@@ -154,7 +154,7 @@ function PersonalCalendar() {
   const eventPath = (event: CalendarEvent) => `/calendar/events/${encodeURIComponent(event.id)}`;
 
   const save = (draft: EventDraft, event?: CalendarEvent) => write({
-    what: `Save the changes to “${draft.title}”`, done: event ? 'Event saved.' : 'Event created.',
+    what: `Save the changes to “${draft.title ?? event?.title ?? ''}”`, done: event ? 'Event saved.' : 'Event created.',
     call: (notify) => event
       ? api.patch(eventPath(event), { ...draft, confirm: true, ...(notify ? { notifyAttendees: true } : {}) })
       : api.post('/calendar/events', { ...draft, confirm: true }),
@@ -182,7 +182,8 @@ function PersonalCalendar() {
     void write({
       what: `${what} “${event.title}”${scope === 'all' ? ' (all events)' : ''}`, done: what === 'Resize' ? 'Event changed.' : 'Event moved.',
       call: (notify) => api.patch(eventPath(event), {
-        ...target(event), confirm: true, title: event.title, allDay: event.allDay, start, end, timeZone: readerTimeZone(),
+        // A move changes the time only: the title is left as it is (an untitled event stays untitled).
+        ...target(event), confirm: true, allDay: event.allDay, start, end, timeZone: readerTimeZone(),
         ...(event.recurring ? { scope } : {}), ...(notify ? { notifyAttendees: true } : {}),
       }),
     });

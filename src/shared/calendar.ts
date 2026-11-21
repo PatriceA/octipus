@@ -36,6 +36,25 @@ export interface CalendarInfo {
  */
 export const calendarKey = (c: { provider: CalendarProvider; id: string; account?: string }) => (c.account ? `${c.provider}:${c.account}:${c.id}` : `${c.provider}:${c.id}`);
 
+/**
+ * The parts of a `calendarKey`. A further account's key is
+ * `provider:<address>:<id>`; the default account's is `provider:<id>`, and its
+ * id may itself contain ":" — so the middle part is an account only when it is
+ * an address (it holds "@" and the rest is non-empty). Null for a key that
+ * names no provider or no id.
+ */
+export function parseCalendarKey(key: string): { provider: CalendarProvider; account?: string; id: string } | null {
+  const sep = key.indexOf(':');
+  const provider = key.slice(0, sep);
+  if (sep < 0 || (provider !== 'google' && provider !== 'microsoft')) return null;
+  const rest = key.slice(sep + 1);
+  const next = rest.indexOf(':');
+  if (next > 0 && rest.slice(0, next).includes('@') && rest.length > next + 1) {
+    return { provider, account: rest.slice(0, next), id: rest.slice(next + 1) };
+  }
+  return rest ? { provider, id: rest } : null;
+}
+
 export interface CalendarAttendee {
   name?: string;
   email?: string;
@@ -46,6 +65,8 @@ export interface CalendarEvent {
   /** The provider's own id, stable across syncs. */
   id: string;
   title: string;
+  /** The event has no title of its own: `title` is a placeholder that must never be written back. */
+  untitled?: boolean;
   /**
    * ISO-8601 start. An all-day event is `YYYY-MM-DDT00:00:00.000Z`: its date
    * part is the calendar date for every reader, whatever their timezone.

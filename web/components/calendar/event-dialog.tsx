@@ -43,7 +43,8 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
   const initialAllDay = event ? event.allDay : seed.allDay === true;
   // An all-day event's stored end is the day after; people think of the last day.
   const range = event?.allDay ? allDayRange(event) : null;
-  const [title, setTitle] = useState(event?.title ?? '');
+  // An untitled event's placeholder is not its title: the field starts empty.
+  const [title, setTitle] = useState(event && !event.untitled ? event.title : '');
   const [allDay, setAllDay] = useState(initialAllDay);
   const [startDay, setStartDay] = useState(range?.first ?? (event ? localInput(event.start).slice(0, 10) : seed.day));
   const [lastDay, setLastDay] = useState(range ? addDays(range.end, -1) : event ? localInput(event.end ?? event.start).slice(0, 10) : endMin >= 24 * 60 ? addDays(seed.day, 1) : seed.day);
@@ -133,7 +134,7 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
     const reminderValue = reminder === 'none' ? null : reminder === '' ? undefined : Number(reminder);
     const draft: EventDraft = {
       provider, ...((event ? event.account : calendar?.account) ? { account: event ? event.account : calendar?.account } : {}),
-      calendarId: event ? event.calendarId : calendar?.id, title: title.trim(), allDay, start, end, location, timeZone: readerTimeZone(),
+      calendarId: event ? event.calendarId : calendar?.id, ...(title.trim() || !event?.untitled ? { title: title.trim() } : {}), allDay, start, end, location, timeZone: readerTimeZone(),
     };
     if (!event) {
       // A new event: everything that was filled in.
@@ -161,7 +162,7 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
         <fieldset disabled={busy} className="space-y-3 text-sm text-on-surface">
           {error && <p role="alert" className="text-error">{error}</p>}
           {details.error && <p role="alert" className="text-error">Could not read the event: {(details.error as Error).message}. Description and guests stay as they are.</p>}
-          <label className="block">Title<input autoFocus className={fieldInput} required maxLength={500} value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+          <label className="block">Title<input autoFocus className={fieldInput} required={!event?.untitled} placeholder={event?.untitled ? '(no title)' : undefined} maxLength={500} value={title} onChange={(e) => setTitle(e.target.value)} /></label>
           <label className="block">Calendar
             <select aria-label="Calendar" className={fieldInput} value={target} disabled={!!event} onChange={(e) => setTarget(e.target.value)}>
               {event && !calendar && <option value={target}>{event.calendarName ?? providerName(event.provider)}</option>}

@@ -1,3 +1,4 @@
+import { parseCalendarKey } from '@/shared/calendar';
 /**
  * The two heartbeat probe sources that live outside the database: pull
  * requests of the user's whose checks are failing, and calendar events about
@@ -156,7 +157,8 @@ export function parseGraphEvents(response: unknown, now: Date, until: Date): Upc
 }
 
 export interface CalendarProbeDeps {
-  getToken: (userId: string, provider: 'google' | 'microsoft') => Promise<string | null>;
+  /** `account`: a further connected account of the provider; absent, the default account. */
+  getToken: (userId: string, provider: 'google' | 'microsoft', account?: string) => Promise<string | null>;
   fetchJson: (url: string, headers: Record<string, string>) => Promise<unknown>;
   /**
    * The calendars the user chose to see on the Calendar page (`provider:id`
@@ -167,9 +169,12 @@ export interface CalendarProbeDeps {
 }
 
 /** The calendar ids of one provider to read: `[undefined]` is the account's default calendar. Pure. */
-export function calendarsToProbe(provider: 'google' | 'microsoft', visible: string[] | undefined): Array<string | undefined> {
-  if (!visible) return [undefined];
-  return visible.filter((key) => key.startsWith(`${provider}:`)).map((key) => key.slice(provider.length + 1)).filter(Boolean).slice(0, 25);
+export function calendarsToProbe(provider: 'google' | 'microsoft', visible: string[] | undefined): Array<{ account?: string; calendarId?: string }> {
+  if (!visible) return [{}];
+  return visible.map(parseCalendarKey)
+    .filter((k): k is NonNullable<ReturnType<typeof parseCalendarKey>> => k?.provider === provider)
+    .map((k) => ({ ...(k.account ? { account: k.account } : {}), calendarId: k.id }))
+    .slice(0, 25);
 }
 
 const CALENDAR_TIMEOUT_MS = 8_000;
@@ -181,7 +186,7 @@ async function defaultFetchJson(url: string, headers: Record<string, string>): P
 }
 
 export const defaultCalendarDeps: CalendarProbeDeps = {
-  getToken: (userId, provider) => getOAuthManager().getValidToken(userId, provider),
+  getToken: (userId, provider, account) => getOAuthManager().getValidToken(userId, provider, account),
   fetchJson: defaultFetchJson,
   visibleCalendars: async (userId) => (await (await import('@/core/calendar/calendars')).getCalendarPreferences(userId)).visible,
 };
@@ -235,13 +240,22 @@ export async function probeUpcomingEvents(
   const visible = await deps.visibleCalendars?.(userId).catch(() => undefined);
   const results = await Promise.all(
     CALENDAR_PROVIDERS.map(async (cal): Promise<{ events: UpcomingEvent[]; failed: boolean }> => {
-      const ids = calendarsToProbe(cal.provider, visible);
-      if (!ids.length) return { events: [], failed: false };
+      const targets = calendarsToProbe(cal.provider, visible);
+      if (!targets.length) return { events: [], failed: false };
       const token = await deps.getToken(userId, cal.provider).catch(() => null);
       if (!token) return { events: [], failed: false };
-      const read = await Promise.all(ids.map(async (calendarId) => {
+      // A further account's calendar is read with that account's own token.
+      const tokens = new Map<string, Promise<string | null>>();
+      const tokenFor = (account?: string) => {
+        if (!account) return Promise.resolve(token);
+        if (!tokens.has(account)) tokens.set(account, deps.getToken(userId, cal.provider, account).catch(() => null));
+        return tokens.get(account)!;
+      };
+      const read = await Promise.all(targets.map(async ({ account, calendarId }) => {
         try {
-          return { events: cal.parse(await deps.fetchJson(cal.url(now, until, calendarId), cal.headers(token)), now, until), failed: false };
+          const own = await tokenFor(account);
+          if (!own) throw new Error('account not connected');
+          return { events: cal.parse(await deps.fetchJson(cal.url(now, until, calendarId), cal.headers(own)), now, until), failed: false };
         } catch (err) {
           coreLogger.debug({ err: (err as Error).message, userId, provider: cal.provider }, 'heartbeat: calendar probe failed (skipping calendar)');
           return { events: [] as UpcomingEvent[], failed: true };

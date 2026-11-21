@@ -32,7 +32,8 @@ export interface EventDraft {
   /** The connected account of the provider, when it is not the default one. */
   account?: string;
   calendarId?: string;
-  title: string;
+  /** Absent on an edit that leaves the title as it is. */
+  title?: string;
   allDay: boolean;
   /** ISO instant, or a date for an all-day event. */
   start: string;
