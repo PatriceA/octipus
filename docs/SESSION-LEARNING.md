@@ -17,7 +17,7 @@ Plan saves and their queued checks share a database transaction. The worker poll
 
 A check uses evidence recorded at or before its trigger: up to eight chat messages, eight verification records and 100 execution events, plus the milestone's plan evidence. Excerpts are redacted and capped at 2,400 characters each within a 40,000-character total budget. Older records may be omitted. This is a recent-evidence check, not an exhaustive reread of multi-day vendor transcript files.
 
-An automatic check (tool count or plan completion) reads only the execution events and verification records created after the previous check of the session ended: the `through` of the session's latest other learning job with status `done` or `error`. A check that was interrupted or cancelled does not move that boundary, so its evidence is read again by the next one. Chat messages are not narrowed: they are always the last eight. The session's first check, and every manual **Check recent work**, read the full window. An automatic check that finds no new execution or verification evidence ends as `insufficient_evidence` with the reason "No new execution evidence since the previous learning check." and calls no model.
+An automatic check (tool count or plan completion) reads only the execution events and verification records created after the last check of the session whose evidence the review model actually judged: the `through` of the session's latest other learning job that ended with stage `checked`, `nothing_reusable` or `partial_failure` (the review succeeded and only some writes failed). A check that failed (no model, a timeout, truncated output), found no evidence (`insufficient_evidence`), was skipped (`skipped_*`), or was interrupted or cancelled does not move that boundary, so its evidence is read again by the next one, within the same event and character bounds. Chat messages are not narrowed: they are always the last eight. The session's first check, and every manual **Check recent work**, read the full window. An automatic check that finds no new execution or verification evidence ends as `insufficient_evidence` with the reason "No new execution evidence since the previous learning check." and calls no model.
 
 Besides the evidence, the review is shown `existing`: up to five live skills (the owner's own, and system skills by name and description only) and up to five of the owner's open skill proposals (pending or candidate), each as `{ref, name, description, excerpt}` with a 400-character description and a 600-character excerpt of the content or draft, redacted. They are the ones nearest, by embedding, to the plan's title and goal plus the owner's last three typed messages. Without an embedding model, or with nothing to rank by, they are the ten most recent open proposals and up to 30 names of the owner's own skills, most recently used first. `existing` is capped at 8,000 characters and, like the patch targets, comes out of the 40,000-character budget. If it cannot be read the check goes on without it.
 
@@ -66,9 +66,9 @@ Existing skills were not locked when the lock was added: nothing recorded until 
 
 There is no cap on the number of learned skills and no eviction when one is added. The skill curator (`runSkillCurator`) now runs once a day, as part of the [daily learning maintenance](#consolidation-and-daily-maintenance); until this release nothing scheduled it. One run covers every user of the install:
 
-- It inspects up to 100 skills that are not archived, not system skills and not locked by an owner edit, whose last use is more than 30 days ago or was never recorded, never-used first, then least recently used.
-- It **archives** those last used more than 90 days ago, and every one that has never been used, whatever its age: the code does not look at when a skill was created, so a skill approved today that no agent has loaded yet is archived at the next daily run.
-- It "flags" the others (unused for 30 to 90 days). A flag is only counted in the log line; nothing is stored or shown.
+- It inspects up to 100 skills that are not archived, not system skills and not locked by an owner edit, and were last used more than 30 days ago. A skill that has never been used is measured from its creation date instead. The least recently used (or oldest never-used) come first.
+- It **archives** those last used, or for a never-used skill created, more than 90 days ago. A skill younger than 90 days is never archived.
+- It "flags" the others (30 to 90 days). A flag is only counted in the log line; nothing is stored or shown.
 - Skills you wrote but that carry no lock are treated like learned ones: the lock is set only by an edit in person in the app (above), not by scripts or API tokens, and skills that existed before the lock was added are not locked.
 - An archived skill keeps its row and gets `archived_at` and `curation_notes` (`auto-curator: <reason>`). It is no longer injected for its topics, offered as a patch target, or matched by proposal deduplication. No route or page unarchives a skill; clear `skills.archived_at` in the database to restore one.
 
@@ -88,7 +88,7 @@ A skill proposal comes from a learning check (a *learned* proposal, `sourceRef` 
 
 You can approve or reject a candidate directly (the page's **Not shown yet** section offers **Show now** and **Reject**; the API accepts approve too). Rejecting a proposal also rejects, with the same `rejected_until` and in the same transaction, every proposal that was merged into it, so their names stay suppressed as well.
 
-Pending proposals are listed with the most observations first, then oldest first (before this release: oldest first). `/proposals` in chat and the TUI numbers them in that order and adds `×N` after a name seen more than once; `/proposals approve <n>` resolves `n` against the same order, so a merge between listing and approving can shift the numbers. The page adds "seen N× in M sessions", "similar to skill X (NN%)" when a live skill's similarity is at or above `relatedSimilarity`, a select-all box with **Reject selected**, and **Merge into…** on each non-patch card.
+The page and `GET /api/skills/proposals` list pending proposals with the most observations first, then oldest first (before this release: oldest first). `/proposals` in chat and the TUI uses a stable order instead: oldest shown first (`surfaced_at`, or `created_at` when it has none), then oldest filed, then id. A proposal keeps its number when counts change or proposals are added, so `/proposals approve <n>` names the row you read; a proposal approved, rejected or merged away between the list and the command still shifts the rows after it. The list adds `×N` after a name seen more than once. The page adds "seen N× in M sessions", "similar to skill X (NN%)" when a live skill's similarity is at or above `relatedSimilarity`, a select-all box with **Reject selected**, and **Merge into…** on each non-patch card.
 
 ### Filing: drop, merge or new
 
@@ -100,8 +100,10 @@ Filing a skill decides, cheapest check first:
    - a rejected, still suppressed proposal at or above `duplicateSimilarity`: dropped. Before this release a rejection suppressed only the same name;
    - the learning reviewer's `extends` names one of your open proposals: merged into it (this needs no embedding);
    - the nearest open proposal at or above `duplicateSimilarity`: merged into it;
-   - the nearest open proposal from `learning.relatedSimilarity` (0.70) up to `duplicateSimilarity`: the merge model decides; if it answers that they are different skills, a new proposal is filed.
+   - the nearest open proposal from `learning.relatedSimilarity` (0.70) up to `duplicateSimilarity`: the merge model decides; if it answers that they are different skills, or cannot judge (below), a new proposal is filed.
 4. Otherwise a new proposal is filed.
+
+If the proposal chosen in step 1 or 3 is approved, rejected or merged away while the observation is being merged into it, filing decides once more against its new state (now covered by the live skill, suppressed, redirected, or new). A second such race fails the filing with an error.
 
 Every decision is logged as `Skill proposal dedup decision` with `{decision, similarity, against}`, which is the data the thresholds can later be calibrated on. The thresholds are defaults chosen when the feature was written; they have not been calibrated against real proposals. Vectors from an earlier embedding model (another dimension) are skipped, not compared.
 
@@ -113,7 +115,10 @@ A merge makes one call to the **background** model with both texts. It answers `
 
 `merged` and `unchanged` both count the observation: `exemplarCount` goes up by one (by the absorbed proposal's own count when two proposals are merged), the source is appended to `sourceRefs` (newest last, the latest 50 kept), `lastExemplarAt` is set, and `signal` keeps the stronger of the two (`correction` over `recovery` over `procedure`). `sourceRef` stays the first source.
 
-When the background model is not bound, fails, or returns truncated or malformed output, the merge falls back to counting: the counters and sources change, the text does not, and the result says so (`mergeDegraded`; in a consolidation report `degraded`). In the related band this means two proposals are combined on similarity alone, without the model's judgment. The same happens when another merge changed the draft while the model was answering, so that merge's text is not overwritten.
+When the background model is not bound, fails, or returns truncated or malformed output, what happens depends on why the two were matched:
+
+- Same name, `extends`, or similarity at or above `duplicateSimilarity`: the merge falls back to counting. The counters and sources change, the text does not, and the result says so (`mergeDegraded`; in a consolidation report `degraded`). The same count-only merge happens when another merge changed the draft while the model was answering, so that merge's text is not overwritten.
+- The related band: only the model's verdict could make them one skill, so they stay separate. Filing files a new proposal; consolidation leaves the pair apart for this run (not counted in `degraded`) and asks again on its next run.
 
 ### What counts as a session
 
@@ -132,20 +137,20 @@ When you merge a pending proposal into a candidate by hand, the candidate become
 
 **Show now** on the page (`POST /api/skills/proposals/:id/surface`) makes a candidate pending at once, without the gate or the caps. It then counts towards the day's cap like any learned proposal surfaced that day.
 
-What `distill_skill` bypasses: a request that ends in a new proposal is pending at once, whatever the gate and the caps. One that is merged into an existing proposal does not change that proposal's status rule: merged into a candidate, it raises the session count (a `text` or `trajectory` source counts as a new source, a `session:` source of the same session does not) and the candidate is shown only if it now qualifies and no cap is reached. The tool's result then says "Merged into the candidate proposal …".
+What `distill_skill` bypasses: the gate and both caps. A request that ends in a new proposal is pending at once; one that is merged into a candidate makes that candidate pending at once (`surfaced_at` set), however many sessions it was seen in. The tool's result then ends with "It is now shown for review." A shown proposal surfaced this way is a learned one when its first source was a learning check, so it counts towards that day's cap for later learned proposals.
 
 ### Consolidation and daily maintenance
 
 Consolidating one user's proposals:
 
 1. Brings that user's proposal embeddings, and all skill embeddings, up to date.
-2. Merges the user's open (pending and candidate) non-patch proposals pairwise, most similar pair first: a pair at or above `duplicateSimilarity` is merged; a pair in the related band is merged unless the merge model says they are different skills (asked once per pair per run). The proposal kept is the pending one; between two pending ones the one with more observations; otherwise the older. The other becomes `merged`. At most 20 proposals are absorbed per run; run it again for more.
-3. Deletes candidates whose `lastExemplarAt` is older than `learning.candidateTtlDays` (30), together with the proposals merged into them. This happens only here, not when a proposal is filed.
+2. Merges the user's open (pending and candidate) non-patch proposals pairwise, most similar pair first: a pair at or above `duplicateSimilarity` is merged; a pair in the related band is merged only when the merge model says they are one skill. A pair it calls different, or cannot judge, is not asked again in that run and costs nothing of the run's merge budget; the next run asks again. The proposal kept is the pending one; between two pending ones the one with more observations; otherwise the older. The other becomes `merged`. At most 20 proposals are absorbed per run; run it again for more.
+3. Deletes candidates whose `lastExemplarAt` is older than `learning.candidateTtlDays` (30) and that never qualified (not seen in `recurrenceSessions` sessions, no `correction` signal), together with the proposals merged into them. A candidate that already qualified and is only waiting for room under a cap is kept, however long it waits. Deletion happens only here, not when a proposal is filed.
 4. Shows the remaining candidates that qualify, oldest first, until a cap is reached.
 
 It returns `{merged, expired, promoted, embedded, degraded}`. **Consolidate now** on the page runs it for you and prints the report as a sentence; `POST /api/skills/proposals/consolidate` does the same and only ever touches the caller's own proposals, admins included. Without an embedding model step 2 merges nothing; steps 3 and 4 still run.
 
-The **daily learning maintenance** runs consolidation for every user with open proposals and then the skill curator ([Usage and stale skills](#usage-and-stale-skills)). The server ticks every hour, the first time one minute after start, and runs it when the last run is at least 24 hours old. The run is claimed with one conditional write to `kv_store` (`learning:maintenance:last-run`) before it starts, so several server processes on one database run it once between them; a process that stops during the run does not retry it until the next 24 hours have passed. A user whose consolidation fails, or a failing curator, is logged and the rest goes on.
+The **daily learning maintenance** runs consolidation for every user with open proposals and then the skill curator ([Usage and stale skills](#usage-and-stale-skills)). The server ticks every hour, the first time one minute after start, and runs it when the last completed run finished at least 24 hours ago. A run is claimed with one conditional write to `kv_store` (`learning:maintenance:last-run`) that holds a 2-hour lease, so several server processes on one database run it once between them; when it finishes, the finish time is recorded and the next run is due 24 hours later. A run cut short by a restart is retried once the lease has expired, about 2 hours after it started. A user whose consolidation fails, or a failing curator, is logged and the rest goes on.
 
 If the process dies while two proposals are being merged: the absorbed proposal is marked `merged` first and its count is added to the target after the model answers. Dying in between leaves it merged into a target that lacks its count and sources (an undercount); it is not shown twice or counted twice, and its name still redirects to the target. A merge of a newly filed skill writes the count in one transaction after the model call, so dying before that loses the observation. This follows from the order of the writes; no test simulates a crash.
 
@@ -161,16 +166,16 @@ If the process dies while two proposals are being merged: the absorbed proposal 
 | merge more or less eagerly | `learning.duplicateSimilarity`, `learning.relatedSimilarity` |
 | keep unseen candidates longer | `learning.candidateTtlDays` |
 
-Defaults and ranges are in [CONFIGURATION.md](CONFIGURATION.md#learning-config). On this version these keys are not registered settings: there is no Settings field, environment variable or settings API key for them, and a value stored under their name in the settings table is not read. Changing one means changing its default in `src/config/schema.ts` and restarting. Without that, the levers you have are **Show now**, approve or reject on a candidate, **Reject selected**, **Merge into…** and **Consolidate now**.
+An admin changes these under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` and body `{"value": …}`. They apply to the whole install, take effect without a restart, and are checked against the bounds in [CONFIGURATION.md](CONFIGURATION.md#learning-config). There is no environment variable for them. Per proposal you also have **Show now**, approve or reject on a candidate, **Reject selected**, **Merge into…** and **Consolidate now**.
 
 ### After upgrading
 
 - Migration `0197_skill_proposal_consolidation` adds the `candidate` and `merged` statuses and the columns `embedding`, `source_refs`, `signal`, `previous_draft`, `merged_into_id` and `surfaced_at`. It sets `source_refs` to the existing `source_ref`, `surfaced_at` to `created_at` for pending proposals (so those created in the last 24 hours count towards the day's cap), and `exemplar_count` to 1 where it was 0.
 - Existing pending proposals stay pending; nothing already shown is hidden. They have no embedding until one is computed. Press **Consolidate now**, or wait for the daily run, to merge the backlog: at most 20 merges per run, so a large backlog may take several presses. New learned proposals from now on start as candidates.
 - Needs an embedding model: merging by meaning (filing and consolidation), suppression of rejected proposals by meaning, "similar to skill X" on a card, the nearest skills and proposals in `existing`, and the nearest learned skills as patch targets.
-- Needs a background model: the learning checks themselves, and a merge that rewrites the text. Without it a merge only counts.
+- Needs a background model: the learning checks themselves, a merge that rewrites the text, and any merge in the related band. Without it, other merges only count.
 - Works without either: name matching, `extends`, the recurrence gate, the caps, candidate expiry, promotion, **Show now**, approve, reject, bulk reject and manual merge (count-only without the background model).
-- The skill curator now runs daily. Before upgrading, check which skills have never been loaded or not for 90 days: they will be archived at the first run, about a minute after the server starts.
+- The skill curator now runs daily, first about a minute after the server starts. It archives non-system skills without an owner-edit lock that were last used, or if never used created, more than 90 days ago, across all users ([Usage and stale skills](#usage-and-stale-skills)). There is no route or page to unarchive a skill.
 
 ## Visibility
 

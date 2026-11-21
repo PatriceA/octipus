@@ -178,8 +178,8 @@ status update fails). Rejecting a proposal suppresses re-proposal for 90 days.
 
 **Prune (curation).** `runSkillCurator` runs once a day with the daily
 learning maintenance. It flags skills unused for 30 days (in the log only) and
-auto-archives those unused for 90, and those never used whatever their age,
-least recently used first; it skips system skills and skills the owner has
+auto-archives those unused for 90, least recently used first; a never-used
+skill is measured from its creation date; it skips system skills and skills the owner has
 edited (`owner_edited_at`). "Used" means the body was loaded, not that the
 skill was listed in an index. See
 [Usage and stale skills](SESSION-LEARNING.md#usage-and-stale-skills).

@@ -77,12 +77,14 @@ Session count of a proposal = distinct session ids parsed from `source_refs`
 `distill_skill` (the user asked) is exempt from the gate and both caps.
 Patches are exempt from all of it.
 
-As built: these keys are schema defaults only. They are not in
-`src/config/settings-registry.ts`, so no setting, environment variable or
-settings API changes them at runtime; tuning means changing the default.
-`distill_skill` is exempt only when it files a new row: merged into an existing
-candidate, it leaves the candidate subject to `promoteIfEligible` (gate and
-caps).
+As built: all nine `learning.*` keys (these plus `localIdleMs`) are registered
+in `src/config/settings-registry.ts` (category `learning`, shown under Settings
+→ Configuration → Agent & Root agent → Learning), so an admin changes them with
+`PUT /api/settings/learning.<name>` and they apply live; no environment
+variable. `distill_skill` merged into a candidate surfaces it at once
+(`surfaceProposal`), past the gate and the caps. `candidateTtlDays` deletes only
+candidates that never qualified (`candidateIsRecurring` false); one waiting for
+a cap is kept.
 
 ### Embeddings (`src/skills/embedding-backfill.ts`)
 
@@ -135,7 +137,10 @@ description, embedding recomputed. `unchanged`: text stays. Both: `exemplar_coun
 `allowDistinct`): the caller files a new row. Name and fingerprint of the
 target never change. Model unavailable, truncated or malformed: counted and
 logged as a count-only merge (no text change), reported in the result
-(`mergeDegraded: true`). Merged content is PII-filtered and capped at 8,000
+(`mergeDegraded: true`). As built: only without `allowDistinct`; in the related
+band such a failure returns `distinct` (with `degradedReason`), so the two stay
+apart. `fileSkillProposal` decides once more when its merge target stops being
+open (`ProposalNotOpenError`) during the merge; a second miss throws. Merged content is PII-filtered and capped at 8,000
 characters. After a merge `promoteIfEligible(proposal)` moves a candidate to
 `pending` (sets `surfaced_at`) when `sessionCountOf >= recurrenceSessions` or
 its signal is `correction`, within the caps.
@@ -151,7 +156,9 @@ Result shape of `fileSkillProposal` keeps `distilled`, `deduped`, `proposalId`,
   verification records created after `since`; chat messages keep the last 8.
   `since` = `through` of the session's previous learning job with status `done`
   or `error` (not the job itself), for automatic triggers; manual checks read
-  the full window.
+  the full window. As built: only jobs whose stage is in `REVIEWED_STAGES`
+  (`checked`, `nothing_reusable`, `partial_failure`) count, so a failed,
+  insufficient-evidence or skipped check does not move the window.
 - `processor.ts`: builds `existing` for the review input: up to 5 nearest live
   skills and up to 5 nearest open proposals (`ref`, `name`, `description`,
   600-character excerpt), ranked by embedding of the plan title/goal plus the
@@ -188,17 +195,23 @@ Returns `{ merged, expired, promoted, embedded, degraded }`.
 As built: the pending member wins; between two pending members the one with
 more observations, then the older; between two candidates the older (their
 counts are not compared).
-Expiry also deletes the `merged` rows pointing at an expired candidate.
-Promotion stops at the first cap hit.
+Expiry skips candidates that already qualified (seen in `recurrenceSessions`
+sessions or a `correction`) and also deletes the `merged` rows pointing at an
+expired candidate. A related-band pair the model calls distinct or cannot judge
+is skipped for the rest of the run without using merge budget. Promotion stops
+at the first cap hit.
 
 Scheduling (as built): not in `startLearningQueue`. `src/index.ts` calls
 `startLearningMaintenance()` (`consolidation.ts`), an unref'd hourly
 `setInterval` whose first tick is one minute after boot. Each tick calls
-`runDailyLearningMaintenance()`, which claims the day with one conditional
-upsert of `kv_store` key `learning:maintenance:last-run` (epoch ms) before it
-runs, so concurrent processes run it once; a run that dies is not retried for
-24 h. It consolidates every user with open non-patch proposals, then calls
-`runSkillCurator()`. Failures are logged, never thrown into the timer.
+`runDailyLearningMaintenance()`, which claims the run with one conditional
+upsert of `kv_store` key `learning:maintenance:last-run` (epoch ms), written as
+a 2-hour lease (`now - 24 h + 2 h`), so concurrent processes run it once; the
+finish time is recorded when the run is done, so the next is due 24 h after
+it, and a run cut short is retried once the lease ends. It consolidates every user with open non-patch proposals, then calls
+`runSkillCurator()`. Failures are logged, never thrown into the timer. As
+built, the curator (and `skillRepository.findStale`) measures a never-used
+skill from `created_at`, so nothing younger than 90 days is archived.
 
 ### API
 
@@ -224,7 +237,11 @@ users for an admin); rows are served as `SkillProposalView`, which also drops
 into a candidate by hand surfaces the candidate without the caps.
 
 `/proposals` (gateway and TUI) lists pending only, with `×N` after the name
-when `exemplar_count > 1`.
+when `exemplar_count > 1`. As built: in a stable order of its own
+(`listPendingProposals(scope, { order: 'surfaced' })`: `coalesce(surfaced_at,
+created_at)`, then `created_at`, then id), not the page's most-seen order, so
+counts changing or rows being added do not renumber it; a row resolved or
+absorbed between list and command still shifts the rows after it.
 
 ### Web (`web/app/skills/proposals/page.tsx`)
 
