@@ -29,8 +29,10 @@ import { saveReplyDraft } from '@/core/email/drafts';
 import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
 import { upsertUserLabel } from '@/core/email/triage-labels';
 import { resolveProvider } from '@/core/email/mailbox';
+import { checkMailbox, fallbackMailbox, triageSources } from '@/core/email/triage-sources';
+import { contentRepos } from '@/db/repositories/content';
 import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
-import type { EmailProvider } from '@/core/email/types';
+import type { EmailProvider, MailboxKey } from '@/core/email/types';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
@@ -441,27 +443,35 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         archiveCategories: t.Optional(t.Array(t.String({ maxLength: 32 }), { maxItems: 21 })),
         instructions: t.Optional(t.String({ maxLength: 1000 })),
         skipDialog: t.Optional(t.Boolean()),
+        auto: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['email'] },
     }
   )
 
   // What a run over these rows would do and what the models are told. Asks no model.
+  // A row may name its mailbox (`google`, `microsoft`, `imap:<account>`); the rest are `?provider=`'s.
   .post(
     '/triage/preview',
     async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await mailboxOf(user.id, request);
-        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        return await triagePreview(user.id, provider, body.items);
+        const repos = contentRepos(principal);
+        const fallback = await fallbackMailbox(repos, user.id, new URL(request.url).searchParams.get('provider'));
+        const rows: Array<{ id: string; unread: boolean; mailbox?: string }> = body.items;
+        // Every mailbox named is checked: connected, or reached by the caller's scope.
+        const keys = new Map<string, MailboxKey>();
+        for (const it of rows) if (it.mailbox && !keys.has(it.mailbox)) keys.set(it.mailbox, await checkMailbox(repos, user.id, it.mailbox));
+        const main = fallback ?? [...keys.values()][0];
+        if (!main || (!fallback && rows.some((it) => !it.mailbox))) { set.status = 400; return { error: 'No mailbox connected' }; }
+        return await triagePreview(user.id, main, rows.map((it) => ({ id: it.id, unread: it.unread, ...(it.mailbox ? { mailbox: keys.get(it.mailbox) } : {}) })));
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
       }
     },
     {
-      body: t.Object({ items: t.Array(t.Object({ id: t.String({ minLength: 1, maxLength: 256 }), unread: t.Boolean() }), { maxItems: 500 }) }),
+      body: t.Object({ items: t.Array(t.Object({ id: t.String({ minLength: 1, maxLength: 256 }), unread: t.Boolean(), mailbox: t.Optional(t.String({ maxLength: 64 })) }), { maxItems: 500 }) }),
       detail: { tags: ['email'] },
     }
   )
@@ -473,11 +483,12 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
     async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await mailboxOf(user.id, request);
-        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        const items: InboxItem[] | undefined = body.items?.map((it: Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>) => ({ ...it, provider, receivedAt: '', unread: false }));
+        const repos = contentRepos(principal);
+        const fallback = await fallbackMailbox(repos, user.id, new URL(request.url).searchParams.get('provider'));
+        // Each row is triaged in its own mailbox; IMAP mail is read from the store, not taken from the request.
+        const sources = await triageSources(repos, user.id, { fallback, items: body.items, mailboxes: body.mailboxes });
         set.status = 202;
-        return { run: await startTriageRun(user.id, provider, { items, newest: body.newest, scope: body.scope }) };
+        return { run: await startTriageRun(user.id, sources, { newest: body.newest, scope: body.scope }) };
       } catch (err) {
         set.status = err instanceof TriageBusyError ? 409 : 400;
         return { error: (err as Error).message };
@@ -490,7 +501,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
           from: t.Object({ email: t.String({ maxLength: 320 }), name: t.Optional(t.String({ maxLength: 320 })) }),
           subject: t.String({ maxLength: 2000 }),
           snippet: t.String({ maxLength: 2000 }),
+          mailbox: t.Optional(t.String({ maxLength: 64 })),
         }), { maxItems: 500 })),
+        /** With `newest`: the inboxes to read (default: `?provider=`'s). */
+        mailboxes: t.Optional(t.Array(t.String({ maxLength: 64 }), { maxItems: 20 })),
         newest: t.Optional(t.Integer({ minimum: 1, maximum: 500 })),
         scope: t.Optional(triageScope),
       }),

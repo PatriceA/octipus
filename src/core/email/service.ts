@@ -23,7 +23,7 @@ import {
 import { invalidateEmailCache, readMessage } from './mailbox';
 import { buildSendRaw, parseRecipients, replySubject } from './send-mime';
 import { detectProvider, gmailApi, graphApi } from './providers';
-import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
+import { type EmailMessage, type EmailProvider, type EmailTriage, type InboxItem, mailboxOf } from './types';
 import { mapLimit } from '@/utils/concurrency';
 
 /** A CLI agent with no tool-less mode (codex) serves chat on a lane but refuses one-shot completions. */
@@ -39,6 +39,12 @@ const completes = (row: { provider: string; modelId: string }) => {
  * can't falls to its backup. A personal row never does: that would switch who pays for the call.
  */
 async function everydayModel(userId: string): Promise<{ model: string; modelConfigName: string }> {
+  const model = await everydayRow(userId);
+  return { model: model.modelId, modelConfigName: model.name };
+}
+
+/** The model row everydayModel() calls (the protection check for IMAP mail needs where it runs). */
+export async function everydayRow(userId: string): Promise<NonNullable<Awaited<ReturnType<typeof resolveModel>>>> {
   const primary = await resolveModel({ userId, topic: 'everyday' });
   if (!primary) throw new Error('No model is bound to the "everyday" lane — bind one in the Models page.');
   const model = completes(primary) ? primary : primary.ownerUserId ? null : await resolveModel({ userId, topic: 'everyday', backup: true });
@@ -46,7 +52,7 @@ async function everydayModel(userId: string): Promise<{ model: string; modelConf
     const fix = primary.ownerUserId ? 'Bind an API or local model of your own to the everyday lane.' : "Bind an API or local model as the everyday lane's backup on the Topics page.";
     throw new Error(`The "everyday" lane runs ${primary.name}, a CLI agent that cannot answer one-shot requests like triage, summaries or drafts. ${fix}`);
   }
-  return { model: model.modelId, modelConfigName: model.name };
+  return model;
 }
 
 
@@ -593,7 +599,8 @@ const keepGoing = (what: string) => (err: unknown) => coreLogger.warn({ error: s
  */
 export async function triageInbox(userId: string, items: InboxItem[], run: TriageRunOptions = {}): Promise<Record<string, EmailTriage>> {
   if (items.length === 0) return {};
-  const provider = items[0].provider;
+  // One mailbox per call: the training set and the owner's labels are kept per mailbox.
+  const provider = mailboxOf(items[0]);
   const owner = tagSource(await userLabels(userId, provider, items.map(it => it.id)).catch((err): Record<string, EmailTriage> => { keepGoing('reading owner labels')(err); return {}; }), 'owner');
   const todo = items.filter(it => !owner[it.id]);
   if (todo.length === 0) return owner;
@@ -735,7 +742,7 @@ export async function startLabelBacklog(userId: string, modelName: string, limit
       if (!page.items.length) break;
     } while (token && items.length < limit);
     if (!items.length) return;
-    const provider = items[0].provider;
+    const provider = mailboxOf(items[0]);
     const categories = await getCategories(userId);
     const instructions = cleanInstructions((await userRepository.findById(userId))?.preferences?.emailTriage?.instructions);
     const rubric = rubricKey(categories, instructions);

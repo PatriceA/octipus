@@ -39,7 +39,7 @@ beforeEach(() => {
 describe('triage settings', () => {
   test('defaults change nothing in the mailbox', async () => {
     const { getTriageSettings } = await import('./triage-run');
-    expect(await getTriageSettings('u')).toEqual({ saved: false, settings: { scope: 'untriaged', applyLabels: false, autoArchive: false, archiveCategories: ['spam', 'promotion'], instructions: '', skipDialog: false } });
+    expect(await getTriageSettings('u')).toEqual({ saved: false, lastAuto: null, settings: { scope: 'untriaged', applyLabels: false, autoArchive: false, archiveCategories: ['spam', 'promotion'], instructions: '', skipDialog: false, auto: false } });
   });
 
   test('a partial save keeps the rest; unknown archive categories and line breaks are dropped', async () => {
@@ -126,5 +126,67 @@ describe('a triage run', () => {
     triageImpl = async () => { throw new Error('No model is bound'); };
     await startTriageRun('u5', 'google', { items: [item('a')] });
     expect(await finished('u5')).toMatchObject({ error: 'No model is bound', finished: true });
+  });
+});
+
+describe('a run over several mailboxes ("All inboxes")', () => {
+  test('progress counts across them; labels and archiving happen in Google / Microsoft mailboxes only', async () => {
+    const { setTriageSettings, startTriageRun, currentTriageRun } = await import('./triage-run');
+    await setTriageSettings('u', { autoArchive: true, applyLabels: true, archiveCategories: ['promotion'] });
+    const box = 'imap:0b9d3c55-5f2c-4c37-9a3e-6d1f00000001' as const;
+    const imapMail = (id: string): InboxItem => ({ ...item(id), provider: 'imap', mailbox: box });
+    const calls: string[][] = [];
+    const seen: number[] = [];
+    triageImpl = async (items, run) => {
+      calls.push(items.map((it) => it.id));
+      run.onProgress?.({ stage: 'decision', done: items.length, total: items.length });
+      seen.push(currentTriageRun('u7')!.done);
+      return Object.fromEntries(items.map((it) => [it.id, { priority: 'low', category: 'promotion' } as EmailTriage]));
+    };
+    await startTriageRun('u7', [
+      { mailbox: 'google', items: [item('g1'), item('g2')] },
+      { mailbox: box, items: [imapMail('i1')], protected: 2 },
+    ]);
+    const run = await finished('u7');
+    expect(calls).toEqual([['g1', 'g2'], ['i1']]);
+    // The second mailbox counts on from the first.
+    expect(seen).toEqual([2, 3]);
+    expect(run).toMatchObject({ total: 3, done: 3 });
+    expect(run.result).toMatchObject({ labeled: 2, archived: ['g1', 'g2'], archiveProposed: [], protected: 2 });
+    expect(Object.keys(run.result!.triage).sort()).toEqual(['g1', 'g2', 'i1']);
+    expect(labelled).toEqual([['g1', 'g2']]);
+  });
+
+  test('an IMAP mailbox with nothing to read gives nothing; no source reads Google for it', async () => {
+    const { startTriageRun } = await import('./triage-run');
+    const { listMessages } = await import('./mailbox');
+    vi.mocked(listMessages).mockClear();
+    let called = false;
+    triageImpl = async () => { called = true; return {}; };
+    await startTriageRun('u8', [{ mailbox: 'imap:0b9d3c55-5f2c-4c37-9a3e-6d1f00000001', newest: async () => ({ items: [], protected: 1 }) }], { newest: 10 });
+    const run = await finished('u8');
+    expect(called).toBe(false);
+    expect(listMessages).not.toHaveBeenCalled();
+    expect(run.result).toMatchObject({ protected: 1 });
+  });
+});
+
+describe('automatic triage settings', () => {
+  test('turning it on remembers when; turning it off forgets; a later save keeps the moment', async () => {
+    const { getTriageSettings, setTriageSettings } = await import('./triage-run');
+    await setTriageSettings('u', { auto: true }, new Date('2026-11-21T08:00:00Z'));
+    expect((await getTriageSettings('u')).settings.auto).toBe(true);
+    expect((prefs.emailTriage as { autoSince?: string }).autoSince).toBe('2026-11-21T08:00:00.000Z');
+    await setTriageSettings('u', { scope: 'all' }, new Date('2026-11-22T08:00:00Z'));
+    expect((prefs.emailTriage as { autoSince?: string }).autoSince).toBe('2026-11-21T08:00:00.000Z');
+    await setTriageSettings('u', { auto: false });
+    expect(prefs.emailTriage).not.toHaveProperty('autoSince');
+  });
+
+  test('the last automatic run is kept beside the settings and shown with them', async () => {
+    const { getTriageSettings, recordAutoTriage, setTriageSettings } = await import('./triage-run');
+    await recordAutoTriage('u', { at: '2026-11-21T09:00:00.000Z', triaged: 4, archived: 1 });
+    await setTriageSettings('u', { instructions: 'be brief' });
+    expect((await getTriageSettings('u')).lastAuto).toEqual({ at: '2026-11-21T09:00:00.000Z', triaged: 4, archived: 1 });
   });
 });

@@ -84,6 +84,12 @@ export interface UserPreferences {
     archiveCategories?: string[];
     instructions?: string;
     skipDialog?: boolean;
+    /** Triage new inbox mail without being asked (src/core/email/auto-triage.ts). */
+    auto?: boolean;
+    /** When `auto` was turned on: older mail is left alone. ISO. */
+    autoSince?: string;
+    /** The last automatic run that triaged something or failed. */
+    lastAuto?: { at: string; triaged: number; archived: number; skipped?: number; error?: string };
   };
   /** Which calendars the Calendar page shows (src/core/calendar/calendars.ts). */
   calendar?: import('@/shared/calendar').CalendarPreferences;
