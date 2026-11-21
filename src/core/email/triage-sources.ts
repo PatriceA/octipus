@@ -8,7 +8,7 @@
  */
 import type { ContentRepos } from '@/db/repositories/content';
 import { effectiveLevel, imapAccount, imapAiRefusal, type ImapAiDeps, imapItemsByIds, type ImapTriageItem, newestImap } from './imap-mailbox';
-import { inMailbox, type MailboxSelection, MailboxAccountError, resolveSelection } from './account-context';
+import { inMailbox, type MailboxSelection, MailboxAccountError, resolveSelection, selectedAccount } from './account-context';
 import { resolveProvider } from './mailbox';
 import type { SourceMail, TriageSource } from './triage-run';
 import { type EmailAddress, imapAccountId, type InboxItem, isImapMailbox, isMailboxKey, type MailboxKey } from './types';
@@ -77,9 +77,13 @@ export async function checkMailbox(repos: ContentRepos, userId: string, key: str
  * (a provider or an IMAP mailbox), else the user's default Google / Microsoft
  * mailbox. Null when there is none.
  */
-export async function fallbackMailbox(repos: ContentRepos, userId: string, named: string | null): Promise<MailboxKey | null> {
-  if (named) return (await checkSource(repos, userId, named)).mailbox;
-  return resolveProvider(userId, null);
+export async function fallbackMailbox(repos: ContentRepos, userId: string, named: string | null): Promise<{ key: string; mailbox: MailboxKey } | null> {
+  const mailbox = named ? (await checkSource(repos, userId, named)).mailbox : await resolveProvider(userId, null);
+  if (!mailbox) return null;
+  if (named && accountKey(named)) return { key: named, mailbox };
+  // `?provider=google&account=b@y` (checked by withMailboxAccount): rows naming no mailbox are b@y's, not the default's.
+  const account = isImapMailbox(mailbox) ? undefined : selectedAccount(mailbox);
+  return { key: account ? `${mailbox}:${account}` : mailbox, mailbox };
 }
 
 export interface RunMail { id: string; from: EmailAddress; subject: string; snippet: string; mailbox?: string }
@@ -88,7 +92,7 @@ export interface RunMail { id: string; from: EmailAddress; subject: string; snip
 export async function triageSources(
   repos: ContentRepos,
   userId: string,
-  request: { fallback: MailboxKey | null; items?: readonly RunMail[]; mailboxes?: readonly string[] },
+  request: { fallback: string | null; items?: readonly RunMail[]; mailboxes?: readonly string[] },
   deps?: ImapAiDeps,
 ): Promise<TriageSource[]> {
   if (request.items) {

@@ -219,8 +219,8 @@ calendars shown on the page.
 - **Email:** IMAP/POP3 mailboxes send plain text without attachments and
   cannot be snoozed (their backend stores plain-text drafts and changes
   nothing on the server). The local index covers each provider's default
-  account; other accounts are read live. Automatic triage covers each
-  provider's default account and personal IMAP mailboxes; a space mailbox is
+  account; other accounts are read live. Automatic triage covers every
+  connected account and personal IMAP mailboxes; a space mailbox is
   triaged by hand, and triage labels on it are per user. One triage run per
   user at a time.
 - **Calendar:** "This and following events" is not offered; a series moves as

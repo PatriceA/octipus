@@ -4,8 +4,8 @@
  * pressing "Triage inbox".
  *
  * - **What:** mail that arrived since automatic triage was turned on and has
- *   no triage yet, in the user's Google / Microsoft mailboxes and their
- *   personal IMAP / POP3 mailboxes. A space's shared mailbox is triaged by
+ *   no triage yet, in every connected Google / Microsoft account of the user
+ *   and their personal IMAP / POP3 mailboxes. A space's shared mailbox is triaged by
  *   hand only: whose run would it be?
  * - **How much:** each user is looked at every AUTO_TRIAGE_EVERY_MS, at most
  *   AUTO_TRIAGE_MAX mails per look. A mail the models gave no answer for is
@@ -30,7 +30,9 @@ import { connectedProviders } from './providers';
 import { listMessages } from './mailbox';
 import { triageInbox, triageLlmModel } from './service';
 import { storedTriage } from './triage-labels';
-import { keepForTriage } from './triage-sources';
+import { inSource, keepForTriage } from './triage-sources';
+import type { MailboxSelection } from './account-context';
+import { getOAuthManager } from '@/security/oauth';
 import { applyOutcome, currentTriageRun, getTriageSettings, type LastAutoTriage, recordAutoTriage, type SourceMail, type TriageOutcome, type TriageSettings } from './triage-run';
 import { type EmailTriage, imapMailbox, type InboxItem, type MailboxKey } from './types';
 
@@ -45,7 +47,15 @@ export const AUTO_TRIAGE_MAX_BACKOFF_MS = 60 * 60_000;
 /** Mails remembered as tried, per user (oldest forgotten first). */
 const TRIED_MAX = 500;
 
-export interface AutoSource { mailbox: MailboxKey; newest: (limit: number) => Promise<SourceMail> }
+export interface AutoSource {
+  mailbox: MailboxKey;
+  /** A Google / Microsoft account: null for the default one, the account for a further one. Absent for IMAP. */
+  selection?: MailboxSelection | null;
+  newest: (limit: number) => Promise<SourceMail>;
+}
+
+/** One mailbox's key in the "tried" list: two accounts of one provider are two mailboxes. */
+const sourceKey = (source: Pick<AutoSource, 'mailbox' | 'selection'>) => (source.selection ? `${source.mailbox}:${source.selection.account}` : source.mailbox);
 
 export interface AutoTriageDeps {
   /** Users with automatic triage on, and since when. */
@@ -100,33 +110,35 @@ export async function autoTriageUser(userId: string, since: string | null, now: 
   let skipped = 0;
   try {
     const settings = await deps.settings(userId);
-    const work: Array<{ mailbox: MailboxKey; items: InboxItem[] }> = [];
+    const work: Array<{ source: AutoSource; items: InboxItem[] }> = [];
     let budget = AUTO_TRIAGE_MAX;
     for (const source of await deps.sources(userId)) {
       if (budget <= 0) break;
-      const read = await source.newest(AUTO_TRIAGE_LOOK);
+      // Everything about a mailbox runs in its account: reading, what is already triaged, triage, labels.
+      const read = await inSource(source, () => source.newest(AUTO_TRIAGE_LOOK));
       skipped += read.protected ?? 0;
-      const fresh = read.items.filter((it) => !tried.has(`${source.mailbox}|${it.id}`)
+      const fresh = read.items.filter((it) => !tried.has(`${sourceKey(source)}|${it.id}`)
         && (!Number.isFinite(sinceMs) || !it.receivedAt || Date.parse(it.receivedAt) >= sinceMs));
       if (!fresh.length) continue;
-      const done = await deps.triaged(userId, source.mailbox, fresh.map((it) => it.id));
+      const done = await inSource(source, () => deps.triaged(userId, source.mailbox, fresh.map((it) => it.id)));
       const items = fresh.filter((it) => !done.has(it.id)).slice(0, budget);
       if (!items.length) continue;
       budget -= items.length;
-      work.push({ mailbox: source.mailbox, items });
+      work.push({ source, items });
     }
     if (!work.length) {
       st.failures = 0;
       st.nextAt = nextLook(at, 0);
       return { result: 'idle', triaged: 0 };
     }
-    for (const { mailbox, items } of work) {
-      const answers = await deps.triage(userId, items, settings);
-      const outcome = await deps.apply(userId, mailbox, answers, settings);
+    for (const { source, items } of work) {
+      const mailbox = source.mailbox;
+      const answers = await inSource(source, () => deps.triage(userId, items, settings));
+      const outcome = await inSource(source, () => deps.apply(userId, mailbox, answers, settings));
       triaged += Object.keys(answers).length;
       archived += outcome.archived.length;
       // Tried, answered or not: a mail the models skip is not sent again and again.
-      for (const it of items) st.tried.push(`${mailbox}|${it.id}`);
+      for (const it of items) st.tried.push(`${sourceKey(source)}|${it.id}`);
     }
     st.tried = st.tried.slice(-TRIED_MAX);
     st.failures = 0;
@@ -162,10 +174,15 @@ export const defaultAutoTriageDeps: AutoTriageDeps = {
     return rows.map((r) => ({ id: r.id, since: r.preferences?.emailTriage?.autoSince ?? null }));
   },
   sources: async (userId) => {
-    const sources: AutoSource[] = (await connectedProviders(userId)).map((provider) => ({
-      mailbox: provider,
-      newest: async (limit) => ({ items: (await listMessages(userId, provider, { folder: 'inbox', limit }, true)).items }),
-    }));
+    // Every connected account of each provider; each is read and triaged in its own account.
+    const sources: AutoSource[] = [];
+    for (const provider of await connectedProviders(userId)) {
+      const accounts = await getOAuthManager().listAccounts(userId, provider).catch(() => []);
+      const selections = accounts.length ? accounts.map((a): MailboxSelection | null => (a.isDefault || !a.account ? null : { provider, account: a.account })) : [null];
+      for (const selection of selections) {
+        sources.push({ mailbox: provider, selection, newest: async (limit) => ({ items: (await listMessages(userId, provider, { folder: 'inbox', limit }, true)).items }) });
+      }
+    }
     // The user's own IMAP / POP3 mailboxes; a space's shared mailbox is triaged by hand.
     const repos = contentRepos(backgroundUserPrincipal(userId));
     for (const account of await repos.mail.accounts()) {

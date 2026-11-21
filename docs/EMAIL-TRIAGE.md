@@ -57,8 +57,12 @@ Outlook account and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
   (Settings → Integrations → **Add another account**) is its own mailbox: a run
   names it `google:<address>` / `microsoft:<address>`, the server checks it is
   one of the caller's own accounts, and that mailbox's part of the run reads,
-  labels and archives with that account's token. Automatic triage covers the
-  default account of each provider and personal IMAP mailboxes.
+  labels and archives with that account's token. Automatic triage covers
+  every connected account and personal IMAP mailboxes.
+- **When the default account changes** (Make default, or the default is
+  disconnected), the triage rows move with their accounts: the old default's
+  bare `google` rows become `google:<its address>`, and the new default's
+  `google:<address>` rows become `google`.
 - **Per person.** Triage answers and labels are kept per user and mailbox
   (`email_triage_labels.provider` is `google` or `microsoft` for the default
   account, `google:<address>` / `microsoft:<address>` for a further one, or
@@ -72,7 +76,8 @@ Outlook account and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
 without anyone pressing the button (`src/core/email/auto-triage.ts`):
 
 - **What:** mail that arrived after it was turned on and has no triage yet, in
-  your Gmail / Outlook inbox and your own IMAP / POP3 mailboxes. A space's
+  the inbox of every Gmail / Outlook account you connected and your own
+  IMAP / POP3 mailboxes. A space's
   shared mailbox is triaged by hand only.
 - **How much:** each user is looked at every 5 minutes, at most 20 mails per
   look across all their mailboxes. A mail the models gave no answer for is

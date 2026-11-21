@@ -481,7 +481,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         // Every mailbox named is checked: connected, or reached by the caller's scope.
         const keys = new Map<string, CheckedMailbox>();
         for (const it of rows) if (it.mailbox && !keys.has(it.mailbox)) keys.set(it.mailbox, await checkSource(repos, user.id, it.mailbox));
-        const main = fallback ?? [...keys.values()][0]?.mailbox;
+        const main = fallback?.mailbox ?? [...keys.values()][0]?.mailbox;
         if (!main || (!fallback && rows.some((it) => !it.mailbox))) { set.status = 400; return { error: 'No mailbox connected' }; }
         return await triagePreview(user.id, main, rows, keys);
       } catch (err) {
@@ -505,7 +505,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         const repos = contentRepos(principal);
         const fallback = await fallbackMailbox(repos, user.id, new URL(request.url).searchParams.get('provider'));
         // Each row is triaged in its own mailbox; IMAP mail is read from the store, not taken from the request.
-        const sources = await triageSources(repos, user.id, { fallback, items: body.items, mailboxes: body.mailboxes });
+        const sources = await triageSources(repos, user.id, { fallback: fallback?.key ?? null, items: body.items, mailboxes: body.mailboxes });
         set.status = 202;
         return { run: await startTriageRun(user.id, sources, { newest: body.newest, scope: body.scope }) };
       } catch (err) {

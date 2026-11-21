@@ -63,6 +63,25 @@ describe('a look at one user', () => {
     expect(records).toEqual([{ at: T0.toISOString(), triaged: 2, archived: 1, skipped: 2 }]);
   });
 
+  test('two accounts of one provider are two mailboxes, each read, triaged and labelled in its own account', async () => {
+    const { selectedAccount } = await import('./account-context');
+    const seen: Array<[string, string | undefined]> = [];
+    const work = { provider: 'google' as const, account: 'me@work.example' };
+    const sources: AutoSource[] = [
+      { mailbox: 'google', selection: null, newest: async () => { seen.push(['read', selectedAccount('google')]); return { items: [mail('same-id')] }; } },
+      { mailbox: 'google', selection: work, newest: async () => { seen.push(['read', selectedAccount('google')]); return { items: [mail('same-id')] }; } },
+    ];
+    const { d, triageCalls } = deps(sources, {
+      triaged: async () => new Set(),
+      triage: async (_u, items) => { seen.push(['triage', selectedAccount('google')]); triageCalls.push({ ids: items.map((it) => it.id), instructions: '' }); return { [items[0].id]: { priority: 'low', category: 'promotion' } }; },
+      apply: vi.fn(async (_u, _m, triage) => { seen.push(['apply', selectedAccount('google')]); return { triage, labeled: 0, archived: [], archiveProposed: [] }; }),
+    });
+    expect(await autoTriageUser('u', null, T0, d)).toEqual({ result: 'ran', triaged: 2 });
+    expect(seen).toEqual([['read', undefined], ['read', 'me@work.example'], ['triage', undefined], ['apply', undefined], ['triage', 'me@work.example'], ['apply', 'me@work.example']]);
+    // The same message id in two accounts is two mails: neither counts as tried for the other.
+    expect(triageCalls.map((c) => c.ids)).toEqual([['same-id'], ['same-id']]);
+  });
+
   test('waits between looks; a look with nothing new records nothing', async () => {
     const { d, records, triageCalls } = deps([source('google', [mail('a')])]);
     await autoTriageUser('u', null, T0, d);
