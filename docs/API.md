@@ -320,12 +320,13 @@ inert and stays in the array.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/email/send` | Send (gated). `to`/`cc`/`bcc` comma-separated, ≤ 50 recipients; `replyTo` threads it; `provider`/`account` pick the mailbox; `format: plain\|rich`; `attachments: [{upload}\|{forward:{messageId, attachmentId}}]`, ≤ 20 files / 25 MB |
+| POST | `/api/email/send` | Send (gated). `to`/`cc`/`bcc` comma-separated, ≤ 50 recipients; `replyTo` threads it; `provider`/`account` pick the mailbox; `format: plain\|rich`; `originalAt` (where the quoted or forwarded original starts: only what is above it is formatted); `attachments: [{upload}\|{forward:{messageId, attachmentId}}]`, ≤ 20 files / 25 MB |
 | POST | `/api/email/uploads` | Hold one file (`file`, multipart) for a mail being written; ≤ 25 MB; held 1 h, for its uploader only |
 | DELETE | `/api/email/uploads/:id` | Let go of a held file |
 | POST | `/api/email/snooze` | `{ids, wakeAt, provider?, threadId?, from, subject, snippet}`: archive now, back in the inbox unread at `wakeAt` |
 | GET | `/api/email/snoozed` | Snoozed conversations, soonest first; `error`/`retryAt` when a wake failed |
 | POST | `/api/email/snoozed/:id/unsnooze` | Bring it back now |
+| POST | `/api/email/snoozed/:id/dismiss` | Let a snooze go: nothing is moved, the mail stays in the archive |
 | GET/PUT | `/api/email/index` | The local header index: on/off (`{enabled}`; off deletes it) and per-mailbox status |
 | POST | `/api/email/imap/message/:id/summarize` · `/reply-options` · `/draft` · `/task` | AI help for IMAP mail; 403 at protection level 3–4 unless the models are local |
 | PUT | `/api/email/imap/triage/label/:id` | The caller's own label on an IMAP mail they can read |

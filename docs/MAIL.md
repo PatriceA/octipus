@@ -94,7 +94,13 @@ only its owners can do it.
 - **Snooze:** a conversation leaves the inbox until a chosen time and comes
   back unread (table `email_snoozes`, job `email-snooze`). The **Snoozed**
   folder lists what is out, says why a wake failed, and has **Unsnooze**. A
-  snooze in a further account is woken in that account.
+  snooze is stored with its account's address (the default's too) and woken
+  in that account. A wake strikes each message from the row as it comes
+  back, so a retry never moves one twice; a message the mailbox no longer
+  has counts as back. After 12 failed wakes (about a day and a half) it is
+  no longer tried: the folder says so and offers **Try again** or **Leave in
+  archive**. A snooze that could move only some messages keeps those and
+  says the rest stayed in the inbox.
 - An IMAP / POP3 mailbox sends plain text without attachments and has no
   snooze: Octipus changes nothing on its server.
 
