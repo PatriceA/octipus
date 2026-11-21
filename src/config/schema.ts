@@ -903,13 +903,39 @@ export const configSchema = z.object({
      * across turns from the last review, so ten one-call turns earn one review
      * and a long turn does not earn one per turn.
      */
-    reviewEveryToolCalls: z.number().int().min(1).default(10),
+    reviewEveryToolCalls: z.number().int().min(1).default(40),
+    /**
+     * No automatic tool-count review sooner than this after the session's
+     * previous check was created. Plan-completed and manual checks are not
+     * held back.
+     */
+    minReviewIntervalMinutes: z.number().int().min(0).default(30),
     /**
      * With the background model on a local provider, a review starts only once
      * that provider has been idle this long, so it never takes the GPU from a
      * user's turn. Remote providers review at once.
      */
     localIdleMs: z.number().int().min(0).default(60_000),
+    /**
+     * Sessions a learned skill proposal must be seen in before it is shown
+     * (until then it waits as a candidate). A user correction, `distill_skill`
+     * and patches are shown at once. 1 turns the gate off.
+     */
+    recurrenceSessions: z.number().int().min(1).default(2),
+    /** Learned skill proposals surfaced per user per rolling 24 hours; the rest wait as candidates. */
+    maxSkillProposalsPerDay: z.number().int().min(0).default(2),
+    /** Above this many pending non-patch proposals of a user, learned ones wait as candidates. */
+    maxPendingSkillProposals: z.number().int().min(0).default(10),
+    /** Cosine similarity of name + description at or above which two proposals are the same skill. */
+    duplicateSimilarity: z.number().min(0).max(1).default(0.85),
+    /**
+     * From here up to `duplicateSimilarity` two proposals are related: the
+     * merge model decides whether they are one skill. Above
+     * `duplicateSimilarity` it is ignored.
+     */
+    relatedSimilarity: z.number().min(0).max(1).default(0.70),
+    /** A candidate not seen again for this many days is deleted by the daily consolidation. */
+    candidateTtlDays: z.number().int().min(1).default(30),
   }).prefault({}),
   /**
    * Context hooks (docs/CONTEXT-HOOKS.md): knowledge-base recall, a notes

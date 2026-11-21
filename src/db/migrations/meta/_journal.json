@@ -1380,6 +1380,13 @@
       "when": 1795305600000,
       "tag": "0196_email_index",
       "breakpoints": true
+    },
+    {
+      "idx": 197,
+      "version": "7",
+      "when": 1795348800000,
+      "tag": "0197_skill_proposal_consolidation",
+      "breakpoints": true
     }
   ]
 }
