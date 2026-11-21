@@ -180,7 +180,16 @@ export interface SerializeOptions {
    * which deliberately flattens to clean prose.
    */
   presentational?: boolean;
+  /**
+   * Mail: a remote image tells the sender the mail was opened (and when, and
+   * from where). The URL is kept in `data-remote-src` instead of `src`, so
+   * nothing loads until the reader asks for the images (REMOTE_IMAGE_ATTR).
+   */
+  blockRemoteImages?: boolean;
 }
+
+/** Where a blocked image's URL waits. A viewer shows the images by renaming it to `src`. */
+export const REMOTE_IMAGE_ATTR = 'data-remote-src';
 
 /**
  * Serialize a node subtree to sanitized HTML using the tag/attr allowlist.
@@ -202,7 +211,7 @@ export function serialize(node: AnyNode, opts: SerializeOptions = {}): string {
     for (const name of allowedAttrs) {
       let val = attr(node, name);
       if ((name === 'href' || name === 'src') && val) val = safeUrl(val);
-      if (val) attrs += ` ${name}="${escapeAttr(val)}"`;
+      if (val) attrs += ` ${tag === 'img' && name === 'src' && opts.blockRemoteImages ? REMOTE_IMAGE_ATTR : name}="${escapeAttr(val)}"`;
     }
   }
   if (opts.presentational) {

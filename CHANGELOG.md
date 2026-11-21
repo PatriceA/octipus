@@ -7,6 +7,19 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Email and calendar fixes** (phase 0 of [the email and calendar plan](docs/plans/email-calendar-ux.md)).
+  - Gmail mail with an attachment showed only its snippet; the body is now
+    found at any MIME depth, and HTML-only mail renders as HTML.
+  - A reply sent from the Email page joins its conversation: `POST /api/email/send`
+    takes `replyTo`. An Outlook reply keeps the original subject.
+  - Remote images in mail are not loaded until **Show images** is chosen.
+  - Triage results survive a reload: `/api/email/inbox` returns the stored
+    triage with the list (migration `0194_email_triage_result`).
+  - **Behaviour change:** auto-archive on triage is off until turned on. It
+    was on by default; anyone relying on that ticks the box once.
+  - Calendar shows the reader's week (not seven days from today) and readable
+    end times.
+
 - **Codemode boundary hardening.** Bounded default and error output, fixed zero-output requests, rejected malformed arguments and misplaced options before dispatch, added a shared source-size limit, preserved prototype-like state keys, and aligned tool discovery aliases with descriptions and invocation. Invalid bridge JSON now returns a client error. Added live-smoke evidence and repeatable request/response, storage, concurrency, timeout and memory boundary tests.
 
 - Codemode now keeps ordinary tool definitions out of API and CLI prompts, including core tools and directly exposed MCP tools. Scripts discover schemas only when needed; coordination controls and existing permission checks are preserved. Models without codemode keep their existing tool advertisement.

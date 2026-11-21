@@ -23,6 +23,7 @@ import {
   startLabelBacklog,
   BacklogBusyError,
   setUserLabel,
+  storedTriage,
   type InboxItem,
 } from '@/core/email';
 import { saveReplyDraft } from '@/core/email/drafts';
@@ -73,7 +74,13 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const limit = Math.min(Math.max(Number(query?.limit) || 20, 1), 50);
-        return await getInbox(user.id, limit, query?.pageToken || undefined);
+        const inbox = await getInbox(user.id, limit, query?.pageToken || undefined);
+        if (!inbox.provider || inbox.items.length === 0) return inbox;
+        // Earlier triage (and the owner's own labels) come back with the list:
+        // without it every reload showed an untriaged inbox. Never blocks the list.
+        const triage = await storedTriage(user.id, inbox.provider, inbox.items.map((it) => it.id))
+          .catch((err: unknown) => { apiLogger.warn({ error: String((err as Error)?.message ?? err).slice(0, 200), userId: user.id }, 'email: could not read stored triage'); return {} as Record<string, never>; });
+        return { ...inbox, items: inbox.items.map((it) => (triage[it.id] ? { ...it, triage: triage[it.id] } : it)) };
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
@@ -269,7 +276,9 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        return await sendReply(user.id, provider, { to: body.to, subject: body.subject, body: body.body });
+        const sent = await sendReply(user.id, provider, { to: body.to, subject: body.subject, body: body.body, replyTo: body.replyTo });
+        if (body.replyTo) handledByOwner(user.id, provider, body.replyTo, 'replied');
+        return sent;
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
@@ -281,6 +290,8 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         subject: t.String({ maxLength: 998 }),
         body: t.String({ minLength: 1, maxLength: 100_000 }),
         confirm: t.Optional(t.Boolean()),
+        // The message this answers: the reply is threaded under it.
+        replyTo: t.Optional(t.String({ minLength: 1, maxLength: 256 })),
       }),
       detail: { tags: ['email'] },
     }

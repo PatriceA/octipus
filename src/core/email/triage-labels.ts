@@ -9,7 +9,7 @@
  */
 import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type ClefObservation, type EmailTriageLabel, emailTriageLabels } from '@/db/schema/email-triage-labels';
+import { type ClefObservation, type EmailTriageLabel, emailTriageLabels, type StoredTriage } from '@/db/schema/email-triage-labels';
 import type { EmailProvider, EmailTriage, InboxItem } from './types';
 
 type Priority = EmailTriage['priority'];
@@ -116,6 +116,37 @@ export async function saveModelLabels(userId: string, provider: EmailProvider, i
     set: { labelPriority: sql`excluded.label_priority`, labelCategory: sql`excluded.label_category`, labelSource: sql`excluded.label_source`, labelModel: sql`excluded.label_model`, labelRubric: sql`excluded.label_rubric`, labeledAt: sql`excluded.labeled_at` },
     setWhere: sql`${emailTriageLabels.labelSource} IS DISTINCT FROM 'user'`,
   });
+}
+
+/** Record the triage answers a run returned, with the model kind that gave each. */
+export async function saveTriageResults(userId: string, provider: EmailProvider, items: InboxItem[], answers: Record<string, EmailTriage>, sourceOf: (id: string) => StoredTriage['source']): Promise<void> {
+  const at = new Date().toISOString();
+  const rows = items.filter(it => answers[it.id]).map(it => {
+    const { priority, category, reason } = answers[it.id];
+    return { ...base(userId, provider, it), triage: { priority, ...(category ? { category } : {}), ...(reason ? { reason: reason.slice(0, 500) } : {}), source: sourceOf(it.id), at } };
+  });
+  if (!rows.length) return;
+  await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
+    target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],
+    set: { triage: sql`excluded.triage` },
+  });
+}
+
+/**
+ * The triage to show for these mails without asking a model again: the owner's
+ * own label, else the answer the last triage run gave.
+ */
+export async function storedTriage(userId: string, provider: EmailProvider, ids: string[]): Promise<Record<string, EmailTriage>> {
+  if (!ids.length) return {};
+  const rows = await getDb().select().from(emailTriageLabels).where(and(
+    eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, provider), inArray(emailTriageLabels.messageId, ids),
+  ));
+  const out: Record<string, EmailTriage> = {};
+  for (const r of rows) {
+    if (r.labelSource === 'user' && r.labelPriority) out[r.messageId] = { priority: r.labelPriority, ...(r.labelCategory ? { category: r.labelCategory } : {}) };
+    else if (r.triage) out[r.messageId] = { priority: r.triage.priority, ...(r.triage.category ? { category: r.triage.category } : {}), ...(r.triage.reason ? { reason: r.triage.reason } : {}) };
+  }
+  return out;
 }
 
 /** The owner's label. Only for a mail triage has already seen (the row holds its sender and subject). */

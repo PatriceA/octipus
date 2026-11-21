@@ -35,6 +35,13 @@ const priorityRail: Record<string, string> = {
   low: 'border-l-outline-variant',
 };
 
+/**
+ * How the server hands over a remote image (REMOTE_IMAGE_ATTR in
+ * src/core/html/sanitize.ts): the URL is parked outside `src`. "<" is escaped
+ * in sanitized text, so this only ever matches a real image tag.
+ */
+const BLOCKED_IMAGE = '<img data-remote-src="';
+
 export default function EmailPage() {
   return <MailWorkspace oauthInbox={<OAuthInbox />} />;
 }
@@ -66,11 +73,14 @@ function OAuthInbox() {
   const [catRows, setCatRows] = useState<Array<{ name: string; description: string }> | null>(null);
   const [catDefaults, setCatDefaults] = useState<Record<string, string>>({});
   const [reviewOpen, setReviewOpen] = useState(false);
-  // Auto-archive low-priority spam/marketing on triage. Per-browser preference;
-  // archive is reversible (All Mail / Archive folder) and the last batch has Undo.
+  // Auto-archive low-priority spam/marketing on triage. Per-browser preference,
+  // off until the owner turns it on: triage must not move mail nobody asked it to.
+  // Archive is reversible (All Mail / Archive folder) and the last batch has Undo.
   const [autoArchiveOn, setAutoArchiveOn] = useState(() => {
-    try { return localStorage.getItem('email.autoArchive') !== 'off'; } catch { return true; }
+    try { return localStorage.getItem('email.autoArchive') === 'on'; } catch { return false; }
   });
+  // Remote images stay unloaded until asked for: loading one tells the sender the mail was opened.
+  const [showImages, setShowImages] = useState(false);
   const [lastArchived, setLastArchived] = useState<InboxItem[]>([]);
 
   const loadInbox = useCallback(async () => {
@@ -115,7 +125,7 @@ function OAuthInbox() {
   }, [loadInbox]);
 
   const open = async (id: string) => {
-    setOpenMsg(null); setSummary(''); setDraft(null); setReplyOpts(null); setBusy('open');
+    setOpenMsg(null); setSummary(''); setDraft(null); setReplyOpts(null); setShowImages(false); setBusy('open');
     try {
       const msg = await api.get<EmailMessage & { error?: string }>(`/email/message/${id}`);
       if (msg.error) { setError(msg.error); return; }
@@ -192,7 +202,7 @@ function OAuthInbox() {
     if (!confirm(`Send this reply to ${draft.to}?`)) return;
     setBusy('send');
     try {
-      const res = await api.post<{ sent?: boolean; error?: string }>('/email/send', { ...draft, confirm: true });
+      const res = await api.post<{ sent?: boolean; error?: string }>('/email/send', { ...draft, confirm: true, ...(openMsg ? { replyTo: openMsg.id } : {}) });
       if (res.error) setError(res.error);
       else { setDraft(null); setSummary('Reply sent.'); }
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
@@ -427,7 +437,7 @@ function OAuthInbox() {
                   {it.unread && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                   <span className={`text-sm truncate flex-1 ${it.unread ? 'font-semibold text-on-surface' : 'text-on-surface-variant'}`}>{it.from.name || it.from.email}</span>
                   {it.triage?.category && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent-container/30 text-on-surface-variant">{it.triage.category}</span>}
-                  {it.triage && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${priorityBadge[it.triage.priority]}`}>{it.triage.priority}</span>}
+                  {it.triage && <span title={it.triage.reason || undefined} className={`text-[10px] px-1.5 py-0.5 rounded-full ${priorityBadge[it.triage.priority]}`}>{it.triage.priority}</span>}
                 </div>
                 <div className="text-sm text-on-surface truncate">{it.subject}</div>
                 <div className="text-xs text-on-surface-variant/70 truncate">{it.snippet}</div>
@@ -477,12 +487,18 @@ function OAuthInbox() {
                 {/* Email body — render sanitized HTML when present (most mail is
                     HTML); fall back to plain text. The body is the important
                     part, so give it at least half the viewport. */}
+                {openMsg.html && !showImages && openMsg.html.includes(BLOCKED_IMAGE) && (
+                  <p className="text-xs text-on-surface-variant border-t border-outline-variant/10 pt-3">
+                    Images are not loaded, so the sender cannot see that you opened this mail.
+                    <button onClick={() => setShowImages(true)} className="ml-2 text-primary underline">Show images</button>
+                  </p>
+                )}
                 {openMsg.html ? (
                   <div
                     className="email-html text-sm text-on-surface min-h-[40vh] max-h-[60vh] overflow-y-auto border-t border-outline-variant/10 pt-3 [&_a]:text-primary [&_a]:underline [&_img]:max-w-full"
                     // Sanitized server-side via the shared allowlist sanitizer
                     // (src/core/html/sanitize.ts) — no scripts/handlers/unsafe URLs survive.
-                    dangerouslySetInnerHTML={{ __html: openMsg.html }}
+                    dangerouslySetInnerHTML={{ __html: showImages ? openMsg.html.replaceAll(BLOCKED_IMAGE, '<img src="') : openMsg.html }}
                   />
                 ) : (
                   <div className="text-sm text-on-surface whitespace-pre-wrap min-h-[40vh] max-h-[60vh] overflow-y-auto border-t border-outline-variant/10 pt-3">{openMsg.body}</div>

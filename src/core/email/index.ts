@@ -20,7 +20,7 @@ export {
   startLabelBacklog,
   BacklogBusyError,
 } from './service';
-export { setUserLabel } from './triage-labels';
+export { setUserLabel, storedTriage } from './triage-labels';
 export { detectProvider } from './providers';
 export { gmailToMessage, m365ToMessage, normalizeGmail, normalizeGmailList, normalizeM365, normalizeM365List, parseAddress } from './normalize';
 export type { EmailAddress, EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';

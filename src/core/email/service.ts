@@ -11,7 +11,7 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { resolveModel } from '@/models/resolve-model';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import type { ClefObservation } from '@/db/schema/email-triage-labels';
-import { DEFAULT_THRESHOLD, examplesFor, reviewQueue, saveModelLabels, saveObservations, type Thresholds, thresholdsFor, userLabels } from './triage-labels';
+import { DEFAULT_THRESHOLD, examplesFor, reviewQueue, saveModelLabels, saveObservations, saveTriageResults, type Thresholds, thresholdsFor, userLabels } from './triage-labels';
 import { userRepository } from '@/db/repositories/user-repository';
 import { coreLogger } from '@/utils/logger';
 import {
@@ -22,6 +22,7 @@ import {
   normalizeGmail,
   normalizeM365List,
 } from './normalize';
+import { buildGmailReplyRaw } from './drafts';
 import { detectProvider, gmailApi, graphApi } from './providers';
 import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
 import { mapLimit } from '@/utils/concurrency';
@@ -206,20 +207,38 @@ export function buildGmailRaw(to: string, subject: string, body: string): string
   return Buffer.from(mime, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Send a reply. Caller MUST have confirmed — this performs the side effect. */
+/**
+ * Send a reply. Caller MUST have confirmed — this performs the side effect.
+ * With `replyTo` (the id of the message being answered) the reply joins that
+ * conversation: without it Gmail and Outlook file it as a new, unrelated mail,
+ * for the sender and the recipient alike.
+ */
 export async function sendReply(
   userId: string,
   provider: EmailProvider,
-  payload: { to: string; subject: string; body: string },
+  payload: { to: string; subject: string; body: string; replyTo?: string },
 ): Promise<{ sent: boolean }> {
   if (provider === 'google') {
-    await gmailApi(userId, 'POST', '/messages/send', { raw: buildGmailRaw(payload.to, payload.subject, payload.body) });
+    if (payload.replyTo) {
+      const original = (await gmailApi(userId, 'GET', `/messages/${encodeURIComponent(payload.replyTo)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`)) as GmailMessage;
+      const header = (name: string) => original.payload?.headers?.find((h) => h.name.toLowerCase() === name)?.value;
+      const raw = buildGmailReplyRaw({ to: payload.to, subject: payload.subject, body: payload.body, inReplyTo: header('message-id'), references: header('references') });
+      await gmailApi(userId, 'POST', '/messages/send', { raw, ...(original.threadId ? { threadId: original.threadId } : {}) });
+    } else {
+      await gmailApi(userId, 'POST', '/messages/send', { raw: buildGmailRaw(payload.to, payload.subject, payload.body) });
+    }
+  } else if (payload.replyTo) {
+    // Graph's reply threads the message and quotes the original below `comment`.
+    await graphApi(userId, 'POST', `/me/messages/${encodeURIComponent(payload.replyTo)}/reply`, {
+      message: { toRecipients: [{ emailAddress: { address: payload.to } }] },
+      comment: payload.body,
+    });
   } else {
     await graphApi(userId, 'POST', '/me/sendMail', {
       message: { subject: payload.subject, body: { contentType: 'Text', content: payload.body }, toRecipients: [{ emailAddress: { address: payload.to } }] },
     });
   }
-  coreLogger.info({ userId, provider, to: payload.to }, 'email: reply sent'); // no body logged
+  coreLogger.info({ userId, provider, to: payload.to, threaded: !!payload.replyTo }, 'email: reply sent'); // no body logged
   return { sent: true };
 }
 
@@ -565,6 +584,9 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
   const decisionMs = Date.now() - started;
   let compared = 0;
   const saves: Promise<void>[] = [];
+  // What the owner was shown, so the inbox still shows it after a reload.
+  const remember = (answers: Record<string, EmailTriage>) =>
+    saveTriageResults(userId, provider, todo, answers, id => (decided[id] ? 'decision' : 'llm')).catch(keepGoing('saving triage results'));
   try {
     // The LLM answers what the decision model did not, plus an audit sample of
     // what it did: those labels keep the fitted thresholds honest.
@@ -584,13 +606,17 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
       }
     });
     record({ event: 'run_completed', items: todo.length, accepted: Object.keys(decided).length, referenced: referenced.length, compared, decisionMs, elapsedMs: Date.now() - started });
+    await remember({ ...llm, ...decided });
     return { ...llm, ...decided, ...owner };
   } catch (err) {
     record({ event: 'reference_failed', items: todo.length, accepted: Object.keys(decided).length, compared, decisionMs, elapsedMs: Date.now() - started });
     // Message only, capped: a provider error can echo the prompt (mail metadata).
     coreLogger.warn({ runId, error: String((err as Error)?.message ?? err).slice(0, 200) }, 'email: reference triage failed; decision records retained');
     // An evaluation failure must not invalidate a fully answered live batch.
-    if (todo.every(item => decided[item.id])) return { ...decided, ...owner };
+    if (todo.every(item => decided[item.id])) {
+      await remember(decided);
+      return { ...decided, ...owner };
+    }
     throw err;
   } finally {
     await Promise.all(saves);

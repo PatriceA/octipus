@@ -105,7 +105,7 @@ more than 5 minutes old. After a failure the wait doubles, up to an hour.
   the mail client.
 
 Stored per message: the addresses, subject, a plain-text body, the HTML body
-sanitized like the Gmail inbox's (no scripts, no remote images), the
+sanitized like the Gmail inbox's (no scripts; a remote image's address is kept aside in `data-remote-src`, so nothing loads until a reader asks for the images), the
 attachments' names and sizes, and the raw source (in `mail_raw`), from which
 attachments are downloaded.
 

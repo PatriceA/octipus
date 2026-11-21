@@ -17,6 +17,30 @@ const allDayLabel = (event: CalendarEvent) => {
   const until = dateOnly(last);
   return until > first ? `All day · ${first} – ${until}` : `All day · ${first}`;
 };
+/** First day of the reader's week (0 = Sunday … 6 = Saturday); Monday where the browser cannot say. */
+const weekStartsOn = () => {
+  try {
+    const locale = new Intl.Locale(navigator.language) as Intl.Locale & { getWeekInfo?: () => { firstDay: number }; weekInfo?: { firstDay: number } };
+    const first = (locale.getWeekInfo?.() ?? locale.weekInfo)?.firstDay;
+    return typeof first === 'number' ? first % 7 : 1;
+  } catch { return 1; }
+};
+/** The first day of the week `day` (YYYY-MM-DD) falls in. */
+const weekStart = (day: string) => {
+  const date = new Date(`${day}T12:00:00`);
+  if (!Number.isFinite(+date)) return day;
+  date.setDate(date.getDate() - ((date.getDay() - weekStartsOn() + 7) % 7));
+  return dateOnly(date);
+};
+const clock = (date: Date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** "09:00 – 10:00"; the end names its date only when the event runs into another day. */
+const timeLabel = (event: CalendarEvent) => {
+  const start = new Date(event.start);
+  if (!event.end) return clock(start);
+  const end = new Date(event.end);
+  const otherDay = dateOnly(end) !== dateOnly(start);
+  return `${clock(start)} – ${otherDay ? `${end.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ` : ''}${clock(end)}`;
+};
 const providerName = (provider: string) => provider === 'google' ? 'Google' : 'Microsoft 365';
 
 export default function CalendarPage() {
@@ -29,13 +53,16 @@ export default function CalendarPage() {
 function PersonalCalendar() {
   const client = useQueryClient();
   const workspace = useWorkspaceId();
-  const [from, setFrom] = useState(() => dateOnly(new Date()));
+  const [from, setFrom] = useState(() => weekStart(dateOnly(new Date())));
   const [filter, setFilter] = useState('all');
   const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null);
   const [notice, setNotice] = useState('');
   const start = new Date(`${from}T00:00:00`);
   const finish = new Date(start); finish.setDate(finish.getDate() + 7);
   const events = useQuery({ queryKey: ['calendar', workspace, from], enabled: Number.isFinite(+start), queryFn: () => api.get<{ events: CalendarEvent[]; providers: CalendarProvider[]; partial: boolean; truncated?: boolean }>(`/calendar/events?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(finish.toISOString())}`) });
+  // A new event starts today when this week is on screen, not on a day already gone.
+  const today = dateOnly(new Date());
+  const newEventDay = today >= from && today < dateOnly(finish) ? today : from;
   const changeWeek = (amount: number) => { const date = new Date(`${from}T12:00:00`); date.setDate(date.getDate() + amount * 7); setFrom(dateOnly(date)); setEditing(null); };
   const rows = (events.data?.events ?? []).filter(event => filter === 'all' || event.provider === filter);
   const groups = new Map<string, CalendarEvent[]>();
@@ -44,9 +71,9 @@ function PersonalCalendar() {
     <PageHeader title="calendar" description="Your connected Google and Microsoft 365 default calendars. Times are shown in your local timezone." />
     <div className="flex flex-wrap gap-3 items-end">
       <button className={mailButton} disabled={!from} onClick={() => changeWeek(-1)}>Previous week</button>
-      <label>Week starting<input className={mailInput} type="date" required value={from} onChange={e => { setFrom(e.target.value); setEditing(null); }} /></label>
+      <label>Week of<input className={mailInput} type="date" required value={from} onChange={e => { setFrom(e.target.value ? weekStart(e.target.value) : ''); setEditing(null); }} /></label>
       <button className={mailButton} disabled={!from} onClick={() => changeWeek(1)}>Next week</button>
-      <button className={mailButton} onClick={() => { setFrom(dateOnly(new Date())); setEditing(null); }}>Today</button>
+      <button className={mailButton} onClick={() => { setFrom(weekStart(dateOnly(new Date()))); setEditing(null); }}>This week</button>
       <label>Calendar provider<select className={mailInput} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">All connected calendars</option><option value="google">Google</option><option value="microsoft">Microsoft 365</option></select></label>
       <button className={mailButton} disabled={events.isFetching} onClick={() => events.refetch()}>Refresh calendar</button>
       <button className={mailButton} disabled={!events.data?.providers.length} onClick={() => { setEditing('new'); setNotice(''); }}>New event</button>
@@ -58,10 +85,10 @@ function PersonalCalendar() {
     {events.data?.partial && <p role="alert" className="text-error">Some calendar data could not be loaded. This schedule may be incomplete.</p>}
     {events.data && !events.data.partial && events.data.providers.length === 0 && <p>No calendar connected. Connect Google or Microsoft 365 in <a className="text-primary underline" href="/settings?tab=integrations">Settings → Integrations</a>.</p>}
     {events.data && events.data.providers.length > 0 && rows.length === 0 && <p>No events in this range.</p>}
-    {editing && <EventForm key={editing === 'new' ? 'new' : `${editing.provider}:${editing.id}`} event={editing === 'new' ? undefined : editing} day={from} providers={events.data?.providers ?? []} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); setNotice('Calendar event saved.'); await client.invalidateQueries({ queryKey: ['calendar', workspace] }); }} />}
+    {editing && <EventForm key={editing === 'new' ? 'new' : `${editing.provider}:${editing.id}`} event={editing === 'new' ? undefined : editing} day={newEventDay} providers={events.data?.providers ?? []} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); setNotice('Calendar event saved.'); await client.invalidateQueries({ queryKey: ['calendar', workspace] }); }} />}
     {[...groups].sort(([a], [b]) => a.localeCompare(b)).map(([day, items]) => <section key={day} className="space-y-2"><h2 className="text-lg font-bold">{new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2>
       {items.map(event => <article key={`${event.provider}:${event.id}`} className="rounded-md border border-outline-variant p-4 space-y-2"><div className="flex justify-between gap-3"><h3 className="font-bold">{event.title}</h3><button className={mailButton} onClick={() => { setEditing(event); setNotice(''); }}>Edit {event.title}</button></div>
-        <p className="text-sm">{event.allDay ? allDayLabel(event) : `${new Date(event.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${event.end ? ` – ${new Date(event.end).toLocaleString()}` : ''}`} · {providerName(event.provider)}</p>
+        <p className="text-sm">{event.allDay ? allDayLabel(event) : timeLabel(event)} · {providerName(event.provider)}</p>
         {event.location && <p>{event.location}</p>}{event.description && <p className="text-sm whitespace-pre-wrap break-words">{event.description}</p>}
         {event.attendees.length > 0 && <p className="text-xs text-on-surface-variant">Attendees: {event.attendees.map(a => a.name || a.email).join(', ')}</p>}
       </article>)}

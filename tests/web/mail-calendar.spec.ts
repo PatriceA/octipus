@@ -162,3 +162,35 @@ test('calendar shows incomplete-provider and pagination warnings', async ({ auth
   await expect(page.getByText('Some calendar data could not be loaded.', { exact: false })).toBeVisible();
   await expect(page.getByText('This range contains more events than could be loaded.', { exact: false })).toBeVisible();
 });
+
+test('OAuth inbox keeps triage across reloads, holds remote images back, threads replies and archives nothing unasked', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await page.route('**/api/mail/accounts', route => json(route, 200, []));
+  const item = { id: 'g1', provider: 'google', from: { email: 'boss@example.com' }, subject: 'Budget', snippet: 'Please confirm', receivedAt: new Date().toISOString(), unread: false, triage: { priority: 'high', category: 'work', reason: 'Asks for a confirmation today' } };
+  await page.route('**/api/email/inbox', route => json(route, 200, { provider: 'google', items: [item] }));
+  await page.route('**/api/email/message/g1', route => json(route, 200, { ...item, body: 'Please confirm', html: '<p>Please confirm</p><img data-remote-src="https://track.example/p.gif" alt="logo">' }));
+  await page.route('**/api/email/message/g1/reply-options', route => json(route, 200, { options: ['Confirm'] }));
+  await page.route('**/api/email/message/g1/draft', route => json(route, 200, { to: 'boss@example.com', subject: 'Re: Budget', body: 'Confirmed.' }));
+  const posts: Record<string, Record<string, unknown>> = {};
+  await page.route('**/api/email/triage', route => { posts.triage = route.request().postDataJSON(); return json(route, 200, { triage: {}, archived: [], labeled: 0 }); });
+  await page.route('**/api/email/send', route => { posts.send = route.request().postDataJSON(); return json(route, 200, { sent: true }); });
+  let imageRequests = 0;
+  await page.route('https://track.example/**', route => { imageRequests++; return route.fulfill({ status: 200, contentType: 'image/gif', body: '' }); });
+  await page.goto('/email');
+  // The stored triage arrives with the list: no triage run happened on this page.
+  await expect(page.getByText('high', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'work 1' })).toBeVisible();
+  await expect(page.getByLabel(/auto-archive/)).not.toBeChecked();
+  await page.getByRole('button', { name: /Triage inbox/ }).click();
+  await expect.poll(() => posts.triage?.autoArchive).toBe(false);
+  await page.getByRole('button', { name: /Budget/ }).click();
+  await expect(page.getByText('Images are not loaded', { exact: false })).toBeVisible();
+  expect(imageRequests).toBe(0);
+  await page.getByRole('button', { name: 'Show images' }).click();
+  await expect.poll(() => imageRequests).toBe(1);
+  await page.getByRole('button', { name: 'Draft reply' }).click();
+  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => posts.send).toMatchObject({ to: 'boss@example.com', confirm: true, replyTo: 'g1' });
+});

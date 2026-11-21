@@ -30,7 +30,14 @@ export interface GmailMessage {
   snippet?: string;
   labelIds?: string[];
   internalDate?: string;
-  payload?: { headers?: GmailHeader[]; body?: { data?: string }; parts?: Array<{ mimeType?: string; body?: { data?: string } }> };
+  payload?: GmailPart & { headers?: GmailHeader[] };
+}
+/** One MIME part. Mail with attachments nests its body: multipart/mixed → multipart/alternative → text/plain + text/html. */
+export interface GmailPart {
+  mimeType?: string;
+  filename?: string;
+  body?: { data?: string };
+  parts?: GmailPart[];
 }
 
 function header(msg: GmailMessage, name: string): string | undefined {
@@ -62,23 +69,7 @@ export function normalizeGmail(msg: GmailMessage): InboxItem {
 
 export const normalizeGmailList = (messages: GmailMessage[]): InboxItem[] => messages.map(normalizeGmail);
 
-/** Decode a Gmail base64url body part. */
-function decodeGmailBody(msg: GmailMessage): string {
-  const data =
-    msg.payload?.body?.data ??
-    msg.payload?.parts?.find((p) => p.mimeType === 'text/plain')?.body?.data ??
-    msg.payload?.parts?.find((p) => p.body?.data)?.body?.data;
-  if (!data) return msg.snippet ?? '';
-  try {
-    return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-  } catch {
-    return msg.snippet ?? '';
-  }
-}
-
-/** Decode the Gmail text/html part, if present, as a base64url string. */
-function decodeGmailHtml(msg: GmailMessage): string | undefined {
-  const data = msg.payload?.parts?.find((p) => p.mimeType === 'text/html')?.body?.data;
+function decodeBase64Url(data: string | undefined): string | undefined {
   if (!data) return undefined;
   try {
     return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
@@ -87,18 +78,40 @@ function decodeGmailHtml(msg: GmailMessage): string | undefined {
   }
 }
 
+/** The first body part of a MIME type, at any depth; attachments (parts with a filename) are not bodies. */
+function findBody(part: GmailPart | undefined, mimeType: string, depth = 0): string | undefined {
+  if (!part || depth > 10) return undefined;
+  if (part.mimeType === mimeType && !part.filename && part.body?.data) return part.body.data;
+  for (const child of part.parts ?? []) {
+    const found = findBody(child, mimeType, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** The plain-text body. A single-part message without a MIME type is taken as text. */
+function decodeGmailBody(msg: GmailMessage): string | undefined {
+  const untyped = !msg.payload?.mimeType && !msg.payload?.parts ? msg.payload?.body?.data : undefined;
+  return decodeBase64Url(findBody(msg.payload, 'text/plain') ?? untyped);
+}
+
+/** The text/html body, if the message has one. */
+function decodeGmailHtml(msg: GmailMessage): string | undefined {
+  return decodeBase64Url(findBody(msg.payload, 'text/html'));
+}
+
 export function gmailToMessage(msg: GmailMessage): EmailMessage {
   const rawHtml = decodeGmailHtml(msg);
   // Presentational: keep sanitized inline style + table layout so the message
   // renders close to how the sender built it (not flattened to plain text).
-  const html = rawHtml ? sanitizeHtmlFragment(rawHtml, { presentational: true }) : undefined;
-  const plain = decodeGmailBody(msg).trim();
+  const html = rawHtml ? sanitizeHtmlFragment(rawHtml, { presentational: true, blockRemoteImages: true }) : undefined;
+  const plain = (decodeGmailBody(msg) ?? '').trim();
   return {
     ...normalizeGmail(msg),
     to: (header(msg, 'to') ?? '').split(',').map(parseAddress).filter((a) => a.email),
     // Prefer the decoded plain part; fall back to text from the HTML so AI
     // prompts and search always have something even for HTML-only mail.
-    body: plain || (rawHtml ? htmlToText(rawHtml) : ''),
+    body: plain || (rawHtml ? htmlToText(rawHtml) : (msg.snippet ?? '')),
     html: html || undefined,
   };
 }
@@ -147,7 +160,7 @@ export function m365ToMessage(msg: GraphMessage): EmailMessage {
   const raw = msg.body?.content ?? msg.bodyPreview ?? '';
   const isHtml = msg.body?.contentType === 'html';
   // Presentational: keep sanitized inline style + table layout (see gmail path).
-  const html = isHtml ? sanitizeHtmlFragment(raw, { presentational: true }) : undefined;
+  const html = isHtml ? sanitizeHtmlFragment(raw, { presentational: true, blockRemoteImages: true }) : undefined;
   return {
     ...normalizeM365(msg),
     to: (msg.toRecipients ?? []).map((r) => graphAddress(r.emailAddress)).filter((a) => a.email),

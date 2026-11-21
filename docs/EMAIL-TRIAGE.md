@@ -26,7 +26,10 @@ this order:
    keep the thresholds honest. On an audited mail the decision model's answer
    still wins.
 5. **Everything is recorded** in the training set (table
-   `email_triage_labels`) and in the evaluation log.
+   `email_triage_labels`) and in the evaluation log. The answer shown for each
+   mail is stored too (column `triage`: priority, category, reason, and whether
+   the decision model or the LLM gave it), so the inbox shows it again after a
+   reload without asking a model.
 
 The result is `{...llm, ...decided, ...owner}`: an owner label beats a
 confident decision, which beats the LLM. If the LLM fails, a batch the decision
@@ -86,9 +89,9 @@ across versions.
    cannot. In that case triage uses the lane's install backup and otherwise
    tells you what to bind. A personal model row (one you own) never falls back
    to the backup.
-4. **Run the migrations.** Migrations `0192_email_triage_labels` and
-   `0193_email_triage_label_rubric` create the training set and run when the
-   backend starts.
+4. **Run the migrations.** Migrations `0192_email_triage_labels`,
+   `0193_email_triage_label_rubric` and `0194_email_triage_result` create the
+   training set and run when the backend starts.
 
 Without a model on the `decision` lane, triage is LLM-only, as it was before.
 

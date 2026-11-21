@@ -102,3 +102,49 @@ describe('normalizeM365', () => {
     expect(normalizeM365({ ...GRAPH, isRead: true }).unread).toBe(false);
   });
 });
+
+const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64url');
+
+describe('gmailToMessage — MIME structure', () => {
+  test('a mail with an attachment keeps its body (it sits one level down)', () => {
+    const msg = gmailToMessage({
+      ...GMAIL,
+      payload: {
+        headers: GMAIL.payload!.headers,
+        mimeType: 'multipart/mixed',
+        parts: [
+          { mimeType: 'multipart/alternative', parts: [
+            { mimeType: 'text/plain', body: { data: b64('Plain body') } },
+            { mimeType: 'text/html', body: { data: b64('<p>Html <b>body</b></p>') } },
+          ] },
+          { mimeType: 'application/pdf', filename: 'invoice.pdf', body: {} },
+        ],
+      },
+    });
+    expect(msg.body).toBe('Plain body');
+    expect(msg.html).toContain('<b>body</b>');
+  });
+
+  test('an attached text file is not taken for the body', () => {
+    const msg = gmailToMessage({
+      ...GMAIL,
+      payload: { headers: GMAIL.payload!.headers, mimeType: 'multipart/mixed', parts: [
+        { mimeType: 'text/plain', filename: 'notes.txt', body: { data: b64('attachment text') } },
+        { mimeType: 'text/plain', body: { data: b64('The real body') } },
+      ] },
+    });
+    expect(msg.body).toBe('The real body');
+  });
+
+  test('an HTML-only single-part mail is rendered as HTML, not shown as source', () => {
+    const msg = gmailToMessage({ ...GMAIL, payload: { headers: GMAIL.payload!.headers, mimeType: 'text/html', body: { data: b64('<p>Only html</p>') } } });
+    expect(msg.html).toContain('<p>Only html</p>');
+    expect(msg.body).toBe('Only html');
+  });
+
+  test('remote images are not loaded until asked for', () => {
+    const msg = gmailToMessage({ ...GMAIL, payload: { headers: GMAIL.payload!.headers, mimeType: 'text/html', body: { data: b64('<p>Hi</p><img src="https://track.example/p.gif" alt="x">') } } });
+    expect(msg.html).toContain('<img data-remote-src="https://track.example/p.gif"');
+    expect(msg.html).not.toMatch(/\ssrc=/);
+  });
+});

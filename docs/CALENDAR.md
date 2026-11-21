@@ -1,7 +1,8 @@
 # Calendar
 
 Open **Calendar** (`/calendar`) to see a week of events from your connected
-Google and Microsoft 365 default calendars. Connect accounts in
+Google and Microsoft 365 default calendars. The week starts on the first day of
+the week in your browser's locale (Monday where the browser does not say). Connect accounts in
 **Settings → Integrations**. The Email & calendar (`inbox`) module must be enabled.
 
 The page reads live provider data, with date navigation, provider filtering and
