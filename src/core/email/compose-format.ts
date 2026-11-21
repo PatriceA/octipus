@@ -72,7 +72,30 @@ export function formattedText(text: string): string {
     .replace(ITALIC_UNDERSCORE, '$1$2');
 }
 
-/** The text and (for a formatted body) HTML parts of what the writer typed. */
-export function composeParts(body: string, format: 'plain' | 'rich' | undefined): { text: string; html?: string } {
-  return format === 'rich' ? { text: formattedText(body), html: formattedHtml(body) } : { text: body };
+/**
+ * A quoted or forwarded original as HTML, read as nothing but text: escaped,
+ * a reply's "> " quote as one blockquote, line breaks kept.
+ */
+export function originalHtml(original: string): string {
+  const lines = original.replace(/\r\n?/g, '\n').split('\n');
+  const quoted = lines.findIndex((l) => /^>/.test(l));
+  const plain = (part: string[]) => part.map(escape).join('<br>');
+  const html = quoted >= 0 && lines.slice(quoted).every((l) => /^>/.test(l) || !l.trim())
+    ? `<p>${plain(lines.slice(0, quoted))}</p><blockquote>${plain(lines.slice(quoted).map((l) => l.replace(/^> ?/, '')))}</blockquote>`
+    : `<p>${plain(lines)}</p>`;
+  return sanitizeHtmlFragment(`<div>${html}</div>`);
+}
+
+/**
+ * The text and (for a formatted body) HTML parts of what the writer typed.
+ * `originalAt`: where the quoted or forwarded original starts; only what is
+ * above it is read as formatting, the original goes as it is.
+ */
+export function composeParts(body: string, format: 'plain' | 'rich' | undefined, originalAt?: number): { text: string; html?: string } {
+  if (format !== 'rich') return { text: body };
+  const at = originalAt !== undefined && Number.isInteger(originalAt) && originalAt >= 0 && originalAt <= body.length ? originalAt : body.length;
+  const own = body.slice(0, at);
+  const original = body.slice(at);
+  if (!original) return { text: formattedText(own), html: formattedHtml(own) };
+  return { text: formattedText(own) + original, html: `${formattedHtml(own)}\n${originalHtml(original)}` };
 }

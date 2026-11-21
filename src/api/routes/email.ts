@@ -299,7 +299,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         if (refs.length > MAX_ATTACHMENTS) { set.status = 400; return { error: `At most ${MAX_ATTACHMENTS} attachments per message.` }; }
         const { files, uploads } = await resolveAttachments(user.id, refs, (messageId, attachmentId) => getAttachment(user.id, provider, messageId, attachmentId),
           async (messageId) => new Map(((await readMessage(user.id, provider, messageId)).attachments ?? []).map((a) => [a.id, a.size])));
-        const { text, html } = composeParts(body.body, body.format);
+        const { text, html } = composeParts(body.body, body.format, body.originalAt);
         const sent = await sendReply(user.id, provider, { to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, body: text, html, attachments: files, replyTo: body.replyTo });
         dropUploads(user.id, uploads);
         if (body.replyTo) handledByOwner(user.id, provider, body.replyTo, 'replied');
@@ -326,6 +326,8 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         replyTo: t.Optional(t.String({ minLength: 1, maxLength: 256 })),
         // `rich`: the body carries the compose box's light formatting; an HTML part is built from it.
         format: t.Optional(t.Union([t.Literal('plain'), t.Literal('rich')])),
+        // Where the quoted or forwarded original starts in `body`: only what is above it is read as formatting.
+        originalAt: t.Optional(t.Integer({ minimum: 0, maximum: 100_000 })),
         // Held uploads (POST /email/uploads) and files of a forwarded message.
         attachments: t.Optional(t.Array(t.Union([
           t.Object({ upload: t.String({ minLength: 1, maxLength: 64 }) }),

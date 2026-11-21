@@ -33,7 +33,13 @@ export interface ComposeDraft {
   attachments: ComposeAttachment[];
   /** Light formatting on: **bold**, _italic_, lists, quotes and links become the mail's HTML. Off: plain text only. Google / Microsoft only. */
   rich: boolean;
+  /** The quoted or forwarded original appended below what the writer types: sent as it is, never read as formatting. */
+  original?: string;
 }
+
+/** Where the original starts in the body, when the body still ends with it untouched. */
+export const originalAt = (draft: Pick<ComposeDraft, 'body' | 'original'>): number | undefined =>
+  draft.original && draft.body.endsWith(draft.original) ? draft.body.length - draft.original.length : undefined;
 
 /** What one mail may carry, as the server checks it (core/email/send-mime.ts). */
 export const MAX_FILES = 20;
@@ -64,14 +70,15 @@ export function composeFor(mode: ComposeMode, source?: EmailMessage, self?: stri
     const head = ['---------- Forwarded message ----------', `From: ${source.from.name ? `${source.from.name} <${source.from.email}>` : source.from.email}`, when && `Date: ${when}`, `Subject: ${source.subject}`, source.to?.length ? `To: ${addressList(source.to)}` : ''].filter(Boolean).join('\n');
     // A Google / Microsoft original's files go along unless the writer removes them.
     const attachments: ComposeAttachment[] = source.provider === 'imap' ? [] : (source.attachments ?? []).map((a) => ({ key: nextKey(), kind: 'forward', name: a.name, size: a.size, messageId: source.id, attachmentId: a.id }));
-    return { ...blank, mode, to: '', subject: fwd(source.subject), body: `\n\n${head}\n\n${source.body}`, source, attachments };
+    const original = `${head}\n\n${source.body}`;
+    return { ...blank, mode, to: '', subject: fwd(source.subject), body: `\n\n${original}`, original, source, attachments };
   }
   if (source.provider === 'imap') return { ...blank, mode, to: '', subject: re(source.subject), body: '', source };
   const own = self?.toLowerCase();
   const others = [...(source.to ?? []), ...(source.cc ?? [])].filter((a) => a.email && a.email.toLowerCase() !== own && a.email.toLowerCase() !== source.from.email.toLowerCase());
   // Outlook's reply quotes the original itself; a second quote from here would double it.
-  const quoted = source.provider === 'microsoft' ? '' : `\n\nOn ${when}, ${who(source.from)} wrote:\n${quote(source.body.slice(0, 8000))}`;
-  return { ...blank, mode, to: source.from.email, cc: mode === 'replyAll' ? addressList(others) : '', subject: re(source.subject), body: quoted, source };
+  const original = source.provider === 'microsoft' ? '' : `On ${when}, ${who(source.from)} wrote:\n${quote(source.body.slice(0, 8000))}`;
+  return { ...blank, mode, to: source.from.email, cc: mode === 'replyAll' ? addressList(others) : '', subject: re(source.subject), body: original ? `\n\n${original}` : '', ...(original ? { original } : {}), source };
 }
 
 const TITLE: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply', replyAll: 'Reply all', forward: 'Forward', draft: 'Draft' };
@@ -222,7 +229,7 @@ export function EmailCompose({ draft, mailbox, senders, ai = true, onMailbox, on
       const attachments = draft.attachments.map((a) => (a.kind === 'upload' ? { upload: a.id! } : { forward: { messageId: a.messageId, attachmentId: a.attachmentId } }));
       const res = await api.post<{ sent?: boolean; error?: string }>('/email/send', {
         to: draft.to, ...(draft.cc.trim() ? { cc: draft.cc } : {}), ...(draft.bcc.trim() ? { bcc: draft.bcc } : {}),
-        subject: draft.subject, body: draft.body, format: draft.rich ? 'rich' : 'plain', confirm: true, ...mailboxBody(mailbox),
+        subject: draft.subject, body: draft.body, format: draft.rich ? 'rich' : 'plain', ...(draft.rich && originalAt(draft) !== undefined ? { originalAt: originalAt(draft) } : {}), confirm: true, ...mailboxBody(mailbox),
         ...(isReply && draft.source ? { replyTo: draft.source.id } : {}),
         ...(attachments.length ? { attachments } : {}),
       });
