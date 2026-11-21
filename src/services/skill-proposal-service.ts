@@ -27,29 +27,42 @@ const REJECT_SUPPRESSION_MS = 90 * 24 * 60 * 60 * 1000;
 const OPEN_STATUSES: Array<'pending' | 'candidate'> = ['pending', 'candidate'];
 
 /**
- * Pending proposals, most observations first, then oldest first. The gateway
- * `/proposals approve <n>` resolves its index against this same order, so it
- * is stable between the list and the action that follows it as long as
- * nothing is merged in between.
+ * How a list is ordered. `most_seen` (the web page): most observations, then
+ * oldest. `surfaced` (the chat `/proposals` command, whose approve/reject
+ * take a row number): oldest shown first, then oldest filed, then id — a
+ * row's position never moves when counts change or rows are added, so a
+ * background merge or a newly surfaced candidate between the list and the
+ * action cannot make a number name another proposal.
+ */
+export type ProposalListOrder = 'most_seen' | 'surfaced';
+
+/**
+ * Pending proposals in `order` (default `most_seen`).
  *
  * `userId` scopes the list to its owner. Passing `undefined` returns every
  * user's — only for an admin/system caller.
  */
-export async function listPendingProposals(userId?: string): Promise<SkillProposalRecord[]> {
-  return listOpenProposals(userId, { includeCandidates: false });
+export async function listPendingProposals(userId?: string, opts: { order?: ProposalListOrder } = {}): Promise<SkillProposalRecord[]> {
+  return listOpenProposals(userId, { includeCandidates: false, order: opts.order });
 }
 
 /**
  * Pending proposals (sorted as `listPendingProposals`), followed by the
  * candidates (not shown yet) in the same order when `includeCandidates`.
  */
-export async function listOpenProposals(userId: string | undefined, opts: { includeCandidates: boolean }): Promise<SkillProposalRecord[]> {
+export async function listOpenProposals(
+  userId: string | undefined,
+  opts: { includeCandidates: boolean; order?: ProposalListOrder },
+): Promise<SkillProposalRecord[]> {
   const statuses: Array<'pending' | 'candidate'> = opts.includeCandidates ? OPEN_STATUSES : ['pending'];
   const filters = [inArray(skillProposals.status, statuses)];
   if (userId) filters.push(eq(skillProposals.userId, userId));
+  const byCount = opts.order === 'surfaced'
+    ? [sql`coalesce(${skillProposals.surfacedAt}, ${skillProposals.createdAt}) ASC`]
+    : [desc(skillProposals.exemplarCount)];
   return getDb().select().from(skillProposals).where(and(...filters)).orderBy(
     sql`(${skillProposals.status} = 'candidate')`,
-    desc(skillProposals.exemplarCount),
+    ...byCount,
     asc(skillProposals.createdAt),
     asc(skillProposals.id),
   );

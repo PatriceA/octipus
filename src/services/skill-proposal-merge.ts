@@ -9,8 +9,10 @@
  * files a new row). `merged` and `unchanged` both count the observation:
  * `exemplar_count`, `source_refs`, `last_exemplar_at` and the stronger
  * `signal`. A model that is unbound, truncated or malformed degrades to that
- * count-only merge and says so (`mergeDegraded`). The target's name and
- * fingerprint never change.
+ * count-only merge and says so (`mergeDegraded`), except in the related band
+ * (`allowDistinct`), where only the model's verdict could make the two one
+ * skill: there it answers `distinct` (with `degradedReason`). The target's
+ * name and fingerprint never change.
  *
  * `promoteIfEligible` moves a candidate to pending once it was seen in
  * `learning.recurrenceSessions` sessions or rests on a user correction, while
@@ -21,7 +23,7 @@ import { z } from 'zod';
 import { getConfig } from '@/config';
 import { filterPII } from '@/core/agent/pii-filter';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
@@ -142,7 +144,11 @@ export interface MergeOptions {
 }
 
 export type MergeResult =
-  | { verdict: 'distinct' }
+  /**
+   * Another skill: the model said so, or (with `degradedReason`) it could not
+   * judge a related-band pair, which then stays apart for now.
+   */
+  | { verdict: 'distinct'; degradedReason?: 'no_model' | 'truncated' | 'malformed' | 'model_error' }
   | {
     verdict: 'merged' | 'unchanged';
     /** The model could not be used: counted only, the text is unchanged. */
@@ -220,14 +226,14 @@ async function askMergeModel(target: SkillProposalRecord, incoming: MergeIncomin
     }));
     return interpretMergeReply(response.content ?? '', response.finishReason, allowDistinct);
   } catch (err) {
-    toolLogger.warn({ err, proposalId: target.id, model: model.modelId }, 'Skill proposal merge: the model call failed; counting only');
+    toolLogger.warn({ err, proposalId: target.id, model: model.modelId }, 'Skill proposal merge: the model call failed');
     return { kind: 'model_error' };
   }
 }
 
 /** The new embedding of a merged text; null (refilled later by ensureProposalEmbeddings) when it cannot be computed. */
 async function embeddingOf(name: string, description: string, proposalId: string): Promise<number[] | null> {
-  if (!isCapabilityOn('embedding')) return null;
+  if (!(await capabilityConfigured('embedding'))) return null;
   try {
     return await getEmbeddingService().generateEmbedding(similarityText({ name, description }), 'document');
   } catch (err) {
@@ -257,6 +263,13 @@ export async function mergeIntoProposal(
   }
   let degradedReason: Extract<MergeResult, { verdict: 'merged' | 'unchanged' }>['degradedReason'] =
     reply.kind === 'merged' || reply.kind === 'unchanged' ? undefined : reply.kind;
+  // In the related band the model's verdict is the only evidence that the two
+  // are one skill: without it they stay apart rather than being counted together.
+  if (degradedReason && allowDistinct) {
+    toolLogger.warn({ proposalId: target.id, incoming: incoming.name, reason: degradedReason, ...(reply.kind === 'malformed' ? { detail: reply.reason } : {}) },
+      'Skill proposal merge: the merge model could not judge a related pair; treating them as different skills');
+    return { verdict: 'distinct', degradedReason };
+  }
   if (degradedReason) {
     toolLogger.warn({ proposalId: target.id, reason: degradedReason, ...(reply.kind === 'malformed' ? { detail: reply.reason } : {}) },
       'Skill proposal merge degraded to a count-only merge');

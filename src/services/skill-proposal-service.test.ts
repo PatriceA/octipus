@@ -98,6 +98,27 @@ describe('listing', () => {
     expect(await service.countCandidateProposals()).toBe(2);
   });
 
+  test('the surfaced order (chat /proposals) keeps every row in place when counts change or rows are added', async () => {
+    const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
+    const a = await seed({ name: 'first-shown', surfacedAt: minutesAgo(30) });
+    const b = await seed({ name: 'second-shown', surfacedAt: minutesAgo(20) });
+    // Filed long ago, shown only just now: it goes last, not first.
+    const late = await seed({ name: 'old-candidate', status: 'candidate', createdAt: minutesAgo(5000) });
+    const before = (await service.listPendingProposals(userId, { order: 'surfaced' })).map(p => p.id);
+    expect(before).toEqual([a, b]);
+
+    // A background merge raises b's count; a candidate is surfaced.
+    const { eq } = await import('drizzle-orm');
+    const { getDb } = await import('@/db/postgres');
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    await getDb().update(skillProposals).set({ exemplarCount: 9 }).where(eq(skillProposals.id, b));
+    expect(await service.surfaceProposal(late, userId)).not.toBeNull();
+
+    expect((await service.listPendingProposals(userId, { order: 'surfaced' })).map(p => p.id)).toEqual([a, b, late]);
+    // The web order is still most-seen first.
+    expect((await service.listPendingProposals(userId))[0].id).toBe(b);
+  });
+
   test('the view adds sessionCount and the nearest similar skill, and never carries the embedding', async () => {
     const { getDb } = await import('@/db/postgres');
     const { skills } = await import('@/db/schema/skills');

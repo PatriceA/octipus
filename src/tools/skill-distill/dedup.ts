@@ -22,7 +22,7 @@
  */
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
 import { cosineSimilarity } from '@/db/schema/embeddings';
@@ -125,7 +125,9 @@ async function openProposalOf(userId: string, id: string): Promise<SkillProposal
 
 /** The incoming skill's embedding, after bringing the stored ones up to date. Null without a model. */
 async function incomingEmbedding(userId: string, distilled: DistilledSkill): Promise<number[] | null> {
-  if (!isCapabilityOn('embedding')) return null;
+  // The authoritative check (computes the snapshot when this process has not):
+  // the same one the embedding backfill makes, so both agree on whether to embed.
+  if (!(await capabilityConfigured('embedding'))) return null;
   await ensureSkillEmbeddings({ limit: 20 });
   await ensureProposalEmbeddings(userId, { limit: 20 });
   try {

@@ -409,7 +409,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       // Everyone, admins included, sees and acts on their own proposals only.
       const scope = ctx.userId;
 
-      const pending = await listPendingProposals(scope);
+      // Oldest shown first: positions do not move when a background merge
+      // changes a count or a candidate is surfaced, so <n> below names the
+      // row the user read (the web page sorts most-seen first instead).
+      const pending = await listPendingProposals(scope, { order: 'surfaced' });
       const action = (ctx.args.action || '').toLowerCase();
 
       if (!action) {
@@ -431,9 +434,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         return { text: `Unknown action "${action}". Use /proposals, /proposals approve <n>, or /proposals reject <n>.` };
       }
 
-      // The index is positional over the SAME list, in the same order (most
-      // observations, then oldest), the user just read, so it stays stable
-      // while nothing is resolved or merged.
+      // The index is positional over the SAME list, in the same stable order,
+      // the user just read; only a row resolved meanwhile shifts the ones after it.
       const index = Number.parseInt(ctx.args.index ?? '', 10);
       const target = Number.isInteger(index) ? pending[index - 1] : undefined;
       if (!target) {

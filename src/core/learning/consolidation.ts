@@ -8,16 +8,20 @@
  *   2. greedy clustering of the user's open non-patch proposals, most similar
  *      pair first: a pair at or above `learning.duplicateSimilarity` merges, a
  *      pair in the related band merges unless the merge model says the two
- *      are different skills (remembered for the run, never asked twice). The
+ *      are different skills, or cannot judge them (remembered for this run
+ *      only, never asked twice in it; the next run asks again). The
  *      target is the pending member with the most observations, else the
  *      oldest; the other is absorbed (`absorbProposal`);
- *   3. candidates not seen for `learning.candidateTtlDays` are deleted;
+ *   3. candidates not seen for `learning.candidateTtlDays` are deleted,
+ *      unless they already recurred (they only wait for a cap);
  *   4. the remaining candidates are promoted when eligible, oldest first.
  *
  * `runDailyLearningMaintenance()` runs that for every user with open
  * proposals and then the skill curator, at most once per 24 hours across all
  * processes: the run is claimed with one conditional upsert of a `kv_store`
- * row, so two processes ticking at once cannot both run it.
+ * row, so two processes ticking at once cannot both run it. The claim is a
+ * 2-hour lease; finishing records the real run, so a run cut short by a
+ * restart is retried after the lease rather than a day later.
  * `startLearningMaintenance()` ticks it hourly (unref'd timer).
  */
 import { and, asc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
@@ -25,7 +29,7 @@ import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { kvStore } from '@/db/schema/kv';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
-import { promoteIfEligible } from '@/services/skill-proposal-merge';
+import { candidateIsRecurring, promoteIfEligible } from '@/services/skill-proposal-merge';
 import { absorbProposal } from '@/services/skill-proposal-service';
 import { ensureProposalEmbeddings, ensureSkillEmbeddings } from '@/skills/embedding-backfill';
 import { runSkillCurator } from '@/skills/curator';
@@ -89,7 +93,7 @@ function pickTarget(x: SkillProposalRecord, y: SkillProposalRecord): [target: Sk
  */
 export async function consolidateProposals(userId: string, opts: ConsolidationOptions = {}): Promise<ConsolidationReport> {
   const maxMerges = opts.maxMerges ?? 20;
-  const { duplicateSimilarity, relatedSimilarity, candidateTtlDays } = getConfig().learning;
+  const { duplicateSimilarity, relatedSimilarity, candidateTtlDays, recurrenceSessions } = getConfig().learning;
   const report: ConsolidationReport = { merged: 0, expired: 0, promoted: 0, embedded: 0, degraded: 0 };
   const db = getDb();
 
@@ -100,7 +104,8 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
 
   // 2. Greedy clustering. A merge changes the target's text and embedding,
   // so pairs are re-read after every round that merged something; a pair the
-  // model called distinct is not asked again in this run.
+  // model called distinct (or could not judge, in the related band) is not
+  // asked again in this run and costs no merge budget; a later run asks again.
   const distinct = new Set<string>();
   const threshold = Math.min(relatedSimilarity, duplicateSimilarity);
   let mergedThisRound = true;
@@ -136,13 +141,15 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
     }
   }
 
-  // 3. Expiry: candidates not seen again in time, with the rows merged into them.
+  // 3. Expiry: candidates never seen again in time, with the rows merged into
+  // them. One that already recurred (or rests on a correction) only waits for
+  // a cap to free up: it is kept.
   const cutoff = new Date(Date.now() - candidateTtlDays * 24 * 60 * 60 * 1000);
   report.expired = await db.transaction(async (tx) => {
-    const expired = await tx.select({ id: skillProposals.id }).from(skillProposals)
+    const stale = await tx.select({ id: skillProposals.id, sourceRefs: skillProposals.sourceRefs, signal: skillProposals.signal }).from(skillProposals)
       .where(and(eq(skillProposals.userId, userId), eq(skillProposals.status, 'candidate'), lt(skillProposals.lastExemplarAt, cutoff)))
       .for('update');
-    const ids = expired.map(row => row.id);
+    const ids = stale.filter(row => !candidateIsRecurring(row, recurrenceSessions)).map(row => row.id);
     if (ids.length === 0) return 0;
     await tx.delete(skillProposals).where(and(
       eq(skillProposals.userId, userId),
@@ -175,21 +182,42 @@ export const MAINTENANCE_KEY = 'learning:maintenance:last-run';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TICK_MS = 60 * 60 * 1000;
 
+/** How long a claimed run blocks other processes before it counts as interrupted. */
+export const MAINTENANCE_LEASE_MS = 2 * 60 * 60 * 1000;
+
 /**
- * Claim today's run: write `now` unless the stored last run is less than 24 h
- * old. One statement, so of two processes ticking at once exactly one wins.
+ * Claim today's run unless the stored last run is less than 24 h old. One
+ * statement, so of two processes ticking at once exactly one wins.
+ *
+ * The claim is a lease, not the run: it stores a last run of
+ * `now - 24 h + lease`, which blocks every other claim for the lease (ample
+ * for a run) and no longer, so a run cut short by a restart (a deploy right
+ * after boot) is retried after 2 hours instead of skipped for a day.
+ * `recordDailyRun` stores the real time once the run is done. Kept as one
+ * epoch number so the key still reads as "last run".
  */
 async function claimDailyRun(now: number): Promise<boolean> {
+  const leased = String(now - DAY_MS + MAINTENANCE_LEASE_MS);
   const rows = await getDb().insert(kvStore)
-    .values({ key: MAINTENANCE_KEY, value: String(now), expiresAt: null })
+    .values({ key: MAINTENANCE_KEY, value: leased, expiresAt: null })
     .onConflictDoUpdate({
       target: kvStore.key,
-      set: { value: String(now), expiresAt: null },
+      set: { value: leased, expiresAt: null },
       // A value that is not a number (hand-edited) counts as never run.
       setWhere: sql`CASE WHEN ${kvStore.value} ~ '^[0-9]+$' THEN ${kvStore.value}::bigint <= ${now - DAY_MS} ELSE true END`,
     })
     .returning({ key: kvStore.key });
   return rows.length > 0;
+}
+
+/** The run finished: the next one is due 24 h from now. Logged, not thrown: the lease still bounds a retry. */
+async function recordDailyRun(now: number): Promise<void> {
+  try {
+    await getDb().insert(kvStore).values({ key: MAINTENANCE_KEY, value: String(now), expiresAt: null })
+      .onConflictDoUpdate({ target: kvStore.key, set: { value: String(now), expiresAt: null } });
+  } catch (err) {
+    coreLogger.error({ err }, 'Daily learning maintenance: could not record the finished run; it runs again once the lease ends');
+  }
 }
 
 export type MaintenanceResult =
@@ -198,8 +226,9 @@ export type MaintenanceResult =
 
 /**
  * Consolidate every user with open proposals, then run the skill curator, at
- * most once per 24 hours (claimed in `kv_store`). A failing user or curator
- * is logged and the rest goes on; only the claim itself can throw.
+ * most once per 24 hours (claimed in `kv_store` as a lease, recorded when
+ * done). A failing user or curator is logged and the rest goes on; only the
+ * claim and the listing of users can throw (the lease then bounds the retry).
  */
 export async function runDailyLearningMaintenance(): Promise<MaintenanceResult> {
   if (!(await claimDailyRun(Date.now()))) return { ran: false };
@@ -223,6 +252,7 @@ export async function runDailyLearningMaintenance(): Promise<MaintenanceResult> 
   } catch (err) {
     coreLogger.error({ err }, 'Daily learning maintenance: the skill curator failed');
   }
+  await recordDailyRun(Date.now());
   coreLogger.info({ users: owners.length, failed, ...total, curator }, 'Daily learning maintenance done');
   return { ran: true, users: owners.length, failed, report: total, curator };
 }

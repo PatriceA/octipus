@@ -126,14 +126,29 @@ export async function gatherPatchableSkills(userId: string, sessionId: string, t
 }
 
 /**
+ * Stages of a finished learning check whose evidence the review model actually
+ * judged (processor.ts): `checked` and `nothing_reusable`, and
+ * `partial_failure`, where the review succeeded and only some writes failed
+ * (their receipts say so; reviewing again would count the saved ones twice).
+ * Not here, so their window is read again by the next check: `failed` (no
+ * model, a timeout, truncation — nothing was judged), `insufficient_evidence`
+ * (nothing to judge; reading that window again costs nothing and can lose
+ * nothing) and the `skipped_*` stages.
+ */
+export const REVIEWED_STAGES = ['checked', 'nothing_reusable', 'partial_failure'] as const;
+
+/**
  * The lower bound of an automatic review's evidence window: the `through` of
- * the session's previous learning check that ended (`done` or `error`), not
- * `jobId` itself. Null when there is none (the session's first review).
+ * the session's latest previous learning check whose evidence was reviewed
+ * (REVIEWED_STAGES), not `jobId` itself. Null when there is none (the
+ * session's first review), so evidence of a check that failed or was skipped
+ * is read by the next one, within gatherEvidence's event and character bounds.
  */
 export async function previousReviewThrough(userId: string, sessionId: string, jobId: string): Promise<Date | null> {
   const [row] = await getDb().select({ payload: backgroundJobs.payload }).from(backgroundJobs).where(and(
     eq(backgroundJobs.kind, 'learning'), eq(backgroundJobs.userId, userId), ne(backgroundJobs.id, jobId),
     sql`${backgroundJobs.payload}->>'sessionId' = ${sessionId}`, inArray(backgroundJobs.status, ['done', 'error']),
+    inArray(backgroundJobs.stage, [...REVIEWED_STAGES]),
   )).orderBy(desc(backgroundJobs.seq)).limit(1);
   const through = row?.payload.through;
   if (typeof through !== 'string') return null;

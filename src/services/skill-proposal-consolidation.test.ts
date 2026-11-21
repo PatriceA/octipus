@@ -176,6 +176,21 @@ describe('fileSkillProposal: recurrence gate and merging', () => {
     expect((await readProposal(manual.proposalId as string)).surfacedAt).toBeInstanceOf(Date);
   });
 
+  test('a manual request merged into a candidate shows it at once, past the gate and the caps', async () => {
+    learning.maxSkillProposalsPerDay = 0;
+    learning.maxPendingSkillProposals = 0;
+    const first = await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' });
+    expect(first.status).toBe('candidate');
+    complete.mockResolvedValueOnce(reply('unchanged'));
+    // Same session: the recurrence gate alone would keep it a candidate.
+    const manual = await fileSkillProposal(rotation, userId, 'session:s1');
+    expect(manual).toMatchObject({ merged: true, proposalId: first.proposalId, status: 'pending' });
+    expect(manual.message).toContain('now shown for review');
+    const row = await readProposal(first.proposalId as string);
+    expect(row).toMatchObject({ status: 'pending', exemplarCount: 2 });
+    expect(row.surfacedAt).toBeInstanceOf(Date);
+  });
+
   test('recurrenceSessions 1 turns the gate off', async () => {
     learning.recurrenceSessions = 1;
     expect((await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' })).status).toBe('pending');
@@ -244,6 +259,45 @@ describe('fileSkillProposal: dedup outcomes', () => {
     });
   });
 
+  test.each([
+    ['fails', () => complete.mockRejectedValueOnce(new Error('provider down'))],
+    ['is truncated', () => complete.mockResolvedValueOnce({ content: '{"verdict":"merged","descr', finishReason: 'length' })],
+    ['answers nonsense', () => complete.mockResolvedValueOnce({ content: 'sure!', finishReason: 'stop' })],
+  ])('in the related band a merge model that %s files a separate proposal instead of counting it', async (_label, arrange) => {
+    const first = await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' });
+    arrange();
+    const second = await fileSkillProposal({ name: 'unlock-keyring', description: 'Unlock the desktop keyring', content: 'steps' }, userId,
+      learned('j2', 's2'), { origin: 'learning', signal: 'procedure' });
+    expect(second.proposalId).not.toBe(first.proposalId);
+    expect(second).toMatchObject({ distilled: true, status: 'candidate' });
+    expect(second.merged).toBeUndefined();
+    expect(await readProposal(first.proposalId as string)).toMatchObject({ exemplarCount: 1, sourceRefs: [learned('j1', 's1')] });
+    expect(await allProposals()).toHaveLength(2);
+  });
+
+  test('a merge target rejected between the decision and the write is decided again (now suppressed)', async () => {
+    const first = await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' });
+    const { rejectProposal } = await import('./skill-proposal-service');
+    complete.mockImplementationOnce(async () => {
+      await rejectProposal(first.proposalId as string, userId);
+      return reply('unchanged');
+    });
+    const second = await fileSkillProposal(rotation, userId, learned('j2', 's2'), { origin: 'learning', signal: 'procedure' });
+    expect(second).toMatchObject({ distilled: false, deduped: true, name: 'token-rotation' });
+    expect(second.message).toContain('suppressed');
+    expect(await readProposal(first.proposalId as string)).toMatchObject({ status: 'rejected', exemplarCount: 1 });
+    expect(await allProposals()).toHaveLength(1);
+  });
+
+  test('a merge target that is not open twice in a row is an error', async () => {
+    const first = await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' });
+    const merge = await import('./skill-proposal-merge');
+    const spy = vi.spyOn(merge, 'mergeIntoProposal').mockRejectedValue(new merge.ProposalNotOpenError(first.proposalId as string, 'promoted'));
+    await expect(fileSkillProposal(rotation, userId, learned('j2', 's2'), { origin: 'learning', signal: 'procedure' }))
+      .rejects.toBeInstanceOf(merge.ProposalNotOpenError);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   test('a merged row redirects to the proposal it was absorbed into', async () => {
     const target = await seedProposal({ name: 'credential-rotation', status: 'pending', sourceRefs: ['text'], sourceRef: 'text' });
     await seedProposal({ name: 'restore-backups', description: 'Restore from backups', status: 'merged', mergedIntoId: target });
@@ -264,6 +318,18 @@ describe('fileSkillProposal: dedup outcomes', () => {
     const [skill] = await getDb().select().from(skills).where(eq(skills.id, skillId));
     expect(skill.descriptionEmbedding).toEqual(VECTORS.rotation);
     expect(skill.descriptionHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('a process that has not computed its capabilities yet still compares by meaning (the check the backfill makes)', async () => {
+    const gates = await import('@/core/capabilities/gates');
+    const first = await fileSkillProposal(rotation, userId, learned('j1', 's1'), { origin: 'learning', signal: 'procedure' });
+    // "Not checked yet" reads as off to the synchronous check; the async one computes it.
+    gates.resetCapabilitiesForTest();
+    gates.setCapabilityResolver('embedding', async () => ({ on: true }));
+    complete.mockResolvedValueOnce(reply('unchanged'));
+    const second = await fileSkillProposal({ ...rotation, name: 'rotate-credentials' }, userId, learned('j2', 's2'), { origin: 'learning', signal: 'procedure' });
+    expect(second).toMatchObject({ merged: true, proposalId: first.proposalId });
+    expect(await allProposals()).toHaveLength(1);
   });
 
   test('without an embedding model the name checks and extendsProposalId still work', async () => {

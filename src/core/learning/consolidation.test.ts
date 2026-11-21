@@ -171,6 +171,41 @@ describe('consolidateProposals', () => {
     expect(related.allowDistinct).toBe(true);
   });
 
+  test('a related pair the merge model cannot judge stays apart for this run and is asked again next run', async () => {
+    const rotation = await seed({ name: 'token-rotation' });
+    const keyring = await seed({ name: 'unlock-keyring', description: 'Unlock the desktop keyring' });
+    complete.mockRejectedValue(new Error('provider down'));
+
+    expect(await consolidation.consolidateProposals(userId)).toMatchObject({ merged: 0, degraded: 0 });
+    expect((await read(rotation)).status).toBe('pending');
+    expect((await read(keyring)).status).toBe('pending');
+    expect((await read(rotation)).exemplarCount).toBe(1);
+    // Asked once in the run, not retried within it ...
+    expect(complete).toHaveBeenCalledTimes(1);
+    // ... but not remembered as distinct: the next run asks again and merges.
+    complete.mockReset();
+    complete.mockResolvedValue(reply('unchanged'));
+    expect((await consolidation.consolidateProposals(userId)).merged).toBe(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  test('a stale candidate that already recurred, or rests on a correction, is kept', async () => {
+    learning.candidateTtlDays = 30;
+    learning.maxPendingSkillProposals = 0;
+    const old = new Date(Date.now() - 40 * DAY);
+    const recurred = await seed({ name: 'restore-backups', description: 'Restore from backups', status: 'candidate', lastExemplarAt: old,
+      sourceRefs: ['learning:j1:session:s1', 'learning:j2:session:s2'] });
+    const corrected = await seed({ name: 'deploy-preview', description: 'Deploy a preview build', status: 'candidate', lastExemplarAt: old, signal: 'correction' });
+    const once = await seed({ name: 'token-rotation', status: 'candidate', lastExemplarAt: old });
+
+    const report = await consolidation.consolidateProposals(userId);
+
+    expect(report.expired).toBe(1);
+    expect(await read(once)).toBeUndefined();
+    expect((await read(recurred)).status).toBe('candidate');
+    expect((await read(corrected)).status).toBe('candidate');
+  });
+
   test('candidates not seen for candidateTtlDays expire, with the rows merged into them', async () => {
     learning.candidateTtlDays = 30;
     const stale = await seed({ name: 'restore-backups', description: 'Restore from backups', status: 'candidate', lastExemplarAt: new Date(Date.now() - 40 * DAY) });
@@ -244,6 +279,28 @@ describe('runDailyLearningMaintenance', () => {
     const { kvStore } = await import('@/db/schema/kv');
     await getDb().update(kvStore).set({ value: String(Date.now() - DAY - 1000) }).where(eq(kvStore.key, consolidation.MAINTENANCE_KEY));
     expect((await consolidation.runDailyLearningMaintenance()).ran).toBe(true);
+  });
+
+  test('a run cut short (claimed, never finished) is retried after the lease, not a day later', async () => {
+    const { eq } = await import('drizzle-orm');
+    const { getDb } = await import('@/db/postgres');
+    const { kvStore } = await import('@/db/schema/kv');
+    const claimedAt = async (ms: number) => getDb().insert(kvStore)
+      .values({ key: consolidation.MAINTENANCE_KEY, value: String(ms - DAY + consolidation.MAINTENANCE_LEASE_MS), expiresAt: null })
+      .onConflictDoUpdate({ target: kvStore.key, set: { value: String(ms - DAY + consolidation.MAINTENANCE_LEASE_MS) } });
+
+    // Claimed an hour ago by a process that may still be running: held off.
+    await claimedAt(Date.now() - 60 * 60 * 1000);
+    expect(await consolidation.runDailyLearningMaintenance()).toEqual({ ran: false });
+
+    // Claimed past the lease and never finished (the process restarted): runs again.
+    await claimedAt(Date.now() - consolidation.MAINTENANCE_LEASE_MS - 1000);
+    const before = Date.now();
+    expect((await consolidation.runDailyLearningMaintenance()).ran).toBe(true);
+    // Finishing records the real run time, so the next is a day away.
+    const [row] = await getDb().select().from(kvStore).where(eq(kvStore.key, consolidation.MAINTENANCE_KEY));
+    expect(Number(row.value)).toBeGreaterThanOrEqual(before);
+    expect(await consolidation.runDailyLearningMaintenance()).toEqual({ ran: false });
   });
 
   test('a failing user is logged and the others still run', async () => {

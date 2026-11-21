@@ -89,7 +89,17 @@ describe('/proposals', () => {
 
   test('every caller, admins included, is scoped to their own proposals', async () => {
     await registry.execute('/proposals', ctx);
-    expect(listSpy).toHaveBeenCalledWith(uuid);
-    expect(listSpy).not.toHaveBeenCalledWith(undefined);
+    expect(listSpy).toHaveBeenCalledWith(uuid, { order: 'surfaced' });
+    expect(listSpy).not.toHaveBeenCalledWith(undefined, expect.anything());
+  });
+
+  test('the list and the numbered actions both use the stable order, not most-seen first', async () => {
+    approveSpy.mockResolvedValue({ promoted: 'skill', id: 'e-9', name: 'k8s-triage', record: {} });
+    rejectSpy.mockResolvedValue(new Date('2026-12-01T00:00:00Z'));
+    for (const input of ['/proposals', '/proposals approve 1', '/proposals reject 1']) {
+      listSpy.mockClear();
+      await registry.execute(input, ctx);
+      expect(listSpy).toHaveBeenCalledWith(uuid, { order: 'surfaced' });
+    }
   });
 });

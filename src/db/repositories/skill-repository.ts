@@ -1,4 +1,4 @@
-import { and, eq, getTableColumns, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, ilike, inArray, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { getUserOrgIds } from '@/services/org-membership';
 import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
@@ -166,11 +166,14 @@ export class SkillRepository {
    * Find skills the curator may want to archive: not used for `unusedDays`
    * AND not already archived AND not system skills (those are explicit
    * conventions we don't auto-prune) AND not owner-edited (the owner wrote
-   * it; only they retire it). Least recently used first, never-used first of
-   * all. Caller decides whether to actually archive — this is the read side.
+   * it; only they retire it). A never-used skill is measured from its
+   * creation, so one approved today is not stale. Least recently used (or
+   * created, when never used) first. Caller decides whether to actually
+   * archive — this is the read side.
    */
   async findStale(unusedDays: number, limit = 50): Promise<Skill[]> {
     const cutoff = new Date(Date.now() - unusedDays * 24 * 60 * 60 * 1000);
+    const lastSeen = sql`coalesce(${skills.lastUsedAt}, ${skills.createdAt})`;
     return this.db
       .select()
       .from(skills)
@@ -179,13 +182,10 @@ export class SkillRepository {
           isNull(skills.archivedAt),
           eq(skills.isSystem, false),
           isNull(skills.ownerEditedAt),
-          or(
-            isNull(skills.lastUsedAt),
-            lt(skills.lastUsedAt, cutoff),
-          ),
+          sql`${lastSeen} < ${cutoff.toISOString()}::timestamptz`,
         ),
       )
-      .orderBy(sql`${skills.lastUsedAt} ASC NULLS FIRST`, skills.createdAt)
+      .orderBy(sql`${lastSeen} ASC`, skills.createdAt)
       .limit(limit);
   }
 

@@ -29,6 +29,8 @@ export async function enqueueTurnLearning(sessionId: string, userId: string, age
     sql`${backgroundJobs.payload}->>'sessionId' = ${sessionId}`,
   )).orderBy(desc(backgroundJobs.seq)).limit(1);
   const { reviewEveryToolCalls, minReviewIntervalMinutes } = getConfig().learning;
+  // Paced off the latest check of any outcome, so a failed one is not retried
+  // at once; its evidence still reaches the next review (previousReviewThrough).
   if (existing && Date.now() - existing.createdAt.getTime() < minReviewIntervalMinutes * 60_000) return;
   const since = existing ? new Date(String(existing.payload.through ?? existing.createdAt.toISOString())) : new Date(0);
   // One observation row carries every result of a parallel tool round: count the results, not the rows.

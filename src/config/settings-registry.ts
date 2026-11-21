@@ -1734,6 +1734,81 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'CONTEXT_HOOKS_MAX_TOKENS',
   },
 
+
+  // ── Learning (src/core/learning; docs/SESSION-LEARNING.md) ──
+  {
+    key: 'learning.reviewEveryToolCalls',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 40,
+    description: 'Tool calls a session runs between automatic learning reviews, counted across turns (at least 1).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.minReviewIntervalMinutes',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 30,
+    description: 'No automatic tool-count learning review sooner than this many minutes after the session\'s previous check. Plan-completed and manual checks are not held back (0 or more).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.localIdleMs',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 60_000,
+    description: 'With the background model on a local provider, a learning review starts only after that provider has been idle this many milliseconds (0 or more).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.recurrenceSessions',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 2,
+    description: 'Sessions a learned skill proposal must be seen in before it is shown for review; until then it waits as a candidate. 1 turns the gate off (at least 1).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.maxSkillProposalsPerDay',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 2,
+    description: 'Learned skill proposals shown per user per rolling 24 hours; the rest wait as candidates (0 or more).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.maxPendingSkillProposals',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 10,
+    description: 'Above this many pending skill proposals of a user, learned ones wait as candidates (0 or more).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.duplicateSimilarity',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 0.85,
+    description: 'Similarity (0–1) of name and description at or above which two skill proposals are the same skill and merge.',
+    isSecret: false,
+  },
+  {
+    key: 'learning.relatedSimilarity',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 0.7,
+    description: 'Similarity (0–1) from which, up to the duplicate threshold, the merge model decides whether two skill proposals are one skill.',
+    isSecret: false,
+  },
+  {
+    key: 'learning.candidateTtlDays',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 30,
+    description: 'Days after which a candidate skill proposal never seen in a second session is deleted by the daily consolidation (at least 1).',
+    isSecret: false,
+  },
+
   // ── Heartbeat (WS2) ──
   {
     key: 'heartbeat.enabled',

@@ -140,7 +140,7 @@ export default function SkillProposalsPage() {
       <div className="max-w-5xl mx-auto">
         <PageHeader
           title="skills/proposals"
-          description="Skills, experts and patches drafted from your sessions and from skill_distill. Suggestions on the same topic are merged into one, and a proposal appears here once it recurs in a second session, comes from your correction, or you asked for it. The → badge shows what approving does. Nothing activates until you approve."
+          description="Skills and patches drafted from your sessions and from distill_skill. Suggestions on the same topic are merged into one. The → badge shows what approving does; nothing activates until you approve."
         />
 
         {error && (
@@ -252,7 +252,7 @@ export default function SkillProposalsPage() {
                           similar to skill {p.similarSkill.name} ({Math.round(p.similarSkill.similarity * 100)}%)
                         </Link>
                       )}
-                      {p.sourceRef && <span className="break-all" title="Where this was last seen">source: {p.sourceRef}</span>}
+                      {p.sourceRef && <span className="break-all" title="Where this proposal was first drafted from; later sightings are counted in seen N×">first drafted from: {p.sourceRef}</span>}
                     </div>
                   </div>
                   <div className="flex gap-2 shrink-0">
@@ -344,7 +344,7 @@ export default function SkillProposalsPage() {
               Not shown yet ({candidateCount})
             </summary>
             <p className="mt-2 text-xs text-on-surface-variant">
-              These were seen once. Each moves up to the list on its own when it is seen again.
+              These have not been seen in a second session yet, or are waiting for room under the daily or list limit. Each appears above on its own when that changes.
             </p>
             {candidates.isLoading && (
               <div className="mt-3 flex items-center gap-2 text-xs text-on-surface-variant">

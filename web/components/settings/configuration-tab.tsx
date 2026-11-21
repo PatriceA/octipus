@@ -16,6 +16,7 @@ const SERVER_CATEGORIES = new Set([
   'ollama',
   'agent',
   'rootAgent',
+  'learning',
   'swarm',
   'api',
   'logging',
@@ -45,6 +46,7 @@ const SECTIONS = [
     subsections: [
       { category: 'agent', label: 'Agent' },
       { category: 'rootAgent', label: 'Root agent' },
+      { category: 'learning', label: 'Learning' },
     ],
   },
   {

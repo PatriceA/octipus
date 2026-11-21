@@ -73,6 +73,7 @@ test.describe('skill proposals page', () => {
     await expect(cards.nth(0)).toContainText('seen 5× in 3 sessions');
     await expect(cards.nth(1)).toContainText('seen 2× in 1 session');
     await expect(cards.nth(2)).not.toContainText('seen 1×');
+    await expect(cards.nth(2)).toContainText('first drafted from: skill_distill');
     await expect(cards.nth(1)).toContainText('from your correction');
     await expect(cards.nth(0)).not.toContainText('from your correction');
   });
@@ -169,7 +170,7 @@ test.describe('skill proposals page', () => {
 
     await page.getByText('Not shown yet (2)').click();
     await expect.poll(() => listUrls.some((u) => u.includes('include=candidates'))).toBe(true);
-    await expect(page.getByText('These were seen once.')).toBeVisible();
+    await expect(page.getByText('These have not been seen in a second session yet')).toBeVisible();
     const rows = page.getByRole('listitem');
     await expect(rows).toHaveCount(2);
     await rows.filter({ hasText: 'lint-before-commit' }).getByRole('button', { name: 'Show now' }).click();

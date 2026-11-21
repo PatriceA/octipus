@@ -7,7 +7,8 @@ import { assertPatchable, skillContentHash, validateSkillPatch } from '@/skills/
 import { getConfig } from '@/config';
 import { sessionCountOf } from '@/shared/skill-proposals';
 import { type DedupDecision, decideSkillProposal, findProposalByFingerprint } from '@/tools/skill-distill/dedup';
-import { initialProposalStatus, learnedSurfaceCap, type MergeResult, mergeIntoProposal, promoteIfEligible } from './skill-proposal-merge';
+import { initialProposalStatus, learnedSurfaceCap, type MergeResult, mergeIntoProposal, ProposalNotOpenError, promoteIfEligible } from './skill-proposal-merge';
+import { surfaceProposal } from './skill-proposal-service';
 import { type DistilledSkill, skillFingerprint } from '@/tools/skill-distill/distiller';
 import { toolLogger } from '@/utils/logger';
 
@@ -53,14 +54,27 @@ export async function fileSkillProposal(
   opts: FileSkillProposalOptions = { origin: 'manual' },
 ): Promise<FileSkillProposalResult> {
   const fingerprint = skillFingerprint(userId, distilled.name);
-  const decision = await decideSkillProposal(userId, fingerprint, distilled, { extendsProposalId: opts.extendsProposalId });
-  if (decision.action === 'drop') return describeDrop(decision);
-  if (decision.action === 'merge') {
-    const merge = await mergeIntoProposal(decision.target, { ...distilled, signal: opts.signal ?? null }, sourceRef,
-      { allowDistinct: decision.allowDistinct });
-    if (merge.verdict !== 'distinct') return describeMerge(merge);
+  // The merge target can be approved, rejected or absorbed between the dedup
+  // decision and the write. Deciding once more sees its new state (covered by
+  // the live skill, suppressed, redirected, or new); a second miss throws.
+  for (let attempt = 1; ; attempt++) {
+    const decision = await decideSkillProposal(userId, fingerprint, distilled, { extendsProposalId: opts.extendsProposalId });
+    if (decision.action === 'drop') return describeDrop(decision);
+    if (decision.action === 'merge') {
+      let merge: MergeResult;
+      try {
+        merge = await mergeIntoProposal(decision.target, { ...distilled, signal: opts.signal ?? null }, sourceRef,
+          { allowDistinct: decision.allowDistinct });
+      } catch (err) {
+        if (!(err instanceof ProposalNotOpenError) || attempt > 1) throw err;
+        toolLogger.info({ proposalId: err.proposalId, status: err.status, name: distilled.name, userId },
+          'Skill proposal merge target was resolved meanwhile; deciding again');
+        continue;
+      }
+      if (merge.verdict !== 'distinct') return describeMerge(merge, opts.origin);
+    }
+    return insertProposal(distilled, userId, sourceRef, fingerprint, opts, decision.embedding);
   }
-  return insertProposal(distilled, userId, sourceRef, fingerprint, opts, decision.embedding);
 }
 
 async function insertProposal(
@@ -131,10 +145,17 @@ function describeDrop(hit: Extract<DedupDecision, { action: 'drop' }>): FileSkil
   };
 }
 
-async function describeMerge(merge: Extract<MergeResult, { verdict: 'merged' | 'unchanged' }>): Promise<FileSkillProposalResult> {
+async function describeMerge(merge: Extract<MergeResult, { verdict: 'merged' | 'unchanged' }>, origin: FileSkillProposalOptions['origin']): Promise<FileSkillProposalResult> {
   let proposal = merge.proposal;
-  const promotion = await promoteIfEligible(proposal);
-  if (promotion.promoted) proposal = promotion.proposal;
+  let surfaced = false;
+  if (origin === 'manual' && proposal.status === 'candidate') {
+    // The user asked for this skill: shown at once, past the recurrence gate and the caps.
+    const shown = await surfaceProposal(proposal.id, proposal.userId);
+    if (shown) { proposal = shown; surfaced = true; }
+  } else {
+    const promotion = await promoteIfEligible(proposal);
+    if (promotion.promoted) { proposal = promotion.proposal; surfaced = true; }
+  }
   const status = proposal.status === 'candidate' ? 'candidate' : 'pending';
   const seen = `seen ${proposal.exemplarCount}× in ${sessionCountOf(proposal.sourceRefs)} session(s)`;
   const text = merge.verdict === 'merged' ? 'its draft now includes this' : 'its draft already covered this';
@@ -147,7 +168,8 @@ async function describeMerge(merge: Extract<MergeResult, { verdict: 'merged' | '
     name: proposal.name,
     status,
     message: `Merged into the ${status === 'candidate' ? 'candidate' : 'pending'} proposal "${proposal.name}" (${seen}); `
-      + (merge.mergeDegraded ? 'the merge model was unavailable, so only the count changed.' : `${text}.`),
+      + (merge.mergeDegraded ? 'the merge model was unavailable, so only the count changed.' : `${text}.`)
+      + (surfaced ? ' It is now shown for review.' : ''),
   };
 }
 

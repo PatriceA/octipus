@@ -143,3 +143,27 @@ test('three reviews of one topic across two sessions end as one pending proposal
   await runCheck(sessionA, 'manual');
   expect(reviewInputs[3].evidence.filter(row => row.kind === 'execution')).toHaveLength(3);
 });
+
+test('a check that failed before reviewing leaves its evidence to the next automatic check', async () => {
+  const sessionC = randomUUID();
+  const { executeRaw } = await import('@/db/postgres');
+  await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ('${sessionC}', '${userId}', 'webchat', 'learn-c')`);
+  await toolResult(sessionC, 'migration failed: lock timeout');
+  await toolResult(sessionC, 'retried with a smaller batch, migration passed');
+  await runCheck(sessionC, 'plan_completed');
+  const reviewed = reviewInputs.length;
+
+  await toolResult(sessionC, 'second migration failed on a missing index');
+  complete.mockRejectedValueOnce(new Error('model timed out'));
+  const failed = await runCheck(sessionC, 'substantial_turn');
+  expect(failed).toMatchObject({ status: 'error', stage: 'failed' });
+  expect(reviewInputs).toHaveLength(reviewed);
+
+  await toolResult(sessionC, 'added the index, second migration passed');
+  await runCheck(sessionC, 'substantial_turn');
+  // The failed check's event is read again, with the new one; the reviewed ones are not.
+  const events = reviewInputs[reviewed].evidence.filter(row => row.kind === 'execution').map(row => row.text);
+  expect(events).toHaveLength(2);
+  expect(events.join('\n')).toContain('missing index');
+  expect(events.join('\n')).toContain('added the index');
+});
