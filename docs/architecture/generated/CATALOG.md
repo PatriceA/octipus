@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-766 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+770 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -657,7 +657,11 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/skills/import` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/proposals` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/approve` | `src/api/routes/skill-proposals.ts` |
+| POST | `/api/skills/proposals/:id/merge` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/reject` | `src/api/routes/skill-proposals.ts` |
+| POST | `/api/skills/proposals/:id/surface` | `src/api/routes/skill-proposals.ts` |
+| POST | `/api/skills/proposals/bulk-reject` | `src/api/routes/skill-proposals.ts` |
+| POST | `/api/skills/proposals/consolidate` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/reload-mounted` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/topics` | `src/api/routes/skill-topic-assignments.ts` |
 | POST | `/api/skills/topics` | `src/api/routes/skill-topic-assignments.ts` |
@@ -787,7 +791,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 4 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 37 |
+| `(root)` | `core` | 38 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -803,7 +807,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 246 |
+| `api` | `core` | 247 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -841,8 +845,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 74 |
-| `core` | `db` | 534 |
+| `core` | `config` | 75 |
+| `core` | `db` | 540 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
@@ -850,12 +854,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
 | `core` | `security` | 249 |
-| `core` | `services` | 2 |
+| `core` | `services` | 4 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 84 |
-| `core` | `skills` | 14 |
+| `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 255 |
+| `core` | `utils` | 257 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -919,30 +923,30 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
-| `services` | `config` | 5 |
-| `services` | `core` | 6 |
-| `services` | `db` | 13 |
-| `services` | `models` | 22 |
+| `services` | `config` | 8 |
+| `services` | `core` | 10 |
+| `services` | `db` | 16 |
+| `services` | `models` | 25 |
 | `services` | `security` | 4 |
 | `services` | `setup` | 1 |
-| `services` | `shared` | 4 |
+| `services` | `shared` | 7 |
 | `services` | `skills` | 2 |
-| `services` | `tools` | 3 |
-| `services` | `utils` | 6 |
+| `services` | `tools` | 4 |
+| `services` | `utils` | 7 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
-| `skills` | `core` | 6 |
-| `skills` | `db` | 14 |
+| `skills` | `core` | 8 |
+| `skills` | `db` | 17 |
 | `skills` | `models` | 2 |
 | `skills` | `security` | 4 |
-| `skills` | `utils` | 7 |
+| `skills` | `utils` | 8 |
 | `test-helpers` | `config` | 1 |
 | `test-helpers` | `core` | 2 |
 | `test-helpers` | `db` | 11 |
 | `test-helpers` | `security` | 2 |
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
-| `tools` | `config` | 5 |
+| `tools` | `config` | 6 |
 | `tools` | `core` | 156 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
@@ -952,7 +956,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `security` | 87 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 9 |
-| `tools` | `skills` | 6 |
+| `tools` | `skills` | 7 |
 | `tools` | `utils` | 43 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 7 |

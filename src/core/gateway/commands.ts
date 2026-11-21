@@ -417,7 +417,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const clip = (text: string | null, t = text ?? '') => JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}...` : t);
         const lines = pending.map((p, i) => p.kind === 'patch'
           ? `  ${i + 1}. ${p.name} (patch) — ${p.description}\n     replace ${clip(p.patchOldText)}\n     with    ${clip(p.patchNewText)}`
-          : `  ${i + 1}. ${p.name} (${p.kind}) — ${p.description}\n     from ${p.exemplarCount} run(s)`,
+          : `  ${i + 1}. ${p.name}${p.exemplarCount > 1 ? ` ×${p.exemplarCount}` : ''} (${p.kind}) — ${p.description}`,
         );
         return {
           text: `Pending skill proposals:\n${lines.join('\n')}\n\n`
@@ -431,8 +431,9 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         return { text: `Unknown action "${action}". Use /proposals, /proposals approve <n>, or /proposals reject <n>.` };
       }
 
-      // The index is positional over the SAME oldest-first list the user just
-      // read, so it stays stable while nothing is resolved.
+      // The index is positional over the SAME list, in the same order (most
+      // observations, then oldest), the user just read, so it stays stable
+      // while nothing is resolved or merged.
       const index = Number.parseInt(ctx.args.index ?? '', 10);
       const target = Number.isInteger(index) ? pending[index - 1] : undefined;
       if (!target) {
