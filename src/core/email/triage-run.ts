@@ -18,7 +18,6 @@ import {
   type Categories,
   cleanInstructions,
   getCategories,
-  getInbox,
   PRIORITY_RULES,
   rubricKey,
   TriageCancelledError,
@@ -26,6 +25,7 @@ import {
   triageLlmModel,
   type TriageStage,
 } from './service';
+import { invalidateEmailCache, listMessages } from './mailbox';
 import { storedTriage, thresholdsFor } from './triage-labels';
 import type { EmailProvider, EmailTriage, InboxItem } from './types';
 
@@ -188,18 +188,16 @@ export interface TriageRunRequest {
   /** Instead of `items`: the newest N mails of the inbox, narrowed by the scope. */
   newest?: number;
   scope?: TriageScope;
-  /** Called when the run changed the mailbox or the stored triage (a list cache must be dropped). */
-  onChanged?: () => void;
 }
 
 /** The newest `limit` inbox mails, over as many pages as that takes. */
-async function newestInbox(userId: string, limit: number, signal: AbortSignal): Promise<InboxItem[]> {
+async function newestInbox(userId: string, provider: EmailProvider, limit: number, signal: AbortSignal): Promise<InboxItem[]> {
   const seen = new Set<string>();
   const items: InboxItem[] = [];
   let token: string | undefined;
   do {
     if (signal.aborted) throw new TriageCancelledError();
-    const page = await getInbox(userId, Math.min(50, limit - items.length), token);
+    const page = await listMessages(userId, provider, { folder: 'inbox', limit: Math.min(50, limit - items.length), pageToken: token }, true);
     for (const it of page.items) if (!seen.has(it.id) && items.length < limit) { seen.add(it.id); items.push(it); }
     token = page.nextPageToken;
     if (!page.items.length) break;
@@ -221,7 +219,7 @@ export async function startTriageRun(userId: string, provider: EmailProvider, re
     const { settings } = await getTriageSettings(userId);
     let items = request.items ?? [];
     if (!request.items) {
-      const newest = await newestInbox(userId, Math.min(Math.max(request.newest ?? 30, 1), 500), abort.signal);
+      const newest = await newestInbox(userId, provider, Math.min(Math.max(request.newest ?? 30, 1), 500), abort.signal);
       const scope = request.scope ?? settings.scope;
       const triaged = scope === 'untriaged' ? new Set(Object.keys(await storedTriage(userId, provider, newest.map(it => it.id)))) : new Set<string>();
       const keep = new Set(inScope(newest, scope, triaged));
@@ -253,7 +251,8 @@ export async function startTriageRun(userId: string, provider: EmailProvider, re
     coreLogger.warn({ error: run.error.slice(0, 200) }, 'email: triage run failed');
   }).finally(() => {
     run.finished = true;
-    request.onChanged?.();
+    // The lists a page shows next carry the new triage and miss what was archived.
+    invalidateEmailCache(userId);
   });
   return run;
 }

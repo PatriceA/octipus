@@ -9,6 +9,8 @@ vi.mock('@/db/repositories/user-repository', () => ({ userRepository: {
 } }));
 vi.mock('./triage-labels', async (importOriginal) => ({ ...(await importOriginal<typeof import('./triage-labels')>()), storedTriage: vi.fn(async () => ({ old: { priority: 'low', source: 'llm' } })), thresholdsFor: vi.fn(async () => ({ priority: 0.7, category: 0.7 })) }));
 
+vi.mock('./mailbox', () => ({ invalidateEmailCache: vi.fn(), listMessages: vi.fn(async () => ({ provider: 'google', items: [item('old'), item('new', true)] })) }));
+
 const archived: string[][] = [];
 const labelled: string[][] = [];
 let triageImpl: (items: InboxItem[], run: { instructions?: string; signal?: AbortSignal; onProgress?: (p: { stage: 'decision' | 'llm'; done: number; total: number }) => void }) => Promise<Record<string, EmailTriage>>;
@@ -16,7 +18,6 @@ vi.mock('./service', async (importOriginal) => {
   const real = await importOriginal<typeof import('./service')>();
   return {
     ...real,
-    getInbox: vi.fn(async () => ({ provider: 'google', items: [item('old'), item('new', true)] })),
     triageInbox: vi.fn(async (_user: string, items: InboxItem[], run = {}) => triageImpl(items, run)),
     applyCategoryLabels: vi.fn(async (_u: string, _p: string, triage: Record<string, EmailTriage>) => { labelled.push(Object.keys(triage)); return Object.keys(triage).length; }),
     autoArchive: vi.fn(async (_u: string, _p: string, triage: Record<string, EmailTriage>, categories?: Iterable<string>) => { const ids = real.autoArchiveIds(triage, categories); archived.push(ids); return ids; }),

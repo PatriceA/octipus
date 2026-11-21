@@ -37,6 +37,7 @@ import { openaiCompatRoutes } from './routes/openai-compat';
 import { deviceRoutes } from './routes/devices';
 import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
+import { emailMailboxRoutes } from './routes/email-mailbox';
 import { calendarRoutes } from './routes/calendar';
 import { heartbeatRoutes } from './routes/heartbeat';
 import { onboardingRoutes } from './routes/onboarding';
@@ -484,6 +485,7 @@ export function createServer() {
         .use(protectionRoutes)
         .use(digestRoutes)
         .use(emailRoutes)
+        .use(emailMailboxRoutes)
         .use(calendarRoutes)
         .use(heartbeatRoutes)
         .use(onboardingRoutes)

@@ -29,6 +29,7 @@ import {
 import { saveReplyDraft } from '@/core/email/drafts';
 import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
 import { upsertUserLabel } from '@/core/email/triage-labels';
+import { resolveProvider } from '@/core/email/mailbox';
 import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
 import type { EmailProvider } from '@/core/email/types';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
@@ -44,6 +45,9 @@ function handledByOwner(userId: string, provider: EmailProvider, messageId: stri
   markEmailHandled({ userId, provider, messageId, outcome, note: 'Handled in the inbox page', taskId })
     .catch((err: unknown) => apiLogger.warn({ err, userId }, 'email: could not record a handled message'));
 }
+
+/** The mailbox a request names with `?provider=`, else the user's default; throws when the named one is not connected. */
+const mailboxOf = (userId: string, request: Request) => resolveProvider(userId, new URL(request.url).searchParams.get('provider'));
 
 const triageItem = t.Object({
   from: t.Object({ email: t.String({ maxLength: 320 }), name: t.Optional(t.String({ maxLength: 320 })) }),
@@ -101,10 +105,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Mark a message read (clears the unread flag in the provider).
   .post(
     '/message/:id/mark-read',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         return await markRead(user.id, provider, params.id);
       } catch (err) {
@@ -118,10 +122,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Propose reply directions for the user to choose BEFORE drafting.
   .post(
     '/message/:id/reply-options',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const message = await getMessage(user.id, provider, params.id);
         return { options: await replyOptions(user.id, message) };
@@ -136,10 +140,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Read a full message.
   .get(
     '/message/:id',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) {
           set.status = 400;
           return { error: 'No mailbox connected' };
@@ -156,10 +160,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Summarize a message.
   .post(
     '/message/:id/summarize',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const message = await getMessage(user.id, provider, params.id);
         return { summary: await summarizeMessage(user.id, message) };
@@ -174,10 +178,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Draft a reply (NOT sent — opens in the editable draft view).
   .post(
     '/message/:id/draft',
-    async ({ user, principal, params, body, set }) => {
+    async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const message = await getMessage(user.id, provider, params.id);
         return await draftReply(user.id, message, body?.instruction);
@@ -194,10 +198,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // back to the thread; a triaged "high" email lands as a high-priority task.
   .post(
     '/message/:id/task',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const message = await getMessage(user.id, provider, params.id);
         const [task] = await createTasksFromSource(principal, 'email', [emailToTask(message)]);
@@ -214,10 +218,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Undo an archive (the UI's Undo after auto-archive).
   .post(
     '/message/:id/unarchive',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         return await unarchiveMessage(user.id, provider, params.id);
       } catch (err) {
@@ -231,10 +235,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Archive a message (explicit).
   .post(
     '/message/:id/archive',
-    async ({ user, principal, params, set }) => {
+    async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const archived = await archiveMessage(user.id, provider, params.id);
         handledByOwner(user.id, provider, params.id, 'archived');
@@ -251,10 +255,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // threaded under the message. Nothing is sent.
   .post(
     '/message/:id/save-draft',
-    async ({ user, principal, params, body, set }) => {
+    async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const draft = await saveReplyDraft(user.id, provider, params.id, body.body);
         handledByOwner(user.id, provider, params.id, 'drafted');
@@ -283,9 +287,9 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         return { error: 'Sending requires explicit confirmation', requiresConfirmation: true };
       }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await resolveProvider(user.id, body.provider);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        const sent = await sendReply(user.id, provider, { to: body.to, subject: body.subject, body: body.body, replyTo: body.replyTo });
+        const sent = await sendReply(user.id, provider, { to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, body: body.body, replyTo: body.replyTo });
         if (body.replyTo) handledByOwner(user.id, provider, body.replyTo, 'replied');
         return sent;
       } catch (err) {
@@ -295,7 +299,12 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
     },
     {
       body: t.Object({
-        to: t.String({ minLength: 1, maxLength: 320 }),
+        // Comma-separated address lists; validated (and capped at 50 recipients) before anything is sent.
+        to: t.String({ minLength: 1, maxLength: 8000 }),
+        cc: t.Optional(t.String({ maxLength: 8000 })),
+        bcc: t.Optional(t.String({ maxLength: 8000 })),
+        // Which connected mailbox sends, when both are; the default one otherwise.
+        provider: t.Optional(t.Union([t.Literal('google'), t.Literal('microsoft')])),
         subject: t.String({ maxLength: 998 }),
         body: t.String({ minLength: 1, maxLength: 100_000 }),
         confirm: t.Optional(t.Boolean()),
@@ -312,10 +321,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // inbox (older clients). `autoArchive` archives low-priority spam/marketing.
   .post(
     '/triage',
-    async ({ user, principal, body, set }) => {
+    async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const req = body as { items?: Array<Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>>; autoArchive?: boolean; applyLabels?: boolean } | undefined;
         const items: InboxItem[] = req?.items
@@ -367,11 +376,11 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // The owner's label for one mail: it wins over every model from now on.
   .put(
     '/triage/label/:id',
-    async ({ user, principal, params, body, set }) => {
+    async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       const categories = await getCategories(user.id);
       if (!Object.hasOwn(categories, body.category)) { set.status = 400; return { error: `Unknown category: ${body.category}` }; }
-      const provider = await detectProvider(user.id);
+      const provider = await mailboxOf(user.id, request).catch(() => null);
       const label = { priority: body.priority, category: body.category };
       // With the row itself (the inbox list sends it) any mail can be labelled, seen by triage or not.
       if (body.item && provider) {
@@ -396,10 +405,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // model over it: the thresholds are fitted from the first triage on.
   .post(
     '/triage/backlog',
-    async ({ user, principal, body, set }) => {
+    async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        if (!(await detectProvider(user.id))) { set.status = 400; return { error: 'No mailbox connected' }; }
+        if (!(await mailboxOf(user.id, request).catch(() => null))) { set.status = 400; return { error: 'No mailbox connected' }; }
         await startLabelBacklog(user.id, body.model, body.limit);
         return { started: true, progress: backlogProgress(user.id) };
       } catch (err) {
@@ -441,10 +450,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // What a run over these rows would do and what the models are told. Asks no model.
   .post(
     '/triage/preview',
-    async ({ user, principal, body, set }) => {
+    async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         return await triagePreview(user.id, provider, body.items);
       } catch (err) {
@@ -462,10 +471,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // rows the page shows (`items`) or the newest N of the inbox (`newest`).
   .post(
     '/triage/run',
-    async ({ user, principal, body, set }) => {
+    async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const provider = await detectProvider(user.id);
+        const provider = await mailboxOf(user.id, request);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
         const items: InboxItem[] | undefined = body.items?.map((it: Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>) => ({ ...it, provider, receivedAt: '', unread: false }));
         set.status = 202;

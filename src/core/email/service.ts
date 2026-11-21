@@ -17,12 +17,11 @@ import { coreLogger } from '@/utils/logger';
 import {
   type GmailMessage,
   type GraphMessage,
-  gmailToMessage,
-  m365ToMessage,
   normalizeGmail,
   normalizeM365List,
 } from './normalize';
-import { buildGmailReplyRaw } from './drafts';
+import { invalidateEmailCache, readMessage } from './mailbox';
+import { buildSendRaw, parseRecipients, replySubject } from './send-mime';
 import { detectProvider, gmailApi, graphApi } from './providers';
 import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
 import { mapLimit } from '@/utils/concurrency';
@@ -104,15 +103,8 @@ export async function markRead(userId: string, provider: EmailProvider, id: stri
   return { read: true };
 }
 
-/** Read a full message. */
-export async function getMessage(userId: string, provider: EmailProvider, id: string): Promise<EmailMessage> {
-  if (provider === 'google') {
-    return gmailToMessage((await gmailApi(userId, 'GET', `/messages/${id}?format=full`)) as GmailMessage);
-  }
-  return m365ToMessage(
-    (await graphApi(userId, 'GET', `/me/messages/${id}?$select=id,conversationId,subject,from,toRecipients,receivedDateTime,isRead,body,bodyPreview`)) as GraphMessage,
-  );
-}
+/** Read a full message, with cc and its attachments listed. */
+export const getMessage = (userId: string, provider: EmailProvider, id: string): Promise<EmailMessage> => readMessage(userId, provider, id);
 
 /** Undo an archive: put the message back in the inbox. */
 export async function unarchiveMessage(userId: string, provider: EmailProvider, id: string): Promise<{ unarchived: boolean }> {
@@ -208,37 +200,45 @@ export function buildGmailRaw(to: string, subject: string, body: string): string
 }
 
 /**
- * Send a reply. Caller MUST have confirmed — this performs the side effect.
- * With `replyTo` (the id of the message being answered) the reply joins that
- * conversation: without it Gmail and Outlook file it as a new, unrelated mail,
- * for the sender and the recipient alike.
+ * Send a mail. Caller MUST have confirmed — this performs the side effect.
+ * `to`, `cc` and `bcc` are comma-separated address lists, validated before
+ * anything is sent (EmailInputError). With `replyTo` (the id of the message
+ * being answered) the mail joins that conversation: without it Gmail and
+ * Outlook file it as a new, unrelated mail, for the sender and the recipient
+ * alike. Without `replyTo` it is a new message (compose, forward).
  */
 export async function sendReply(
   userId: string,
   provider: EmailProvider,
-  payload: { to: string; subject: string; body: string; replyTo?: string },
+  payload: { to: string; cc?: string; bcc?: string; subject: string; body: string; replyTo?: string },
 ): Promise<{ sent: boolean }> {
+  const recipients = parseRecipients(payload);
+  const graphList = (list: string[]) => list.map((address) => ({ emailAddress: { address } }));
+  const graphRecipients = {
+    toRecipients: graphList(recipients.to),
+    ...(recipients.cc.length ? { ccRecipients: graphList(recipients.cc) } : {}),
+    ...(recipients.bcc.length ? { bccRecipients: graphList(recipients.bcc) } : {}),
+  };
   if (provider === 'google') {
     if (payload.replyTo) {
       const original = (await gmailApi(userId, 'GET', `/messages/${encodeURIComponent(payload.replyTo)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`)) as GmailMessage;
       const header = (name: string) => original.payload?.headers?.find((h) => h.name.toLowerCase() === name)?.value;
-      const raw = buildGmailReplyRaw({ to: payload.to, subject: payload.subject, body: payload.body, inReplyTo: header('message-id'), references: header('references') });
+      const raw = buildSendRaw({ ...recipients, subject: replySubject(payload.subject), body: payload.body, inReplyTo: header('message-id'), references: header('references') });
       await gmailApi(userId, 'POST', '/messages/send', { raw, ...(original.threadId ? { threadId: original.threadId } : {}) });
     } else {
-      await gmailApi(userId, 'POST', '/messages/send', { raw: buildGmailRaw(payload.to, payload.subject, payload.body) });
+      await gmailApi(userId, 'POST', '/messages/send', { raw: buildSendRaw({ ...recipients, subject: payload.subject, body: payload.body }) });
     }
   } else if (payload.replyTo) {
     // Graph's reply threads the message and quotes the original below `comment`.
-    await graphApi(userId, 'POST', `/me/messages/${encodeURIComponent(payload.replyTo)}/reply`, {
-      message: { toRecipients: [{ emailAddress: { address: payload.to } }] },
-      comment: payload.body,
-    });
+    await graphApi(userId, 'POST', `/me/messages/${encodeURIComponent(payload.replyTo)}/reply`, { message: graphRecipients, comment: payload.body });
   } else {
     await graphApi(userId, 'POST', '/me/sendMail', {
-      message: { subject: payload.subject, body: { contentType: 'Text', content: payload.body }, toRecipients: [{ emailAddress: { address: payload.to } }] },
+      message: { subject: payload.subject.replace(/[\r\n]+/g, ' ').trim(), body: { contentType: 'Text', content: payload.body }, ...graphRecipients },
     });
   }
-  coreLogger.info({ userId, provider, to: payload.to, threaded: !!payload.replyTo }, 'email: reply sent'); // no body logged
+  invalidateEmailCache(userId);
+  // Counts only: no address, subject or body is logged.
+  coreLogger.info({ userId, provider, recipients: recipients.to.length + recipients.cc.length + recipients.bcc.length, threaded: !!payload.replyTo }, 'email: mail sent');
   return { sent: true };
 }
 
