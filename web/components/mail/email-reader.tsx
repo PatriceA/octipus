@@ -1,33 +1,21 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Archive, ArrowLeft, Forward, ListPlus, Loader2, MailOpen, Paperclip, Reply, ReplyAll, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, Forward, ListPlus, Loader2, MailOpen, Paperclip, PenSquare, Reply, ReplyAll, Sparkles, Star, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import type { EmailBatchAction, EmailThreadResponse } from '../../../src/shared/email';
+import type { EmailBatchAction } from '../../../src/shared/email';
 import type { ComposeMode } from './email-compose';
-import { addressList, btn, btnGhost, mailboxQuery, type Conversation, type EmailMessage, type EmailProvider, type EmailTriage, hasBlockedImages, MailHtml, priorityTone, shortDate, sourceLabel, who } from './email-shared';
+import { addressList, btn, btnGhost, type Conversation, type EmailMessage, type EmailTriage, hasBlockedImages, MailHtml, priorityTone, shortDate, sourceLabel, who } from './email-shared';
+import { aiPath, attachmentPath, canDo, loadConversation, type Mailbox } from './mailboxes';
 
 const size = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
-/** The messages of a conversation, oldest first. A provider without thread ids gives the one message. */
-async function loadThread(conversation: Conversation, provider: EmailProvider, account?: string): Promise<EmailMessage[]> {
-  const { latest } = conversation;
-  if (latest.threadId) {
-    const res = await api.get<EmailThreadResponse & { error?: string }>(`/email/thread/${encodeURIComponent(latest.threadId)}?${mailboxQuery(provider, account)}`);
-    if (res.error) throw new Error(res.error);
-    if (res.messages?.length) return res.messages;
-  }
-  const msg = await api.get<EmailMessage & { error?: string }>(`/email/message/${encodeURIComponent(latest.id)}?${mailboxQuery(provider, account)}`);
-  if (msg.error) throw new Error(msg.error);
-  return [msg];
-}
-
 interface Props {
   conversation: Conversation;
-  provider: EmailProvider;
-  /** The account of the provider, when it is not the default one. */
-  account?: string;
+  mailbox: Mailbox;
+  /** The AI help and triage (the Email & calendar module) are available. */
+  ai: boolean;
   categories: string[];
   folder: string;
   onBack: () => void;
@@ -35,11 +23,13 @@ interface Props {
   onCompose: (mode: ComposeMode, source: EmailMessage) => void;
   onLabel: (message: EmailMessage, label: { priority: EmailTriage['priority']; category: string }) => Promise<void>;
   onNotice: (text: string) => void;
+  /** IMAP / POP3: a draft was deleted. */
+  onDeleted?: () => void;
 }
 
 /** The read pane: one conversation, its newest message open, the earlier ones folded. */
-export function EmailReader({ conversation, provider, account, categories, folder, onBack, onAction, onCompose, onLabel, onNotice }: Props) {
-  const thread = useQuery({ queryKey: ['email-thread', provider, account ?? '', conversation.key], queryFn: () => loadThread(conversation, provider, account), staleTime: 30_000 });
+export function EmailReader({ conversation, mailbox, ai, categories, folder, onBack, onAction, onCompose, onLabel, onNotice, onDeleted }: Props) {
+  const thread = useQuery({ queryKey: ['email-thread', mailbox.key, conversation.key], queryFn: () => loadConversation(mailbox, conversation.latest), staleTime: 30_000 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showImages, setShowImages] = useState(false);
   const [summary, setSummary] = useState('');
@@ -49,8 +39,8 @@ export function EmailReader({ conversation, provider, account, categories, folde
   const last = messages.at(-1);
   const ids = messages.length ? messages.map((m) => m.id) : conversation.ids;
 
-  // Opening a conversation reads it: clear the unread mark here and in the mailbox.
-  const unreadIds = messages.filter((m) => m.unread).map((m) => m.id).join(',');
+  // Opening a conversation reads it: clear the unread mark here and in the mailbox (when the reader may change it).
+  const unreadIds = canDo(mailbox, 'read') ? messages.filter((m) => m.unread).map((m) => m.id).join(',') : '';
   useEffect(() => {
     if (unreadIds) onAction(unreadIds.split(','), 'read');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per set of unread messages
@@ -62,52 +52,67 @@ export function EmailReader({ conversation, provider, account, categories, folde
   };
   const summarize = () => run('summarize', async () => {
     if (!last) return;
-    const res = await api.post<{ summary?: string; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/summarize?${mailboxQuery(provider, account)}`, {});
+    const res = await api.post<{ summary?: string; error?: string }>(aiPath(mailbox, last.id, 'summarize'), {});
     if (res.error) throw new Error(res.error);
     setSummary(res.summary ?? '');
   });
   // An email that needs something from me becomes a to-do, linked to the thread.
   const toTask = () => run('task', async () => {
     if (!last) return;
-    const res = await api.post<{ task?: { title: string }; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/task?${mailboxQuery(provider, account)}`, {});
+    const res = await api.post<{ task?: { title: string }; error?: string }>(aiPath(mailbox, last.id, 'task'), {});
     if (res.error) throw new Error(res.error);
     onNotice(`Added to your to-do list: ${res.task?.title ?? last.subject}`);
   });
   const download = (message: EmailMessage, attachment: { id: string; name: string }) => run(`att:${attachment.id}`, async () => {
-    const blob = await api.getBlob(`/email/message/${encodeURIComponent(message.id)}/attachment/${encodeURIComponent(attachment.id)}?${mailboxQuery(provider, account)}`);
+    const blob = await api.getBlob(attachmentPath(mailbox, message.id, attachment.id));
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url; link.download = attachment.name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
+  // IMAP / POP3: a draft or a failed send is opened again in the compose panel, or deleted.
+  const deleteDraft = () => run('delete', async () => {
+    if (!last) return;
+    await api.delete(`/mail/drafts/${encodeURIComponent(last.id)}`);
+    onNotice('Draft deleted.');
+    onDeleted?.();
+  });
+
   const triage = conversation.latest.triage;
   const blocked = !showImages && messages.some((m) => m.html && hasBlockedImages(m.html));
   const inTrash = folder === 'trash';
+  const status = conversation.latest.status;
+  const editable = mailbox.kind === 'imap' && (status === 'draft' || status === 'failed');
+  const received = !status || status === 'received';
+  const canReply = mailbox.canSend && received;
 
   return (
     <article aria-label={`Conversation: ${conversation.latest.subject}`} className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-1 border-b border-outline-variant/40 px-3 py-2">
         <button onClick={onBack} aria-label="Back to the list" className={`${btnGhost} lg:hidden`}><ArrowLeft className="h-4 w-4" /></button>
-        <button className={btn} disabled={!last} onClick={() => last && onCompose('reply', last)}><Reply className="h-4 w-4" /> Reply</button>
-        <button className={btnGhost} aria-label="Reply all" title="Reply all" disabled={!last} onClick={() => last && onCompose('replyAll', last)}><ReplyAll className="h-4 w-4" /> <span className="hidden 2xl:inline">Reply all</span></button>
-        <button className={btnGhost} aria-label="Forward" title="Forward" disabled={!last} onClick={() => last && onCompose('forward', last)}><Forward className="h-4 w-4" /> <span className="hidden 2xl:inline">Forward</span></button>
-        <span className="mx-1 h-5 w-px bg-outline-variant/50" />
-        {folder === 'archive' || inTrash
+        {editable && mailbox.canSend && <button className={btn} disabled={!last} onClick={() => last && onCompose('draft', last)}><PenSquare className="h-4 w-4" /> Edit draft</button>}
+        {editable && mailbox.canWrite && <button className={btnGhost} disabled={!last || busy === 'delete'} onClick={deleteDraft}><Trash2 className="h-4 w-4" /> Delete draft</button>}
+        {canReply && <button className={btn} disabled={!last} onClick={() => last && onCompose('reply', last)}><Reply className="h-4 w-4" /> Reply</button>}
+        {canReply && <button className={btnGhost} aria-label="Reply all" title="Reply all" disabled={!last} onClick={() => last && onCompose('replyAll', last)}><ReplyAll className="h-4 w-4" /> <span className="hidden 2xl:inline">Reply all</span></button>}
+        {mailbox.canSend && !editable && <button className={btnGhost} aria-label="Forward" title="Forward" disabled={!last} onClick={() => last && onCompose('forward', last)}><Forward className="h-4 w-4" /> <span className="hidden 2xl:inline">Forward</span></button>}
+        {mailbox.moves && <span className="mx-1 h-5 w-px bg-outline-variant/50" />}
+        {mailbox.moves && (folder === 'archive' || inTrash
           ? <button className={btnGhost} onClick={() => onAction(ids, inTrash ? 'untrash' : 'unarchive')}>Move to inbox</button>
-          : <button className={btnGhost} title="Archive (e)" aria-label="Archive" onClick={() => onAction(ids, 'archive')}><Archive className="h-4 w-4" /></button>}
-        {!inTrash && <button className={btnGhost} title="Move to trash (#)" aria-label="Move to trash" onClick={() => onAction(ids, 'trash')}><Trash2 className="h-4 w-4" /></button>}
-        <button className={btnGhost} title="Mark unread (u)" aria-label="Mark unread" onClick={() => { onAction(ids.slice(-1), 'unread'); onBack(); }}><MailOpen className="h-4 w-4" /></button>
-        <button className={btnGhost} title="Star (s)" aria-label={conversation.starred ? 'Remove star' : 'Star'} aria-pressed={conversation.starred} onClick={() => onAction(ids.slice(-1), conversation.starred ? 'unstar' : 'star')}><Star className={`h-4 w-4 ${conversation.starred ? 'fill-warning text-warning' : ''}`} /></button>
-        <span className="mx-1 h-5 w-px bg-outline-variant/50" />
-        <button className={btnGhost} disabled={!last || busy === 'summarize'} onClick={summarize}>{busy === 'summarize' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-accent" />} Summarize</button>
-        <button className={btnGhost} disabled={!last || busy === 'task'} onClick={toTask}>{busy === 'task' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListPlus className="h-4 w-4" />} To-do</button>
+          : <button className={btnGhost} title="Archive (e)" aria-label="Archive" onClick={() => onAction(ids, 'archive')}><Archive className="h-4 w-4" /></button>)}
+        {mailbox.moves && !inTrash && <button className={btnGhost} title="Move to trash (#)" aria-label="Move to trash" onClick={() => onAction(ids, 'trash')}><Trash2 className="h-4 w-4" /></button>}
+        {canDo(mailbox, 'unread') && received && <button className={btnGhost} title="Mark unread (u)" aria-label="Mark unread" onClick={() => { onAction(ids.slice(-1), 'unread'); onBack(); }}><MailOpen className="h-4 w-4" /></button>}
+        {mailbox.moves && <button className={btnGhost} title="Star (s)" aria-label={conversation.starred ? 'Remove star' : 'Star'} aria-pressed={conversation.starred} onClick={() => onAction(ids.slice(-1), conversation.starred ? 'unstar' : 'star')}><Star className={`h-4 w-4 ${conversation.starred ? 'fill-warning text-warning' : ''}`} /></button>}
+        {ai && received && <span className="mx-1 h-5 w-px bg-outline-variant/50" />}
+        {ai && received && <button className={btnGhost} disabled={!last || busy === 'summarize'} onClick={summarize}>{busy === 'summarize' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-accent" />} Summarize</button>}
+        {ai && received && <button className={btnGhost} disabled={!last || busy === 'task'} onClick={toTask}>{busy === 'task' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListPlus className="h-4 w-4" />} To-do</button>}
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
         <h2 className="text-lg font-semibold text-on-surface">{conversation.latest.subject || '(no subject)'}</h2>
 
-        <TriageLine triage={triage} categories={categories} disabled={!last} onLabel={(label) => (last ? onLabel(last, label) : Promise.resolve())} />
+        {ai && received && <TriageLine triage={triage} categories={categories} disabled={!last} onLabel={(label) => (last ? onLabel(last, label) : Promise.resolve())} />}
+        {last?.sendError && <p role="alert" className="rounded-md bg-error/10 px-3 py-2 text-sm text-error">The last send failed: {last.sendError}</p>}
 
         {(error || thread.error) && <p role="alert" className="rounded-md bg-error/10 px-3 py-2 text-sm text-error">{error || (thread.error as Error).message}</p>}
         {summary && (

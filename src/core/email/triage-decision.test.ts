@@ -133,3 +133,22 @@ describe('triageInbox with a decision model (live)', () => {
     expect((await triageInbox('u', [item])).m1).toMatchObject({ priority: 'high', category: 'work' });
   });
 });
+
+describe('triageInbox on an IMAP / POP3 mailbox', () => {
+  beforeEach(() => { primary = { modelId: 'chat-model', name: 'chat-model' }; backup = null; answers = null; owner = {}; llmCalls = 0; llmFails = false; vi.mocked(saveModelLabels).mockClear(); vi.mocked(saveObservations).mockClear(); });
+
+  test('labels, answers and the training set are keyed by the mailbox, not by a provider', async () => {
+    const { userLabels } = await import('./triage-labels');
+    vi.mocked(userLabels).mockClear();
+    const box = 'imap:0b9d3c55-5f2c-4c37-9a3e-6d1f00000001' as const;
+    const imapMail: InboxItem = { ...item, provider: 'imap', mailbox: box };
+    expect((await triageInbox('u', [imapMail])).m1).toMatchObject({ priority: 'high', source: 'llm' });
+    expect(vi.mocked(userLabels).mock.calls[0][1]).toBe(box);
+    expect(vi.mocked(saveModelLabels).mock.calls[0][1]).toBe(box);
+  });
+
+  test('IMAP mail without its mailbox is refused rather than filed under a provider', async () => {
+    await expect(triageInbox('u', [{ ...item, provider: 'imap' }])).rejects.toThrow(/must name its mailbox/);
+    expect(llmCalls).toBe(0);
+  });
+});

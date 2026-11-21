@@ -233,7 +233,8 @@ export function renderEmailChecklist(emails: readonly InboxItem[], clock: (iso: 
     ...emails.map((e) => {
       const from = e.from.name ? `${inline(e.from.name, 80)} <${inline(e.from.email, 120)}>` : inline(e.from.email, 120);
       const at = e.receivedAt ? ` ${clock(e.receivedAt)}` : '';
-      return `- [${toolProviderName(e.provider)} ${e.id}]${at} from ${from}: "${inline(e.subject, 160)}" — ${inline(e.snippet, 200)}`;
+      // The watch lists Google / Microsoft mail only.
+      return `- [${e.provider === 'imap' ? 'imap' : toolProviderName(e.provider)} ${e.id}]${at} from ${from}: "${inline(e.subject, 160)}" — ${inline(e.snippet, 200)}`;
     }),
     '</email-list>',
     'For each email: read it with `get_email_summary` when the preview is not enough, then decide whether anything is needed.',

@@ -4,7 +4,8 @@ import { Archive, ChevronDown, ChevronRight, Loader2, Plus, Sparkles, Trash2, X 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
-import { btn, btnGhost, btnPrimary, type EmailProvider, type EmailTriage, field, type InboxItem, mailboxQuery, sourceLabel, who } from './email-shared';
+import { btn, btnGhost, btnPrimary, type EmailTriage, field, type InboxItem, sourceLabel, who } from './email-shared';
+import { keyOf } from './mailboxes';
 import { TriageReview } from './triage-review';
 
 export type TriageScope = 'untriaged' | 'unread' | 'all';
@@ -15,9 +16,15 @@ export interface TriageSettings {
   archiveCategories: string[];
   instructions: string;
   skipDialog: boolean;
+  /** Triage new inbox mail without being asked. */
+  auto: boolean;
 }
+/** The last automatic run that triaged something or failed. */
+export interface LastAutoTriage { at: string; triaged: number; archived: number; skipped?: number; error?: string }
 interface Preview {
   settings: TriageSettings;
+  capabilities: { labels: boolean; archive: boolean; imap: boolean };
+  lastAuto: LastAutoTriage | null;
   counts: Record<TriageScope, number>;
   ownerLabelled: number;
   categories: Record<string, string>;
@@ -33,7 +40,7 @@ export interface TriageRun {
   finished: boolean;
   cancelled?: boolean;
   error?: string;
-  result?: { triage: Record<string, EmailTriage>; labeled: number; labelError?: string; archived: string[]; archiveProposed: string[] };
+  result?: { triage: Record<string, EmailTriage>; labeled: number; labelError?: string; archived: string[]; archiveProposed: string[]; protected?: number };
 }
 
 const SCOPE_TEXT: Record<TriageScope, string> = {
@@ -52,12 +59,23 @@ const STAGE_TEXT: Record<TriageRun['stage'], string> = {
 type Row = { name: string; description: string };
 const toRows = (c: Record<string, string>): Row[] => Object.entries(c).map(([name, description]) => ({ name, description }));
 
-/** Start a run with the saved settings. Used by the dialog and by the one-click path. */
-export async function startTriage(provider: EmailProvider, items: InboxItem[], scope: TriageScope, newest?: number, account?: string): Promise<TriageRun> {
+/**
+ * Start a run with the saved settings over `mailboxes` (one, or every inbox
+ * of "All inboxes"). Each row names its mailbox; with `newest` the server
+ * reads the newest mail of each. Used by the dialog and by the one-click path.
+ */
+export async function startTriage(mailboxes: string[], items: InboxItem[], scope: TriageScope, newest?: number): Promise<TriageRun> {
   const body = newest
-    ? { newest, scope }
-    : { items: items.map(({ id, from, subject, snippet }) => ({ id, from, subject, snippet })) };
-  return (await api.post<{ run: TriageRun }>(`/email/triage/run?${mailboxQuery(provider, account)}`, body)).run;
+    ? { newest, scope, mailboxes }
+    : { items: items.map((it) => ({ id: it.id, from: it.from, subject: it.subject, snippet: it.snippet, mailbox: keyOf(it) })) };
+  return (await api.post<{ run: TriageRun }>('/email/triage/run', body)).run;
+}
+
+/** "Fri 09:41: 4 triaged, 1 archived". */
+export function lastAutoText(last: LastAutoTriage): string {
+  const when = new Date(last.at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const parts = [`${last.triaged} triaged`, ...(last.archived ? [`${last.archived} archived`] : []), ...(last.skipped ? [`${last.skipped} kept from the models by their protection level`] : [])];
+  return last.error ? `${when}: failed (${last.error})${last.triaged ? `, ${parts.join(', ')}` : ''}` : `${when}: ${parts.join(', ')}`;
 }
 
 /** The loaded rows a scope takes, the way the server counts them. */
@@ -67,10 +85,8 @@ export function rowsInScope(items: InboxItem[], scope: TriageScope): InboxItem[]
 }
 
 interface Props {
-  /** The mailbox being triaged. */
-  provider: EmailProvider;
-  /** The account of that provider, when it is not the default one. */
-  account?: string;
+  /** The mailboxes being triaged: one, or every inbox of "All inboxes". */
+  mailboxes: string[];
   /** The inbox rows the page has loaded. */
   items: InboxItem[];
   /** A run already going (or just finished) when the dialog opens. */
@@ -88,7 +104,7 @@ interface Props {
  * progress, then its result. Nothing in the mailbox changes before Start, and
  * archiving is either an explicit setting shown here or a proposal afterwards.
  */
-export function TriageDialog({ provider, account, items, run, onRun, onArchive, onUnarchive, onClose }: Props) {
+export function TriageDialog({ mailboxes, items, run, onRun, onArchive, onUnarchive, onClose }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [settings, setSettings] = useState<TriageSettings | null>(null);
   const [error, setError] = useState('');
@@ -103,12 +119,12 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
 
   const loadPreview = useCallback(async () => {
     try {
-      const res = await api.post<Preview & { error?: string }>(`/email/triage/preview?${mailboxQuery(provider, account)}`, { items: items.slice(0, 500).map(({ id, unread }) => ({ id, unread })) });
+      const res = await api.post<Preview & { error?: string }>('/email/triage/preview', { items: items.slice(0, 500).map((it) => ({ id: it.id, unread: it.unread, mailbox: keyOf(it) })) });
       if (res.error) { setError(res.error); return; }
       setPreview(res);
       setSettings((current) => current ?? res.settings);
     } catch (err) { setError((err as Error).message); }
-  }, [items, provider, account]);
+  }, [items]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load the preview once on open
@@ -126,6 +142,8 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
   const set = (patch: Partial<TriageSettings>) => setSettings((s) => (s ? { ...s, ...patch } : s));
   const byId = useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
   const llmError = preview && 'error' in preview.models.llm ? preview.models.llm.error : '';
+  // A server from before IMAP triage sends no capabilities: Google / Microsoft only.
+  const caps = preview?.capabilities ?? { labels: true, archive: true, imap: false };
   const count = !preview || !settings ? 0 : preview.counts[settings.scope];
   const calibrationChanges = !!preview && !!settings && settings.instructions.trim() !== preview.settings.instructions;
 
@@ -145,7 +163,7 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
     setBusy('start'); setError('');
     try {
       await api.put('/email/triage/settings', settings);
-      onRun(await startTriage(provider, rowsInScope(items, settings.scope), settings.scope, useNewest ? newest : undefined, account));
+      onRun(await startTriage(mailboxes, rowsInScope(items, settings.scope), settings.scope, useNewest ? newest : undefined));
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
@@ -275,6 +293,11 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
 
                 <section aria-label="After triage" className="space-y-2">
                   <h3 className="font-medium">After triage</h3>
+                  {!caps.labels ? (
+                    <p className="text-on-surface-variant">An IMAP or POP3 mailbox keeps its mail as it is: triage gives each mail a priority and a category here, without labels in the mailbox or archiving.</p>
+                  ) : (
+                  <>
+                  {caps.imap && <p className="text-xs text-on-surface-variant">Labels and archiving apply to Gmail and Outlook mail; IMAP mail gets its priority and category only.</p>}
                   <label className="flex cursor-pointer items-start gap-2">
                     <input type="checkbox" className="mt-0.5" checked={settings.applyLabels} onChange={(e) => set({ applyLabels: e.target.checked })} />
                     <span>Label each mail in the mailbox <span className="text-on-surface-variant">(a Gmail label or Outlook category named Octipus/&lt;category&gt;; mail is not moved)</span></span>
@@ -290,6 +313,18 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
                       return <button key={c} aria-pressed={on} onClick={() => set({ archiveCategories: on ? settings.archiveCategories.filter((x) => x !== c) : [...settings.archiveCategories, c] })} className={`rounded-full border px-2 py-0.5 text-xs ${on ? 'border-primary/50 bg-primary-container text-on-primary-container' : 'border-outline-variant/60 text-on-surface-variant hover:bg-surface-container-high'}`}>{c}</button>;
                     })}
                   </div>
+                  </>
+                  )}
+                </section>
+
+                <section aria-label="Automatic triage" className="space-y-1.5">
+                  <h3 className="font-medium">Automatic triage</h3>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input type="checkbox" className="mt-0.5" checked={settings.auto} onChange={(e) => set({ auto: e.target.checked })} />
+                    <span>Triage new mail automatically <span className="text-on-surface-variant">(every few minutes, at most 20 mails at a time, with these settings: your Gmail / Outlook inbox and your own IMAP mailboxes; a space&apos;s shared mailbox only by hand)</span></span>
+                  </label>
+                  <p className="text-xs text-on-surface-variant">Every run asks the models above, so it costs what a run by hand costs. It starts with mail that arrives after you turn it on.</p>
+                  {preview.lastAuto && <p className={`text-xs ${preview.lastAuto.error ? 'text-error' : 'text-on-surface-variant'}`}>Last automatic run: {lastAutoText(preview.lastAuto)}</p>}
                 </section>
               </>
             )}
@@ -330,6 +365,7 @@ export function TriageDialog({ provider, account, items, run, onRun, onArchive, 
                     )}
                     {result.labeled > 0 && <p className="text-on-surface-variant">{result.labeled} labelled in the mailbox.</p>}
                     {result.labelError && <p className="text-error">Labelling failed: {result.labelError}</p>}
+                    {!!result.protected && <p className="text-on-surface-variant">{result.protected} IMAP {result.protected === 1 ? 'mail was' : 'mails were'} left out: {result.protected === 1 ? 'its' : 'their'} protection level keeps {result.protected === 1 ? 'it' : 'them'} on local models, and the triage models are not local.</p>}
                     {result.archived.length > 0 && (
                       <p className="flex flex-wrap items-center gap-2">
                         {undone ? `${result.archived.length} put back in the inbox.` : `${result.archived.length} low-priority ${result.archived.length === 1 ? 'mail' : 'mails'} archived.`}

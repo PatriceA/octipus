@@ -21,7 +21,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getOAuthManager, normalizeAccount } from '@/security/oauth';
-import type { EmailProvider } from '@/shared/email';
+import type { EmailProvider, MailboxKey } from '@/shared/email';
 
 /** A non-default account of a provider. */
 export interface MailboxSelection {
@@ -47,7 +47,9 @@ export function selectedAccount(provider: EmailProvider): string | undefined {
  * the bare provider for the default account, as it always was, and
  * `provider:<address>` for any other, so two accounts' mail never mixes.
  */
-export function mailboxKey(provider: EmailProvider): string {
+export function mailboxKey(provider: MailboxKey): string {
+  // An IMAP mailbox is its own key; only Google / Microsoft have accounts.
+  if (provider !== 'google' && provider !== 'microsoft') return provider;
   const account = selectedAccount(provider);
   return account ? `${provider}:${account}` : provider;
 }

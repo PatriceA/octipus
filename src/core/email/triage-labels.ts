@@ -11,7 +11,7 @@ import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ClefObservation, type EmailTriageLabel, emailTriageLabels, type StoredTriage } from '@/db/schema/email-triage-labels';
 import { mailboxKey } from './account-context';
-import type { EmailProvider, EmailTriage, InboxItem } from './types';
+import type { EmailTriage, InboxItem, MailboxKey } from './types';
 
 type Priority = EmailTriage['priority'];
 
@@ -59,7 +59,7 @@ export function domainOf(email: string): string {
 }
 
 /** Owner labels for these mails: triage returns them as they are. */
-export async function userLabels(userId: string, provider: EmailProvider, ids: string[]): Promise<Record<string, EmailTriage>> {
+export async function userLabels(userId: string, provider: MailboxKey, ids: string[]): Promise<Record<string, EmailTriage>> {
   if (!ids.length) return {};
   const rows = await getDb().select().from(emailTriageLabels).where(and(
     eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, mailboxKey(provider)),
@@ -92,15 +92,16 @@ export async function examplesFor(userId: string, item: InboxItem): Promise<Arra
 /**
  * A row's mailbox: the bare provider for the default account, `provider:<address>`
  * for another account of the same provider (core/email/account-context.ts),
- * so two accounts' mail never shares a row.
+ * `imap:<account id>` for an IMAP / POP3 mailbox. An address always holds "@"
+ * and an IMAP id never does, so the three kinds of key cannot meet.
  */
-const base = (userId: string, provider: EmailProvider, it: InboxItem) => ({
+const base = (userId: string, provider: MailboxKey, it: InboxItem) => ({
   userId, provider: mailboxKey(provider), messageId: it.id, fromEmail: it.from.email.toLowerCase(),
   subject: it.subject.slice(0, 500), snippet: it.snippet.slice(0, SNIPPET_CHARS),
 });
 
 /** Record Clef's answers; a mail seen again gets its latest answer. */
-export async function saveObservations(userId: string, provider: EmailProvider, items: InboxItem[], clef: Record<string, ClefObservation>): Promise<void> {
+export async function saveObservations(userId: string, provider: MailboxKey, items: InboxItem[], clef: Record<string, ClefObservation>): Promise<void> {
   const rows = items.filter(it => clef[it.id]).map(it => ({ ...base(userId, provider, it), clef: clef[it.id] }));
   if (!rows.length) return;
   await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
@@ -110,7 +111,7 @@ export async function saveObservations(userId: string, provider: EmailProvider, 
 }
 
 /** Record a reference model's labels under the rubric it was given; an owner label is left alone. */
-export async function saveModelLabels(userId: string, provider: EmailProvider, items: InboxItem[], labels: Record<string, EmailTriage>, model: string, rubric: string): Promise<void> {
+export async function saveModelLabels(userId: string, provider: MailboxKey, items: InboxItem[], labels: Record<string, EmailTriage>, model: string, rubric: string): Promise<void> {
   const now = new Date();
   const rows = items.filter(it => labels[it.id]).map(it => ({
     ...base(userId, provider, it), labelPriority: labels[it.id].priority, labelCategory: labels[it.id].category,
@@ -125,7 +126,7 @@ export async function saveModelLabels(userId: string, provider: EmailProvider, i
 }
 
 /** Record the triage answers a run returned, with the model kind that gave each. */
-export async function saveTriageResults(userId: string, provider: EmailProvider, items: InboxItem[], answers: Record<string, EmailTriage>, sourceOf: (id: string) => StoredTriage['source'], rubric?: string): Promise<void> {
+export async function saveTriageResults(userId: string, provider: MailboxKey, items: InboxItem[], answers: Record<string, EmailTriage>, sourceOf: (id: string) => StoredTriage['source'], rubric?: string): Promise<void> {
   const at = new Date().toISOString();
   const rows = items.filter(it => answers[it.id]).map(it => {
     const { priority, category, reason } = answers[it.id];
@@ -142,7 +143,7 @@ export async function saveTriageResults(userId: string, provider: EmailProvider,
  * The triage to show for these mails without asking a model again: the owner's
  * own label, else the answer the last triage run gave.
  */
-export async function storedTriage(userId: string, provider: EmailProvider, ids: string[]): Promise<Record<string, EmailTriage>> {
+export async function storedTriage(userId: string, provider: MailboxKey, ids: string[]): Promise<Record<string, EmailTriage>> {
   if (!ids.length) return {};
   const rows = await getDb().select().from(emailTriageLabels).where(and(
     eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, mailboxKey(provider)), inArray(emailTriageLabels.messageId, ids),
@@ -156,7 +157,7 @@ export async function storedTriage(userId: string, provider: EmailProvider, ids:
 }
 
 /** The owner's label. Only for a mail triage has already seen (the row holds its sender and subject). */
-export async function setUserLabel(userId: string, messageId: string, label: { priority: Priority; category: string }, provider?: EmailProvider): Promise<boolean> {
+export async function setUserLabel(userId: string, messageId: string, label: { priority: Priority; category: string }, provider?: MailboxKey): Promise<boolean> {
   const rows = await getDb().update(emailTriageLabels)
     .set({ labelPriority: label.priority, labelCategory: label.category, labelSource: 'user', labelModel: null, labelRubric: null, labeledAt: new Date() })
     .where(and(eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.messageId, messageId), provider ? eq(emailTriageLabels.provider, mailboxKey(provider)) : undefined))
@@ -169,7 +170,7 @@ export async function setUserLabel(userId: string, messageId: string, label: { p
  * also works for a mail no triage run has seen, so a label can be given (or
  * corrected) on any row.
  */
-export async function upsertUserLabel(userId: string, provider: EmailProvider, item: InboxItem, label: { priority: Priority; category: string }): Promise<void> {
+export async function upsertUserLabel(userId: string, provider: MailboxKey, item: InboxItem, label: { priority: Priority; category: string }): Promise<void> {
   const labelled = { labelPriority: label.priority, labelCategory: label.category, labelSource: 'user' as const, labelModel: null, labelRubric: null, labeledAt: new Date() };
   await getDb().insert(emailTriageLabels).values({ ...base(userId, provider, item), ...labelled }).onConflictDoUpdate({
     target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],

@@ -145,6 +145,14 @@ export class MailRepo {
     return row ?? null;
   }
 
+  /** Unread received mail of one account the scope reaches. */
+  async unreadCount(accountId: string): Promise<number> {
+    if (!isUuid(accountId)) return 0;
+    const [row] = await this.db.select({ n: sql<number>`count(*)::int` }).from(mailMessages)
+      .where(and(eq(mailMessages.accountId, accountId), eq(mailMessages.status, 'received'), eq(mailMessages.unread, true), ...this.messageRows()));
+    return row?.n ?? 0;
+  }
+
   /** Messages of the scope among `ids` (for case links). */
   async findByIds(ids: readonly string[]): Promise<MailSummaryRow[]> {
     const valid = ids.filter(isUuid);

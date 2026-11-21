@@ -32,6 +32,54 @@ On each mail the reading pane shows its triage, who gave it (you, the decision
 model or the LLM) and the LLM's reason, and you can set the priority and
 category there. That stores your label, exactly like the review queue does.
 
+## Which mailboxes
+
+Triage works on every mailbox the Email page shows: a connected Gmail or
+Outlook mailbox and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
+
+- **One mailbox or all of them.** In **All inboxes** one run covers every
+  inbox on screen. Progress counts across them, and each mail is triaged,
+  labelled and archived in the mailbox it lives in.
+- **IMAP / POP3 mailboxes** get a priority and a category, nothing more:
+  Octipus changes nothing on their servers, so there are no labels in the
+  mailbox and no archiving. The window says so when the run covers such a
+  mailbox.
+- **Mail is read from the store.** For IMAP mail the run reads sender, subject
+  and snippet from what Octipus stored, through the caller's own access (a
+  space's shared mailbox: its members). It never takes them from the request.
+- **Protection levels.** IMAP mail carries a protection level
+  ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)). While the `protection` module
+  is on, mail at level 3 or 4 (unclassified counts as 4) is triaged only when
+  the decision model (if one is bound) and the everyday LLM both run locally.
+  Otherwise it is left out and the result counts it. The same holds for the
+  summary, the reply directions and AI drafts of such mail.
+- **Per person.** Triage answers and labels are kept per user and mailbox
+  (`email_triage_labels.provider` is `google`, `microsoft` or
+  `imap:<account id>`). In a space's shared mailbox every member triages for
+  themselves: one member's labels are not another's.
+
+## Automatic triage
+
+**Triage new mail automatically**, in the same window, triages new inbox mail
+without anyone pressing the button (`src/core/email/auto-triage.ts`):
+
+- **What:** mail that arrived after it was turned on and has no triage yet, in
+  your Gmail / Outlook inbox and your own IMAP / POP3 mailboxes. A space's
+  shared mailbox is triaged by hand only.
+- **How much:** each user is looked at every 5 minutes, at most 20 mails per
+  look across all their mailboxes. A mail the models gave no answer for is
+  not sent again (until the backend restarts).
+- **With your settings:** instructions, labels and archiving as set in the
+  window. Archiving happens only when you turned it on.
+- **Failures** wait twice as long each time, up to an hour. A missing model is
+  reported once.
+- **Not** while your own run is going, without a model on the everyday lane,
+  or with the Email & calendar module off (job `inbox-auto-triage`).
+- **Cost:** every look that finds new mail asks the models, like a run by hand.
+
+The window shows the last automatic run that triaged something or failed:
+when, how many, what was archived, what protection kept back, and the error.
+
 ## How a triage run works
 
 `triageInbox` (`src/core/email/service.ts`) handles each batch of inbox mail in
@@ -272,9 +320,10 @@ answer about two thirds of all mail at 92–93% accuracy.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /api/email/triage/run` | Start a background run (the page uses this); `GET` for progress and result, `/cancel` to stop. |
-| `POST /api/email/triage/preview` | What a run would do and what the models are told. |
-| `GET`/`PUT /api/email/triage/settings` | Scope, labels, auto-archive and its categories, instructions. |
+| `POST /api/email/triage/run` | Start a background run (the page uses this): rows with their `mailbox`, or `newest` with `mailboxes`; `GET` for progress and result, `/cancel` to stop. |
+| `POST /api/email/triage/preview` | What a run would do and what the models are told; `capabilities` says whether labels and archiving apply. |
+| `PUT /api/email/imap/triage/label/:id` | Your label `{priority, category}` for an IMAP / POP3 mail you can read. |
+| `GET`/`PUT /api/email/triage/settings` | Scope, labels, auto-archive and its categories, instructions, `auto`; `GET` also returns `lastAuto`. |
 | `POST /api/email/triage` | One synchronous run (older clients). |
 | `GET /api/email/triage/review` | The review queue, statistics, fitted thresholds and backlog progress. |
 | `PUT /api/email/triage/label/:id` | Set your label `{priority, category}` for a mail triage has already seen; 404 otherwise. |
@@ -288,6 +337,9 @@ answer about two thirds of all mail at 92–93% accuracy.
   review queue.
 - `src/db/schema/email-triage-labels.ts`: table `email_triage_labels`.
 - `src/core/email/triage-run.ts`: settings, preview, the background run.
+- `src/core/email/triage-sources.ts`: which mailboxes a run covers, checked.
+- `src/core/email/imap-mailbox.ts`: IMAP / POP3 mail in triage's shapes, the protection gate.
+- `src/core/email/auto-triage.ts`: automatic triage.
 - `web/components/mail/triage-dialog.tsx`: the Triage window.
 - `web/components/mail/triage-review.tsx`: the Review panel.
 - `src/models/decision.ts`: `decide()`, the privacy gate and the decision lane.

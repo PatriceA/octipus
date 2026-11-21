@@ -54,6 +54,7 @@ let reminderSweepRunning = false;
 let mailSweepRunning = false;
 let mailIndexSweepRunning = false;
 let scanSweepRunning = false;
+let autoTriageRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -570,6 +571,18 @@ export function startModuleSweeps(now: Date): string[] {
       .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
       .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
       .finally(() => { scanSweepRunning = false; });
+  }
+
+  // Automatic email triage (core/email/auto-triage.ts): new inbox mail of the
+  // users who turned it on. Loaded on first use: most installs never run it.
+  if (!autoTriageRunning && isJobOn('inbox-auto-triage')) {
+    autoTriageRunning = true;
+    started.push('inbox-auto-triage');
+    import('@/core/email/auto-triage')
+      .then(({ autoTriageTick }) => autoTriageTick(now))
+      .then((triaged) => { if (triaged > 0) coreLogger.info({ triaged }, 'Automatic triage sorted new mail'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Automatic triage sweep failed'))
+      .finally(() => { autoTriageRunning = false; });
   }
   return started;
 }

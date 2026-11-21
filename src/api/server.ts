@@ -39,6 +39,7 @@ import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
 import { emailMailboxRoutes } from './routes/email-mailbox';
 import { emailIndexRoutes } from './routes/email-index';
+import { emailImapRoutes } from './routes/email-imap';
 import { calendarRoutes } from './routes/calendar';
 import { heartbeatRoutes } from './routes/heartbeat';
 import { onboardingRoutes } from './routes/onboarding';
@@ -93,6 +94,7 @@ import { pluginSetupRoutes } from './routes/plugin-setup';
 import { pluginHostRoutes } from './routes/plugin-host';
 import { pluginCallRoutes, pluginUiRoutes } from './routes/plugin-ui';
 import { mailRoutes } from './routes/mail';
+import { mailClientRoutes } from './routes/mail-client';
 import { moduleRoutes } from './routes/modules';
 import { scanFolderRoutes } from './routes/scan-folders';
 import { companionRoutes } from './routes/companion';
@@ -480,6 +482,7 @@ export function createServer() {
         .use(pluginCallRoutes)
         .use(pluginHostRoutes)
         .use(mailRoutes)
+        .use(mailClientRoutes)
         .use(scanFolderRoutes)
         .use(companionRoutes)
         .use(backupRoutes)
@@ -488,6 +491,7 @@ export function createServer() {
         .use(emailRoutes)
         .use(emailMailboxRoutes)
         .use(emailIndexRoutes)
+        .use(emailImapRoutes)
         .use(calendarRoutes)
         .use(heartbeatRoutes)
         .use(onboardingRoutes)
