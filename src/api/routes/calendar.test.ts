@@ -3,7 +3,17 @@ const mock = vi.hoisted(() => ({ list: vi.fn(), write: vi.fn(), remove: vi.fn(),
 vi.mock('@/core/calendar/events', () => ({ listCalendarEvents: mock.list }));
 vi.mock('@/core/calendar/manage', () => ({ writeCalendarEvent: mock.write, deleteCalendarEvent: mock.remove, respondToCalendarEvent: mock.respond, calendarEventAttendees: mock.attendees, CalendarInputError: class extends Error {} }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: {} }));
-vi.mock('@/security/oauth', () => ({ getOAuthManager: () => ({}) }));
+vi.mock('@/security/oauth', async () => {
+  const actual = await vi.importActual<typeof import('@/security/oauth')>('@/security/oauth');
+  // Alice has two Google accounts: home (the default) and work.
+  const accounts = ['me@home.example', 'me@work.example'];
+  return { normalizeAccount: actual.normalizeAccount, getOAuthManager: () => ({
+    accountRole: async (userId: string, provider: string, account: string) => {
+      const i = userId === '11111111-1111-4111-8111-111111111111' && provider === 'google' ? accounts.indexOf(account) : -1;
+      return i < 0 ? null : i === 0 ? 'default' : 'other';
+    },
+  }) };
+});
 vi.mock('@/core/calendar/calendars', async () => {
   // The real validator: the route's boundary check is part of what is tested.
   const actual = await vi.importActual<typeof import('@/core/calendar/calendars')>('@/core/calendar/calendars');
@@ -74,14 +84,14 @@ test('changing or deleting an event with guests needs the caller to accept that 
   mock.attendees.mockResolvedValue(3);
   const edit = await call('PATCH', '/events/e1', { ...input, calendarId: 'team' });
   expect(edit).toEqual({ status: 409, body: { error: 'This event has 3 guests, who will be notified of the change.', requiresAttendeeConfirmation: true, attendees: 3 } });
-  expect(mock.attendees).toHaveBeenCalledWith(alice.id, 'google', 'e1', 'team');
+  expect(mock.attendees).toHaveBeenCalledWith(alice.id, 'google', 'e1', 'team', undefined);
   expect((await call('DELETE', '/events/e1', { provider: 'google', confirm: true })).body).toMatchObject({ requiresAttendeeConfirmation: true, attendees: 3 });
   expect(mock.write).not.toHaveBeenCalled(); expect(mock.remove).not.toHaveBeenCalled();
 
   expect((await call('PATCH', '/events/e1', { ...input, calendarId: 'team', notifyAttendees: true })).status).toBe(200);
   expect(mock.write).toHaveBeenCalledWith(alice.id, 'google', expect.objectContaining({ title: 'Meeting' }), 'e1', { calendarId: 'team', notify: true });
   expect((await call('DELETE', '/events/e1', { provider: 'google', confirm: true, notifyAttendees: true })).status).toBe(200);
-  expect(mock.remove).toHaveBeenCalledWith(alice.id, 'google', 'e1', { calendarId: undefined, notify: true });
+  expect(mock.remove).toHaveBeenCalledWith(alice.id, 'google', 'e1', { calendarId: undefined, account: undefined, notify: true });
 });
 
 test('an event without guests is changed and deleted without a second question', async () => {
@@ -127,4 +137,23 @@ test('visibility choices are checked and stored for the caller', async () => {
   expect(mock.setPrefs).toHaveBeenCalledWith(alice.id, { visible: ['google:team'] });
   expect((await call('PUT', '/preferences', { visible: ['caldav:x'] })).status).toBe(400);
   expect(mock.setPrefs).toHaveBeenCalledTimes(1);
+});
+
+test('a write on another account goes to that account; one not connected, or another user\'s, is refused before the provider', async () => {
+  const work = { ...team, id: 'team', account: 'me@work.example' };
+  mock.view.mockResolvedValue({ calendars: [mine, boss, team, work], providers: ['google'], partial: false, preferences: {} });
+  await call('POST', '/events', { ...input, account: 'Me@Work.example', calendarId: 'team' });
+  expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.anything(), undefined, { calendarId: 'team', account: 'me@work.example' });
+  // The default account named explicitly is the default account.
+  await call('POST', '/events', { ...input, account: 'me@home.example' });
+  expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.anything(), undefined, { calendarId: undefined, account: undefined });
+  mock.write.mockClear();
+  expect((await call('POST', '/events', { ...input, account: 'stranger@x.dev' })).status).toBe(404);
+  expect((await call('DELETE', '/events/e1', { provider: 'google', account: 'stranger@x.dev', confirm: true })).status).toBe(404);
+  expect((await call('POST', '/events/e1/respond', { provider: 'google', account: 'stranger@x.dev', response: 'accepted' })).status).toBe(404);
+  expect((await call('POST', '/events', { ...input, account: 'not an address' })).status).toBe(400);
+  expect(mock.write).not.toHaveBeenCalled(); expect(mock.remove).not.toHaveBeenCalled(); expect(mock.respond).not.toHaveBeenCalled();
+  // The work account's "team" calendar is not the home account's "team" calendar: read-only checks look at the right one.
+  await call('POST', '/events/e1/respond', { provider: 'google', account: 'me@work.example', response: 'declined' });
+  expect(mock.respond).toHaveBeenCalledWith(alice.id, 'google', 'e1', 'declined', { calendarId: undefined, account: 'me@work.example' });
 });

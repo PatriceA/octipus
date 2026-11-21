@@ -10,6 +10,8 @@ export type CalendarShowAs = 'busy' | 'free' | 'tentative' | 'away';
 /** One calendar of a connected account: the reader's own, or one shared with them. */
 export interface CalendarInfo {
   provider: CalendarProvider;
+  /** The connected account it belongs to (its address), when that is not the provider's default account. */
+  account?: string;
   /** The provider's id for the calendar. */
   id: string;
   name: string;
@@ -27,8 +29,12 @@ export interface CalendarInfo {
   visible: boolean;
 }
 
-/** `provider:id` — how a calendar is named in stored choices and in the page. */
-export const calendarKey = (c: { provider: CalendarProvider; id: string }) => `${c.provider}:${c.id}`;
+/**
+ * `provider:id` — how a calendar is named in stored choices and in the page.
+ * A calendar of another account than the provider's default is
+ * `provider:account:id`, so the default account's stored choices stay valid.
+ */
+export const calendarKey = (c: { provider: CalendarProvider; id: string; account?: string }) => (c.account ? `${c.provider}:${c.account}:${c.id}` : `${c.provider}:${c.id}`);
 
 export interface CalendarAttendee {
   name?: string;
@@ -53,6 +59,8 @@ export interface CalendarEvent {
   organizer?: { name?: string; email?: string };
   attendees: CalendarAttendee[];
   provider: CalendarProvider;
+  /** The connected account it was read from, when that is not the provider's default account. */
+  account?: string;
   /** The calendar it was read from; absent when only the default calendar was read. */
   calendarId?: string;
   calendarName?: string;

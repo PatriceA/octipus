@@ -44,7 +44,7 @@ test('a write answers the event id the provider names', async () => {
 test('provider writes use only the caller token and encode event IDs as one segment', async () => {
   token.mockResolvedValue('caller-secret'); const request = vi.fn(async () => new Response('{}')); vi.stubGlobal('fetch', request);
   await writeCalendarEvent('alice', 'google', input, 'event/with?parts');
-  expect(token).toHaveBeenCalledWith('alice', 'google');
+  expect(token).toHaveBeenCalledWith('alice', 'google', undefined);
   expect(request).toHaveBeenCalledWith('https://www.googleapis.com/calendar/v3/calendars/primary/events/event%2Fwith%3Fparts', expect.objectContaining({ method: 'PATCH', headers: { Authorization: 'Bearer caller-secret', 'Content-Type': 'application/json' } }));
 });
 

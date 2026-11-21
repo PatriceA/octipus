@@ -89,4 +89,25 @@ describe('label store', () => {
     // Labels written before the new answer survive it (the backlog labels first).
     expect((await store.reviewQueue(owner, 'r2')).items.find(i => i.messageId === 'c')).toBeUndefined();
   });
+
+  test('two accounts of one provider keep their triage apart; the default account keeps the bare key', async () => {
+    const store = await import('./triage-labels');
+    const { inMailbox } = await import('./account-context');
+    const { getDb } = await import('@/db/postgres');
+    const { emailTriageLabels } = await import('@/db/schema/email-triage-labels');
+    const { eq } = await import('drizzle-orm');
+    const second = { provider: 'google' as const, account: 'me@work.example' };
+    const m = mail('same-id', 'x@y.org');
+    // The same message id in both mailboxes: two rows, never one overwritten by the other.
+    await store.saveTriageResults(owner, 'google', [m], { 'same-id': { priority: 'high' } }, () => 'llm');
+    await inMailbox(second, () => store.saveTriageResults(owner, 'google', [m], { 'same-id': { priority: 'low' } }, () => 'decision'));
+    expect(await store.storedTriage(owner, 'google', ['same-id'])).toEqual({ 'same-id': { priority: 'high', source: 'llm' } });
+    expect(await inMailbox(second, () => store.storedTriage(owner, 'google', ['same-id']))).toEqual({ 'same-id': { priority: 'low', source: 'decision' } });
+    // The owner's label in one account does not reach the other.
+    await inMailbox(second, () => store.upsertUserLabel(owner, 'google', m, { priority: 'normal', category: 'work' }));
+    expect(await store.userLabels(owner, 'google', ['same-id'])).toEqual({});
+    expect(await inMailbox(second, () => store.userLabels(owner, 'google', ['same-id']))).toEqual({ 'same-id': { priority: 'normal', category: 'work' } });
+    const keys = (await getDb().select({ provider: emailTriageLabels.provider }).from(emailTriageLabels).where(eq(emailTriageLabels.messageId, 'same-id'))).map(r => r.provider).sort();
+    expect(keys).toEqual(['google', 'google:me@work.example']);
+  });
 });

@@ -117,6 +117,10 @@ export interface VaultMetadata {
     scopes: string[];
     refreshToken?: string;
     expiresAt?: string;
+    /** The account's address, lowercased: several accounts of one provider are told apart by it. */
+    account?: string;
+    /** Set once the user chose a default among several accounts; otherwise the first connected is. */
+    isDefault?: boolean;
   };
 }
 

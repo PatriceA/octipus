@@ -101,7 +101,7 @@ describe('flags', () => {
     const { gmailIndexRow } = await import('./mail-index');
     const row = gmailIndexRow('u', gmailMessage('m1', 5, ['INBOX']))!;
     expect(row).toMatchObject({ messageId: 'm1', threadId: 't-m1', fromName: 'Anna', fromEmail: 'anna@acme.io', to: [{ email: 'me@x.dev' }], cc: [{ name: 'Doe, Jane', email: 'jane@x.dev' }], inbox: true, hasAttachments: null });
-    expect(row.snippet.length).toBe(300);
+    expect(row.snippet?.length).toBe(300);
     expect(Object.keys(row)).not.toContain('body');
     // No date: no row (it could not be placed in a list).
     expect(gmailIndexRow('u', { ...gmailMessage('m2', 5, []), internalDate: undefined })).toBeNull();
@@ -360,6 +360,21 @@ describe('the index', () => {
     // Claimed: a second sweep right away does nothing.
     expect(await index.syncDueMailIndexes(new Date())).toBe(0);
     connected = ['google', 'microsoft'];
+  });
+
+  test('another account of the provider is never served from, or written into, the default account\'s index', async () => {
+    const index = await import('./mail-index');
+    const { inMailbox } = await import('./account-context');
+    const before = await rowsOf(owner, 'google');
+    expect(before.length).toBeGreaterThan(0);
+    const live = vi.fn(async () => ({ provider: 'google' as const, items: [] }));
+    const second = { provider: 'google' as const, account: 'second@x.dev' };
+    const page = await inMailbox(second, () => index.listWithIndex(owner, 'google', { folder: 'inbox', limit: 25 }, false, live));
+    expect(live).toHaveBeenCalledWith({ folder: 'inbox', limit: 25 });
+    expect(page.items).toEqual([]);
+    // An action on the second account's mail leaves the default's rows as they were.
+    await inMailbox(second, () => index.applyIndexAction(owner, 'google', before.map((r) => r.messageId), 'trash'));
+    expect((await rowsOf(owner, 'google')).map((r) => [r.messageId, r.trash])).toEqual(before.map((r) => [r.messageId, r.trash]));
   });
 
   test('disconnecting a provider deletes its index', async () => {

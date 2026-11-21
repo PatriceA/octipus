@@ -28,6 +28,7 @@ import { emailIndex, emailIndexState, type EmailIndexRow, type EmailIndexStateRo
 import type { EmailBatchAction, EmailFolder, EmailListResponse, EmailProvider, InboxItem } from '@/shared/email';
 import { mapLimit } from '@/utils/concurrency';
 import { coreLogger } from '@/utils/logger';
+import { inMailbox, selectedAccount } from './account-context';
 import { buildGmailBatch, parseGmailBatch } from './gmail-batch';
 import type { ListOptions } from './mailbox';
 import { type GmailMessage, type GraphMessage, normalizeGmail, normalizeM365, parseAddressList } from './normalize';
@@ -278,6 +279,13 @@ function runInBackground(userId: string, provider: EmailProvider): void {
  * state row (without mail content) and back the next try off.
  */
 export function syncMailIndex(userId: string, provider: EmailProvider): Promise<void> {
+  // The index holds the provider's DEFAULT account only (account ''). A sync
+  // started from a request about another account must not read that account
+  // into it: it runs outside any account choice, on the default token.
+  return inMailbox(null, () => syncDefaultAccount(userId, provider));
+}
+
+function syncDefaultAccount(userId: string, provider: EmailProvider): Promise<void> {
   const key = `${userId}\n${provider}`;
   const current = running.get(key);
   if (current) return current;
@@ -502,13 +510,14 @@ const soon = new Map<string, ReturnType<typeof setTimeout>>();
 export function syncMailIndexSoon(userId: string): void {
   const timer = soon.get(userId);
   if (timer) clearTimeout(timer);
-  soon.set(userId, setTimeout(() => {
+  // Outside the request's account choice: a timer inherits it otherwise.
+  soon.set(userId, inMailbox(null, () => setTimeout(() => {
     soon.delete(userId);
     void (async () => {
       const states = await getDb().select({ provider: emailIndexState.provider }).from(emailIndexState).where(eq(emailIndexState.userId, userId));
       for (const s of states) await syncMailIndex(userId, s.provider as EmailProvider).catch(() => {});
     })().catch(() => {});
-  }, 4000));
+  }, 4000)));
 }
 
 // ── Serving ─────────────────────────────────────────────────────────────
@@ -574,6 +583,8 @@ export async function listWithIndex(
   userId: string, provider: EmailProvider, opts: ListOptions, fresh: boolean,
   live: (opts: ListOptions & { before?: Date }) => Promise<EmailListResponse>,
 ): Promise<EmailListResponse> {
+  // Another account than the default: its mail is not indexed, so it is read live, whole.
+  if (selectedAccount(provider)) return live(opts);
   const token = opts.pageToken;
   if (token?.startsWith(LIVE_TOKEN)) {
     const parsed = parseLiveToken(token);
@@ -616,7 +627,8 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
  * row is dropped, and the sync adds it under the new folder.
  */
 export async function applyIndexAction(userId: string, provider: EmailProvider, ids: string[], action: EmailBatchAction): Promise<void> {
-  if (ids.length === 0) return;
+  // Ids of another account than the default must not touch the default account's rows.
+  if (ids.length === 0 || selectedAccount(provider)) return;
   const db = getDb();
   const where = and(rowsOf(userId, provider), inArray(emailIndex.messageId, ids));
   // The inbox's unread count moves by what this action changes there, until the sync reads the provider's own count.

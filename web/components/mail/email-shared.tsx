@@ -6,6 +6,34 @@ import type { EmailAddress, EmailFolder, EmailMessage, EmailProvider, EmailTriag
 export type { EmailAddress, EmailFolder, EmailMessage, EmailProvider, EmailTriage, InboxItem };
 
 export const providerLabel = (provider: EmailProvider) => (provider === 'google' ? 'Gmail' : 'Outlook');
+
+/**
+ * One connected mailbox: a provider and, for any account but that provider's
+ * default, the account's address (the API's `account`). `key` names it in
+ * the page: the bare provider for the default account.
+ */
+export interface Mailbox {
+  provider: EmailProvider;
+  /** Only for a further account of the provider; the default account has none. */
+  account?: string;
+  /** The address to show, when known. */
+  address?: string;
+  key: string;
+}
+
+export const mailboxKeyOf = (m: { provider: EmailProvider; account?: string }) => (m.account ? `${m.provider}:${m.account}` : m.provider);
+
+/** `provider=…` and, for a further account, `&account=…`: how a request names its mailbox. */
+export const mailboxQuery = (provider: EmailProvider, account?: string) =>
+  account ? `provider=${provider}&account=${encodeURIComponent(account)}` : `provider=${provider}`;
+
+/** The mailboxes the accounts listing names, each provider's default account first. */
+export function mailboxesOf(accounts: Array<{ provider: EmailProvider; address?: string; isDefault?: boolean }>): Mailbox[] {
+  return accounts.map((a) => {
+    const account = a.isDefault === false && a.address ? a.address : undefined;
+    return { provider: a.provider, ...(account ? { account } : {}), ...(a.address ? { address: a.address } : {}), key: mailboxKeyOf({ provider: a.provider, account }) };
+  });
+}
 export const who = (a: EmailAddress | undefined) => a?.name || a?.email || '(unknown sender)';
 export const addressList = (list: EmailAddress[] | undefined) => (list ?? []).map((a) => a.email).filter(Boolean).join(', ');
 

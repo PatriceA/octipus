@@ -37,7 +37,7 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
   const [description, setDescription] = useState('');
   const [guests, setGuests] = useState('');
   const [target, setTarget] = useState(() => {
-    if (event) return `${event.provider}:${event.calendarId ?? ''}`;
+    if (event) return calendarKey({ provider: event.provider, id: event.calendarId ?? '', account: event.account });
     const first = calendars.find((c) => c.primary && c.visible) ?? calendars.find((c) => c.primary) ?? calendars[0];
     return first ? calendarKey(first) : '';
   });
@@ -83,7 +83,8 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
     if (bad) { setError(`“${bad}” is not an email address.`); return; }
     setBusy(true);
     const saved = await onSave({
-      provider, calendarId: event ? event.calendarId : calendar?.id, title: title.trim(), allDay, start, end, location,
+      provider, ...((event ? event.account : calendar?.account) ? { account: event ? event.account : calendar?.account } : {}),
+      calendarId: event ? event.calendarId : calendar?.id, title: title.trim(), allDay, start, end, location,
       // An edit leaves the description and the guest list as they are.
       ...(!event ? { description, ...(attendees.length ? { attendees } : {}) } : {}),
     });
@@ -99,7 +100,7 @@ export function EventDialog({ event, seed, calendars, onClose, onSave }: Props) 
           <label className="block">Calendar
             <select className={fieldInput} value={target} disabled={!!event} onChange={(e) => setTarget(e.target.value)}>
               {event && !calendar && <option value={target}>{event.calendarName ?? providerName(event.provider)}</option>}
-              {calendars.map((c) => <option key={calendarKey(c)} value={calendarKey(c)}>{c.name} · {providerName(c.provider)}</option>)}
+              {calendars.map((c) => <option key={calendarKey(c)} value={calendarKey(c)}>{c.name} · {c.account ?? providerName(c.provider)}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />All day</label>

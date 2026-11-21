@@ -142,7 +142,7 @@ describe('thread, accounts and attachments', () => {
     connected = ['google', 'microsoft'];
     gmail = () => ({ emailAddress: 'me@gmail.com' });
     graph = () => ({ mail: null, userPrincipalName: 'me@corp.com' });
-    expect((await json(await call(await buildApp(), 'GET', '/api/email/accounts'))).body).toEqual({ accounts: [{ provider: 'google', address: 'me@gmail.com' }, { provider: 'microsoft', address: 'me@corp.com' }] });
+    expect((await json(await call(await buildApp(), 'GET', '/api/email/accounts'))).body).toEqual({ accounts: [{ provider: 'google', address: 'me@gmail.com', isDefault: true }, { provider: 'microsoft', address: 'me@corp.com', isDefault: true }] });
   });
 
   test('an attachment is always a download, with a neutral type for anything a browser would run', async () => {

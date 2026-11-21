@@ -4,7 +4,7 @@ import { Archive, ChevronDown, ChevronRight, Loader2, Plus, Sparkles, Trash2, X 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
-import { btn, btnGhost, btnPrimary, type EmailProvider, type EmailTriage, field, type InboxItem, sourceLabel, who } from './email-shared';
+import { btn, btnGhost, btnPrimary, type EmailProvider, type EmailTriage, field, type InboxItem, mailboxQuery, sourceLabel, who } from './email-shared';
 import { TriageReview } from './triage-review';
 
 export type TriageScope = 'untriaged' | 'unread' | 'all';
@@ -53,11 +53,11 @@ type Row = { name: string; description: string };
 const toRows = (c: Record<string, string>): Row[] => Object.entries(c).map(([name, description]) => ({ name, description }));
 
 /** Start a run with the saved settings. Used by the dialog and by the one-click path. */
-export async function startTriage(provider: EmailProvider, items: InboxItem[], scope: TriageScope, newest?: number): Promise<TriageRun> {
+export async function startTriage(provider: EmailProvider, items: InboxItem[], scope: TriageScope, newest?: number, account?: string): Promise<TriageRun> {
   const body = newest
     ? { newest, scope }
     : { items: items.map(({ id, from, subject, snippet }) => ({ id, from, subject, snippet })) };
-  return (await api.post<{ run: TriageRun }>(`/email/triage/run?provider=${provider}`, body)).run;
+  return (await api.post<{ run: TriageRun }>(`/email/triage/run?${mailboxQuery(provider, account)}`, body)).run;
 }
 
 /** The loaded rows a scope takes, the way the server counts them. */
@@ -69,6 +69,8 @@ export function rowsInScope(items: InboxItem[], scope: TriageScope): InboxItem[]
 interface Props {
   /** The mailbox being triaged. */
   provider: EmailProvider;
+  /** The account of that provider, when it is not the default one. */
+  account?: string;
   /** The inbox rows the page has loaded. */
   items: InboxItem[];
   /** A run already going (or just finished) when the dialog opens. */
@@ -86,7 +88,7 @@ interface Props {
  * progress, then its result. Nothing in the mailbox changes before Start, and
  * archiving is either an explicit setting shown here or a proposal afterwards.
  */
-export function TriageDialog({ provider, items, run, onRun, onArchive, onUnarchive, onClose }: Props) {
+export function TriageDialog({ provider, account, items, run, onRun, onArchive, onUnarchive, onClose }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [settings, setSettings] = useState<TriageSettings | null>(null);
   const [error, setError] = useState('');
@@ -101,12 +103,12 @@ export function TriageDialog({ provider, items, run, onRun, onArchive, onUnarchi
 
   const loadPreview = useCallback(async () => {
     try {
-      const res = await api.post<Preview & { error?: string }>(`/email/triage/preview?provider=${provider}`, { items: items.slice(0, 500).map(({ id, unread }) => ({ id, unread })) });
+      const res = await api.post<Preview & { error?: string }>(`/email/triage/preview?${mailboxQuery(provider, account)}`, { items: items.slice(0, 500).map(({ id, unread }) => ({ id, unread })) });
       if (res.error) { setError(res.error); return; }
       setPreview(res);
       setSettings((current) => current ?? res.settings);
     } catch (err) { setError((err as Error).message); }
-  }, [items, provider]);
+  }, [items, provider, account]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load the preview once on open
@@ -143,7 +145,7 @@ export function TriageDialog({ provider, items, run, onRun, onArchive, onUnarchi
     setBusy('start'); setError('');
     try {
       await api.put('/email/triage/settings', settings);
-      onRun(await startTriage(provider, rowsInScope(items, settings.scope), settings.scope, useNewest ? newest : undefined));
+      onRun(await startTriage(provider, rowsInScope(items, settings.scope), settings.scope, useNewest ? newest : undefined, account));
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 

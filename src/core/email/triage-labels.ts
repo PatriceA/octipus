@@ -10,6 +10,7 @@
 import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ClefObservation, type EmailTriageLabel, emailTriageLabels, type StoredTriage } from '@/db/schema/email-triage-labels';
+import { mailboxKey } from './account-context';
 import type { EmailProvider, EmailTriage, InboxItem } from './types';
 
 type Priority = EmailTriage['priority'];
@@ -61,7 +62,7 @@ export function domainOf(email: string): string {
 export async function userLabels(userId: string, provider: EmailProvider, ids: string[]): Promise<Record<string, EmailTriage>> {
   if (!ids.length) return {};
   const rows = await getDb().select().from(emailTriageLabels).where(and(
-    eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, provider),
+    eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, mailboxKey(provider)),
     inArray(emailTriageLabels.messageId, ids), eq(emailTriageLabels.labelSource, 'user'),
   ));
   return Object.fromEntries(rows.map(r => [r.messageId, { priority: r.labelPriority!, category: r.labelCategory! }]));
@@ -88,8 +89,13 @@ export async function examplesFor(userId: string, item: InboxItem): Promise<Arra
   return rows.map(r => ({ from: r.fromEmail, subject: r.subject, priority: r.labelPriority!, category: r.labelCategory!, labelledBy: r.labelSource === 'user' ? 'owner' : 'model' }));
 }
 
+/**
+ * A row's mailbox: the bare provider for the default account, `provider:<address>`
+ * for another account of the same provider (core/email/account-context.ts),
+ * so two accounts' mail never shares a row.
+ */
 const base = (userId: string, provider: EmailProvider, it: InboxItem) => ({
-  userId, provider, messageId: it.id, fromEmail: it.from.email.toLowerCase(),
+  userId, provider: mailboxKey(provider), messageId: it.id, fromEmail: it.from.email.toLowerCase(),
   subject: it.subject.slice(0, 500), snippet: it.snippet.slice(0, SNIPPET_CHARS),
 });
 
@@ -139,7 +145,7 @@ export async function saveTriageResults(userId: string, provider: EmailProvider,
 export async function storedTriage(userId: string, provider: EmailProvider, ids: string[]): Promise<Record<string, EmailTriage>> {
   if (!ids.length) return {};
   const rows = await getDb().select().from(emailTriageLabels).where(and(
-    eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, provider), inArray(emailTriageLabels.messageId, ids),
+    eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.provider, mailboxKey(provider)), inArray(emailTriageLabels.messageId, ids),
   ));
   const out: Record<string, EmailTriage> = {};
   for (const r of rows) {
@@ -153,7 +159,7 @@ export async function storedTriage(userId: string, provider: EmailProvider, ids:
 export async function setUserLabel(userId: string, messageId: string, label: { priority: Priority; category: string }, provider?: EmailProvider): Promise<boolean> {
   const rows = await getDb().update(emailTriageLabels)
     .set({ labelPriority: label.priority, labelCategory: label.category, labelSource: 'user', labelModel: null, labelRubric: null, labeledAt: new Date() })
-    .where(and(eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.messageId, messageId), provider ? eq(emailTriageLabels.provider, provider) : undefined))
+    .where(and(eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.messageId, messageId), provider ? eq(emailTriageLabels.provider, mailboxKey(provider)) : undefined))
     .returning({ id: emailTriageLabels.id });
   return rows.length > 0;
 }

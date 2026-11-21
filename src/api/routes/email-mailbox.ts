@@ -1,6 +1,8 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { withMailboxAccount } from '@/core/email/account-context';
 import {
+  accountOfRequest,
   batchAction,
   getAttachment,
   getThread,
@@ -19,6 +21,8 @@ import { apiLogger } from '@/utils/logger';
 
 const NOT_AUTHENTICATED = { error: 'Not authenticated' };
 const PROVIDER = t.Optional(t.Union([t.Literal('google'), t.Literal('microsoft')]));
+/** Which account of `provider` (its address), when the user connected several. Absent: the default account. */
+const ACCOUNT = t.Optional(t.String({ maxLength: 320 }));
 /** Provider ids are opaque; they are only ever used as one encoded path segment. */
 const ID = t.String({ minLength: 1, maxLength: 1024 });
 
@@ -60,7 +64,7 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
   }, { detail: { tags: ['email'] } })
 
   // One page of a folder, newest first, with the stored triage of each mail.
-  .get('/messages', async ({ user, principal, query, set }) => {
+  .get('/messages', withMailboxAccount(async ({ user, principal, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
     try {
       const folder = query.folder ?? 'inbox';
@@ -72,14 +76,16 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
         folder, limit, q: query.q || undefined, unread: query.unread === 'true', pageToken: query.pageToken || undefined,
       }, query.refresh === 'true');
       if (list.items.length === 0) return list;
+      // Named in each row, so a merged list sends every action to the account the mail is in.
       // Read on every request, not remembered with the page: a triage run or the owner's label shows at once. Never blocks the list.
       const triage = await storedTriage(user.id, provider, list.items.map((it) => it.id)).catch((err: unknown) => {
         apiLogger.warn({ error: String((err as Error)?.message ?? err).slice(0, 200), userId: user.id }, 'email: could not read stored triage');
         return {} as Awaited<ReturnType<typeof storedTriage>>;
       });
-      return { ...list, items: list.items.map((it) => (triage[it.id] ? { ...it, triage: triage[it.id] } : it)) } satisfies EmailListResponse;
+      const account = accountOfRequest(provider);
+      return { ...list, items: list.items.map((it) => ({ ...it, ...account, ...(triage[it.id] ? { triage: triage[it.id] } : {}) })) } satisfies EmailListResponse;
     } catch (err) { return failure(err, set); }
-  }, {
+  }), {
     query: t.Object({
       folder: t.Optional(t.String({ maxLength: 20 })),
       q: t.Optional(t.String({ maxLength: 300 })),
@@ -87,6 +93,7 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
       pageToken: t.Optional(t.String({ maxLength: 2100 })),
       limit: t.Optional(t.String({ maxLength: 3 })),
       provider: PROVIDER,
+      account: ACCOUNT,
       // `true` skips the 30-second memory of the page (the Refresh button).
       refresh: t.Optional(t.String({ maxLength: 5 })),
     }),
@@ -94,17 +101,18 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
   })
 
   // Every message of a conversation, oldest first.
-  .get('/thread/:threadId', async ({ user, principal, params, query, set }) => {
+  .get('/thread/:threadId', withMailboxAccount(async ({ user, principal, params, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
     try {
       const provider = await resolveProvider(user.id, query.provider);
       if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-      return { messages: await getThread(user.id, provider, params.threadId) } satisfies EmailThreadResponse;
+      const account = accountOfRequest(provider);
+      return { messages: (await getThread(user.id, provider, params.threadId)).map((m) => ({ ...m, ...account })) } satisfies EmailThreadResponse;
     } catch (err) { return failure(err, set); }
-  }, { params: t.Object({ threadId: ID }), query: t.Object({ provider: PROVIDER }), detail: { tags: ['email'] } })
+  }), { params: t.Object({ threadId: ID }), query: t.Object({ provider: PROVIDER, account: ACCOUNT }), detail: { tags: ['email'] } })
 
   // One attachment, always as a download: never rendered in the app's origin.
-  .get('/message/:id/attachment/:attachmentId', async ({ user, principal, params, query, set }) => {
+  .get('/message/:id/attachment/:attachmentId', withMailboxAccount(async ({ user, principal, params, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
     try {
       const provider = await resolveProvider(user.id, query.provider);
@@ -119,10 +127,10 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
       set.headers['Cache-Control'] = 'private, max-age=60';
       return new Response(new Uint8Array(file.content));
     } catch (err) { return failure(err, set); }
-  }, { params: t.Object({ id: ID, attachmentId: ID }), query: t.Object({ provider: PROVIDER }), detail: { tags: ['email'] } })
+  }), { params: t.Object({ id: ID, attachmentId: ID }), query: t.Object({ provider: PROVIDER, account: ACCOUNT }), detail: { tags: ['email'] } })
 
   // One action on several messages. Nothing is deleted for good: `trash` moves to the trash.
-  .post('/messages/batch', async ({ user, principal, body, set }) => {
+  .post('/messages/batch', withMailboxAccount(async ({ user, principal, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
     try {
       const provider = await resolveProvider(user.id, body.provider);
@@ -132,11 +140,12 @@ export const emailMailboxRoutes = new Elysia({ prefix: '/email' })
       if (body.action === 'trash') handledByOwner(user.id, provider, result.done, 'other', 'Moved to the trash in the inbox page');
       return result;
     } catch (err) { return failure(err, set); }
-  }, {
+  }), {
     body: t.Object({
       ids: t.Array(ID, { minItems: 1, maxItems: 100 }),
       action: t.Union(EMAIL_BATCH_ACTIONS.map((a) => t.Literal(a))),
       provider: PROVIDER,
+      account: ACCOUNT,
     }),
     detail: { tags: ['email'] },
   });

@@ -307,7 +307,7 @@ describe('listAccounts', () => {
   test('connected mailboxes with their address; a failed lookup still lists the account', async () => {
     gmail = () => ({ emailAddress: 'me@gmail.com' });
     graph = () => { throw new Error('x'); };
-    expect(await mailbox.listAccounts(nextUser())).toEqual({ accounts: [{ provider: 'google', address: 'me@gmail.com' }, { provider: 'microsoft' }] });
+    expect(await mailbox.listAccounts(nextUser())).toEqual({ accounts: [{ provider: 'google', address: 'me@gmail.com', isDefault: true }, { provider: 'microsoft', isDefault: true }] });
     connected = [];
     expect(await mailbox.listAccounts(nextUser())).toEqual({ accounts: [] });
   });

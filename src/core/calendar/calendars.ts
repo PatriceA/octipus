@@ -98,23 +98,40 @@ export interface CalendarsResult {
   partial: boolean;
 }
 
-/** Every calendar of the connected accounts, each account's default first. */
+/**
+ * Every calendar of the connected accounts: each provider's default account
+ * first, then its further accounts (their calendars carry `account`), each
+ * account's default calendar first.
+ */
 export async function listCalendars(userId: string, deps: CalendarDeps = defaultCalendarDeps): Promise<CalendarsResult> {
   const results = await Promise.all(SOURCES.map(async (source) => {
     const token = await deps.getToken(userId, source.provider).catch(() => null);
     if (!token) return null;
-    try {
-      const calendars = source.parse(await deps.fetchJson(source.url, { Authorization: `Bearer ${token}` }));
-      return { provider: source.provider, failed: false, calendars: calendars.sort((a, b) => Number(b.primary) - Number(a.primary) || Number(a.shared) - Number(b.shared) || a.name.localeCompare(b.name)) };
-    } catch (err) {
-      coreLogger.warn({ err: (err as Error).message, userId, provider: source.provider }, 'calendar: could not list calendars for provider');
-      return { provider: source.provider, failed: true, calendars: [] as ListedCalendar[] };
-    }
+    const others = deps.otherAccounts ? await deps.otherAccounts(userId, source.provider).catch(() => [] as string[]) : [];
+    const read = async (account?: string) => {
+      try {
+        const own = account ? await deps.getToken(userId, source.provider, account).catch(() => null) : token;
+        if (!own) throw new Error('account not connected');
+        const calendars = source.parse(await deps.fetchJson(source.url, { Authorization: `Bearer ${own}` }));
+        return {
+          failed: false,
+          calendars: calendars
+            .map((c) => (account ? { ...c, account } : c))
+            .sort((a, b) => Number(b.primary) - Number(a.primary) || Number(a.shared) - Number(b.shared) || a.name.localeCompare(b.name)),
+        };
+      } catch (err) {
+        coreLogger.warn({ err: (err as Error).message, userId, provider: source.provider }, 'calendar: could not list calendars for an account');
+        return { failed: true, calendars: [] as ListedCalendar[] };
+      }
+    };
+    const accounts = await Promise.all([read(), ...others.map((account) => read(account))]);
+    return { provider: source.provider, failed: accounts.some((a) => a.failed), defaultFailed: accounts[0].failed, calendars: accounts.flatMap((a) => a.calendars) };
   }));
   const connected = results.filter((r): r is NonNullable<typeof r> => r !== null);
   return {
     calendars: connected.flatMap((r) => r.calendars),
-    providers: connected.filter((r) => !r.failed).map((r) => r.provider),
+    // A provider answers when its default account's list was read.
+    providers: connected.filter((r) => !r.defaultFailed).map((r) => r.provider),
     partial: connected.some((r) => r.failed),
   };
 }

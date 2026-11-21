@@ -6,16 +6,21 @@
  */
 import { getOAuthManager } from '@/security/oauth';
 import { coreLogger } from '@/utils/logger';
+import { selectedAccount } from './account-context';
 import type { EmailProvider } from './types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
+/** The user's token for `provider`: the account the request chose (core/email/account-context.ts), else the default. */
 async function requireToken(userId: string, provider: EmailProvider): Promise<string> {
-  const token = await getOAuthManager().getValidToken(userId, provider);
+  const account = selectedAccount(provider);
+  const token = await getOAuthManager().getValidToken(userId, provider, account);
   if (!token) {
     const label = provider === 'google' ? 'Google' : 'Microsoft 365';
-    throw new Error(`${label} is not connected. Connect your account in Settings > Integrations.`);
+    throw new Error(account
+      ? `${account} is not connected. Connect it again in Settings > Integrations.`
+      : `${label} is not connected. Connect your account in Settings > Integrations.`);
   }
   return token;
 }

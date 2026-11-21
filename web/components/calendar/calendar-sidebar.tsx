@@ -28,8 +28,13 @@ export function CalendarSidebar({ anchor, shown, today, firstDay, calendars, loa
   const page = (direction: 1 | -1) => setPaged({ from: anchor.slice(0, 7), month: stepAnchor('month', month, direction) });
   const days = monthGrid(month, firstDay);
   const inView = new Set(shown);
+  // One group per connected account: the provider's default account first, then its further accounts by address.
   const groups = (['google', 'microsoft'] as CalendarProvider[])
-    .map((provider) => ({ provider, list: (calendars?.calendars ?? []).filter((c) => c.provider === provider) }))
+    .flatMap((provider) => {
+      const own = (calendars?.calendars ?? []).filter((c) => c.provider === provider);
+      const accounts = [undefined, ...new Set(own.map((c) => c.account).filter((a): a is string => !!a))];
+      return accounts.map((account) => ({ provider, account, list: own.filter((c) => c.account === account) }));
+    })
     .filter((g) => g.list.length > 0);
   const sharedMicrosoft = (calendars?.calendars ?? []).some((c) => c.provider === 'microsoft' && c.shared);
 
@@ -61,9 +66,9 @@ export function CalendarSidebar({ anchor, shown, today, firstDay, calendars, loa
 
       <div className="space-y-3">
         {loading && Array.from({ length: 4 }, (_, i) => <div key={i} className="h-5 rounded-xs bg-surface-container-highest animate-pulse" />)}
-        {groups.map(({ provider, list }) => (
-          <fieldset key={provider} disabled={saving}>
-            <legend className="text-[11px] uppercase tracking-wide text-on-surface-variant mb-1">{providerName(provider)}</legend>
+        {groups.map(({ provider, account, list }) => (
+          <fieldset key={`${provider}:${account ?? ''}`} disabled={saving}>
+            <legend className="text-[11px] uppercase tracking-wide text-on-surface-variant mb-1">{providerName(provider)}{account && <span className="normal-case tracking-normal"> · {account}</span>}</legend>
             {list.map((calendar) => (
               <label key={calendarKey(calendar)} className="flex items-center gap-2 py-1 text-sm text-on-surface cursor-pointer" title={calendar.owner ? `Shared by ${calendar.owner}` : undefined}>
                 <input type="checkbox" checked={calendar.visible} onChange={(e) => onToggleCalendar(calendar, e.target.checked)} className="w-4 h-4 rounded-xs shrink-0" style={{ accentColor: colorOf(calendar) }} />

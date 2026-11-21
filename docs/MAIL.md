@@ -26,7 +26,11 @@ SMTP server. Each account can be edited, tested, synced and removed there.
 Blank password fields retain a saved login; passwords are never read back.
 
 The Email page's mailbox selector switches between the Google and Microsoft
-mailboxes (or all of them at once) and individual IMAP/POP3 accounts. An IMAP
+mailboxes (or all of them at once) and individual IMAP/POP3 accounts. Each
+connected account is its own mailbox: with two Gmail accounts (Settings →
+Integrations → **Add another account**) the selector lists both, and "All
+inboxes" merges every account. The default account (Settings → Integrations
+→ **Make default**) is the one agents and the heartbeat use. An IMAP
 mailbox keeps its own simpler view there. **Mailboxes** (`/mail`) also works when
 the separate Google/Microsoft inbox module is off. Accounts are scoped to the
 selected local workspace; remote-install mailbox management is not supported.

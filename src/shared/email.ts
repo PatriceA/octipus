@@ -32,6 +32,8 @@ export interface InboxItem {
   /** The conversation this message belongs to (Gmail thread id, Graph conversation id). */
   threadId?: string;
   provider: EmailProvider;
+  /** The account it belongs to, when that is not the provider's default account. */
+  account?: string;
   from: EmailAddress;
   /** Recipients, where the list call gives them (always for `sent` and `drafts`). */
   to?: EmailAddress[];
@@ -65,7 +67,12 @@ export interface EmailMessage extends InboxItem {
 
 /** GET /api/email/accounts */
 export interface EmailAccountsResponse {
-  accounts: Array<{ provider: EmailProvider; address?: string }>;
+  /**
+   * Every connected account, Google first, each provider's default account
+   * first. A request names a non-default account with `account` (its address)
+   * next to `provider`; without it the default account answers.
+   */
+  accounts: Array<{ provider: EmailProvider; address?: string; isDefault?: boolean }>;
 }
 
 /** GET /api/email/messages?folder=&q=&unread=true&pageToken=&limit=&provider= */

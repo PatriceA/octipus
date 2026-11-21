@@ -14,6 +14,7 @@
  * where the provider keeps it for its own retention period.
  */
 import { randomBytes } from 'node:crypto';
+import { getOAuthManager } from '@/security/oauth';
 import { EMAIL_FOLDERS } from '@/shared/email';
 import type { EmailAccountsResponse, EmailAttachment, EmailBatchAction, EmailBatchResponse, EmailFolder, EmailListResponse, EmailMessage, EmailProvider, InboxItem } from '@/shared/email';
 import { mapLimit } from '@/utils/concurrency';
@@ -21,6 +22,7 @@ import { coreLogger } from '@/utils/logger';
 import { buildGmailBatch, parseGmailBatch } from './gmail-batch';
 import { applyIndexAction, listWithIndex, syncMailIndexSoon } from './mail-index';
 import { findGmailPart, type GmailMessage, type GraphMessage, gmailToMessage, m365ToMessage, normalizeGmail, normalizeM365List } from './normalize';
+import { mailboxKey, selectedAccount } from './account-context';
 import { connectedProviders, detectProvider, gmailApi, gmailBatch, graphApi, graphBytes } from './providers';
 
 /** A request the mailbox cannot serve; `status` is the HTTP status to answer with. */
@@ -51,7 +53,7 @@ const ADDRESS_TTL_MS = 10 * 60_000;
 const addresses = new Map<string, { at: number; address: string }>();
 
 async function accountAddress(userId: string, provider: EmailProvider): Promise<string | undefined> {
-  const key = `${userId}\n${provider}`;
+  const key = `${userId}\n${mailboxKey(provider)}`;
   const hit = addresses.get(key);
   if (hit && Date.now() - hit.at < ADDRESS_TTL_MS) return hit.address;
   try {
@@ -71,14 +73,28 @@ async function accountAddress(userId: string, provider: EmailProvider): Promise<
   }
 }
 
-/** The connected mailboxes, Google first, each with its address when the provider tells it. */
+/**
+ * The connected mailboxes, Google first, each provider's default account
+ * first, each with its address when the provider tells it.
+ */
 export async function listAccounts(userId: string): Promise<EmailAccountsResponse> {
   const providers = await connectedProviders(userId);
-  const accounts = await Promise.all(providers.map(async (provider) => {
-    const address = await accountAddress(userId, provider);
-    return { provider, ...(address ? { address } : {}) };
+  const perProvider = await Promise.all(providers.map(async (provider) => {
+    const connected = await getOAuthManager().listAccounts(userId, provider).catch(() => []);
+    if (connected.length <= 1) {
+      // One account: as before, its address read from the mailbox when the connection did not keep it.
+      const address = connected[0]?.account ?? await accountAddress(userId, provider);
+      return [{ provider, ...(address ? { address } : {}), isDefault: true }];
+    }
+    return connected.map((a) => ({ provider, ...(a.account ? { address: a.account } : {}), isDefault: a.isDefault }));
   }));
-  return { accounts };
+  return { accounts: perProvider.flat() };
+}
+
+/** The account a list or a message came from, for the client to name it back (only for a non-default account). */
+export function accountOfRequest(provider: EmailProvider): { account?: string } {
+  const account = selectedAccount(provider);
+  return account ? { account } : {};
 }
 
 // ── Listing ─────────────────────────────────────────────────────────────
@@ -252,7 +268,8 @@ const CACHE_TTL_MS = 30_000;
 const CACHE_MAX = 400;
 const cache = new Map<string, { at: number; value: EmailListResponse }>();
 const cacheKey = (userId: string, provider: EmailProvider, o: ListOptions) =>
-  [userId, provider, o.folder, cleanQuery(o.q), o.unread ? 'u' : '', o.limit, o.pageToken ?? '', o.before?.toISOString() ?? ''].join('\n');
+  // Two accounts of one provider are two mailboxes: the account is part of the key.
+  [userId, mailboxKey(provider), o.folder, cleanQuery(o.q), o.unread ? 'u' : '', o.limit, o.pageToken ?? '', o.before?.toISOString() ?? ''].join('\n');
 
 /** Forget this user's remembered list pages: call after anything that changes their mailbox. */
 export function invalidateEmailCache(userId: string): void {
