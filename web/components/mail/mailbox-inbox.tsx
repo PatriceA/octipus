@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 import type { MailAccountView, MailMessageSummary, MailMessageView } from '../../../src/shared/mail';
+import { hasBlockedImages, ListSkeleton, MailHtml } from './email-shared';
 import { mailAccountsKey, mailButton, mailInput } from './mailbox-manager';
 
 export function MailboxInbox({ account }: { account: MailAccountView }) {
@@ -21,6 +22,8 @@ export function MailboxInbox({ account }: { account: MailAccountView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // Remote images stay unloaded until asked for: loading one tells the sender the mail was opened.
+  const [imagesFor, setImagesFor] = useState<string | null>(null);
   const messages = useQuery({ queryKey: ['mail-messages', workspace, account.id, status], queryFn: () => api.get<MailMessageSummary[]>(`/mail/messages?account=${encodeURIComponent(account.id)}&status=${status}&limit=50`) });
   const message = useQuery({ queryKey: ['mail-message', workspace, account.id, openId], enabled: !!openId, queryFn: () => api.get<MailMessageView>(`/mail/messages/${encodeURIComponent(openId!)}`) });
   const refresh = async () => { setPages([]); setExhausted(false); await client.invalidateQueries({ queryKey: ['mail-messages', workspace, account.id] }); await client.invalidateQueries({ queryKey: ['mail-message', workspace, account.id] }); };
@@ -50,14 +53,17 @@ export function MailboxInbox({ account }: { account: MailAccountView }) {
     {account.lastError && <p className="text-error">Last sync: {account.lastError}</p>}
     <label className="block max-w-xs">Folder<select className={mailInput} disabled={busy} value={status} onChange={e => { setStatus(e.target.value); setPages([]); setExhausted(false); setOpenId(null); }}><option value="received">Inbox</option><option value="draft">Drafts</option><option value="sent">Sent</option><option value="failed">Failed sends</option><option value="sending">Sending</option></select></label>
     <div className="grid lg:grid-cols-[20rem_1fr] gap-4">
-      <div className="space-y-2">{messages.isLoading && <p>Loading messages…</p>}{!messages.isLoading && rows.length === 0 && <p>No messages in this folder. Use Sync inbox to fetch new mail.</p>}
+      <div className="space-y-2">{messages.isLoading && <ListSkeleton rows={5} />}{!messages.isLoading && rows.length === 0 && <p>No messages in this folder. Use Sync inbox to fetch new mail.</p>}
         {rows.map(row => <button key={row.id} disabled={busy} className={`${mailButton} w-full text-left ${openId === row.id ? 'bg-primary/10' : ''}`} onClick={() => { setOpenId(row.id); setDraft(null); setConfirmSend(false); }}><span className="block font-bold">{row.unread ? '● ' : ''}{row.subject || '(No subject)'}</span><span className="block text-xs">{row.from?.name || row.from?.address || row.to.map(a => a.address).join(', ')}</span><span className="block text-xs">{new Date(row.date).toLocaleString()}</span></button>)}
         {(messages.data?.length ?? 0) >= 50 && !exhausted && <button className={mailButton} disabled={busy} onClick={() => action(async () => { const last = rows.at(-1); if (!last) return; const more = await api.get<MailMessageSummary[]>(`/mail/messages?account=${encodeURIComponent(account.id)}&status=${status}&limit=50&before=${encodeURIComponent(last.date)}&beforeId=${encodeURIComponent(last.id)}`); setPages(prev => [...prev, ...more.filter(row => !rows.some(existing => existing.id === row.id))]); setExhausted(more.length < 50); if (more.length === 0) setNotice('All messages loaded.'); })}>Load more messages</button>}
       </div>
       <div className="min-w-0 space-y-3">{message.isLoading && openId && <p>Loading message…</p>}{message.data && <article className="rounded-md border border-outline-variant p-4 space-y-3">
         <h2 className="font-bold text-xl">{message.data.subject}</h2><p className="text-sm">From: {message.data.from?.address || account.address}<br />To: {message.data.to.map(a => a.address).join(', ')}</p>
         {message.data.error && <p role="alert" className="text-error">{message.data.error}</p>}
-        <pre className="whitespace-pre-wrap font-sans break-words text-sm">{message.data.text}</pre>
+        {message.data.html && imagesFor !== message.data.id && hasBlockedImages(message.data.html) && <p className="text-xs text-on-surface-variant">Images are not loaded, so the sender cannot see that you opened this mail. <button className="text-primary underline" onClick={() => setImagesFor(message.data!.id)}>Show images</button></p>}
+        {message.data.html
+          ? <MailHtml html={message.data.html} showImages={imagesFor === message.data.id} title={`Message: ${message.data.subject}`} />
+          : <pre className="whitespace-pre-wrap font-sans break-words text-sm">{message.data.text}</pre>}
         {message.data.attachments.map(attachment => <button key={attachment.index} className={mailButton} disabled={busy || !message.data?.rawKept} onClick={() => action(async () => { const blob = await api.getBlob(`/mail/messages/${message.data!.id}/attachments/${attachment.index}`); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = attachment.filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); })}>Download {attachment.filename}</button>)}
         <div className="flex gap-2 flex-wrap">{access.canWrite && message.data.status === 'received' && <button disabled={busy} className={mailButton} onClick={() => action(async () => { await api.patch(`/mail/messages/${message.data!.id}`, { unread: !message.data!.unread }); await refresh(); })}>{message.data.unread ? 'Mark read' : 'Mark unread'}</button>}
           {canSend && message.data.status === 'received' && <button disabled={busy} className={mailButton} onClick={() => { setDraft({ replyTo: message.data!.id, to: '', cc: '', subject: '', body: '' }); setDraftDirty(true); setConfirmSend(false); }}>Reply</button>}

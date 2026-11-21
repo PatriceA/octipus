@@ -198,7 +198,7 @@ test('Email switches between a Google mailbox and separate IMAP inboxes without 
     outgoing: null, folder: 'INBOX', enabled: true, fileAttachments: false, defaultProtectionLevel: null,
     passwordSet: { incoming: true, outgoing: false }, lastSyncAt: null, lastError: null, createdAt: now,
   });
-  const message = (id: string, accountId: string): MailMessageView => ({ id, accountId, revision: 'a'.repeat(64), status: 'received', from: { address: 'sender@example.com' }, to: [{ address: `${accountId}@example.com` }], cc: [], subject: `Mail for ${accountId}`, snippet: 'Hello', date: now, unread: true, hasAttachments: false, protectionLevel: 2, messageIdHeader: null, inReplyTo: null, text: 'Safe plain text <script>malicious()</script>', html: '<script>malicious()</script>', attachments: [], rawKept: false, error: null });
+  const message = (id: string, accountId: string): MailMessageView => ({ id, accountId, revision: 'a'.repeat(64), status: 'received', from: { address: 'sender@example.com' }, to: [{ address: `${accountId}@example.com` }], cc: [], subject: `Mail for ${accountId}`, snippet: 'Hello', date: now, unread: true, hasAttachments: false, protectionLevel: 2, messageIdHeader: null, inReplyTo: null, text: 'Safe plain text <script>malicious()</script>', html: '<p>Hello from a2</p><script>parent.document.body.dataset.pwned = "1"</script>', attachments: [], rawKept: false, error: null });
   await stubMailbox(page, [row('g1', { subject: 'Google message' })]);
   await page.route('**/api/mail/accounts', route => json(route, 200, [account('a1', 'Work'), account('a2', 'Personal')]));
   await page.route('**/api/mail/messages?**', route => { const id = new URL(route.request().url()).searchParams.get('account')!; return json(route, 200, [message(`m-${id}`, id)]); });
@@ -214,7 +214,11 @@ test('Email switches between a Google mailbox and separate IMAP inboxes without 
   await expect(page.getByRole('button', { name: /Mail for a2/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Mail for a1/ })).toHaveCount(0);
   await page.getByRole('button', { name: /Mail for a2/ }).click();
-  await expect(page.getByText('Safe plain text <script>malicious()</script>', { exact: true })).toBeVisible();
+  // The mail's HTML is drawn in a frame that can run no script; nothing of it lands in the page itself.
+  const frame = page.locator('iframe[title="Message: Mail for a2"]');
+  await expect(frame).toHaveAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+  await expect(page.frameLocator('iframe[title="Message: Mail for a2"]').getByText('Hello from a2')).toBeVisible();
+  expect(await page.evaluate(() => document.body.dataset.pwned)).toBeUndefined();
   await mailbox.selectOption('google');
   await expect(page.getByText('Google message')).toBeVisible();
 });

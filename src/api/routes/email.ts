@@ -9,7 +9,6 @@ import {
   setCategories,
   validateCategories,
   unarchiveMessage,
-  detectProvider,
   draftReply,
   getInbox,
   getMessage,
