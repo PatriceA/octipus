@@ -11,7 +11,7 @@ import type { EmailAccountsResponse, EmailBatchAction, EmailListResponse } from 
 import type { MailAccountView } from '../../../src/shared/mail';
 import { type ComposeDraft, type ComposeMode, composeFor, EmailCompose } from './email-compose';
 import { EmailReader } from './email-reader';
-import { btn, btnGhost, btnPrimary, type Conversation, conversations, type EmailMessage, type EmailTriage, field, type InboxItem, ListSkeleton, priorityTone, shortDate, triageWhy, who } from './email-shared';
+import { btn, btnGhost, btnPrimary, type Conversation, conversations, type EmailMessage, type EmailTriage, field, type InboxItem, ListSkeleton, type MailboxCursors, mergeMailboxPages, priorityTone, shortDate, triageWhy, who } from './email-shared';
 import { canDo, changeMessages, type ClientFolder, imapMailboxOf, keyOf, labelPath, listPage, type Mailbox, mailboxBody, oauthMailbox, syncMailbox } from './mailboxes';
 import { EmailIndexSetting } from './email-index-setting';
 import { MailboxManager, mailAccountsKey } from './mailbox-manager';
@@ -31,7 +31,9 @@ const FOLDER_ORDER: readonly ClientFolder[] = ['inbox', 'starred', 'sent', 'draf
 const INVERSE: Partial<Record<EmailBatchAction, EmailBatchAction>> = { archive: 'unarchive', trash: 'untrash', unarchive: 'archive', untrash: 'trash' };
 const MOVED_TEXT: Partial<Record<EmailBatchAction, string>> = { archive: 'archived', trash: 'moved to trash', unarchive: 'moved to the inbox', untrash: 'moved to the inbox' };
 
-type ListData = InfiniteData<EmailListResponse, string | undefined>;
+/** A list page; a merged one also says how far each mailbox has been read. */
+type ListPage = EmailListResponse & { cursors?: MailboxCursors };
+type ListData = InfiniteData<ListPage, string | undefined>;
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
 /**
@@ -97,7 +99,7 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
     queryKey: listKey,
     enabled: inView.length > 0,
     initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam }): Promise<EmailListResponse> => {
+    queryFn: async ({ pageParam }): Promise<ListPage> => {
       // One page per mailbox. With several, the page token carries each mailbox's own token.
       const tokens: Partial<Record<string, string>> = !pageParam ? {} : all ? JSON.parse(pageParam) : { [inView[0].key]: pageParam };
       const pages = await Promise.all(inView.filter((b) => b.folders.includes(folder) && (!pageParam || tokens[b.key])).map(async (b) => {
@@ -106,10 +108,12 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
       }));
       if (!all) return pages[0]?.[1] ?? { provider: null, items: [] };
       const next = Object.fromEntries(pages.filter(([, res]) => res.nextPageToken).map(([key, res]) => [key, res.nextPageToken]));
+      const cursors: MailboxCursors = Object.fromEntries(pages.map(([key, res]) => [key, { oldest: res.items.map((it) => it.receivedAt).filter(Boolean).sort()[0], more: !!res.nextPageToken }]));
       const counts = pages.map(([, res]) => res.unreadCount).filter((n): n is number => typeof n === 'number');
       return {
         provider: null,
-        items: pages.flatMap(([, res]) => res.items).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)),
+        items: pages.flatMap(([, res]) => res.items),
+        cursors,
         ...(Object.keys(next).length ? { nextPageToken: JSON.stringify(next) } : {}),
         ...(counts.length ? { unreadCount: counts.reduce((sum, n) => sum + n, 0) } : {}),
       };
@@ -127,9 +131,12 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
   const settings = useQuery({ queryKey: ['email-triage-settings'], enabled: ai && inView.length > 0, queryFn: () => api.get<{ settings: TriageSettings; saved: boolean }>('/email/triage/settings') });
 
   const items = useMemo(() => {
+    const pages = list.data?.pages ?? [];
+    // Several mailboxes: one date order over every page loaded, held at the oldest mail a mailbox with more has shown.
+    if (all) return mergeMailboxPages(pages);
     const seen = new Set<string>();
-    return (list.data?.pages ?? []).flatMap((p) => p.items).filter((it) => (seen.has(it.id) ? false : (seen.add(it.id), true)));
-  }, [list.data]);
+    return pages.flatMap((p) => p.items).filter((it) => (seen.has(it.id) ? false : (seen.add(it.id), true)));
+  }, [list.data, all]);
   const visible = useMemo(() => {
     const rows = conversations(items);
     if (filter === 'all' || filter === 'unread') return rows;

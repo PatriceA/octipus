@@ -135,3 +135,26 @@ export function MailHtml({ html, showImages, title }: { html: string; showImages
     />
   );
 }
+
+/** Per mailbox in a merged ("All inboxes") page: the oldest mail loaded so far, and whether it has more. */
+export type MailboxCursors = Record<string, { oldest?: string; more: boolean }>;
+
+/**
+ * The rows of a merged list over all pages loaded: newest first (ties keep
+ * their order), and only mail newer than the oldest mail loaded of any
+ * mailbox that still has more. Older mail waits for "Load more", or a busy
+ * mailbox's next page would land below a quiet mailbox's month-old mail. Pure.
+ */
+export function mergeMailboxPages(pages: Array<{ items: InboxItem[]; cursors?: MailboxCursors }>): InboxItem[] {
+  const seen = new Set<string>();
+  const items = pages.flatMap((p) => p.items).filter((it) => {
+    const key = `${it.provider}:${it.account ?? ''}:${it.mailbox ?? ''}:${it.id}`;
+    return seen.has(key) ? false : (seen.add(key), true);
+  });
+  // The latest word on each mailbox: the last page it appears in.
+  const cursors: MailboxCursors = {};
+  for (const page of pages) Object.assign(cursors, page.cursors ?? {});
+  const horizon = Object.values(cursors).filter((c) => c.more && c.oldest).map((c) => c.oldest!).sort().at(-1);
+  const sorted = items.map((it, i) => ({ it, i })).sort((a, b) => b.it.receivedAt.localeCompare(a.it.receivedAt) || a.i - b.i).map((x) => x.it);
+  return horizon ? sorted.filter((it) => !it.receivedAt || it.receivedAt >= horizon) : sorted;
+}

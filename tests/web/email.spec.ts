@@ -291,3 +291,27 @@ test('mailbox settings say what the local index keeps, and turning it off delete
   await expect(box).not.toBeChecked();
   await expect(setting).not.toContainText('1234 messages');
 });
+
+test('All inboxes keeps one date order when a busy mailbox loads more than a quiet one', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await stubMailbox(page, [], [{ provider: 'google', address: 'me@gmail.example' }, { provider: 'microsoft', address: 'me@outlook.example' }]);
+  const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  await page.route('**/api/email/messages?**', route => {
+    const url = new URL(route.request().url());
+    const provider = url.searchParams.get('provider');
+    if (provider === 'microsoft') return json(route, 200, { provider, items: [row('quiet', { provider: 'microsoft', subject: 'Quiet, a day old', receivedAt: at(24 * 60) })] });
+    // The busy mailbox: three recent mails a page, two pages.
+    return url.searchParams.get('pageToken') === 'p2'
+      ? json(route, 200, { provider, items: [4, 5, 6].map((n) => row(`busy-${n}`, { subject: `Busy ${n}`, receivedAt: at(n * 10) })) })
+      : json(route, 200, { provider, nextPageToken: 'p2', items: [1, 2, 3].map((n) => row(`busy-${n}`, { subject: `Busy ${n}`, receivedAt: at(n * 10) })) });
+  });
+  await page.goto('/email');
+  await page.getByRole('combobox', { name: 'Mailbox', exact: true }).selectOption('all');
+  const rows = page.getByRole('region', { name: 'Messages' }).getByRole('listitem');
+  // The day-old mail waits: the busy mailbox has newer mail still to load.
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByText('Quiet, a day old')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Load more' }).click();
+  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveText([/Busy 1/, /Busy 2/, /Busy 3/, /Busy 4/, /Busy 5/, /Busy 6/, /Quiet, a day old/]);
+});
