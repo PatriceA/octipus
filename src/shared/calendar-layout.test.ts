@@ -45,6 +45,10 @@ describe('overlapping events', () => {
     expect(columns([timed('long', '09:00', '12:00'), timed('b', '09:30', '10:00'), timed('c', '10:00', '11:00'), timed('d', '10:15', '10:45')]))
       .toEqual({ long: '0/3', b: '1/3', c: '1/3', d: '2/3' });
   });
+  test('an event widens into columns that are empty while it runs', () => {
+    const placed = layoutDay(segmentsForDay([timed('long', '09:00', '12:00'), timed('b', '09:30', '10:00'), timed('c', '10:00', '11:00'), timed('d', '10:15', '10:45')], DAY));
+    expect(Object.fromEntries(placed.map((p) => [p.event.id, p.span]))).toEqual({ long: 1, b: 2, c: 1, d: 1 });
+  });
   test('a later, separate group is laid out on its own', () => {
     expect(columns([timed('a', '09:00', '10:00'), timed('b', '09:00', '10:00'), timed('c', '14:00', '15:00')])).toEqual({ a: '0/2', b: '1/2', c: '0/1' });
   });

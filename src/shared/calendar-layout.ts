@@ -92,6 +92,8 @@ export interface Placed<E extends CalendarEvent = CalendarEvent> extends Segment
   /** 0-based column, and how many columns its group of overlapping events needs. */
   column: number;
   columns: number;
+  /** Columns it may fill: its own, plus the ones to its right that are empty while it runs. */
+  span: number;
 }
 
 /**
@@ -106,7 +108,12 @@ export function layoutDay<E extends CalendarEvent>(segments: Segment<E>[]): Plac
   let groupEnd = -1;
   let columnEnds: number[] = [];
   const close = () => {
-    for (const item of group) item.columns = columnEnds.length;
+    const columns = columnEnds.length;
+    for (const item of group) {
+      item.columns = columns;
+      // Widen into the columns on the right that nothing occupies during this event.
+      while (item.column + item.span < columns && !group.some((o) => o.column === item.column + item.span && o.startMin < item.endMin && o.endMin > item.startMin)) item.span++;
+    }
     placed.push(...group);
     group = [];
     columnEnds = [];
@@ -117,7 +124,7 @@ export function layoutDay<E extends CalendarEvent>(segments: Segment<E>[]): Plac
     if (column < 0) column = columnEnds.length;
     columnEnds[column] = segment.endMin;
     groupEnd = Math.max(groupEnd, segment.endMin);
-    group.push({ ...segment, column, columns: 1 });
+    group.push({ ...segment, column, columns: 1, span: 1 });
   }
   close();
   return placed;

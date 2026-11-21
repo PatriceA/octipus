@@ -1,150 +1,330 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronLeft, ChevronRight, ListFilter, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { CalendarSidebar } from '@/components/calendar/calendar-sidebar';
+import { EventDialog } from '@/components/calendar/event-dialog';
+import { EventPopover } from '@/components/calendar/event-popover';
+import { AgendaView, MonthView } from '@/components/calendar/list-views';
+import {
+  buttonPrimary, buttonQuiet, type CalendarsResponse, type CalendarViewName, type EventDraft, eventKey, type EventsResponse, firstWeekday,
+  type NewEventSeed, rangeTitle, stepAnchor, today as todayOf, viewDays, VIEWS,
+} from '@/components/calendar/model';
+import { TimeGrid } from '@/components/calendar/time-grid';
+import { Modal } from '@/components/ui/modal';
 import { PageHeader } from '@/components/ui/page-header';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useWorkspace, useWorkspaceId } from '@/lib/workspace-context';
-import { mailButton, mailInput } from '@/components/mail/mailbox-manager';
-import type { CalendarEvent, CalendarProvider } from '../../../src/shared/calendar';
-
-const dateOnly = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-const localTime = (iso: string) => { const date = new Date(iso); return `${dateOnly(date)}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; };
-const allDayLabel = (event: CalendarEvent) => {
-  const first = event.start.slice(0, 10);
-  if (!event.end) return `All day · ${first}`;
-  const last = new Date(`${event.end.slice(0, 10)}T12:00:00`); last.setDate(last.getDate() - 1);
-  const until = dateOnly(last);
-  return until > first ? `All day · ${first} – ${until}` : `All day · ${first}`;
-};
-/** First day of the reader's week (0 = Sunday … 6 = Saturday); Monday where the browser cannot say. */
-const weekStartsOn = () => {
-  try {
-    const locale = new Intl.Locale(navigator.language) as Intl.Locale & { getWeekInfo?: () => { firstDay: number }; weekInfo?: { firstDay: number } };
-    const first = (locale.getWeekInfo?.() ?? locale.weekInfo)?.firstDay;
-    return typeof first === 'number' ? first % 7 : 1;
-  } catch { return 1; }
-};
-/** The first day of the week `day` (YYYY-MM-DD) falls in. */
-const weekStart = (day: string) => {
-  const date = new Date(`${day}T12:00:00`);
-  if (!Number.isFinite(+date)) return day;
-  date.setDate(date.getDate() - ((date.getDay() - weekStartsOn() + 7) % 7));
-  return dateOnly(date);
-};
-const clock = (date: Date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-/** "09:00 – 10:00"; the end names its date only when the event runs into another day. */
-const timeLabel = (event: CalendarEvent) => {
-  const start = new Date(event.start);
-  if (!event.end) return clock(start);
-  const end = new Date(event.end);
-  const otherDay = dateOnly(end) !== dateOnly(start);
-  return `${clock(start)} – ${otherDay ? `${end.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ` : ''}${clock(end)}`;
-};
-const providerName = (provider: string) => provider === 'google' ? 'Google' : 'Microsoft 365';
+import { calendarKey, type CalendarEvent, type CalendarInfo, type CalendarResponse } from '../../../src/shared/calendar';
+import { addDays } from '../../../src/shared/calendar-layout';
 
 export default function CalendarPage() {
   const { activeWorkspace, isLoading } = useWorkspace();
   const workspace = useWorkspaceId();
-  if (isLoading) return <p>Loading workspace…</p>;
-  if (activeWorkspace?.kind === 'shared' || activeWorkspace?.kind === 'remote') return <p>Switch to your personal workspace to view your connected calendars.</p>;
+  if (isLoading) return <Frame><p className="text-sm text-on-surface-variant">Loading workspace…</p></Frame>;
+  if (activeWorkspace?.kind === 'shared' || activeWorkspace?.kind === 'remote') {
+    return <Frame><p className="text-sm text-on-surface-variant">Your connected calendars are personal. Switch to your personal workspace to see them.</p></Frame>;
+  }
   return <PersonalCalendar key={workspace ?? 'personal'} />;
 }
+
+function Frame({ children }: { children: React.ReactNode }) {
+  return <div><PageHeader title="calendar" />{children}</div>;
+}
+
+const PHONE = '(max-width: 767px)';
+const watchPhone = (notify: () => void) => { const query = window.matchMedia(PHONE); query.addEventListener('change', notify); return () => query.removeEventListener('change', notify); };
+const isView = (value: string | null): value is CalendarViewName => VIEWS.some((v) => v.id === value);
+
+interface Notice { text: string; error?: boolean }
+/** A change that reaches guests, waiting for the reader to agree. */
+interface Ask { what: string; attendees: number; confirm: () => void; cancel: () => void }
+
 function PersonalCalendar() {
   const client = useQueryClient();
   const workspace = useWorkspaceId();
-  const [from, setFrom] = useState(() => weekStart(dateOnly(new Date())));
-  const [filter, setFilter] = useState('all');
-  const [editing, setEditing] = useState<CalendarEvent | 'new' | null>(null);
-  const [notice, setNotice] = useState('');
-  const start = new Date(`${from}T00:00:00`);
-  const finish = new Date(start); finish.setDate(finish.getDate() + 7);
-  const events = useQuery({ queryKey: ['calendar', workspace, from], enabled: Number.isFinite(+start), queryFn: () => api.get<{ events: CalendarEvent[]; providers: CalendarProvider[]; partial: boolean; truncated?: boolean }>(`/calendar/events?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(finish.toISOString())}`) });
-  // A new event starts today when this week is on screen, not on a day already gone.
-  const today = dateOnly(new Date());
-  const newEventDay = today >= from && today < dateOnly(finish) ? today : from;
-  const changeWeek = (amount: number) => { const date = new Date(`${from}T12:00:00`); date.setDate(date.getDate() + amount * 7); setFrom(dateOnly(date)); setEditing(null); };
-  const rows = (events.data?.events ?? []).filter(event => filter === 'all' || event.provider === filter);
-  const groups = new Map<string, CalendarEvent[]>();
-  for (const event of rows) { const day = event.allDay ? event.start.slice(0, 10) : dateOnly(new Date(event.start)); groups.set(day, [...(groups.get(day) ?? []), event]); }
-  return <div className="space-y-5">
-    <PageHeader title="calendar" description="Your connected Google and Microsoft 365 default calendars. Times are shown in your local timezone." />
-    <div className="flex flex-wrap gap-3 items-end">
-      <button className={mailButton} disabled={!from} onClick={() => changeWeek(-1)}>Previous week</button>
-      <label>Week of<input className={mailInput} type="date" required value={from} onChange={e => { setFrom(e.target.value ? weekStart(e.target.value) : ''); setEditing(null); }} /></label>
-      <button className={mailButton} disabled={!from} onClick={() => changeWeek(1)}>Next week</button>
-      <button className={mailButton} onClick={() => { setFrom(weekStart(dateOnly(new Date()))); setEditing(null); }}>This week</button>
-      <label>Calendar provider<select className={mailInput} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">All connected calendars</option><option value="google">Google</option><option value="microsoft">Microsoft 365</option></select></label>
-      <button className={mailButton} disabled={events.isFetching} onClick={() => events.refetch()}>Refresh calendar</button>
-      <button className={mailButton} disabled={!events.data?.providers.length} onClick={() => { setEditing('new'); setNotice(''); }}>New event</button>
-    </div>
-    <p className="text-sm text-on-surface-variant">Agents can also create and edit events using the Google Workspace or Microsoft 365 calendar tools. Those actions request approval according to your calendar-write permissions.</p>
-    {notice && <p role="status">{notice}</p>}
-    {events.isLoading && <p>Loading calendar…</p>}
-    {events.error && <p role="alert" className="text-error">{events.error.message}</p>}
-    {events.data?.partial && <p role="alert" className="text-error">Some calendar data could not be loaded. This schedule may be incomplete.</p>}
-    {events.data && !events.data.partial && events.data.providers.length === 0 && <p>No calendar connected. Connect Google or Microsoft 365 in <a className="text-primary underline" href="/settings?tab=integrations">Settings → Integrations</a>.</p>}
-    {events.data && events.data.providers.length > 0 && rows.length === 0 && <p>No events in this range.</p>}
-    {editing && <EventForm key={editing === 'new' ? 'new' : `${editing.provider}:${editing.id}`} event={editing === 'new' ? undefined : editing} day={newEventDay} providers={events.data?.providers ?? []} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); setNotice('Calendar event saved.'); await client.invalidateQueries({ queryKey: ['calendar', workspace] }); }} />}
-    {[...groups].sort(([a], [b]) => a.localeCompare(b)).map(([day, items]) => <section key={day} className="space-y-2"><h2 className="text-lg font-bold">{new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2>
-      {items.map(event => <article key={`${event.provider}:${event.id}`} className="rounded-md border border-outline-variant p-4 space-y-2"><div className="flex justify-between gap-3"><h3 className="font-bold">{event.title}</h3><button className={mailButton} onClick={() => { setEditing(event); setNotice(''); }}>Edit {event.title}</button></div>
-        <p className="text-sm">{event.allDay ? allDayLabel(event) : timeLabel(event)} · {providerName(event.provider)}</p>
-        {event.location && <p>{event.location}</p>}{event.description && <p className="text-sm whitespace-pre-wrap break-words">{event.description}</p>}
-        {event.attendees.length > 0 && <p className="text-xs text-on-surface-variant">Attendees: {event.attendees.map(a => a.name || a.email).join(', ')}</p>}
-      </article>)}
-    </section>)}
-    {events.data?.truncated && <p>This range contains more events than could be loaded. Choose a later start date to see more.</p>}
-  </div>;
-}
-function EventForm({ event, day, providers, onClose, onSaved }: { event?: CalendarEvent; day: string; providers: CalendarProvider[]; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [provider, setProvider] = useState<CalendarProvider>(event?.provider ?? providers[0] ?? 'google');
-  const [title, setTitle] = useState(event?.title ?? '');
-  const [allDay, setAllDay] = useState(event?.allDay ?? false);
-  const [start, setStart] = useState(event ? event.allDay ? event.start.slice(0, 10) : localTime(event.start) : `${day}T09:00`);
-  const [end, setEnd] = useState(event?.end ? event.allDay ? event.end.slice(0, 10) : localTime(event.end) : `${day}T10:00`);
-  const [location, setLocation] = useState(event?.location ?? '');
-  const [description, setDescription] = useState('');
-  const [confirmed, setConfirmed] = useState(false);
+  const phone = useSyncExternalStore(watchPhone, () => window.matchMedia(PHONE).matches, () => false);
+  const [firstDay] = useState(firstWeekday);
+  const [anchor, setAnchor] = useState(todayOf);
+  const [view, setViewState] = useState<CalendarViewName>(() => {
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('calendar.view'); } catch { /* a convenience only */ }
+    // A week does not fit a phone: start there on one day.
+    return window.matchMedia(PHONE).matches ? (saved === 'agenda' ? 'agenda' : 'day') : isView(saved) ? saved : 'week';
+  });
+  const [selected, setSelected] = useState<{ event: CalendarEvent; anchor: DOMRect } | null>(null);
+  const [editor, setEditor] = useState<{ event?: CalendarEvent; seed: NewEventSeed } | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const changeAllDay = (value: boolean) => {
-    const first = start.slice(0, 10);
-    const last = end.slice(0, 10);
-    const endDay = new Date(`${last}T12:00:00`);
-    if (value) {
-      // A timed event ending during a day covers that day; midnight does not.
-      if (end.slice(11) !== '00:00' || last <= first) endDay.setDate(endDay.getDate() + 1);
-      setStart(first); setEnd(dateOnly(endDay));
-    } else {
-      // An all-day end is exclusive. Preserve the final covered day.
-      endDay.setDate(endDay.getDate() - 1);
-      setStart(`${first}T09:00`); setEnd(`${dateOnly(endDay)}T10:00`);
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [calendarsOpen, setCalendarsOpen] = useState(false);
+  const [clockTick, setClockTick] = useState(() => new Date());
+
+  const setView = useCallback((next: CalendarViewName) => {
+    setViewState(next); setSelected(null);
+    try { localStorage.setItem('calendar.view', next); } catch { /* a convenience only */ }
+  }, []);
+  const go = useCallback((day: string) => { setAnchor(day); setSelected(null); }, []);
+  const openDay = useCallback((day: string) => { setAnchor(day); setView('day'); }, [setView]);
+
+  useEffect(() => { const timer = setInterval(() => setClockTick(new Date()), 60_000); return () => clearInterval(timer); }, []);
+  useEffect(() => { if (!notice || notice.error) return; const timer = setTimeout(() => setNotice(null), 6000); return () => clearTimeout(timer); }, [notice]);
+
+  const today = todayOf();
+  const nowMin = clockTick.getHours() * 60 + clockTick.getMinutes();
+  const days = useMemo(() => viewDays(view, anchor, firstDay), [view, anchor, firstDay]);
+
+  // ── Data ────────────────────────────────────────────────────────────────
+  const calendars = useQuery({
+    queryKey: ['calendar-list', workspace], staleTime: 60_000,
+    // An answer missing a field (an older backend) must not take the page down.
+    queryFn: async (): Promise<CalendarsResponse> => {
+      const r = await api.get<Partial<CalendarsResponse>>('/calendar/calendars');
+      return { calendars: r.calendars ?? [], providers: r.providers ?? [], partial: r.partial === true, preferences: r.preferences ?? {}, microsoftSharedAccess: r.microsoftSharedAccess ?? null };
+    },
+  });
+  const eventsKey = useCallback((shown: string[]) => ['calendar-events', workspace, shown[0], shown.length] as const, [workspace]);
+  const fetchEvents = useCallback((shown: string[]) => {
+    const from = new Date(`${shown[0]}T00:00:00`);
+    const to = new Date(`${addDays(shown[shown.length - 1], 1)}T00:00:00`);
+    return api.get<Partial<EventsResponse>>(`/calendar/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
+      .then((r): EventsResponse => ({ ...r, events: r.events ?? [], providers: r.providers ?? [], partial: r.partial === true }));
+  }, []);
+  // The range on screen stays while the next one loads.
+  const events = useQuery({ queryKey: eventsKey(days), queryFn: () => fetchEvents(days), staleTime: 60_000, placeholderData: keepPreviousData });
+  // The ranges either side are fetched ahead, so stepping is instant.
+  const loaded = !!events.data && !events.isPlaceholderData;
+  useEffect(() => {
+    if (!loaded) return;
+    for (const direction of [-1, 1] as const) {
+      const next = viewDays(view, stepAnchor(view, anchor, direction), firstDay);
+      void client.prefetchQuery({ queryKey: eventsKey(next), queryFn: () => fetchEvents(next), staleTime: 60_000 });
     }
-    setAllDay(value); setConfirmed(false);
+  }, [loaded, view, anchor, firstDay, client, eventsKey, fetchEvents]);
+
+  const hideDeclined = calendars.data?.preferences.hideDeclined === true;
+  const shownEvents = useMemo(() => (events.data?.events ?? []).filter((e) => !(hideDeclined && e.responseStatus === 'declined')), [events.data, hideDeclined]);
+  const writable = useMemo(() => (calendars.data?.calendars ?? []).filter((c) => !c.readOnly), [calendars.data]);
+  const connected = calendars.data ? calendars.data.providers.length > 0 || calendars.data.partial : true;
+  // The card follows the event as it changes (an answer, a move), and goes when the event does.
+  const selectedEvent = selected ? (events.data?.events ?? []).find((e) => eventKey(e) === eventKey(selected.event)) ?? selected.event : null;
+
+  // ── Writes ──────────────────────────────────────────────────────────────
+  const patchEvents = useCallback((change: (list: CalendarEvent[]) => CalendarEvent[]) => {
+    client.setQueriesData<EventsResponse>({ queryKey: ['calendar-events', workspace] }, (old) => (old ? { ...old, events: change(old.events) } : old));
+  }, [client, workspace]);
+  const refresh = useCallback(() => client.invalidateQueries({ queryKey: ['calendar-events', workspace] }), [client, workspace]);
+
+  /**
+   * One change to a calendar. When it would reach guests the server answers
+   * with how many, the reader is asked, and the change is sent again with
+   * their agreement. Resolves true once it is saved.
+   */
+  const write = useCallback((options: { what: string; done: string; notify?: boolean; call: (notify: boolean) => Promise<unknown> }) => new Promise<boolean>((resolve) => {
+    const attempt = async (notify: boolean) => {
+      setBusy(true);
+      try {
+        await options.call(notify);
+        setNotice({ text: options.done });
+        void refresh();
+        resolve(true);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && err.body.requiresAttendeeConfirmation === true) {
+          setAsk({
+            what: options.what, attendees: Number(err.body.attendees) || 0,
+            confirm: () => { setAsk(null); void attempt(true); },
+            cancel: () => { setAsk(null); void refresh(); resolve(false); },
+          });
+          return;
+        }
+        setNotice({ text: err instanceof Error ? err.message : 'The calendar change failed.', error: true });
+        void refresh();
+        resolve(false);
+      } finally { setBusy(false); }
+    };
+    void attempt(options.notify === true);
+  }), [refresh]);
+
+  const target = (event: CalendarEvent) => ({ provider: event.provider, ...(event.calendarId ? { calendarId: event.calendarId } : {}) });
+  const eventPath = (event: CalendarEvent) => `/calendar/events/${encodeURIComponent(event.id)}`;
+
+  const save = (draft: EventDraft, event?: CalendarEvent) => write({
+    what: `Save the changes to “${draft.title}”`, done: event ? 'Event saved.' : 'Event created.',
+    call: (notify) => event
+      ? api.patch(eventPath(event), { ...draft, confirm: true, ...(notify ? { notifyAttendees: true } : {}) })
+      : api.post('/calendar/events', { ...draft, confirm: true }),
+  });
+
+  const move = (event: CalendarEvent, start: string, end: string) => {
+    const key = eventKey(event);
+    patchEvents((list) => list.map((e) => (eventKey(e) === key ? { ...e, start, end } : e)));
+    setSelected(null);
+    void write({
+      what: `Move “${event.title}”`, done: 'Event moved.',
+      call: (notify) => api.patch(eventPath(event), { ...target(event), confirm: true, title: event.title, allDay: false, start, end, ...(notify ? { notifyAttendees: true } : {}) }),
+    });
   };
-  const save = async (e: FormEvent) => {
-    e.preventDefault(); setBusy(true); setError('');
+
+  const remove = (event: CalendarEvent) => {
+    const key = eventKey(event);
+    setSelected(null);
+    patchEvents((list) => list.filter((e) => eventKey(e) !== key));
+    // The card already named the guests and the reader pressed "Delete and notify".
+    void write({
+      what: `Delete “${event.title}”`, done: 'Event deleted.', notify: event.attendees.length > 0,
+      call: (notify) => api.delete(eventPath(event), { ...target(event), confirm: true, ...(notify ? { notifyAttendees: true } : {}) }),
+    });
+  };
+
+  const respond = (event: CalendarEvent, response: Exclude<CalendarResponse, 'needsAction'>) => {
+    const key = eventKey(event);
+    patchEvents((list) => list.map((e) => (eventKey(e) === key ? { ...e, responseStatus: response } : e)));
+    void write({ what: 'Answer the invitation', done: response === 'accepted' ? 'Accepted.' : response === 'declined' ? 'Declined.' : 'Answered maybe.', call: () => api.post(`${eventPath(event)}/respond`, { ...target(event), response }) });
+  };
+
+  const savePreferences = async (change: { visible?: string[]; hideDeclined?: boolean }) => {
+    setSavingPrefs(true);
+    // Shown at once; the server's answer follows.
+    client.setQueryData<CalendarsResponse>(['calendar-list', workspace], (old) => old && {
+      ...old, preferences: { ...old.preferences, ...change },
+      calendars: change.visible ? old.calendars.map((c) => ({ ...c, visible: change.visible!.includes(calendarKey(c)) })) : old.calendars,
+    });
     try {
-      if (!confirmed) throw new Error('Confirm this calendar change first.');
-      if (Date.parse(end) <= Date.parse(start)) throw new Error('End must be later than start.');
-      const body = { provider, confirm: true, title, allDay, start: allDay ? start : new Date(start).toISOString(), end: allDay ? end : new Date(end).toISOString(), location, ...(!event ? { description } : {}) };
-      if (event) await api.patch(`/calendar/events/${encodeURIComponent(event.id)}`, body); else await api.post('/calendar/events', body);
-      await onSaved();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save the calendar event'); }
-    finally { setBusy(false); }
+      await api.put('/calendar/preferences', change);
+      if (change.visible) await refresh();
+    } catch (err) {
+      setNotice({ text: err instanceof Error ? err.message : 'Could not save the calendar choice.', error: true });
+    } finally {
+      await client.invalidateQueries({ queryKey: ['calendar-list', workspace] });
+      setSavingPrefs(false);
+    }
   };
-  return <form aria-label={event ? 'Edit calendar event' : 'New calendar event'} onSubmit={save} className="border border-outline-variant rounded-md p-4 space-y-3">
-    <fieldset disabled={busy} className="space-y-3"><h2 className="font-bold">{event ? 'Edit event' : 'New event'}</h2>
-      {error && <p role="alert" className="text-error">{error}</p>}
-      <label className="block">Event provider<select className={mailInput} value={provider} disabled={!!event} onChange={e => { setProvider(e.target.value as CalendarProvider); setConfirmed(false); }}>{providers.map(p => <option key={p} value={p}>{providerName(p)}</option>)}</select></label>
-      <label className="block">Title<input className={mailInput} required maxLength={500} value={title} onChange={e => { setTitle(e.target.value); setConfirmed(false); }} /></label>
-      <label className="flex gap-2"><input type="checkbox" checked={allDay} onChange={e => changeAllDay(e.target.checked)} />All-day event</label>
-      <div className="grid sm:grid-cols-2 gap-3"><label>Start<input className={mailInput} required type={allDay ? 'date' : 'datetime-local'} value={start} onChange={e => { setStart(e.target.value); setConfirmed(false); }} /></label><label>{allDay ? 'End (exclusive)' : 'End'}<input className={mailInput} required type={allDay ? 'date' : 'datetime-local'} value={end} onChange={e => { setEnd(e.target.value); setConfirmed(false); }} /></label></div>
-      <label className="block">Location<input className={mailInput} maxLength={2000} value={location} onChange={e => { setLocation(e.target.value); setConfirmed(false); }} /></label>
-      {!event && <label className="block">Description<textarea className={mailInput} rows={3} maxLength={20000} value={description} onChange={e => { setDescription(e.target.value); setConfirmed(false); }} /></label>}
-      {event && <p className="text-sm">Existing description and attendees are preserved. Editing a recurring occurrence changes that occurrence.</p>}
-      <label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />Confirm this change in my {providerName(provider)} calendar</label>
-      <div className="flex gap-2"><button className={mailButton} type="submit" disabled={!confirmed}>{busy ? 'Saving…' : 'Save event'}</button><button className={mailButton} type="button" onClick={onClose}>Cancel</button></div>
-    </fieldset>
-  </form>;
+  const toggleCalendar = (calendar: CalendarInfo, visible: boolean) => {
+    const keys = new Set((calendars.data?.calendars ?? []).filter((c) => c.visible).map(calendarKey));
+    if (visible) keys.add(calendarKey(calendar)); else keys.delete(calendarKey(calendar));
+    void savePreferences({ visible: [...keys] });
+  };
+
+  const create = useCallback((seed: NewEventSeed) => { setSelected(null); setEditor({ seed }); }, []);
+  const canCreate = writable.length > 0;
+
+  // ── Keyboard ────────────────────────────────────────────────────────────
+  const overlayOpen = !!editor || !!ask;
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (overlayOpen || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
+      const pressed = e.key.toLowerCase();
+      const next = VIEWS.find((v) => v.key === pressed);
+      if (next) setView(next.id);
+      else if (pressed === 't') go(todayOf());
+      else if (pressed === 'j' || e.key === 'ArrowRight') go(stepAnchor(view, anchor, 1));
+      else if (pressed === 'k' || e.key === 'ArrowLeft') go(stepAnchor(view, anchor, -1));
+      else if (pressed === 'c' && canCreate) create({ day: days.includes(todayOf()) ? todayOf() : anchor });
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [overlayOpen, view, anchor, days, canCreate, setView, go, create]);
+
+  // ── Layout: the grid takes what is left of the window ───────────────────
+  const body = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(560);
+  useLayoutEffect(() => {
+    const fit = () => { if (body.current) setHeight(Math.max(420, window.innerHeight - body.current.getBoundingClientRect().top - 28)); };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [notice, events.data?.partial, events.data?.truncated, connected, phone, calendarsOpen]);
+
+  const loading = events.isPending;
+  const common = { events: shownEvents, loading, today, selectedKey: selectedEvent ? eventKey(selectedEvent) : undefined, onSelect: (event: CalendarEvent, rect: DOMRect) => setSelected({ event, anchor: rect }), onCreate: canCreate ? create : () => {}, onOpenDay: openDay };
+  const failed = events.data?.failedCalendars ?? [];
+
+  return (
+    <div className="font-sans">
+      <PageHeader
+        title="calendar"
+        className="mb-3"
+        actions={<button className={buttonPrimary} disabled={!canCreate} title={canCreate ? 'New event (c)' : 'Connect a calendar you can write to first'} onClick={() => create({ day: days.includes(today) ? today : anchor })}><Plus className="w-4 h-4" aria-hidden />New event</button>}
+      />
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <button className={buttonQuiet} onClick={() => go(todayOf())} title="Today (t)">Today</button>
+        <div className="flex">
+          <button aria-label="Previous" title="Previous (k or ←)" onClick={() => go(stepAnchor(view, anchor, -1))} className="p-1.5 rounded-full text-on-surface hover:bg-surface-container-high cursor-pointer"><ChevronLeft className="w-5 h-5" /></button>
+          <button aria-label="Next" title="Next (j or →)" onClick={() => go(stepAnchor(view, anchor, 1))} className="p-1.5 rounded-full text-on-surface hover:bg-surface-container-high cursor-pointer"><ChevronRight className="w-5 h-5" /></button>
+        </div>
+        <h2 className="text-base sm:text-lg font-semibold text-on-surface" aria-live="polite">{rangeTitle(view, anchor, days)}</h2>
+        {events.isFetching && !loading && <Loader2 className="w-4 h-4 animate-spin text-on-surface-variant" aria-label="Updating" />}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="View" className="inline-flex rounded-full border border-outline-variant/40 p-0.5">
+            {VIEWS.map((v) => (
+              <button key={v.id} aria-pressed={view === v.id} title={`${v.label} (${v.key})`} onClick={() => setView(v.id)}
+                className={`px-3 py-1 text-sm rounded-full cursor-pointer ${view === v.id ? 'bg-primary-container text-on-primary-container font-semibold' : 'text-on-surface-variant hover:text-on-surface'}`}>{v.label}</button>
+            ))}
+          </div>
+          <button aria-label="Refresh calendar" title="Refresh" disabled={events.isFetching} onClick={() => { void client.invalidateQueries({ queryKey: ['calendar-list', workspace] }); void refresh(); }} className="p-1.5 rounded-full text-on-surface-variant hover:bg-surface-container-high cursor-pointer disabled:opacity-50"><RefreshCw className="w-4 h-4" /></button>
+          <button aria-expanded={calendarsOpen} onClick={() => setCalendarsOpen(!calendarsOpen)} className={`${buttonQuiet} md:hidden`}><ListFilter className="w-4 h-4" aria-hidden />Calendars</button>
+        </div>
+      </div>
+
+      {notice && (
+        <p role={notice.error ? 'alert' : 'status'} className={`mb-3 rounded-xs border px-3 py-2 text-sm ${notice.error ? 'border-error/30 bg-error/10 text-error' : 'border-primary/20 bg-primary/10 text-primary'}`}>
+          {notice.text}<button onClick={() => setNotice(null)} className="ml-2 underline cursor-pointer">dismiss</button>
+        </p>
+      )}
+      {(events.error || calendars.error) && <p role="alert" className="mb-3 rounded-xs border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{(events.error ?? calendars.error)?.message}</p>}
+      {(events.data?.partial || calendars.data?.partial) && (
+        <p role="alert" className="mb-3 rounded-xs border border-warning/30 bg-warning-container px-3 py-2 text-sm text-on-warning-container">
+          {failed.length > 0 ? `Could not load ${failed.join(', ')}.` : 'Some calendar data could not be loaded.'} This schedule may be incomplete.
+          {calendars.data?.microsoftSharedAccess === false && failed.length > 0 && <> A Microsoft 365 calendar shared with you opens after you connect Microsoft 365 once more in <a className="underline" href="/settings?tab=integrations">Settings → Integrations</a>.</>}
+        </p>
+      )}
+      {events.data?.truncated && <p role="status" className="mb-3 rounded-xs border border-outline-variant/60 px-3 py-2 text-sm text-on-surface-variant">This range holds more events than could be loaded. Choose a shorter view to see them all.</p>}
+
+      <div ref={body} className="flex flex-col md:flex-row gap-4" style={phone ? undefined : { height }}>
+        <div className={`${calendarsOpen ? 'block' : 'hidden'} md:block md:h-full`}>
+          <CalendarSidebar anchor={anchor} shown={view === 'month' ? [] : days} today={today} firstDay={firstDay} calendars={calendars.data} loading={calendars.isPending} saving={savingPrefs}
+            onPickDay={go} onToggleCalendar={toggleCalendar} onHideDeclined={(hide) => void savePreferences({ hideDeclined: hide })} />
+        </div>
+        <div className="min-w-0 md:flex-1 md:h-full" style={phone ? { height: Math.max(420, height) } : undefined}>
+          {!connected ? (
+            <div className="h-full rounded-md border border-dashed border-outline-variant flex flex-col items-center justify-center text-center px-6 text-on-surface-variant">
+              <p className="text-on-surface font-medium">No calendar connected</p>
+              <p className="text-sm mt-1">Connect Google or Microsoft 365 in <a className="text-primary underline" href="/settings?tab=integrations">Settings → Integrations</a>.</p>
+            </div>
+          ) : view === 'month' ? <MonthView days={days} month={anchor} {...common} />
+            : view === 'agenda' ? <AgendaView days={days} {...common} />
+            : <TimeGrid key={view} days={days} nowMin={nowMin} onMove={move} {...common} />}
+        </div>
+      </div>
+
+      {selected && selectedEvent && (
+        <EventPopover key={eventKey(selectedEvent)} event={selectedEvent} anchor={selected.anchor} busy={busy} onClose={() => setSelected(null)}
+          onEdit={() => { setEditor({ event: selectedEvent, seed: { day: anchor } }); setSelected(null); }}
+          onDelete={() => remove(selectedEvent)} onRespond={(response) => respond(selectedEvent, response)} />
+      )}
+      {editor && (
+        <EventDialog key={editor.event ? eventKey(editor.event) : `new-${editor.seed.day}-${editor.seed.startMin ?? ''}`} event={editor.event} seed={editor.seed} calendars={writable}
+          onClose={() => setEditor(null)}
+          onSave={async (draft) => { const saved = await save(draft, editor.event); if (saved) setEditor(null); return saved; }} />
+      )}
+      {ask && (
+        <Modal open onClose={ask.cancel} title="Guests will be notified" maxWidth="sm">
+          <div role="alertdialog" aria-label="Guests will be notified" className="space-y-3 text-sm text-on-surface">
+            <p>{ask.what}? {ask.attendees === 1 ? 'This event has 1 guest, who gets' : `This event has ${ask.attendees} guests, who get`} an email about the change.</p>
+            <div className="flex justify-end gap-2">
+              <button className={buttonQuiet} onClick={ask.cancel}>Cancel</button>
+              <button className={buttonPrimary} onClick={ask.confirm}>{ask.attendees === 1 ? 'Notify the guest' : `Notify ${ask.attendees} guests`}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
 }
