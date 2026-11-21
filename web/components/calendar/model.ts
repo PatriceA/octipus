@@ -1,4 +1,4 @@
-import type { CalendarEvent, CalendarInfo, CalendarPreferences, CalendarProvider } from '../../../src/shared/calendar';
+import type { CalendarEvent, CalendarInfo, CalendarPreferences, CalendarProvider, CalendarRecurrence, RecurrenceScope } from '../../../src/shared/calendar';
 import { addDays, allDayRange, dayOf, monthGrid, noonOf, weekStart } from '../../../src/shared/calendar-layout';
 
 export type CalendarViewName = 'day' | 'week' | 'month' | 'agenda';
@@ -38,7 +38,42 @@ export interface EventDraft {
   end: string;
   location?: string;
   description?: string;
+  /** On create: who is invited. On an edit: the new guest list, sent only when it changed. */
   attendees?: string[];
+  /** Sent only when chosen or changed. null: no reminder. */
+  reminderMinutes?: number | null;
+  recurrence?: CalendarRecurrence;
+  /** The reader's zone: a repeating event keeps its local time across a clock change. */
+  timeZone?: string;
+  /** For an occurrence of a repeating event. */
+  scope?: RecurrenceScope;
+}
+
+/** The browser's IANA zone ("Europe/Berlin"), or UTC where it cannot say. */
+export function readerTimeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+/** "10 minutes before", "At the start", "1 day before". */
+export function reminderLabel(minutes: number): string {
+  if (minutes === 0) return 'At the start';
+  if (minutes % 1440 === 0) return `${minutes / 1440} ${minutes === 1440 ? 'day' : 'days'} before`;
+  if (minutes % 60 === 0) return `${minutes / 60} ${minutes === 60 ? 'hour' : 'hours'} before`;
+  return `${minutes} minutes before`;
+}
+
+const DAY_NAMES: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+/** "Every 2 weeks on Mon, Wed, until 31 Dec 2026". */
+export function recurrenceLabel(rule: CalendarRecurrence): string {
+  const n = rule.interval ?? 1;
+  const unit = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[rule.frequency];
+  let text = n === 1 ? `Every ${unit}` : `Every ${n} ${unit}s`;
+  if (rule.frequency === 'weekly' && rule.byDay?.length) {
+    text += ` on ${rule.byDay.map((d) => new Date(2026, 10, 15 + DAY_NAMES[d]).toLocaleDateString(undefined, { weekday: 'short' })).join(', ')}`;
+  }
+  if (rule.until) text += `, until ${noonOf(rule.until).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  if (rule.count) text += `, ${rule.count} times`;
+  return text;
 }
 
 /** A time the reader picked on the grid for a new event. */
