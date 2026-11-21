@@ -2,22 +2,95 @@ import { createHash } from 'node:crypto';
 import { filterPII } from '@/core/agent/pii-filter';
 import { getDb } from '@/db/postgres';
 import { skillRepository } from '@/db/repositories/skill-repository';
-import { skillProposals } from '@/db/schema/skill-proposals';
+import { type SkillProposalSignal, skillProposals } from '@/db/schema/skill-proposals';
 import { assertPatchable, skillContentHash, validateSkillPatch } from '@/skills/patch';
-import { type DedupHit, findExisting, findProposalByFingerprint } from '@/tools/skill-distill/dedup';
+import { getConfig } from '@/config';
+import { sessionCountOf } from '@/shared/skill-proposals';
+import { type DedupDecision, decideSkillProposal, findProposalByFingerprint } from '@/tools/skill-distill/dedup';
+import { initialProposalStatus, learnedSurfaceCap, type MergeResult, mergeIntoProposal, ProposalNotOpenError, promoteIfEligible } from './skill-proposal-merge';
+import { surfaceProposal } from './skill-proposal-service';
 import { type DistilledSkill, skillFingerprint } from '@/tools/skill-distill/distiller';
 import { toolLogger } from '@/utils/logger';
 
-/** Shared proposal writer: manual and automatic learning use the same dedup and review path. */
-export async function fileSkillProposal(distilled: DistilledSkill, userId: string, sourceRef: string): Promise<Record<string, unknown>> {
-  const db = getDb();
-  const fingerprint = skillFingerprint(userId, distilled.name);
-  const existing = await findExisting(userId, fingerprint, distilled);
-  if (existing) return describeExisting(existing);
+export interface FileSkillProposalOptions {
+  /** 'manual': the user asked (`distill_skill`), shown at once and exempt from the caps. */
+  origin: 'manual' | 'learning';
+  /** The kind of evidence: a user correction is shown at once. */
+  signal?: SkillProposalSignal;
+  /** An open proposal of the user the reviewer says this extends (`proposal:<id>` or the id). */
+  extendsProposalId?: string;
+}
 
-  // 5. File the proposal (pending review). kind='skill' routes the approve
-  //    path to create a skill, not an expert.
-  const [proposal] = await db
+/** What filing did, as the distill tool and the learning check report it. */
+export interface FileSkillProposalResult {
+  /** A proposal exists for it now (filed, or merged into one). */
+  distilled: boolean;
+  /** No new row: dropped, or merged into an existing proposal. */
+  deduped?: boolean;
+  /** Merged into the open proposal `proposalId`. */
+  merged?: boolean;
+  /** The merge model could not be used: only counted, the text is unchanged. */
+  mergeDegraded?: boolean;
+  proposalId?: string;
+  /** Dropped because this live skill covers it. */
+  existingSkillId?: string;
+  name: string;
+  description?: string;
+  /** The proposal's status now: 'candidate' waits until it has been seen again. */
+  status?: 'pending' | 'candidate';
+  message?: string;
+  note?: string;
+}
+
+/**
+ * Shared proposal writer: manual and automatic learning use the same dedup,
+ * merge and review path (docs/plans/self-learning-consolidation.md). Without
+ * `opts` the proposal is the user's own request (`origin: 'manual'`).
+ */
+export async function fileSkillProposal(
+  distilled: DistilledSkill,
+  userId: string,
+  sourceRef: string,
+  opts: FileSkillProposalOptions = { origin: 'manual' },
+): Promise<FileSkillProposalResult> {
+  const fingerprint = skillFingerprint(userId, distilled.name);
+  // The merge target can be approved, rejected or absorbed between the dedup
+  // decision and the write. Deciding once more sees its new state (covered by
+  // the live skill, suppressed, redirected, or new); a second miss throws.
+  for (let attempt = 1; ; attempt++) {
+    const decision = await decideSkillProposal(userId, fingerprint, distilled, { extendsProposalId: opts.extendsProposalId });
+    if (decision.action === 'drop') return describeDrop(decision);
+    if (decision.action === 'merge') {
+      let merge: MergeResult;
+      try {
+        merge = await mergeIntoProposal(decision.target, { ...distilled, signal: opts.signal ?? null }, sourceRef,
+          { allowDistinct: decision.allowDistinct });
+      } catch (err) {
+        if (!(err instanceof ProposalNotOpenError) || attempt > 1) throw err;
+        toolLogger.info({ proposalId: err.proposalId, status: err.status, name: distilled.name, userId },
+          'Skill proposal merge target was resolved meanwhile; deciding again');
+        continue;
+      }
+      if (merge.verdict !== 'distinct') return describeMerge(merge, opts.origin);
+    }
+    return insertProposal(distilled, userId, sourceRef, fingerprint, opts, decision.embedding);
+  }
+}
+
+async function insertProposal(
+  distilled: DistilledSkill,
+  userId: string,
+  sourceRef: string,
+  fingerprint: string,
+  opts: FileSkillProposalOptions,
+  embedding: number[] | null,
+): Promise<FileSkillProposalResult> {
+  let status = initialProposalStatus({ origin: opts.origin, signal: opts.signal, recurrenceSessions: getConfig().learning.recurrenceSessions });
+  const cap = status === 'pending' && opts.origin === 'learning' ? await learnedSurfaceCap(userId) : null;
+  if (cap) status = 'candidate';
+  const now = new Date();
+  // kind='skill' routes the approve path to create a skill, not an expert.
+  const [proposal] = await getDb()
     .insert(skillProposals)
     .values({
       userId,
@@ -26,13 +99,19 @@ export async function fileSkillProposal(distilled: DistilledSkill, userId: strin
       description: distilled.description,
       draftPromptTemplate: distilled.content,
       kind: 'skill',
+      status,
       sourceRef,
-      lastExemplarAt: new Date(),
+      sourceRefs: [sourceRef],
+      exemplarCount: 1,
+      signal: opts.signal ?? null,
+      embedding,
+      surfacedAt: status === 'pending' ? now : null,
+      lastExemplarAt: now,
     })
-    .returning();
+    .returning({ id: skillProposals.id });
 
   toolLogger.info(
-    { proposalId: proposal?.id, name: distilled.name, userId },
+    { proposalId: proposal?.id, name: distilled.name, userId, status, origin: opts.origin, signal: opts.signal, cap },
     'Distilled a skill proposal',
   );
   return {
@@ -40,14 +119,16 @@ export async function fileSkillProposal(distilled: DistilledSkill, userId: strin
     proposalId: proposal?.id,
     name: distilled.name,
     description: distilled.description,
-    status: 'pending',
-    note: 'Filed as a pending skill proposal for review (not yet a live skill).',
+    status,
+    note: status === 'pending'
+      ? 'Filed as a pending skill proposal for review (not yet a live skill).'
+      : 'Filed as a candidate skill proposal: it is shown for review once it has been seen again (not yet a live skill).',
   };
 }
 
-/** Turn a dedup hit into the tool result the model sees — no proposal filed. */
-function describeExisting(hit: DedupHit): Record<string, unknown> {
-  if (hit.kind === 'skill') {
+/** A dedup drop as the tool result the model sees — no proposal filed. */
+function describeDrop(hit: Extract<DedupDecision, { action: 'drop' }>): FileSkillProposalResult {
+  if (hit.reason === 'skill') {
     return {
       distilled: false,
       deduped: true,
@@ -56,21 +137,39 @@ function describeExisting(hit: DedupHit): Record<string, unknown> {
       message: `Already covered by the existing skill "${hit.name}" — nothing filed. Edit that skill if it needs updating.`,
     };
   }
-  if (hit.kind === 'suppressed') {
-    return {
-      distilled: false,
-      deduped: true,
-      name: hit.name,
-      message: `"${hit.name}" was rejected and stays suppressed until ${hit.until.toISOString().slice(0, 10)} — nothing filed.`,
-    };
+  return {
+    distilled: false,
+    deduped: true,
+    name: hit.name,
+    message: `"${hit.name}" was rejected and stays suppressed until ${hit.until.toISOString().slice(0, 10)} — nothing filed.`,
+  };
+}
+
+async function describeMerge(merge: Extract<MergeResult, { verdict: 'merged' | 'unchanged' }>, origin: FileSkillProposalOptions['origin']): Promise<FileSkillProposalResult> {
+  let proposal = merge.proposal;
+  let surfaced = false;
+  if (origin === 'manual' && proposal.status === 'candidate') {
+    // The user asked for this skill: shown at once, past the recurrence gate and the caps.
+    const shown = await surfaceProposal(proposal.id, proposal.userId);
+    if (shown) { proposal = shown; surfaced = true; }
+  } else {
+    const promotion = await promoteIfEligible(proposal);
+    if (promotion.promoted) { proposal = promotion.proposal; surfaced = true; }
   }
+  const status = proposal.status === 'candidate' ? 'candidate' : 'pending';
+  const seen = `seen ${proposal.exemplarCount}× in ${sessionCountOf(proposal.sourceRefs)} session(s)`;
+  const text = merge.verdict === 'merged' ? 'its draft now includes this' : 'its draft already covered this';
   return {
     distilled: true,
     deduped: true,
-    proposalId: hit.id,
-    name: hit.name,
-    status: 'pending',
-    message: `An equivalent proposal ("${hit.name}") is already pending review.`,
+    merged: true,
+    ...(merge.mergeDegraded ? { mergeDegraded: true } : {}),
+    proposalId: proposal.id,
+    name: proposal.name,
+    status,
+    message: `Merged into the ${status === 'candidate' ? 'candidate' : 'pending'} proposal "${proposal.name}" (${seen}); `
+      + (merge.mergeDegraded ? 'the merge model was unavailable, so only the count changed.' : `${text}.`)
+      + (surfaced ? ' It is now shown for review.' : ''),
   };
 }
 
@@ -115,6 +214,10 @@ export async function fileSkillPatchProposal(patch: SkillPatchInput, userId: str
     draftPromptTemplate: patched,
     kind: 'patch',
     sourceRef,
+    sourceRefs: [sourceRef],
+    exemplarCount: 1,
+    // Patches are exempt from the recurrence gate and the caps: shown at once.
+    surfacedAt: new Date(),
     lastExemplarAt: new Date(),
     targetSkillId: skill.id,
     patchOldText: patch.oldText,

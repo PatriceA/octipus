@@ -1,5 +1,7 @@
 /**
- * Skill embedding backfill — Phase 2 of skill discovery.
+ * Skill embedding backfill — Phase 2 of skill discovery. The work is
+ * `ensureSkillEmbeddings` (src/skills/embedding-backfill.ts), which dedup and
+ * the daily consolidation call too; this runs it once over every row.
  *
  * Iterates DB-stored skills where `description_embedding IS NULL` OR
  * `description_hash != sha256(name + '\n' + description)` (catches
@@ -12,8 +14,9 @@
  * provider. External (filesystem) skills are NOT in the DB and therefore
  * naturally skipped.
  *
- * No-embedding-model path: catches the resolveModel() error from the
- * FIRST row and exits 0 with a loud error log + remediation message.
+ * No-embedding-model path: the capability is off, or the FIRST row's
+ * resolveModel() error says so; exits 0 with a loud error log + remediation
+ * message.
  * Subsequent transient row failures are logged at error level and the
  * batch continues.
  *
@@ -22,28 +25,11 @@
  *
  * Usage: npx tsx scripts/backfill-skill-embeddings.ts
  */
-import { createHash } from 'node:crypto';
-import { eq } from 'drizzle-orm';
-import { initializeDb, getDb, closeDb } from '../src/db/postgres';
+import { initializeDb, closeDb } from '../src/db/postgres';
 import { initializeStorage, closeStorage } from '../src/db/storage';
 import { initializeVault } from '../src/security/vault';
-import { skills } from '../src/db/schema/skills';
-import { getEmbeddingService } from '../src/core/rag/embeddings';
+import { ensureSkillEmbeddings } from '../src/skills/embedding-backfill';
 import { coreLogger } from '../src/utils/logger';
-
-const BATCH_SIZE = 20;
-
-function computeHash(name: string, description: string): string {
-  return createHash('sha256').update(`${name}\n${description}`).digest('hex');
-}
-
-interface CandidateRow {
-  id: string;
-  name: string;
-  description: string;
-  descriptionHash: string | null;
-  descriptionEmbedding: number[] | null;
-}
 
 async function main() {
   const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
@@ -56,153 +42,28 @@ async function main() {
   // do it explicitly. See scripts/rotate-vault-keys.ts for the same pattern.
   await initializeVault();
 
-  const db = getDb();
-  const embeddingService = getEmbeddingService();
+  coreLogger.info({ component: 'backfill-skills' }, 'Skill embedding backfill: starting');
+  const result = await ensureSkillEmbeddings({
+    onBatch: ({ batch, of, embedded, failed }) => coreLogger.info(
+      { batch, of, succeeded: embedded, failed, component: 'backfill-skills' },
+      `[batch ${batch}/${of}] succeeded=${embedded} failed=${failed}`,
+    ),
+  });
 
-  // Pull all DB skills, then filter in TS for the staleness check
-  // (sha256 in pure SQL is awkward across PG/PGlite — keep portable).
-  const allRows = await db.select({
-    id: skills.id,
-    name: skills.name,
-    description: skills.description,
-    descriptionHash: skills.descriptionHash,
-    descriptionEmbedding: skills.descriptionEmbedding,
-  }).from(skills);
-
-  // External skills have ids prefixed `external:` and live in memory only —
-  // they are never persisted to the DB, so allRows naturally excludes them.
-  // Defensive filter just in case something seeded an external-prefixed row.
-  const candidates: CandidateRow[] = [];
-  for (const row of allRows) {
-    if (row.id.startsWith('external:')) continue;
-    const expectedHash = computeHash(row.name, row.description);
-    const needsEmbed = row.descriptionEmbedding == null
-      || row.descriptionHash !== expectedHash;
-    if (needsEmbed) candidates.push(row);
-  }
-
-  const total = allRows.length;
-  const skipped = total - candidates.length;
-
-  coreLogger.info(
-    { total, candidates: candidates.length, skipped, component: 'backfill-skills' },
-    'Skill embedding backfill: starting',
-  );
-
-  if (candidates.length === 0) {
-    coreLogger.info(
-      { total, succeeded: 0, failed: 0, skipped, component: 'backfill-skills' },
-      'Skill embedding backfill: nothing to do',
+  if (result.noModel) {
+    coreLogger.error(
+      { component: 'backfill-skills' },
+      'Skill embedding backfill aborted: no embedding model configured. ' +
+      'Configure an embedding model: assign one to topic="embedding" in the Models page.',
     );
-    await closeDb();
-    if (mode === 'embedded') await closeStorage();
-    process.exit(0);
-  }
-
-  let succeeded = 0;
-  let failed = 0;
-  let firstRow = true;
-  let bailed = false;
-
-  const numBatches = Math.ceil(candidates.length / BATCH_SIZE);
-  for (let batchIdx = 0; batchIdx < numBatches; batchIdx++) {
-    const batch = candidates.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE);
-
-    // Process the very first row of the very first batch in isolation so we
-    // can detect the no-model-configured case and exit cleanly without
-    // attempting more rows that would all fail identically.
-    let workItems = batch;
-    if (firstRow) {
-      const probe = batch[0];
-      const text = `${probe.name}\n${probe.description}`;
-      const hash = computeHash(probe.name, probe.description);
-      try {
-        const embedding = await embeddingService.generateEmbedding(text);
-        await db.update(skills)
-          .set({
-            descriptionEmbedding: embedding,
-            descriptionHash: hash,
-            updatedAt: new Date(),
-          })
-          .where(eq(skills.id, probe.id));
-        succeeded++;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes('No model mapped to topic "embedding"') || (err as { code?: string }).code === 'capability_not_configured') {
-          coreLogger.error(
-            { err, component: 'backfill-skills' },
-            'Skill embedding backfill aborted: no embedding model configured. ' +
-            'Configure an embedding model: assign one to topic="embedding" in the Models page.',
-          );
-          bailed = true;
-          break;
-        }
-        // Some other transient error on first row — log and continue.
-        coreLogger.error(
-          { err, skillId: probe.id, name: probe.name, component: 'backfill-skills' },
-          'Skill embedding backfill: failed to embed row (continuing)',
-        );
-        failed++;
-      }
-      firstRow = false;
-      workItems = batch.slice(1);
-    }
-
-    if (workItems.length > 0) {
-      const results = await Promise.allSettled(workItems.map(async (row) => {
-        const text = `${row.name}\n${row.description}`;
-        const hash = computeHash(row.name, row.description);
-        const embedding = await embeddingService.generateEmbedding(text);
-        await db.update(skills)
-          .set({
-            descriptionEmbedding: embedding,
-            descriptionHash: hash,
-            updatedAt: new Date(),
-          })
-          .where(eq(skills.id, row.id));
-        return row.id;
-      }));
-
-      let batchSucceeded = 0;
-      let batchFailed = 0;
-      for (let i = 0; i < results.length; i++) {
-        const res = results[i];
-        if (res.status === 'fulfilled') {
-          batchSucceeded++;
-        } else {
-          batchFailed++;
-          coreLogger.error(
-            {
-              err: res.reason,
-              skillId: workItems[i].id,
-              name: workItems[i].name,
-              component: 'backfill-skills',
-            },
-            'Skill embedding backfill: row failed (continuing)',
-          );
-        }
-      }
-      succeeded += batchSucceeded;
-      failed += batchFailed;
-    }
-
+  } else if (result.stale === 0) {
+    coreLogger.info({ succeeded: 0, failed: 0, component: 'backfill-skills' }, 'Skill embedding backfill: nothing to do');
+  } else {
     coreLogger.info(
-      {
-        batch: batchIdx + 1,
-        of: numBatches,
-        succeeded,
-        failed,
-        skipped,
-        component: 'backfill-skills',
-      },
-      `[batch ${batchIdx + 1}/${numBatches}] succeeded=${succeeded} failed=${failed} skipped=${skipped}`,
+      { candidates: result.stale, succeeded: result.embedded, failed: result.failed, component: 'backfill-skills' },
+      'Skill embedding backfill: complete',
     );
   }
-
-  coreLogger.info(
-    { total, succeeded, failed, skipped, bailed, component: 'backfill-skills' },
-    'Skill embedding backfill: complete',
-  );
 
   await closeDb();
   if (mode === 'embedded') await closeStorage();

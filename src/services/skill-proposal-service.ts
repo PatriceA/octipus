@@ -1,5 +1,6 @@
 /**
- * Distilled-skill proposals: list, approve (promote), reject.
+ * Distilled-skill proposals: list, approve (promote), reject, merge, surface,
+ * and the view the API serves (docs/plans/self-learning-consolidation.md).
  *
  * One implementation shared by the REST route and the gateway `/proposals`
  * command. The promotion is the part that must not be copied — it inserts a
@@ -8,10 +9,13 @@
  * (re-approvable → duplicates).
  */
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
 import { skills } from '@/db/schema/skills';
+import { getConfig } from '@/config';
+import { type MergeResult, mergeIntoProposal, ProposalNotOpenError, promoteIfEligible } from '@/services/skill-proposal-merge';
+import { type SkillProposalView, sessionCountOf } from '@/shared/skill-proposals';
 import { applySkillPatch, assertPatchable, SkillPatchError, skillContentHash } from '@/skills/patch';
 import { normalizeSkillName } from '@/tools/skill-distill/distiller';
 import { coreLogger } from '@/utils/logger';
@@ -19,19 +23,57 @@ import { coreLogger } from '@/utils/logger';
 /** 90 days — how long a rejected proposal stays suppressed. */
 const REJECT_SUPPRESSION_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** Statuses a proposal can still be approved, rejected or merged from. */
+const OPEN_STATUSES: Array<'pending' | 'candidate'> = ['pending', 'candidate'];
+
 /**
- * Pending proposals, oldest first so a positional index (`/proposals approve 1`)
- * is stable between the list and the approval that follows it.
+ * How a list is ordered. `most_seen` (the web page): most observations, then
+ * oldest. `surfaced` (the chat `/proposals` command, whose approve/reject
+ * take a row number): oldest shown first, then oldest filed, then id — a
+ * row's position never moves when counts change or rows are added, so a
+ * background merge or a newly surfaced candidate between the list and the
+ * action cannot make a number name another proposal.
+ */
+export type ProposalListOrder = 'most_seen' | 'surfaced';
+
+/**
+ * Pending proposals in `order` (default `most_seen`).
  *
  * `userId` scopes the list to its owner. Passing `undefined` returns every
  * user's — only for an admin/system caller.
  */
-export async function listPendingProposals(userId?: string): Promise<SkillProposalRecord[]> {
-  const db = getDb();
-  const where = userId
-    ? and(eq(skillProposals.status, 'pending'), eq(skillProposals.userId, userId))
-    : eq(skillProposals.status, 'pending');
-  return db.select().from(skillProposals).where(where).orderBy(asc(skillProposals.createdAt));
+export async function listPendingProposals(userId?: string, opts: { order?: ProposalListOrder } = {}): Promise<SkillProposalRecord[]> {
+  return listOpenProposals(userId, { includeCandidates: false, order: opts.order });
+}
+
+/**
+ * Pending proposals (sorted as `listPendingProposals`), followed by the
+ * candidates (not shown yet) in the same order when `includeCandidates`.
+ */
+export async function listOpenProposals(
+  userId: string | undefined,
+  opts: { includeCandidates: boolean; order?: ProposalListOrder },
+): Promise<SkillProposalRecord[]> {
+  const statuses: Array<'pending' | 'candidate'> = opts.includeCandidates ? OPEN_STATUSES : ['pending'];
+  const filters = [inArray(skillProposals.status, statuses)];
+  if (userId) filters.push(eq(skillProposals.userId, userId));
+  const byCount = opts.order === 'surfaced'
+    ? [sql`coalesce(${skillProposals.surfacedAt}, ${skillProposals.createdAt}) ASC`]
+    : [desc(skillProposals.exemplarCount)];
+  return getDb().select().from(skillProposals).where(and(...filters)).orderBy(
+    sql`(${skillProposals.status} = 'candidate')`,
+    ...byCount,
+    asc(skillProposals.createdAt),
+    asc(skillProposals.id),
+  );
+}
+
+/** Candidates (filed, not shown yet) of `userId`, or of everyone when `undefined`. */
+export async function countCandidateProposals(userId?: string): Promise<number> {
+  const filters = [eq(skillProposals.status, 'candidate')];
+  if (userId) filters.push(eq(skillProposals.userId, userId));
+  const [row] = await getDb().select({ n: sql<number>`count(*)::int` }).from(skillProposals).where(and(...filters));
+  return Number(row?.n ?? 0);
 }
 
 /**
@@ -86,7 +128,10 @@ export class ProposalRefusedError extends Error {
   constructor(readonly code: 'stale' | 'locked' | 'missing' | 'override' | 'invalid', message: string) { super(message); }
 }
 
-/** Promote a pending proposal. Returns null when it isn't pending (or isn't the caller's). */
+/**
+ * Promote a pending proposal, or a candidate the owner approves before it was
+ * shown. Returns null when it isn't open (or isn't the caller's).
+ */
 export async function approveProposal(id: string, opts: ApproveOptions = {}): Promise<ApproveResult> {
   try {
     return await promote(id, opts);
@@ -98,7 +143,7 @@ export async function approveProposal(id: string, opts: ApproveOptions = {}): Pr
 
 async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult> {
   const db = getDb();
-  const filters = [eq(skillProposals.id, id), eq(skillProposals.status, 'pending')];
+  const filters = [eq(skillProposals.id, id), inArray(skillProposals.status, OPEN_STATUSES)];
   if (opts.userId) filters.push(eq(skillProposals.userId, opts.userId));
 
   const [proposal] = await db.select().from(skillProposals).where(and(...filters)).limit(1);
@@ -181,13 +226,13 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
       if (!created) throw new AlreadyResolvedError();
       merged = Boolean(duplicate);
 
-      // Filter on `pending`, not just the id: the SELECT above is outside this
+      // Filter on the open statuses, not just the id: the SELECT above is outside this
       // transaction, so two approvals racing (the REST route and `/proposals
       // approve` are two front doors now) would both read it pending and both
       // insert. Whoever loses the flip finds no row and rolls their insert back.
       const [flipped] = await tx.update(skillProposals)
         .set({ status: 'promoted', promotedSkillId: created.id })
-        .where(and(eq(skillProposals.id, id), eq(skillProposals.status, 'pending')))
+        .where(and(eq(skillProposals.id, id), inArray(skillProposals.status, OPEN_STATUSES)))
         .returning({ id: skillProposals.id });
       if (!flipped) throw new AlreadyResolvedError();
       return created;
@@ -257,20 +302,274 @@ async function applyPatch(proposal: SkillProposalRecord, opts: ApproveOptions): 
 }
 
 /**
- * Reject a pending proposal and suppress the same distillation for 90 days.
- * Returns the suppression date, or null when the proposal isn't pending.
+ * Reject an open (pending or candidate) proposal and suppress the same
+ * distillation for 90 days. The rows merged into it (`merged_into_id`) are
+ * rejected with the same `rejected_until` in the same transaction, so their
+ * fingerprints are suppressed too. A `merged` row itself cannot be rejected.
+ * Returns the suppression date, or null when the proposal isn't open (or
+ * isn't the caller's).
  */
 export async function rejectProposal(id: string, userId?: string): Promise<Date | null> {
-  const db = getDb();
-  const filters = [eq(skillProposals.id, id), eq(skillProposals.status, 'pending')];
+  const { rejected, rejectedUntil } = await rejectOpen([id], userId);
+  return rejected.length > 0 ? rejectedUntil : null;
+}
+
+/**
+ * Reject several open proposals at once (see `rejectProposal`). An id that is
+ * not an open proposal of `userId` (any owner when `undefined`) is reported
+ * in `notFound` and nothing happens to it.
+ */
+export async function rejectProposals(ids: string[], userId?: string): Promise<{ rejected: string[]; notFound: string[] }> {
+  const unique = [...new Set(ids)];
+  const { rejected } = await rejectOpen(unique, userId);
+  const done = new Set(rejected);
+  return { rejected, notFound: unique.filter(id => !done.has(id)) };
+}
+
+async function rejectOpen(ids: string[], userId: string | undefined): Promise<{ rejected: string[]; rejectedUntil: Date }> {
+  const rejectedUntil = new Date(Date.now() + REJECT_SUPPRESSION_MS);
+  const valid = ids.filter(id => UUID.test(id));
+  if (valid.length === 0) return { rejected: [], rejectedUntil };
+  const filters = [inArray(skillProposals.id, valid), inArray(skillProposals.status, OPEN_STATUSES)];
   if (userId) filters.push(eq(skillProposals.userId, userId));
 
-  const rejectedUntil = new Date(Date.now() + REJECT_SUPPRESSION_MS);
-  const updated = await db
-    .update(skillProposals)
-    .set({ status: 'rejected', rejectedUntil })
-    .where(and(...filters))
-    .returning({ id: skillProposals.id });
+  const rejected = await getDb().transaction(async (tx) => {
+    const rows = await tx.update(skillProposals)
+      .set({ status: 'rejected', rejectedUntil })
+      .where(and(...filters))
+      .returning({ id: skillProposals.id });
+    const targets = rows.map(row => row.id);
+    if (targets.length > 0) {
+      const absorbed = await tx.update(skillProposals)
+        .set({ status: 'rejected', rejectedUntil })
+        .where(and(inArray(skillProposals.mergedIntoId, targets), eq(skillProposals.status, 'merged')))
+        .returning({ id: skillProposals.id });
+      if (absorbed.length > 0) coreLogger.info({ targets, absorbed: absorbed.length }, 'Rejected the proposals merged into rejected skill proposals');
+    }
+    return targets;
+  });
+  // In the order asked for, so a caller can line them up.
+  const done = new Set(rejected);
+  return { rejected: valid.filter(id => done.has(id)), rejectedUntil };
+}
 
-  return updated.length > 0 ? rejectedUntil : null;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ── merge, surface ────────────────────────────────────────────────
+
+/**
+ * A manual merge that cannot be done. `not_found`: either id is not a
+ * proposal of the caller. `same`: a proposal cannot be merged into itself.
+ * `patch`: patches are never merged. `owner`: the two belong to different
+ * users (only an admin can name both). `not_open`: either is no longer
+ * pending or a candidate.
+ */
+export class ProposalMergeError extends Error {
+  constructor(readonly code: 'not_found' | 'same' | 'patch' | 'owner' | 'not_open', message: string) {
+    super(message);
+    this.name = 'ProposalMergeError';
+  }
+}
+
+export type AbsorbResult =
+  /** `row` is now `merged` into `target`; `proposal` is the target after the merge (and any promotion). */
+  | { outcome: 'merged'; verdict: 'merged' | 'unchanged'; mergeDegraded: boolean; proposal: SkillProposalRecord; promoted: boolean }
+  /** The merge model said they are different skills (only with `allowDistinct`): both stay open. */
+  | { outcome: 'distinct' }
+  /** `row` or `target` was no longer open: nothing changed. */
+  | { outcome: 'not_open'; proposalId: string };
+
+/**
+ * Absorb the open proposal `row` into the open proposal `target` (same owner,
+ * neither a patch): the merge model folds `row`'s text, `source_refs` and
+ * `exemplar_count` into `target`, `row` becomes `merged` with
+ * `merged_into_id = target`, and `target` is promoted when it is eligible.
+ *
+ * Order, chosen so a process dying half-way never counts `row` twice: `row`
+ * is marked `merged` FIRST (one conditional update, which also claims it
+ * against a concurrent merge or rejection), then merged into `target`. When
+ * the merge does not happen (`distinct`, `target` no longer open, an error)
+ * the mark is undone. Dying between the two leaves `row` merged into a target
+ * that lacks its count and sources: an undercount, never a duplicate shown
+ * twice or counted twice, and the fingerprint still redirects to `target`.
+ */
+export async function absorbProposal(
+  row: SkillProposalRecord,
+  target: SkillProposalRecord,
+  opts: { allowDistinct?: boolean } = {},
+): Promise<AbsorbResult> {
+  const db = getDb();
+  const [claimed] = await db.update(skillProposals)
+    .set({ status: 'merged', mergedIntoId: target.id })
+    .where(and(eq(skillProposals.id, row.id), inArray(skillProposals.status, OPEN_STATUSES)))
+    .returning({ id: skillProposals.id });
+  if (!claimed) return { outcome: 'not_open', proposalId: row.id };
+
+  const release = async () => {
+    await db.update(skillProposals)
+      .set({ status: row.status, mergedIntoId: null })
+      .where(and(eq(skillProposals.id, row.id), eq(skillProposals.status, 'merged'), eq(skillProposals.mergedIntoId, target.id)));
+  };
+
+  let merge: MergeResult;
+  try {
+    merge = await mergeIntoProposal(
+      target,
+      { name: row.name, description: row.description, content: row.draftPromptTemplate, signal: row.signal },
+      row.sourceRefs.length > 0 ? row.sourceRefs : (row.sourceRef ? [row.sourceRef] : []),
+      { allowDistinct: opts.allowDistinct ?? false, exemplars: row.exemplarCount },
+    );
+  } catch (err) {
+    await release();
+    if (err instanceof ProposalNotOpenError) return { outcome: 'not_open', proposalId: target.id };
+    throw err;
+  }
+  if (merge.verdict === 'distinct') {
+    await release();
+    return { outcome: 'distinct' };
+  }
+
+  // Rows merged into `row` earlier now point at `target`, so a rejection of
+  // `target` reaches them and a fingerprint redirect is one hop.
+  await db.update(skillProposals).set({ mergedIntoId: target.id })
+    .where(and(eq(skillProposals.mergedIntoId, row.id), eq(skillProposals.status, 'merged')));
+
+  let proposal = merge.proposal;
+  let promoted = false;
+  if (row.status === 'pending' && proposal.status === 'candidate') {
+    // A shown proposal was folded into one not shown yet: the topic was
+    // already in front of the owner, so the merged proposal stays in front of them.
+    const [surfaced] = await db.update(skillProposals).set({ status: 'pending', surfacedAt: new Date() })
+      .where(and(eq(skillProposals.id, proposal.id), eq(skillProposals.status, 'candidate'))).returning();
+    if (surfaced) { proposal = surfaced; promoted = true; }
+  } else {
+    const promotion = await promoteIfEligible(proposal);
+    if (promotion.promoted) { proposal = promotion.proposal; promoted = true; }
+  }
+  coreLogger.info({ proposalId: row.id, into: target.id, verdict: merge.verdict, mergeDegraded: merge.mergeDegraded, promoted },
+    'Skill proposal absorbed into another');
+  return { outcome: 'merged', verdict: merge.verdict, mergeDegraded: merge.mergeDegraded, proposal, promoted };
+}
+
+/**
+ * The owner merges proposal `id` into `intoId` by hand (both open, same
+ * owner, neither a patch). `userId` scopes both to the caller; `undefined`
+ * (admin) still requires the two to share an owner. Throws
+ * `ProposalMergeError`.
+ */
+export async function mergeProposals(id: string, intoId: string, userId?: string): Promise<Extract<AbsorbResult, { outcome: 'merged' }>> {
+  if (id === intoId) throw new ProposalMergeError('same', 'A proposal cannot be merged into itself.');
+  if (!UUID.test(id) || !UUID.test(intoId)) throw new ProposalMergeError('not_found', 'proposal not found');
+  const filters = [inArray(skillProposals.id, [id, intoId])];
+  if (userId) filters.push(eq(skillProposals.userId, userId));
+  const rows = await getDb().select().from(skillProposals).where(and(...filters));
+  const row = rows.find(r => r.id === id);
+  const target = rows.find(r => r.id === intoId);
+  if (!row || !target) throw new ProposalMergeError('not_found', 'proposal not found');
+  if (row.kind === 'patch' || target.kind === 'patch') throw new ProposalMergeError('patch', 'A patch proposal cannot be merged.');
+  if (row.userId !== target.userId) throw new ProposalMergeError('owner', 'The two proposals belong to different users.');
+  for (const p of [row, target]) {
+    if (p.status !== 'pending' && p.status !== 'candidate') {
+      throw new ProposalMergeError('not_open', `Proposal ${p.id} is ${p.status}, not pending or a candidate: nothing merged.`);
+    }
+  }
+  const result = await absorbProposal(row, target, { allowDistinct: false });
+  if (result.outcome === 'not_open') {
+    throw new ProposalMergeError('not_open', `Proposal ${result.proposalId} is no longer pending or a candidate: nothing merged.`);
+  }
+  // allowDistinct is false: the merge model cannot answer distinct.
+  if (result.outcome === 'distinct') throw new Error('merge model answered distinct without allowDistinct');
+  return result;
+}
+
+/**
+ * The owner shows a candidate now: it becomes pending with `surfaced_at` set.
+ * The recurrence gate and the caps do not apply. Returns null when it is not
+ * a candidate of `userId` (any owner when `undefined`).
+ */
+export async function surfaceProposal(id: string, userId?: string): Promise<SkillProposalRecord | null> {
+  if (!UUID.test(id)) return null;
+  const filters = [eq(skillProposals.id, id), eq(skillProposals.status, 'candidate')];
+  if (userId) filters.push(eq(skillProposals.userId, userId));
+  const [row] = await getDb().update(skillProposals).set({ status: 'pending', surfacedAt: new Date() }).where(and(...filters)).returning();
+  if (row) coreLogger.info({ proposalId: id, userId: row.userId }, 'Skill proposal surfaced by its owner');
+  return row ?? null;
+}
+
+// ── view ──────────────────────────────────────────────────────────
+
+/**
+ * For each proposal with an embedding, the nearest live skill of its owner
+ * or the system at or above `learning.relatedSimilarity`, computed in SQL
+ * from the stored vectors (another dimension is skipped).
+ */
+async function similarSkillsOf(proposals: SkillProposalRecord[]): Promise<Map<string, NonNullable<SkillProposalView['similarSkill']>>> {
+  const ids = proposals.filter(p => p.embedding !== null && p.kind !== 'patch').map(p => p.id);
+  const found = new Map<string, NonNullable<SkillProposalView['similarSkill']>>();
+  if (ids.length === 0) return found;
+  const { relatedSimilarity } = getConfig().learning;
+  const res = await getDb().execute(sql`
+    SELECT p.id AS proposal_id, s.id AS skill_id, s.name AS skill_name,
+           1 - (s.description_embedding <=> p.embedding) AS similarity
+    FROM ${skillProposals} p
+    CROSS JOIN LATERAL (
+      SELECT k.id, k.name, k.description_embedding
+      FROM ${skills} k
+      WHERE (k.user_id = p.user_id OR k.is_system = true)
+        AND k.archived_at IS NULL
+        AND k.description_embedding IS NOT NULL
+        AND vector_dims(k.description_embedding) = vector_dims(p.embedding)
+      ORDER BY k.description_embedding <=> p.embedding
+      LIMIT 1
+    ) s
+    WHERE p.id IN (${sql.join(ids.map(id => sql`${id}::uuid`), sql`, `)})
+      AND p.embedding IS NOT NULL
+  `);
+  const rows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows ?? []) as Array<{
+    proposal_id: string; skill_id: string; skill_name: string; similarity: number | string;
+  }>;
+  for (const row of rows) {
+    const similarity = Number(row.similarity);
+    if (similarity >= relatedSimilarity) found.set(row.proposal_id, { id: row.skill_id, name: row.skill_name, similarity: Math.round(similarity * 1000) / 1000 });
+  }
+  return found;
+}
+
+const iso = (date: Date | null): string | null => (date ? date.toISOString() : null);
+
+/**
+ * Proposals as the API serves them (`SkillProposalView`): the row without its
+ * embedding (and without `rejected_until`), dates as ISO strings, plus
+ * `sessionCount`, `similarSkill` and, for a patch, its skill's current
+ * content and whether it is stale.
+ */
+export async function toProposalViews(proposals: SkillProposalRecord[]): Promise<SkillProposalView[]> {
+  const [withContext, similar] = await Promise.all([withPatchContext(proposals), similarSkillsOf(proposals)]);
+  return withContext.map((p): SkillProposalView => ({
+    id: p.id,
+    userId: p.userId,
+    fingerprint: p.fingerprint,
+    name: p.name,
+    description: p.description,
+    draftPromptTemplate: p.draftPromptTemplate,
+    exemplarCount: p.exemplarCount,
+    lastExemplarAt: p.lastExemplarAt.toISOString(),
+    kind: p.kind,
+    sourceRef: p.sourceRef,
+    status: p.status,
+    createdAt: p.createdAt.toISOString(),
+    targetSkillId: p.targetSkillId,
+    patchOldText: p.patchOldText,
+    patchNewText: p.patchNewText,
+    baseContentHash: p.baseContentHash,
+    promotedSkillId: p.promotedSkillId,
+    sourceRefs: p.sourceRefs,
+    sessionCount: sessionCountOf(p.sourceRefs),
+    signal: p.signal,
+    previousDraft: p.previousDraft,
+    surfacedAt: iso(p.surfacedAt),
+    mergedIntoId: p.mergedIntoId,
+    similarSkill: similar.get(p.id) ?? null,
+    ...('currentContent' in p ? { currentContent: p.currentContent, stale: p.stale } : {}),
+  }));
 }

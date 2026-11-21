@@ -91,6 +91,19 @@ describe('runSkillCurator', () => {
     expect(report.archived[0].reason).toMatch(/never used/);
   });
 
+  test('a never-used skill is measured from its creation: a young one is not archived', async () => {
+    skillRepository.findStale = vi.fn(async () => [
+      makeSkill({ id: 's-today', lastUsedAt: null, createdAt: new Date() }),
+      makeSkill({ id: 's-month', lastUsedAt: null, createdAt: new Date(Date.now() - 45 * 86_400_000) }),
+    ]);
+    const report = await runSkillCurator();
+    expect(report.archived).toEqual([]);
+    expect(skillRepository.archive).not.toHaveBeenCalled();
+    // Past the review age only: flagged, not archived.
+    expect(report.flagged.map(f => f.skill.id)).toEqual(['s-today', 's-month']);
+    expect(report.flagged[1].reason).toMatch(/never used, created more than 30 days ago/);
+  });
+
   test('applyArchive=false produces a would-archive flag instead of writing', async () => {
     const ancient = new Date(Date.now() - 200 * 86_400_000);
     skillRepository.findStale = vi.fn(async () => [

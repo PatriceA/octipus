@@ -330,6 +330,8 @@ export async function stubSkills(page: Page): Promise<void> {
             description: 'Generates tests',
             draftPromptTemplate: 'Prompt',
             exemplarCount: 3,
+            sessionCount: 2,
+            sourceRefs: ['session:a', 'session:b', 'session:b'],
             lastExemplarAt: new Date().toISOString(),
             kind: 'skill',
             status: 'pending',
@@ -339,7 +341,9 @@ export async function stubSkills(page: Page): Promise<void> {
             name: 'deploy-service',
             description: 'The untagged push failed',
             draftPromptTemplate: '1. Build.\n2. Push it with --tag.\n',
-            exemplarCount: 0,
+            exemplarCount: 1,
+            sessionCount: 1,
+            sourceRefs: [],
             lastExemplarAt: new Date().toISOString(),
             kind: 'patch',
             status: 'pending',
@@ -350,6 +354,7 @@ export async function stubSkills(page: Page): Promise<void> {
             stale: false,
           },
         ],
+        candidateCount: 0,
       });
     }
     return json(route, 200, { ok: true });

@@ -160,6 +160,19 @@ Prioritize reliable everyday workflows over catalog size.
 Principles can change when implementation evidence supports a better approach.
 Record the reason, current behavior, and migration implications together.
 
+## Fix every bug you find
+
+A bug does not become acceptable because someone else introduced it or because
+it predates the change in hand. Whoever finds a bug or a failing test fixes it
+in the same session: its own commit, with a test that fails without the fix. A
+known bug left behind is paid for again by every later reader who has to
+rediscover it, and by the user who meets it first.
+
+An environment gap (a missing browser, a tool only CI installs) is reported as
+one, with evidence that the suite passes once the tool is provided. A fix too
+large or too risky for the session becomes an issue linked from the pull
+request. Leaving a bug unmentioned is never an option.
+
 ## Resolve execution location and authority together
 
 Project tools share an owner-selected execution environment: machine, account,

@@ -95,8 +95,14 @@ export function googleRecurrence(rule: CalendarRecurrence, options: { allDay: bo
   return [`RRULE:${parts.join(';')}`];
 }
 
-/** A Google `recurrence` list read back, when the page can show and change it; else `custom`. */
-export function parseGoogleRecurrence(lines: unknown): CalendarRecurrence | 'custom' | undefined {
+/**
+ * A Google `recurrence` list read back, when the page can show and change it; else `custom`.
+ * A timed series ends at an instant in UTC (`UNTIL=…Z`): its date is the day
+ * that instant falls on in `timeZone`, the series' own zone. Read as a UTC
+ * date it came back a day late west of Greenwich, and saving it again moved
+ * the end of the series.
+ */
+export function parseGoogleRecurrence(lines: unknown, timeZone?: string): CalendarRecurrence | 'custom' | undefined {
   if (!Array.isArray(lines) || lines.length === 0) return undefined;
   // EXDATE / RDATE lines are exceptions to a rule the page would rewrite: keep them by not offering a change.
   if (lines.length !== 1 || typeof lines[0] !== 'string' || !lines[0].startsWith('RRULE:')) return 'custom';
@@ -114,9 +120,11 @@ export function parseGoogleRecurrence(lines: unknown): CalendarRecurrence | 'cus
     rule.byDay = days as Weekday[];
   }
   if (fields.UNTIL) {
-    const m = /^(\d{4})(\d{2})(\d{2})/.exec(fields.UNTIL);
+    const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z)?/.exec(fields.UNTIL);
     if (!m) return 'custom';
-    rule.until = `${m[1]}-${m[2]}-${m[3]}`;
+    rule.until = m[4] && validTimeZone(timeZone)
+      ? zoned(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`, timeZone).date
+      : `${m[1]}-${m[2]}-${m[3]}`;
   }
   if (fields.COUNT) rule.count = Number(fields.COUNT);
   const clean = validateRecurrence(rule);

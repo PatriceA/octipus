@@ -56,6 +56,15 @@ describe('Google RRULE', () => {
     expect(parseGoogleRecurrence(['RRULE:FREQ=MINUTELY'])).toBe('custom');
     expect(parseGoogleRecurrence(undefined)).toBeUndefined();
   });
+  test('a timed series ends on the day its UTC instant falls on in the series\' zone', () => {
+    // 23:59:59 on 30 November in Los Angeles is already 1 December in UTC.
+    const [line] = googleRecurrence({ frequency: 'weekly', until: '2026-11-30' }, { allDay: false, timeZone: 'America/Los_Angeles' });
+    expect(line).toBe('RRULE:FREQ=WEEKLY;UNTIL=20261201T075959Z');
+    expect(parseGoogleRecurrence([line], 'America/Los_Angeles')).toEqual({ frequency: 'weekly', until: '2026-11-30' });
+    // East of Greenwich the UTC date is the same day; an all-day end is a plain date in any zone.
+    expect(parseGoogleRecurrence(['RRULE:FREQ=WEEKLY;UNTIL=20261231T225959Z'], 'Europe/Berlin')).toEqual({ frequency: 'weekly', until: '2026-12-31' });
+    expect(parseGoogleRecurrence(['RRULE:FREQ=YEARLY;UNTIL=20300501'], 'America/Los_Angeles')).toEqual({ frequency: 'yearly', until: '2030-05-01' });
+  });
 });
 
 describe('Graph patternedRecurrence', () => {

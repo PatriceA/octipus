@@ -422,8 +422,8 @@ describe('owner-only gateway commands', () => {
       const admin = await gateway(adminId);
       admin.send({ type: 'command', name: 'proposals' });
       await admin.waitFor((f) => f.type === 'command.result' && f.name === 'proposals');
-      expect(list).toHaveBeenCalledWith(adminId);
-      expect(list).not.toHaveBeenCalledWith(undefined);
+      expect(list).toHaveBeenCalledWith(adminId, { order: 'surfaced' });
+      expect(list).not.toHaveBeenCalledWith(undefined, expect.anything());
     } finally {
       list.mockRestore();
     }

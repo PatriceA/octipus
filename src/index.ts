@@ -306,6 +306,9 @@ async function main() {
       getDocumentQueue().resume();
       const { startLearningQueue } = await import('@/core/learning/queue');
       startLearningQueue();
+      // Daily consolidation of skill proposals + the skill curator (hourly tick, once per 24 h).
+      const { startLearningMaintenance } = await import('@/core/learning/consolidation');
+      startLearningMaintenance();
     }
 
     // Initialize messaging channels (reads config from DB now)

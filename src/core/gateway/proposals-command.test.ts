@@ -1,15 +1,15 @@
 /**
  * `/proposals` — the only surface a TUI user has for approving distilled
  * skills. Pins the two things that make the positional index safe: it is
- * resolved against the same oldest-first list the user just read, and an
+ * resolved against the same list, in the same order, the user just read, and an
  * out-of-range number resolves nothing instead of the wrong proposal.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import * as service from '@/services/skill-proposal-service';
 import { CommandRegistry, registerBuiltinCommands } from './commands';
 
-const proposal = (id: string, name: string, kind: 'skill' | 'expert' = 'skill') => ({
-  id, name, kind, description: `${name} desc`, exemplarCount: 4,
+const proposal = (id: string, name: string, kind: 'skill' | 'expert' = 'skill', exemplarCount = 4) => ({
+  id, name, kind, description: `${name} desc`, exemplarCount,
 } as unknown as Awaited<ReturnType<typeof service.listPendingProposals>>[number]);
 
 describe('/proposals', () => {
@@ -27,13 +27,14 @@ describe('/proposals', () => {
     listSpy.mockReset();
     approveSpy.mockReset();
     rejectSpy.mockReset();
-    listSpy.mockResolvedValue([proposal('p-1', 'pdf-invoice-extract'), proposal('p-2', 'k8s-triage', 'expert')]);
+    listSpy.mockResolvedValue([proposal('p-1', 'pdf-invoice-extract'), proposal('p-2', 'k8s-triage', 'expert', 1)]);
   });
 
-  test('bare /proposals lists pending rows with numbers', async () => {
+  test('bare /proposals lists pending rows with numbers, and ×N for a proposal seen more than once', async () => {
     const result = await registry.execute('/proposals', ctx);
-    expect(result!.text).toContain('1. pdf-invoice-extract (skill)');
+    expect(result!.text).toContain('1. pdf-invoice-extract ×4 (skill)');
     expect(result!.text).toContain('2. k8s-triage (expert)');
+    expect(result!.text).not.toContain('×1');
     expect(approveSpy).not.toHaveBeenCalled();
   });
 
@@ -88,7 +89,17 @@ describe('/proposals', () => {
 
   test('every caller, admins included, is scoped to their own proposals', async () => {
     await registry.execute('/proposals', ctx);
-    expect(listSpy).toHaveBeenCalledWith(uuid);
-    expect(listSpy).not.toHaveBeenCalledWith(undefined);
+    expect(listSpy).toHaveBeenCalledWith(uuid, { order: 'surfaced' });
+    expect(listSpy).not.toHaveBeenCalledWith(undefined, expect.anything());
+  });
+
+  test('the list and the numbered actions both use the stable order, not most-seen first', async () => {
+    approveSpy.mockResolvedValue({ promoted: 'skill', id: 'e-9', name: 'k8s-triage', record: {} });
+    rejectSpy.mockResolvedValue(new Date('2026-12-01T00:00:00Z'));
+    for (const input of ['/proposals', '/proposals approve 1', '/proposals reject 1']) {
+      listSpy.mockClear();
+      await registry.execute(input, ctx);
+      expect(listSpy).toHaveBeenCalledWith(uuid, { order: 'surfaced' });
+    }
   });
 });

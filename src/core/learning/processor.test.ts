@@ -3,10 +3,12 @@ import type { BackgroundJob } from '@/db/schema/background-jobs';
 const mock = vi.hoisted(() => ({
   finish: vi.fn(), progress: vi.fn(), session: vi.fn(), evidence: vi.fn(), model: vi.fn(), complete: vi.fn(),
   save: vi.fn(), findNote: vi.fn(), judge: vi.fn(), proposal: vi.fn(), permission: vi.fn(), owner: vi.fn(), patchable: vi.fn(), patch: vi.fn(),
+  context: vi.fn(), previous: vi.fn(),
 }));
 vi.mock('@/db/repositories/background-job-repository', () => ({ backgroundJobRepository: { finish: mock.finish, progress: mock.progress } }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mock.session } }));
-vi.mock('./evidence', async (importOriginal) => ({ ...await importOriginal<typeof import('./evidence')>(), gatherEvidence: mock.evidence, gatherPatchableSkills: mock.patchable }));
+vi.mock('./evidence', async (importOriginal) => ({ ...await importOriginal<typeof import('./evidence')>(), gatherEvidence: mock.evidence, gatherPatchableSkills: mock.patchable,
+  gatherReviewContext: mock.context, previousReviewThrough: mock.previous }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelForTopic: mock.model }) }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: mock.complete }) }));
 vi.mock('@/core/knowledge/notes', () => ({ getNoteService: () => ({ save: mock.save }) }));
@@ -37,6 +39,8 @@ beforeEach(() => {
   mock.permission.mockResolvedValue({ level: 'ALLOW' });
   mock.owner.mockReturnValue([{ id: 'm1', text: 'Please keep replies short, I read on my phone' }]);
   mock.patchable.mockResolvedValue([]);
+  mock.context.mockImplementation(async (_u: string, _s: string, _t: Date, _p: unknown, loaded: unknown[]) => ({ existing: { skills: [], proposals: [] }, patchTargets: loaded }));
+  mock.previous.mockResolvedValue(null);
 });
 test('quiet runs are reviewed using execution evidence and report deliberate no-op', async () => {
   await processLearningJob(job);
@@ -83,7 +87,7 @@ test('files only a pending skill through the existing dedup writer', async () =>
   mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, skills: [skill] }) });
   mock.proposal.mockResolvedValue({ proposalId: 'p1', distilled: true });
   await processLearningJob(job);
-  expect(mock.proposal).toHaveBeenCalledWith(expect.objectContaining({ name: skill.name }), 'u1', 'learning:j1:session:s1');
+  expect(mock.proposal).toHaveBeenCalledWith(expect.objectContaining({ name: skill.name }), 'u1', 'learning:j1:session:s1', { origin: 'learning', signal: 'procedure' });
   expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([expect.objectContaining({ kind: 'skill', status: 'proposed', id: 'p1' })]);
 });
 test.each(['DENY', 'ASK'])('respects %s without approving a background write', async level => {
@@ -175,4 +179,80 @@ test('patch targets count against the evidence budget, and failing to read them 
   expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: 0 });
   expect(JSON.parse(mock.complete.mock.calls.at(-1)![0].messages[1].content).learnedSkills).toEqual([]);
   expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done' });
+});
+
+const existing = {
+  skills: [{ ref: 'skill:s-1', name: 'deploy-preview', description: 'Deploy a preview build', excerpt: '1. Build.' }],
+  proposals: [{ ref: 'proposal:11111111-1111-4111-8111-111111111111', name: 'repair-cache', description: 'Repair stale caches', excerpt: 'Check cache' }],
+};
+test('an automatic check reads evidence since the previous check ended; a manual one reads everything', async () => {
+  const previous = new Date('2026-09-27T12:00:00.000Z');
+  mock.previous.mockResolvedValue(previous);
+  await processLearningJob(job);
+  expect(mock.previous).toHaveBeenCalledWith('u1', 's1', 'j1');
+  expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: 0, since: previous });
+  mock.evidence.mockClear(); mock.previous.mockClear();
+  await processLearningJob({ ...job, payload: { ...job.payload, trigger: 'manual', triggerKey: 'manual:1' } });
+  expect(mock.previous).not.toHaveBeenCalled();
+  expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: 0 });
+});
+test('nothing new since the previous check ends as insufficient evidence without a model call', async () => {
+  mock.previous.mockResolvedValue(new Date('2026-09-27T12:00:00.000Z'));
+  mock.evidence.mockResolvedValue([{ id: 'message:m1', kind: 'user', text: 'Keep replies short' }]);
+  await processLearningJob(job);
+  expect(mock.complete).not.toHaveBeenCalled();
+  expect(mock.finish).toHaveBeenCalledWith('j1', expect.objectContaining({ status: 'done', stage: 'insufficient_evidence',
+    result: expect.objectContaining({ reason: expect.stringContaining('since the previous') }) }));
+});
+test('existing skills and proposals are shown to the review and count against the evidence budget', async () => {
+  const { existingChars } = await import('./evidence');
+  const target = { id: 'skill-2', name: 'nearest', content: 'step' };
+  mock.context.mockResolvedValue({ existing, patchTargets: [target] });
+  await processLearningJob(job);
+  expect(mock.context).toHaveBeenCalledWith('u1', 's1', new Date(job.payload.through as string), undefined, []);
+  const input = JSON.parse(mock.complete.mock.calls[0][0].messages[1].content);
+  expect(input.existing).toEqual(existing);
+  expect(input.learnedSkills).toEqual([target]);
+  expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: existingChars(existing) + target.id.length + target.name.length + target.content.length + 50 });
+});
+test('a nearest learned skill offered as a target can be patched', async () => {
+  mock.context.mockResolvedValue({ existing: { skills: [], proposals: [] }, patchTargets: [{ id: 'skill-1', name: 'deploy', content: '1. Build.\n2. Push it.' }] });
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, patches: [patch] }) });
+  mock.patch.mockResolvedValue({ proposalId: 'p2', status: 'pending' });
+  await processLearningJob(job);
+  expect(mock.patch).toHaveBeenCalled();
+});
+test('failing to read existing skills and proposals does not fail the check', async () => {
+  mock.patchable.mockResolvedValue([{ id: 'skill-1', name: 'deploy', content: 'x' }]);
+  mock.context.mockRejectedValue(new Error('vector index hiccup'));
+  await processLearningJob(job);
+  const input = JSON.parse(mock.complete.mock.calls[0][0].messages[1].content);
+  expect(input.existing).toEqual({ skills: [], proposals: [] });
+  expect(input.learnedSkills).toEqual([expect.objectContaining({ id: 'skill-1' })]);
+  expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done' });
+});
+test('extends is passed only for a proposal that was offered; signal reaches the writer', async () => {
+  mock.context.mockResolvedValue({ existing, patchTargets: [] });
+  mock.proposal.mockResolvedValue({ distilled: true, deduped: true, merged: true, proposalId: '11111111-1111-4111-8111-111111111111', status: 'candidate', name: skill.name });
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, skills: [{ ...skill, signal: 'recovery', extends: existing.proposals[0].ref }] }) });
+  await processLearningJob(job);
+  expect(mock.proposal.mock.calls[0][3]).toEqual({ origin: 'learning', signal: 'recovery', extendsProposalId: existing.proposals[0].ref });
+  expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([expect.objectContaining({ kind: 'skill', status: 'merged' })]);
+  mock.proposal.mockClear(); mock.finish.mockReset();
+  mock.proposal.mockResolvedValue({ distilled: true, proposalId: 'p9', status: 'candidate', name: skill.name });
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, skills: [{ ...skill, signal: 'correction', extends: 'proposal:22222222-2222-4222-8222-222222222222' }] }) });
+  await processLearningJob(job);
+  expect(mock.proposal.mock.calls[0][3]).toEqual({ origin: 'learning', signal: 'correction' });
+  expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([expect.objectContaining({ kind: 'skill', status: 'candidate', id: 'p9' })]);
+});
+test.each([
+  [{ distilled: true, proposalId: 'p1', status: 'pending' }, 'proposed'],
+  [{ distilled: true, proposalId: 'p1', status: 'candidate' }, 'candidate'],
+  [{ distilled: true, deduped: true, merged: true, proposalId: 'p1', status: 'pending' }, 'merged'],
+  [{ distilled: true, deduped: true, merged: true, mergeDegraded: true, proposalId: 'p1', status: 'candidate' }, 'merged'],
+  [{ distilled: false, deduped: true, existingSkillId: 'skill-1' }, 'duplicate'],
+  [{ distilled: false, deduped: true, message: 'suppressed' }, 'duplicate'],
+] as const)('filing result %o is receipt %s', async (result, status) => {
+  const { skillOutputStatus } = await import('./processor');
+  expect(skillOutputStatus({ name: 'x', ...result })).toBe(status);
 });

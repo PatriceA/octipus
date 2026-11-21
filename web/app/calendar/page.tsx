@@ -43,6 +43,13 @@ interface Ask { what: string; attendees: number; confirm: () => void; cancel: ()
 /** A change to a repeating event, waiting for the reader to say which events it reaches. */
 interface AskScope { what: string; choose: (scope: RecurrenceScope | null) => void }
 
+type PreferenceChange = { visible?: string[]; hideDeclined?: boolean };
+/** The calendar list as it reads with a preference change applied. */
+const withPreferences = (list: CalendarsResponse, change: PreferenceChange): CalendarsResponse => ({
+  ...list, preferences: { ...list.preferences, ...change },
+  calendars: change.visible ? list.calendars.map((c) => ({ ...c, visible: change.visible!.includes(calendarKey(c)) })) : list.calendars,
+});
+
 function PersonalCalendar() {
   const client = useQueryClient();
   const workspace = useWorkspaceId();
@@ -62,6 +69,10 @@ function PersonalCalendar() {
   const [askScope, setAskScope] = useState<AskScope | null>(null);
   const [busy, setBusy] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
+  // The choice being saved, shown from the click itself: the query cache is
+  // only written after an awaited cancel, and until then a ticked box read as
+  // unticked.
+  const [pendingPrefs, setPendingPrefs] = useState<PreferenceChange | null>(null);
   const [calendarsOpen, setCalendarsOpen] = useState(false);
   const [clockTick, setClockTick] = useState(() => new Date());
 
@@ -107,7 +118,8 @@ function PersonalCalendar() {
     }
   }, [loaded, view, anchor, firstDay, client, eventsKey, fetchEvents]);
 
-  const hideDeclined = calendars.data?.preferences.hideDeclined === true;
+  const shownCalendars = useMemo(() => (calendars.data && pendingPrefs ? withPreferences(calendars.data, pendingPrefs) : calendars.data), [calendars.data, pendingPrefs]);
+  const hideDeclined = shownCalendars?.preferences.hideDeclined === true;
   const shownEvents = useMemo(() => (events.data?.events ?? []).filter((e) => !(hideDeclined && e.responseStatus === 'declined')), [events.data, hideDeclined]);
   const writable = useMemo(() => (calendars.data?.calendars ?? []).filter((c) => !c.readOnly), [calendars.data]);
   const connected = calendars.data ? calendars.data.providers.length > 0 || calendars.data.partial : true;
@@ -208,15 +220,13 @@ function PersonalCalendar() {
     void write({ what: 'Answer the invitation', done: response === 'accepted' ? 'Accepted.' : response === 'declined' ? 'Declined.' : 'Answered maybe.', call: () => api.post(`${eventPath(event)}/respond`, { ...target(event), response }) });
   };
 
-  const savePreferences = async (change: { visible?: string[]; hideDeclined?: boolean }) => {
+  const savePreferences = async (change: PreferenceChange) => {
     setSavingPrefs(true);
+    setPendingPrefs(change);
     // A re-read still in flight carries the choice before this one: drop it, or it would overwrite what is shown.
     await client.cancelQueries({ queryKey: ['calendar-list', workspace] });
     // Shown at once; the server's answer follows.
-    client.setQueryData<CalendarsResponse>(['calendar-list', workspace], (old) => old && {
-      ...old, preferences: { ...old.preferences, ...change },
-      calendars: change.visible ? old.calendars.map((c) => ({ ...c, visible: change.visible!.includes(calendarKey(c)) })) : old.calendars,
-    });
+    client.setQueryData<CalendarsResponse>(['calendar-list', workspace], (old) => old && withPreferences(old, change));
     try {
       await api.put('/calendar/preferences', change);
       if (change.visible) await refresh();
@@ -225,10 +235,11 @@ function PersonalCalendar() {
     } finally {
       await client.invalidateQueries({ queryKey: ['calendar-list', workspace] });
       setSavingPrefs(false);
+      setPendingPrefs(null);
     }
   };
   const toggleCalendar = (calendar: CalendarInfo, visible: boolean) => {
-    const keys = new Set((calendars.data?.calendars ?? []).filter((c) => c.visible).map(calendarKey));
+    const keys = new Set((shownCalendars?.calendars ?? []).filter((c) => c.visible).map(calendarKey));
     if (visible) keys.add(calendarKey(calendar)); else keys.delete(calendarKey(calendar));
     void savePreferences({ visible: [...keys] });
   };
@@ -315,7 +326,7 @@ function PersonalCalendar() {
 
       <div ref={body} className="flex flex-col md:flex-row gap-4" style={phone ? undefined : { height }}>
         <div className={`${calendarsOpen ? 'block' : 'hidden'} md:block md:h-full`}>
-          <CalendarSidebar anchor={anchor} shown={view === 'month' ? [] : days} today={today} firstDay={firstDay} calendars={calendars.data} loading={calendars.isPending} saving={savingPrefs}
+          <CalendarSidebar anchor={anchor} shown={view === 'month' ? [] : days} today={today} firstDay={firstDay} calendars={shownCalendars} loading={calendars.isPending} saving={savingPrefs}
             onPickDay={go} onToggleCalendar={toggleCalendar} onHideDeclined={(hide) => void savePreferences({ hideDeclined: hide })} />
         </div>
         <div className="min-w-0 md:flex-1 md:h-full" style={phone ? { height: Math.max(420, height) } : undefined}>

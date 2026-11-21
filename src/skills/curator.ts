@@ -56,7 +56,9 @@ export async function runSkillCurator(opts: RunOptions = {}): Promise<CuratorRep
 
   const archiveCutoff = Date.now() - archiveAfterDays * 24 * 60 * 60 * 1000;
   for (const skill of stale) {
-    const lastUsed = skill.lastUsedAt ? skill.lastUsedAt.getTime() : 0;
+    // Never used: measured from creation, so nothing younger than
+    // archiveAfterDays is archived (the same baseline findStale uses).
+    const lastUsed = (skill.lastUsedAt ?? skill.createdAt).getTime();
     if (lastUsed < archiveCutoff) {
       const reason = skill.lastUsedAt
         ? `unused for >${archiveAfterDays} days (last_used_at=${skill.lastUsedAt.toISOString()})`
@@ -77,7 +79,7 @@ export async function runSkillCurator(opts: RunOptions = {}): Promise<CuratorRep
         skill,
         reason: skill.lastUsedAt
           ? `unused for >${reviewAfterDays} days (last_used_at=${skill.lastUsedAt.toISOString()})`
-          : `never used`,
+          : `never used, created more than ${reviewAfterDays} days ago (created_at=${skill.createdAt.toISOString()})`,
       });
     }
   }

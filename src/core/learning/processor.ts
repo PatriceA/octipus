@@ -19,8 +19,9 @@ import { fileSkillPatchProposal, fileSkillProposal } from '@/services/file-skill
 import { SkillPatchError } from '@/skills/patch';
 import { getPermissionManager } from '@/security/permissions';
 import { getConfig } from '@/config';
-import type { LearningCheckView } from '@/shared/learning';
-import { gatherEvidence, gatherPatchableSkills, type PatchableSkill, patchTargetChars } from './evidence';
+import type { LearningCheckView, LearningSkillOutputStatus } from '@/shared/learning';
+import type { FileSkillProposalResult } from '@/services/file-skill-proposal';
+import { type ExistingContext, existingChars, gatherEvidence, gatherPatchableSkills, gatherReviewContext, type PatchableSkill, patchTargetChars, previousReviewThrough } from './evidence';
 import { coreLogger } from '@/utils/logger';
 import { LEARNING_PROMPT, parseLearningReview } from './review';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
@@ -60,20 +61,32 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
       const { getOrgWorkspaceManager } = await import('@/security/orgs');
       workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(job.userId)).id;
     }
-    // Learned skills this session loaded: the only patch targets on offer.
-    // Without them a check still reviews everything else, so a failed read
-    // is logged and the check goes on.
+    const through = new Date(payload.through);
+    // An automatic check reads only what happened since the previous one
+    // ended; a manual check reads the full window.
+    const since = payload.trigger === 'manual' ? null : await previousReviewThrough(job.userId, session.id, job.id);
+    // Learned skills this session loaded, then the nearest learned ones: the
+    // only patch targets on offer. Without them, or without `existing`, a
+    // check still reviews everything else, so a failed read is logged and the
+    // check goes on.
     let learnedSkills: PatchableSkill[] = [];
     try {
-      learnedSkills = await gatherPatchableSkills(job.userId, session.id, new Date(payload.through));
+      learnedSkills = await gatherPatchableSkills(job.userId, session.id, through);
     } catch (err) {
       coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read patch targets; reviewing without them');
     }
+    let existing: ExistingContext = { skills: [], proposals: [] };
+    try {
+      ({ existing, patchTargets: learnedSkills } = await gatherReviewContext(job.userId, session.id, through, payload.plan, learnedSkills));
+    } catch (err) {
+      coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read existing skills and proposals; reviewing without them');
+    }
     // Their text counts against the same input budget as the evidence.
-    const evidence = await gatherEvidence(job.userId, session.id, new Date(payload.through), payload.plan,
-      { reserveChars: patchTargetChars(learnedSkills) });
+    const evidence = await gatherEvidence(job.userId, session.id, through, payload.plan,
+      { reserveChars: patchTargetChars(learnedSkills) + existingChars(existing), ...(since ? { since } : {}) });
     if (!evidence.some(row => row.kind === 'execution' || row.kind === 'verification')) {
-      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'insufficient_evidence', result: { reason: 'No recorded execution evidence at this milestone.', outputs } });
+      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'insufficient_evidence', result: {
+        reason: since ? 'No new execution evidence since the previous learning check.' : 'No recorded execution evidence at this milestone.', outputs } });
       return;
     }
     const model = await getModelRegistry().getModelForTopic('background');
@@ -84,7 +97,7 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
       ? LEARNING_PROMPT
       : `${LEARNING_PROMPT}\nMemory is off on this install: always return "memories": [].`;
     const systemText = `${SECURITY_PREAMBLE}\n\n${prompt}`;
-    const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence, learnedSkills });
+    const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence, learnedSkills, existing });
     const contextRoom = model.contextWindow == null ? Infinity
       : model.contextWindow - estimateTokens(systemText) - estimateTokens(evidenceText) - 1024;
     const ceiling = Math.min(model.maxTokens ?? model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, contextRoom);
@@ -111,7 +124,10 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     if (response.finishReason === 'length') {
       throw new Error(`Learning review truncated at output limit: ${budget} tokens; model ${model.name ?? model.modelId}; output ${response.usage?.outputTokens ?? 'unknown'}, reasoning ${response.usage?.reasoningTokens ?? 'unknown'}. Increase this model's default output budget or reduce its reasoning setting.`);
     }
-    const review = parseLearningReview(response.content ?? '', evidence);
+    const review = parseLearningReview(response.content ?? '', evidence, { offeredProposals: existing.proposals.map(item => item.ref) });
+    if (review.ignoredExtends.length) {
+      coreLogger.warn({ jobId: job.id, ignoredExtends: review.ignoredExtends }, 'Learning check: a skill extends a proposal that was not offered; filed without it');
+    }
     const canWrite = async (toolId: string, action: string, args: Record<string, unknown>) => {
       const permission = await getPermissionManager().check(job.userId, toolId, action, args,
         { sessionId: session.id, workspaceId: workspaceId ?? undefined }, { defaultLevel: 'ALLOW' });
@@ -168,10 +184,10 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
       try {
         const skill = { name: filterPII(item.name).filtered, description: filterPII(item.description).filtered, content: filterPII(item.content).filtered };
         await canWrite('skill-distill', 'distill', { source: 'text', content: skill.content });
-        const result = await fileSkillProposal(skill, job.userId, `learning:${job.id}:session:${session.id}`);
-        outputs.push({ kind: 'skill', status: result.deduped ? 'duplicate' : 'proposed',
-          id: typeof result.proposalId === 'string' ? result.proposalId : undefined,
-          detail: typeof result.message === 'string' ? result.message : undefined });
+        const result = await fileSkillProposal(skill, job.userId, `learning:${job.id}:session:${session.id}`,
+          { origin: 'learning', signal: item.signal, ...(item.extends ? { extendsProposalId: item.extends } : {}) });
+        outputs.push({ kind: 'skill', status: skillOutputStatus(result), id: result.proposalId,
+          detail: result.message ?? result.note });
       } catch (err) { outputs.push({ kind: 'skill', status: 'failed', detail: errorText(err) }); }
     }
     for (const item of review.patches) {
@@ -199,5 +215,11 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
   } catch (err) {
     await backgroundJobRepository.finish(job.id, { status: 'error', stage: 'failed', error: errorText(err), result: { outputs } });
   }
+}
+/** The receipt status of filing a learned skill (LearningSkillOutputStatus). */
+export function skillOutputStatus(result: FileSkillProposalResult): LearningSkillOutputStatus {
+  if (result.merged) return 'merged';
+  if (result.deduped || !result.distilled) return 'duplicate';
+  return result.status === 'candidate' ? 'candidate' : 'proposed';
 }
 function errorText(err: unknown): string { return filterPII(err instanceof Error ? err.message : String(err)).filtered.slice(0, 1000); }

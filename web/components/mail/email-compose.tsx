@@ -2,6 +2,7 @@
 
 import { Bold, FileText, Italic, Link2, List, ListOrdered, Loader2, Paperclip, Quote, Send, Sparkles, X } from 'lucide-react';
 import { type DragEvent, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { api } from '@/lib/api';
 import type { MailMessageView } from '../../../src/shared/mail';
 import { addressList, btn, btnGhost, btnPrimary, type EmailMessage, field, who } from './email-shared';
@@ -188,8 +189,12 @@ export function EmailCompose({ draft, mailbox, senders, ai = true, onMailbox, on
     const area = textRef.current;
     if (!area) return;
     const next = make(draft.body, area.selectionStart, area.selectionEnd);
-    set({ body: next.text, rich: true });
-    requestAnimationFrame(() => { area.focus(); area.setSelectionRange(next.start, next.end); });
+    // Committed before the selection is put back. Left to the next frame, the
+    // restore could land after a selection made meanwhile and replace it, so
+    // the next toolbar action formatted the wrong lines.
+    flushSync(() => set({ body: next.text, rich: true }));
+    area.focus();
+    area.setSelectionRange(next.start, next.end);
   };
 
 

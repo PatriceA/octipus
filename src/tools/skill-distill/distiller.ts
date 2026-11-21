@@ -101,9 +101,6 @@ export function skillFingerprint(userId: string, name: string): string {
   return createHash('sha256').update(`${userId}:${key}`).digest('hex');
 }
 
-/** Cosine similarity above which two skills are the same procedure, differently named. */
-export const NEAR_DUPLICATE_SIMILARITY = 0.85;
-
 /** Cosine similarity of two equal-length vectors. 0 when either is degenerate. */
 export function cosine(a: number[], b: number[]): number {
   if (a.length !== b.length || a.length === 0) return 0;

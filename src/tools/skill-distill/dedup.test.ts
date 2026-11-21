@@ -2,7 +2,8 @@
  * The distiller filed four proposals for one procedure ("Token Rotation
  * Procedure", "token-rotation-procedure", "vault-token-rotation",
  * "secure-credential-rotation") because the only guard was an exact-name match
- * against pending rows. These cover each way that now gets caught. Runs against
+ * against pending rows. These cover each way that now gets caught (and what
+ * filing then does: drop, merge or insert). Runs against
  * embedded PGlite, mirroring skill-proposals.tx.test.ts.
  */
 import { randomUUID } from 'node:crypto';
@@ -29,7 +30,7 @@ function stubEmbeddings(impl?: () => Promise<number[]>) {
 }
 
 let embeddingsModule: typeof import('@/core/rag/embeddings');
-let findExisting: typeof import('./dedup').findExisting;
+let decideSkillProposal: typeof import('./dedup').decideSkillProposal;
 let skillFingerprint: typeof import('./distiller').skillFingerprint;
 
 beforeAll(async () => {
@@ -44,7 +45,7 @@ beforeAll(async () => {
   await seedUsers([{ id: userId, username: 'dedup-user' }]);
 
   embeddingsModule = await import('@/core/rag/embeddings');
-  ({ findExisting } = await import('./dedup'));
+  ({ decideSkillProposal } = await import('./dedup'));
   ({ skillFingerprint } = await import('./distiller'));
 });
 
@@ -107,24 +108,24 @@ const distilled = (name: string, description = 'How to rotate a token') => ({
   content: '1. revoke\n2. reissue',
 });
 
-describe('findExisting', () => {
-  test('a name that differs only in case/punctuation hits the pending proposal', async () => {
+const decide = (skill: ReturnType<typeof distilled>, opts?: { extendsProposalId?: string }) =>
+  decideSkillProposal(userId, skillFingerprint(userId, skill.name), skill, opts);
+
+describe('decideSkillProposal', () => {
+  test('a name that differs only in case/punctuation merges into the pending proposal', async () => {
     stubEmbeddings();
     const id = await seedProposal({ name: 'Token Rotation Procedure' });
-    const skill = distilled('token-rotation-procedure');
 
-    const hit = await findExisting(userId, skillFingerprint(userId, skill.name), skill);
-    expect(hit).toMatchObject({ kind: 'pending', id });
+    const hit = await decide(distilled('token-rotation-procedure'));
+    expect(hit).toMatchObject({ action: 'merge', via: 'fingerprint', target: { id }, allowDistinct: false });
   });
 
   test('a rejection still inside its suppression window blocks a re-file', async () => {
     stubEmbeddings();
     const until = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     await seedProposal({ name: 'token-rotation', status: 'rejected', rejectedUntil: until });
-    const skill = distilled('token-rotation');
 
-    const hit = await findExisting(userId, skillFingerprint(userId, skill.name), skill);
-    expect(hit?.kind).toBe('suppressed');
+    expect(await decide(distilled('token-rotation'))).toMatchObject({ action: 'drop', reason: 'suppressed' });
   });
 
   test('an expired suppression lets the skill be proposed again', async () => {
@@ -134,42 +135,50 @@ describe('findExisting', () => {
       status: 'rejected',
       rejectedUntil: new Date(Date.now() - 1000),
     });
-    const skill = distilled('token-rotation');
 
-    expect(await findExisting(userId, skillFingerprint(userId, skill.name), skill)).toBeNull();
+    expect(await decide(distilled('token-rotation'))).toMatchObject({ action: 'insert' });
   });
 
   test('an existing live skill wins over filing another proposal', async () => {
     stubEmbeddings();
     const id = await seedSkill('Token Rotation');
-    const skill = distilled('token-rotation');
 
-    const hit = await findExisting(userId, skillFingerprint(userId, skill.name), skill);
-    expect(hit).toMatchObject({ kind: 'skill', id });
+    expect(await decide(distilled('token-rotation'))).toMatchObject({ action: 'drop', reason: 'skill', id });
   });
 
-  test('a differently-named but equivalent pending proposal is caught by similarity', async () => {
+  test('a differently-named but equivalent pending proposal is caught by its stored embedding', async () => {
     stubEmbeddings();
+    // Seeded without an embedding: the dedup computes it first.
     const id = await seedProposal({ name: 'vault-token-rotation' });
-    const skill = distilled('secure-credential-rotation', 'Rotate a credential safely');
 
-    const hit = await findExisting(userId, skillFingerprint(userId, skill.name), skill);
-    expect(hit).toMatchObject({ kind: 'pending', id });
+    const hit = await decide(distilled('secure-credential-rotation', 'Rotate a credential safely'));
+    expect(hit).toMatchObject({ action: 'merge', via: 'similarity', target: { id }, allowDistinct: false });
+    expect(hit.action === 'merge' && hit.similarity).toBeGreaterThanOrEqual(0.85);
   });
 
   test('an unrelated pending proposal is not treated as a duplicate', async () => {
     stubEmbeddings();
     await seedProposal({ name: 'restore-from-backups', description: 'Restore from backups' });
-    const skill = distilled('secure-credential-rotation', 'Rotate a credential safely');
 
-    expect(await findExisting(userId, skillFingerprint(userId, skill.name), skill)).toBeNull();
+    const hit = await decide(distilled('secure-credential-rotation', 'Rotate a credential safely'));
+    expect(hit).toMatchObject({ action: 'insert' });
+    expect(hit.action === 'insert' && hit.embedding).toEqual(VECTORS.rotation);
   });
 
   test('no embedding model ⇒ name checks only, never a throw', async () => {
     stubEmbeddings(() => Promise.reject(new Error('no embedding model configured')));
     await seedProposal({ name: 'vault-token-rotation' });
-    const skill = distilled('secure-credential-rotation');
 
-    expect(await findExisting(userId, skillFingerprint(userId, skill.name), skill)).toBeNull();
+    expect(await decide(distilled('secure-credential-rotation'))).toEqual({ action: 'insert', embedding: null });
+  });
+
+  test('extendsProposalId merges into that open proposal without any embedding', async () => {
+    stubEmbeddings(() => Promise.reject(new Error('no embedding model configured')));
+    const id = await seedProposal({ name: 'restore-from-backups', description: 'Restore from backups' });
+
+    expect(await decide(distilled('secure-credential-rotation'), { extendsProposalId: `proposal:${id}` }))
+      .toMatchObject({ action: 'merge', via: 'extends', target: { id } });
+    // Not an open proposal of the user: ignored.
+    expect(await decide(distilled('secure-credential-rotation'), { extendsProposalId: randomUUID() })).toMatchObject({ action: 'insert' });
   });
 });

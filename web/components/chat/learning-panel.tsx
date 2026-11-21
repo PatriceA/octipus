@@ -2,6 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LearningCheckView } from '../../../src/shared/learning';
 import { api } from '@/lib/api';
 
+/** Receipt statuses that read better spelled out than as the raw status, by `kind:status`. */
+const OUTPUT_LABELS: Record<string, string> = {
+  'skill:merged': 'merged into an existing proposal',
+  'skill:candidate': 'kept as a candidate',
+};
+
+function outputLabel(output: { kind: string; status: string }): string {
+  return OUTPUT_LABELS[`${output.kind}:${output.status}`] ?? output.status.replaceAll('_', ' ');
+}
+
 export default function LearningPanel({ sessionId }: { sessionId: string | null }) {
   const client = useQueryClient();
   const key = ['session-learning', sessionId];
@@ -24,7 +34,7 @@ export default function LearningPanel({ sessionId }: { sessionId: string | null 
         <p className="text-on-surface-variant">{item.result?.reason ?? item.stage?.replaceAll('_', ' ')}</p>
         {item.error && <p className="text-error">{item.error}</p>}
         {item.result?.outputs?.map((output, index) => <p key={`${output.kind}-${index}`}>
-          {output.kind}: {output.status.replaceAll('_', ' ')}{output.detail ? ` — ${output.detail}` : ''}
+          {output.kind}: {outputLabel(output)}{output.detail ? ` — ${output.detail}` : ''}
           {output.id && <span className="ml-1 text-on-surface-variant">({output.id})</span>}
         </p>)}
       </div>)}

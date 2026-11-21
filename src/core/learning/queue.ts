@@ -17,7 +17,10 @@ import { resolveDataPolicy } from '@/models/decision';
  * Plan completions are queued transactionally by workPlanRepository; this
  * covers the rest. A review is due once the session has run
  * `learning.reviewEveryToolCalls` tool calls since its last review (or since it
- * began), counted across turns: not once per turn.
+ * began), counted across turns: not once per turn, and no sooner than
+ * `learning.minReviewIntervalMinutes` after the session's previous check was
+ * created (of any trigger). The interval holds back only this automatic
+ * review: plan-completed and manual checks are queued elsewhere.
  */
 export async function enqueueTurnLearning(sessionId: string, userId: string, agentId: string): Promise<void> {
   const db = getDb();
@@ -25,6 +28,10 @@ export async function enqueueTurnLearning(sessionId: string, userId: string, age
     eq(backgroundJobs.kind, 'learning'), eq(backgroundJobs.userId, userId),
     sql`${backgroundJobs.payload}->>'sessionId' = ${sessionId}`,
   )).orderBy(desc(backgroundJobs.seq)).limit(1);
+  const { reviewEveryToolCalls, minReviewIntervalMinutes } = getConfig().learning;
+  // Paced off the latest check of any outcome, so a failed one is not retried
+  // at once; its evidence still reaches the next review (previousReviewThrough).
+  if (existing && Date.now() - existing.createdAt.getTime() < minReviewIntervalMinutes * 60_000) return;
   const since = existing ? new Date(String(existing.payload.through ?? existing.createdAt.toISOString())) : new Date(0);
   // One observation row carries every result of a parallel tool round: count the results, not the rows.
   const [count] = await db.select({ n: sql<number>`coalesce(sum(CASE WHEN jsonb_typeof(${agentEvents.data}->'results') = 'array'
@@ -33,7 +40,7 @@ export async function enqueueTurnLearning(sessionId: string, userId: string, age
     gte(agentEvents.createdAt, since), inArray(agentEvents.type, ['action', 'observation']),
     sql`(${agentEvents.data}->>'type' = 'cli_tool_result' OR ${agentEvents.data} ? 'results')`,
   ));
-  if (!reviewDue(Number(count.n), getConfig().learning.reviewEveryToolCalls)) return;
+  if (!reviewDue(Number(count.n), reviewEveryToolCalls)) return;
   const session = await sessionRepository.findById(sessionId);
   if (!session || !(await canActInSession(session, userId, 'learning'))) throw new Error('Learning session not found');
   await backgroundJobRepository.create({ kind: 'learning', userId, workspaceId: session.workspaceId,

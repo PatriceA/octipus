@@ -162,17 +162,23 @@ describe('the owner-edit lock', () => {
     expect(await approveProposal(proposal.id, { userId, name: 'token-rotation-v2' })).toMatchObject({ name: 'token-rotation-v2' });
   });
 
-  test('the curator\'s stale scan skips owner-edited skills and lists least recently used first', async () => {
+  test('the curator\'s stale scan skips owner-edited, system and young never-used skills, least recently used first', async () => {
     const { skillRepository } = await import('@/db/repositories/skill-repository');
     const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
     const older = new Date(Date.now() - 300 * 24 * 60 * 60 * 1000);
+    const oldest = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000);
     const locked = await seedSkill({ lastUsedAt: older, ownerEditedAt: new Date() });
+    const system = await seedSkill({ lastUsedAt: oldest, isSystem: true, userId: null });
     const used = await seedSkill({ lastUsedAt: old });
-    const never = await seedSkill();
+    // Never used: measured from creation.
+    const never = await seedSkill({ createdAt: oldest });
+    const approvedToday = await seedSkill();
     const lessUsed = await seedSkill({ lastUsedAt: older });
     const stale = (await skillRepository.findStale(90)).map(skill => skill.id);
     expect(stale).toEqual([never, lessUsed, used]);
     expect(stale).not.toContain(locked);
+    expect(stale).not.toContain(system);
+    expect(stale).not.toContain(approvedToday);
     await skillRepository.recordUsage([never]);
     const row = await readSkill(never);
     expect(row.usageCount).toBe(1);

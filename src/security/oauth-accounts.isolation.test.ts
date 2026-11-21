@@ -55,7 +55,7 @@ let app: App;
 const sessions: Record<string, string> = {};
 
 /** The stand-in Google: which code yields which tokens, and which token belongs to which address. */
-const codes: Record<string, { access_token: string; refresh_token?: string; expires_in: number }> = {};
+const codes: Record<string, { access_token: string; refresh_token?: string; expires_in: number; scope?: string }> = {};
 const addressOf: Record<string, string | null> = {};
 let refreshes = 0;
 
@@ -208,11 +208,19 @@ describe('several accounts of one provider', () => {
       expect((await (await call('alice', 'GET', '/api/auth/oauth/google/status')).json())).toMatchObject({ connected: true, email: 'alice@work.example', accounts: 2 });
 
       // A refresh keeps which account an entry is and whether it is the default.
-      codes.c6 = { access_token: 'home-at-old', refresh_token: 'home-rt-2', expires_in: 1 };
+      codes.c6 = { access_token: 'home-at-old', refresh_token: 'home-rt-2', expires_in: 1, scope: 'openid granted.then' };
       addressOf['home-at-old'] = 'alice@home.example';
       expect((await connect('c6', { addAccount: true })).page).toMatch(/Google Connected/);
       expect(await oauth.getValidToken(aliceId, 'google', 'alice@home.example')).toBe('home-rt-2-refreshed');
       expect(refreshes).toBe(1);
+      // The refresh answer names no scopes: the grant stays what it was, not
+      // what the provider config asks for today.
+      const { getDb } = await import('@/db/postgres');
+      const { vault } = await import('@/db/schema/vault');
+      const stored = (await getDb().select({ metadata: vault.metadata }).from(vault))
+        .map((row) => (row.metadata as { oauthConfig?: { account?: string; scopes?: string[] } } | null)?.oauthConfig)
+        .find((config) => config?.account === 'alice@home.example');
+      expect(stored?.scopes).toEqual(['openid', 'granted.then']);
       expect(await accounts()).toEqual({ accounts: [{ account: 'alice@work.example', isDefault: true }, { account: 'alice@home.example', isDefault: false }] });
 
       // Disconnecting the default: the other account becomes it.

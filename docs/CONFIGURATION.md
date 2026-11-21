@@ -191,6 +191,22 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
 | `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
+## Learning Config
+
+Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARNING.md)). An admin sets them under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` (body `{"value": …}`). They apply to the whole install and take effect without a restart; a value outside the bounds below is refused. There is no environment variable for them. The thresholds are defaults chosen when the feature was written, not calibrated against real proposals.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `learning.reviewEveryToolCalls` | 40 | Tool results a session accumulates, across turns, before the next successful turn queues an automatic check. Min 1. Was 10. |
+| `learning.minReviewIntervalMinutes` | 30 | No tool-count check sooner than this after the session's previous check was created. Plan-completion and manual checks are not held back. 0 turns it off. |
+| `learning.localIdleMs` | 60000 | With the background model on a local provider, a queued check starts only after that provider has been idle this long, in milliseconds. Min 0. |
+| `learning.recurrenceSessions` | 2 | Sessions a learned skill proposal must be seen in before it is shown; until then it waits as a candidate. A user correction, `distill_skill` and patches are shown at once. 1 turns the gate off. |
+| `learning.maxSkillProposalsPerDay` | 2 | Learned skill proposals that become pending per user per rolling 24 hours; the rest wait as candidates. 0: none appear on their own. |
+| `learning.maxPendingSkillProposals` | 10 | At this many pending non-patch proposals of a user, learned ones wait as candidates. |
+| `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. |
+| `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals are one skill; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
+| `learning.candidateTtlDays` | 30 | A candidate not seen again for this many days, and never seen in `recurrenceSessions` sessions or backed by a correction, is deleted by consolidation. One that qualified and only waits for room under a cap is kept. Min 1. |
+
 ## Gateway Config
 
 | Key | Default | Purpose |
