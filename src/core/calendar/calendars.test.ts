@@ -43,7 +43,7 @@ describe('calendar lists', () => {
   it('lists both accounts, the default calendar first; a provider that fails makes the list partial', async () => {
     const deps: CalendarDeps = {
       getToken: async () => 'token',
-      fetchJson: async (url) => { if (url.includes('graph.microsoft.com')) throw new Error('calendar API 503'); return GOOGLE_LIST; },
+      fetchJson: async (url) => { if (new URL(url).host === 'graph.microsoft.com') throw new Error('calendar API 503'); return GOOGLE_LIST; },
     };
     const result = await listCalendars('alice', deps);
     expect(result.calendars.map((c) => c.name)).toEqual(['Mine', 'Boss', 'Team']);
@@ -102,7 +102,7 @@ describe('events of named calendars', () => {
     const deps: CalendarDeps = {
       getToken: async () => 'token',
       fetchJson: async (url) => {
-        if (url.includes('graph.microsoft.com')) throw new Error('calendar API 403');
+        if (new URL(url).host === 'graph.microsoft.com') throw new Error('calendar API 403');
         return url.includes('boss') ? googleEvent('theirs') : googleEvent('mine');
       },
     };
