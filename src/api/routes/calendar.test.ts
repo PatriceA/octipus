@@ -37,6 +37,9 @@ beforeEach(() => {
   mock.view.mockResolvedValue({ calendars: [mine, boss, team], providers: ['google'], partial: false, preferences: {} });
 });
 
+/** What the core gets: the event, without the request's routing and confirmation. */
+const fields = ({ provider: _p, calendarId: _c, confirm: _x, ...rest }: Record<string, unknown>) => rest;
+
 test('unconfirmed writes never access a calendar provider', async () => {
   expect((await call('POST', '/events', { ...input, confirm: false })).status).toBe(409);
   expect((await call('PATCH', '/events/e1', { ...input, confirm: false })).status).toBe(409);
@@ -54,7 +57,7 @@ test('shared spaces and anonymous callers cannot use personal calendar credentia
 
 test('writes are attributed to the authenticated caller, on the default calendar unless one is named', async () => {
   expect(await call('POST', '/events', input)).toEqual({ status: 200, body: { success: true, id: 'new-id' } });
-  expect(mock.write).toHaveBeenCalledWith(alice.id, 'google', input, undefined, { calendarId: undefined });
+  expect(mock.write).toHaveBeenCalledWith(alice.id, 'google', fields(input), undefined, { calendarId: undefined });
   await call('POST', '/events', { ...input, calendarId: 'team', attendees: ['ada@x.dev'] });
   expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.objectContaining({ attendees: ['ada@x.dev'] }), undefined, { calendarId: 'team' });
 });
@@ -86,7 +89,7 @@ test('changing or deleting an event with guests needs the caller to accept that 
 
 test('an event without guests is changed and deleted without a second question', async () => {
   expect((await call('PATCH', '/events/e%2F1', input)).status).toBe(200);
-  expect(mock.write).toHaveBeenCalledWith(alice.id, 'google', input, 'e/1', { calendarId: undefined, notify: false });
+  expect(mock.write).toHaveBeenCalledWith(alice.id, 'google', fields(input), 'e/1', { calendarId: undefined, notify: false });
   expect((await call('DELETE', '/events/e1', { provider: 'microsoft', confirm: true })).status).toBe(200);
   expect(mock.remove).toHaveBeenCalledWith(alice.id, 'microsoft', 'e1', { calendarId: undefined, notify: false });
 });
@@ -127,4 +130,17 @@ test('visibility choices are checked and stored for the caller', async () => {
   expect(mock.setPrefs).toHaveBeenCalledWith(alice.id, { visible: ['google:team'] });
   expect((await call('PUT', '/preferences', { visible: ['caldav:x'] })).status).toBe(400);
   expect(mock.setPrefs).toHaveBeenCalledTimes(1);
+});
+
+test('a repeat rule and a reminder are checked at the boundary; a series change names its scope', async () => {
+  const bad = await call('POST', '/events', { ...input, recurrence: { frequency: 'hourly' } });
+  expect(bad.status).toBe(400); expect(bad.body.error).toMatch(/frequency/);
+  expect((await call('POST', '/events', { ...input, reminderMinutes: -5 })).status).toBe(422);
+  expect(mock.write).not.toHaveBeenCalled();
+  await call('POST', '/events', { ...input, timeZone: 'Europe/Berlin', reminderMinutes: 10, recurrence: { frequency: 'weekly', byDay: ['MO', 'WE'], count: 5 } });
+  expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.objectContaining({ reminderMinutes: 10, timeZone: 'Europe/Berlin', recurrence: { frequency: 'weekly', byDay: ['MO', 'WE'], count: 5 } }), undefined, { calendarId: undefined });
+  await call('PATCH', '/events/e1', { ...input, scope: 'all', reminderMinutes: null });
+  expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.objectContaining({ reminderMinutes: null }), 'e1', { calendarId: undefined, notify: false, scope: 'all' });
+  await call('DELETE', '/events/e1', { provider: 'google', confirm: true, scope: 'all' });
+  expect(mock.remove).toHaveBeenLastCalledWith(alice.id, 'google', 'e1', { calendarId: undefined, notify: false, scope: 'all' });
 });

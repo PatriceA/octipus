@@ -12,7 +12,7 @@ import { userRepository } from '@/db/repositories/user-repository';
 import { getOAuthManager } from '@/security/oauth';
 import { calendarKey, type CalendarInfo, type CalendarPreferences, type CalendarProvider } from '@/shared/calendar';
 import { coreLogger } from '@/utils/logger';
-import { type CalendarDeps, defaultCalendarDeps } from './events';
+import { type CalendarDeps, type CalendarSource, defaultCalendarDeps } from './events';
 
 /** A calendar as the provider lists it, with the provider's own idea of whether it is shown. */
 export type ListedCalendar = Omit<CalendarInfo, 'visible'> & { defaultVisible: boolean };
@@ -197,4 +197,15 @@ export async function microsoftSharedAccess(userId: string): Promise<boolean | n
   const status = await getOAuthManager().getConnectionStatus(userId, 'microsoft').catch(() => null);
   if (!status?.connected) return null;
   return (status.scopes ?? []).some((scope) => /(^|\/)Calendars\.(Read|ReadWrite)\.Shared$/i.test(scope));
+}
+
+/**
+ * The calendars the user chose to see on the Calendar page, for readers that
+ * should follow that choice (the meeting import). Undefined when they never
+ * chose: then each account's default calendar is read, as before.
+ */
+export async function selectedCalendars(userId: string, deps?: CalendarDeps): Promise<CalendarSource[] | undefined> {
+  const preferences = await getCalendarPreferences(userId);
+  if (!preferences.visible) return undefined;
+  return (await calendarView(userId, { deps })).calendars.filter((c) => c.visible);
 }

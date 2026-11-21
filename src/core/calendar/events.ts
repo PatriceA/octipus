@@ -108,7 +108,7 @@ export function parseGoogleEvents(response: unknown): CalendarEvent[] {
     if (mine) event.responseStatus = mine;
     const meeting = httpsUrl(item.hangoutLink) ?? httpsUrl(item.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri);
     if (meeting) event.meetingUrl = meeting;
-    if (item.recurringEventId) event.recurring = true;
+    if (item.recurringEventId) { event.recurring = true; event.seriesId = item.recurringEventId; }
     if (item.transparency === 'transparent') event.showAs = 'free';
     const web = httpsUrl(item.htmlLink);
     if (web) event.webUrl = web;
@@ -208,6 +208,7 @@ export function parseGraphEvents(response: unknown): CalendarEvent[] {
     const meeting = httpsUrl(item.onlineMeeting?.joinUrl) ?? httpsUrl(item.onlineMeetingUrl);
     if (meeting) event.meetingUrl = meeting;
     if (item.seriesMasterId || item.type === 'occurrence' || item.type === 'exception') event.recurring = true;
+    if (item.seriesMasterId) event.seriesId = item.seriesMasterId;
     const showAs = GRAPH_SHOW_AS[item.showAs ?? ''];
     if (showAs && showAs !== 'busy') event.showAs = showAs;
     const web = httpsUrl(item.webLink);
@@ -234,6 +235,36 @@ interface ProviderSpec {
   url: (from: Date, to: Date, limit: number, calendarId?: string) => string;
   headers: (token: string) => Record<string, string>;
   parse: (response: unknown) => CalendarEvent[];
+  /** The next page of the same list, or null at the end. `first` is the URL of the first page. */
+  next: (response: unknown, first: string) => string | null;
+}
+
+/** Events read from one calendar for one range at most: beyond it the result says it is truncated. */
+export const MAX_EVENTS_PER_CALENDAR = 2500;
+
+/**
+ * Google's next page: the first URL with `pageToken`. The token is opaque, so
+ * it is only ever sent back as one encoded query value. Pure.
+ */
+export function googleNextPage(response: unknown, first: string): string | null {
+  const token = (response as { nextPageToken?: unknown })?.nextPageToken;
+  if (typeof token !== 'string' || !token || token.length > 2048) return null;
+  return `${first}&pageToken=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Graph's next page, as Graph names it — but only when it stays on Graph's own
+ * host and the caller's own calendar API: a list answer cannot send the token
+ * anywhere else. Pure.
+ */
+export function graphNextPage(response: unknown): string | null {
+  const link = (response as { '@odata.nextLink'?: unknown })?.['@odata.nextLink'];
+  if (typeof link !== 'string') return null;
+  try {
+    const url = new URL(link);
+    if (url.protocol !== 'https:' || url.hostname !== 'graph.microsoft.com' || url.port || url.username || !url.pathname.startsWith('/v1.0/me/')) return null;
+    return url.toString();
+  } catch { return null; }
 }
 
 const GRAPH_SELECT = 'id,subject,bodyPreview,start,end,location,organizer,attendees,isAllDay,isCancelled,type,seriesMasterId,showAs,webLink,originalStartTimeZone,onlineMeeting,onlineMeetingUrl,responseStatus';
@@ -245,6 +276,7 @@ const PROVIDERS: readonly ProviderSpec[] = [
       `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId ?? 'primary')}/events?timeMin=${encodeURIComponent(from.toISOString())}&timeMax=${encodeURIComponent(to.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=${limit}`,
     headers: (token) => ({ Authorization: `Bearer ${token}` }),
     parse: parseGoogleEvents,
+    next: googleNextPage,
   },
   {
     provider: 'microsoft',
@@ -254,6 +286,7 @@ const PROVIDERS: readonly ProviderSpec[] = [
       `https://graph.microsoft.com/v1.0/me/${calendarId ? `calendars/${encodeURIComponent(calendarId)}/` : ''}calendarView?startDateTime=${encodeURIComponent(from.toISOString())}&endDateTime=${encodeURIComponent(to.toISOString())}&$select=${GRAPH_SELECT}&$orderby=start/dateTime&$top=${limit}`,
     headers: (token) => ({ Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' }),
     parse: parseGraphEvents,
+    next: (response) => graphNextPage(response),
   },
 ];
 
@@ -284,7 +317,14 @@ export type CalendarSource = Pick<CalendarInfo, 'provider' | 'id' | 'name' | 'co
  */
 export async function listCalendarEvents(
   userId: string,
-  options: { from: Date; to: Date; limit?: number; deps?: CalendarDeps; calendars?: CalendarSource[] },
+  options: {
+    from: Date; to: Date;
+    /** Events per request (at most 250). */
+    limit?: number;
+    deps?: CalendarDeps; calendars?: CalendarSource[];
+    /** Follow the provider's pages up to MAX_EVENTS_PER_CALENDAR. Without it one page is read, as before. */
+    allPages?: boolean;
+  },
 ): Promise<CalendarListResult> {
   const deps = options.deps ?? defaultCalendarDeps;
   const limit = Math.max(1, Math.min(options.limit ?? 50, 250));
@@ -294,11 +334,23 @@ export async function listCalendarEvents(
     const token = await deps.getToken(userId, spec.provider).catch(() => null);
     if (!token) return { events: [] as CalendarEvent[], provider: null, failed: false, truncated: false };
     const read = async (calendar?: CalendarSource) => {
-      const response = await deps.fetchJson(spec.url(options.from, options.to, limit, calendar?.id), spec.headers(token));
-      const parsed = spec.parse(response);
-      const page = response as { nextPageToken?: string; '@odata.nextLink'?: string };
+      // Page by page, up to MAX_EVENTS_PER_CALENDAR; past that the result says it is incomplete.
+      const first = spec.url(options.from, options.to, limit, calendar?.id);
+      const parsed: CalendarEvent[] = [];
+      let url: string | null = first;
+      let truncated = false;
+      while (url) {
+        const response = await deps.fetchJson(url, spec.headers(token));
+        parsed.push(...spec.parse(response));
+        const following = spec.next(response, first);
+        const rawMore = !!(response as { nextPageToken?: unknown; '@odata.nextLink'?: unknown })?.nextPageToken || !!(response as { '@odata.nextLink'?: unknown })?.['@odata.nextLink'];
+        if (!options.allPages) { truncated = parsed.length >= limit || rawMore; break; }
+        if (!following) { truncated = rawMore; break; }
+        if (parsed.length >= MAX_EVENTS_PER_CALENDAR) { truncated = true; break; }
+        url = following;
+      }
       return {
-        truncated: parsed.length >= limit || !!page.nextPageToken || !!page['@odata.nextLink'],
+        truncated,
         events: calendar
           ? parsed.map((e) => ({ ...e, calendarId: calendar.id, calendarName: calendar.name, ...(calendar.color ? { color: calendar.color } : {}), ...(calendar.readOnly ? { readOnly: true } : {}) }))
           : parsed,

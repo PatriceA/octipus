@@ -7,11 +7,14 @@
  * actually UTC, a meeting room in the attendee list that would otherwise
  * become a "person". Each has a case below.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import {
   type CalendarDeps,
   type CalendarEvent,
+  googleNextPage,
+  graphNextPage,
   listCalendarEvents,
+  MAX_EVENTS_PER_CALENDAR,
   parseGoogleEvents,
   parseGraphEvents,
 } from './events';
@@ -198,4 +201,60 @@ it('reports provider pagination even when the combined event count is below the 
   });
   expect(listed.truncated).toBe(true);
   expect(listed.partial).toBe(false);
+});
+
+test('the Calendar page reads every page, up to a cap; a next link off Graph\'s own API is never followed', async () => {
+  const urls: string[] = [];
+  const google = await listCalendarEvents('u1', {
+    from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-30T00:00:00Z'), limit: 2, allPages: true,
+    calendars: [{ provider: 'google', id: 'me@x.dev', name: 'Mine', readOnly: false }],
+    deps: {
+      getToken: async (_u, provider) => (provider === 'google' ? 'tok' : null),
+      fetchJson: async (url) => {
+        urls.push(url);
+        const page = url.includes('pageToken=p2') ? 2 : 1;
+        return { items: [{ id: `e${page}a`, summary: 'A', start: { dateTime: '2026-11-02T09:00:00Z' } }, { id: `e${page}b`, summary: 'B', start: { dateTime: '2026-11-02T10:00:00Z' } }], ...(page === 1 ? { nextPageToken: 'p2' } : {}) };
+      },
+    },
+  });
+  expect(google.events.map((e) => e.id).sort()).toEqual(['e1a', 'e1b', 'e2a', 'e2b']);
+  expect(google.truncated).toBeUndefined();
+  expect(urls[1]).toContain('&pageToken=p2');
+
+  const graph = await listCalendarEvents('u1', {
+    from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-30T00:00:00Z'), allPages: true,
+    deps: {
+      getToken: async (_u, provider) => (provider === 'microsoft' ? 'tok' : null),
+      fetchJson: async () => ({ value: [{ id: 'm1', subject: 'M', start: { dateTime: '2026-11-02T09:00:00' } }], '@odata.nextLink': 'https://evil.example/v1.0/me/calendarView?$skip=1' }),
+    },
+  });
+  expect(graph.events).toHaveLength(1);
+  // There was more, but the link was not Graph's: the list says it is incomplete.
+  expect(graph.truncated).toBe(true);
+});
+
+test('a list past the cap stops and says it is truncated', async () => {
+  let calls = 0;
+  const listed = await listCalendarEvents('u1', {
+    from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-30T00:00:00Z'), limit: 250, allPages: true,
+    deps: {
+      getToken: async (_u, provider) => (provider === 'google' ? 'tok' : null),
+      fetchJson: async () => {
+        calls++;
+        return { items: Array.from({ length: 250 }, (_, i) => ({ id: `e${calls}-${i}`, start: { dateTime: '2026-11-02T09:00:00Z' } })), nextPageToken: 'more' };
+      },
+    },
+  });
+  expect(listed.events).toHaveLength(MAX_EVENTS_PER_CALENDAR);
+  expect(calls).toBe(MAX_EVENTS_PER_CALENDAR / 250);
+  expect(listed.truncated).toBe(true);
+});
+
+test('next-page links: Google by token, Graph only on graph.microsoft.com under /v1.0/me/', () => {
+  expect(googleNextPage({ nextPageToken: 'a b' }, 'https://x/events?q=1')).toBe('https://x/events?q=1&pageToken=a%20b');
+  expect(googleNextPage({}, 'https://x')).toBeNull();
+  expect(graphNextPage({ '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/calendarView?$skip=50' })).toBe('https://graph.microsoft.com/v1.0/me/calendarView?$skip=50');
+  for (const link of ['http://graph.microsoft.com/v1.0/me/x', 'https://graph.microsoft.com.evil.example/v1.0/me/x', 'https://graph.microsoft.com/v1.0/users/x', 'https://graph.microsoft.com:444/v1.0/me/x', 'not a url']) {
+    expect(graphNextPage({ '@odata.nextLink': link })).toBeNull();
+  }
 });
