@@ -29,7 +29,7 @@ import { saveReplyDraft } from '@/core/email/drafts';
 import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
 import { upsertUserLabel } from '@/core/email/triage-labels';
 import { withMailboxAccount } from '@/core/email/account-context';
-import { getAttachment, resolveProvider } from '@/core/email/mailbox';
+import { getAttachment, readMessage, resolveProvider } from '@/core/email/mailbox';
 import { type CheckedMailbox, checkSource, fallbackMailbox, triageSources } from '@/core/email/triage-sources';
 import { contentRepos } from '@/db/repositories/content';
 import { composeParts } from '@/core/email/compose-format';
@@ -297,7 +297,8 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         // Files: held uploads, and a forwarded message's own files fetched from the mailbox now.
         const refs = body.attachments ?? [];
         if (refs.length > MAX_ATTACHMENTS) { set.status = 400; return { error: `At most ${MAX_ATTACHMENTS} attachments per message.` }; }
-        const { files, uploads } = await resolveAttachments(user.id, refs, (messageId, attachmentId) => getAttachment(user.id, provider, messageId, attachmentId));
+        const { files, uploads } = await resolveAttachments(user.id, refs, (messageId, attachmentId) => getAttachment(user.id, provider, messageId, attachmentId),
+          async (messageId) => new Map(((await readMessage(user.id, provider, messageId)).attachments ?? []).map((a) => [a.id, a.size])));
         const { text, html } = composeParts(body.body, body.format);
         const sent = await sendReply(user.id, provider, { to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, body: text, html, attachments: files, replyTo: body.replyTo });
         dropUploads(user.id, uploads);

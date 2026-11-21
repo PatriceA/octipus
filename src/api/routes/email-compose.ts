@@ -3,6 +3,29 @@ import { apiContext } from '@/api/context';
 import { withMailboxAccount } from '@/core/email/account-context';
 import { MailboxError, resolveProvider } from '@/core/email/mailbox';
 import { dropUploads, holdUpload } from '@/core/email/outgoing';
+import { MAX_ATTACHMENT_BYTES } from '@/core/email/send-mime';
+
+/** The request body, or null as soon as it passes `max` bytes (nothing more is read). */
+async function readCapped(request: Request, max: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) { await reader.cancel().catch(() => {}); return null; }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) { out.set(chunk, at); at += chunk.byteLength; }
+  return out;
+}
+
+/** One file plus the multipart framing around it. */
+const UPLOAD_BODY_MAX = MAX_ATTACHMENT_BYTES + 64 * 1024;
 import { EmailInputError } from '@/core/email/send-mime';
 import { dismissSnooze, listSnoozed, SnoozeInputError, SnoozePartialError, type SnoozeView, snooze, unsnooze } from '@/core/email/snooze';
 import { markEmailHandled } from '@/core/email/watch';
@@ -29,13 +52,23 @@ export const emailComposeRoutes = new Elysia({ prefix: '/email' })
   .use(apiContext)
 
   // Hold one file for a mail being written. Nothing is sent: the send names it.
-  .post('/uploads', async ({ user, principal, body, set }) => {
+  // The route reads the body itself, with a cap: a declared length over the
+  // limit is refused at once, an undeclared one stops at the limit. (The
+  // framework's own body parse, src/api/http/app.ts, runs before routing.)
+  .post('/uploads', async ({ user, principal, request, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
+    const tooLarge = { error: `A file may be at most ${MAX_ATTACHMENT_BYTES / 1048576} MB.` };
+    // A declared length over the limit is refused unread; an undeclared one is read only up to the limit.
+    if (Number(request.headers.get('content-length')) > UPLOAD_BODY_MAX) { set.status = 413; return tooLarge; }
     try {
-      const file = body.file;
+      const bytes = await readCapped(request, UPLOAD_BODY_MAX);
+      if (!bytes) { set.status = 413; return tooLarge; }
+      const file = (await new Response(bytes as unknown as BodyInit, { headers: { 'content-type': request.headers.get('content-type') ?? '' } }).formData()).get('file');
+      if (!(file instanceof File)) { set.status = 400; return { error: 'Send the file as the form field "file".' }; }
+      if (file.size > MAX_ATTACHMENT_BYTES) { set.status = 413; return { error: `A file may be at most ${MAX_ATTACHMENT_BYTES / 1048576} MB.` }; }
       return holdUpload(user.id, { name: file.name || 'attachment', contentType: file.type, content: new Uint8Array(await file.arrayBuffer()) });
     } catch (err) { return failure(err, set); }
-  }, { body: t.Object({ file: t.File() }), detail: { tags: ['email'] } })
+  }, { parse: () => ({}), detail: { tags: ['email'] } })
 
   // Let go of a held file (the writer removed it).
   .delete('/uploads/:id', ({ user, principal, params, set }) => {

@@ -82,15 +82,35 @@ export async function resolveAttachments(
   userId: string,
   refs: AttachmentRef[],
   fetchForwarded: (messageId: string, attachmentId: string) => Promise<OutgoingFile>,
+  /** The sizes a forwarded message lists for its files, read before any file is fetched. */
+  forwardedSizes?: (messageId: string) => Promise<Map<string, number>>,
 ): Promise<{ files: OutgoingFile[]; uploads: string[] }> {
   const uploads = refs.flatMap((ref) => ('upload' in ref ? [ref.upload] : []));
   const fromMemory = heldUploads(userId, uploads);
+  const tooMuch = () => new EmailInputError(`Attachments may add up to ${MAX_ATTACHMENT_BYTES / 1048576} MB.`);
+  // The whole mail's size, from what is known before downloading anything: held files and the listed sizes.
+  let total = fromMemory.reduce((sum, f) => sum + f.content.byteLength, 0);
+  if (forwardedSizes) {
+    const listed = new Map<string, Map<string, number>>();
+    for (const ref of refs) {
+      if ('upload' in ref) continue;
+      const { messageId, attachmentId } = ref.forward;
+      if (!listed.has(messageId)) listed.set(messageId, await forwardedSizes(messageId));
+      total += listed.get(messageId)!.get(attachmentId) ?? 0;
+      if (total > MAX_ATTACHMENT_BYTES) throw tooMuch();
+    }
+  }
+  if (total > MAX_ATTACHMENT_BYTES) throw tooMuch();
+  // And as files arrive, in case a listed size was wrong: stop at the limit, never fetch past it.
+  let fetched = fromMemory.reduce((sum, f) => sum + f.content.byteLength, 0);
   const files: OutgoingFile[] = [];
   let next = 0;
   for (const ref of refs) {
     if ('upload' in ref) files.push(fromMemory[next++]);
     else {
       const file = await fetchForwarded(ref.forward.messageId, ref.forward.attachmentId);
+      fetched += file.content.byteLength;
+      if (fetched > MAX_ATTACHMENT_BYTES) throw tooMuch();
       files.push({ name: safeFileName(file.name), contentType: safeContentType(file.contentType), content: file.content });
     }
   }

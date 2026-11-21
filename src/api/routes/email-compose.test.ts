@@ -122,6 +122,34 @@ describe('uploads and the send that names them', () => {
   });
 });
 
+describe('nothing too large is read into memory', () => {
+  test('an upload over the limit is refused by its declared length, or as soon as the read passes it', async () => {
+    const app = await buildApp();
+    const big = new Request('http://localhost/api/email/uploads', { method: 'POST', headers: { 'content-type': 'multipart/form-data; boundary=x', 'content-length': String(30 * 1048576) }, body: 'x' });
+    expect((await app.handle(big)).status).toBe(413);
+    // No declared length: refused once the read passes the limit.
+    let served = 0;
+    const endless = new ReadableStream<Uint8Array>({ pull(controller) { served += 1048576; controller.enqueue(new Uint8Array(1048576)); if (served > 40 * 1048576) controller.close(); } });
+    const streamed = new Request('http://localhost/api/email/uploads', { method: 'POST', headers: { 'content-type': 'multipart/form-data; boundary=x' }, body: endless, duplex: 'half' } as RequestInit);
+    expect((await app.handle(streamed)).status).toBe(413);
+    // An ordinary file still goes through.
+    expect((await upload(app, 'ok.txt', 'hello')).status).toBe(200);
+  });
+
+  test('forwarded files over the limit are refused from their listed sizes, before any is downloaded', async () => {
+    const { resolveAttachments } = await import('@/core/email/outgoing');
+    const fetched: string[] = [];
+    const refs = Array.from({ length: 3 }, (_, i) => ({ forward: { messageId: 'm1', attachmentId: String(i) } }));
+    await expect(resolveAttachments('u-big', refs, async (_m, id) => { fetched.push(id); return { name: 'f', contentType: 'application/pdf', content: new Uint8Array(1) }; },
+      async () => new Map([['0', 10 * 1048576], ['1', 10 * 1048576], ['2', 10 * 1048576]]))).rejects.toThrow(/add up to 25 MB/);
+    expect(fetched).toEqual([]);
+    // A size the listing got wrong: the fetching stops at the limit.
+    await expect(resolveAttachments('u-big', refs, async (_m, id) => { fetched.push(id); return { name: 'f', contentType: 'application/pdf', content: new Uint8Array(13 * 1048576) }; },
+      async () => new Map())).rejects.toThrow(/add up to 25 MB/);
+    expect(fetched).toEqual(['0', '1']);
+  });
+});
+
 describe('snooze routes', () => {
   test('snooze passes the conversation on; a bad time is a 400', async () => {
     const app = await buildApp();
