@@ -453,7 +453,9 @@ export class OAuthManager {
         ...(previous?.account ? { account: previous.account } : {}),
         ...(typeof previous?.isDefault === 'boolean' ? { isDefault: previous.isDefault } : {}),
         provider,
-        scopes: grantedScopes(tokens, providerConfig.scopes),
+        // A refresh response may leave `scope` out: the grant is then what it
+        // was, not whatever the provider config asks for today.
+        scopes: grantedScopes(tokens, previous?.scopes?.length ? previous.scopes : providerConfig.scopes),
         refreshToken: tokens.refresh_token || refreshToken, // Some providers rotate refresh tokens
         expiresAt,
       },
