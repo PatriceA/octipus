@@ -25,8 +25,9 @@ Mailboxes page. Add an address, incoming server and password, and optionally an
 SMTP server. Each account can be edited, tested, synced and removed there.
 Blank password fields retain a saved login; passwords are never read back.
 
-The Email page's mailbox selector switches between the existing Google/Microsoft
-inbox and individual IMAP/POP3 accounts. **Mailboxes** (`/mail`) also works when
+The Email page's mailbox selector switches between the Google and Microsoft
+mailboxes (or all of them at once) and individual IMAP/POP3 accounts. An IMAP
+mailbox keeps its own simpler view there. **Mailboxes** (`/mail`) also works when
 the separate Google/Microsoft inbox module is off. Accounts are scoped to the
 selected local workspace; remote-install mailbox management is not supported.
 The `mail` module must be enabled in Settings → Modules.

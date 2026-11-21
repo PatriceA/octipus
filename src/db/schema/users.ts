@@ -85,6 +85,8 @@ export interface UserPreferences {
     instructions?: string;
     skipDialog?: boolean;
   };
+  /** Which calendars the Calendar page shows (src/core/calendar/calendars.ts). */
+  calendar?: import('@/shared/calendar').CalendarPreferences;
 }
 
 export type User = typeof users.$inferSelect;

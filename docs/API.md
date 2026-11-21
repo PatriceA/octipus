@@ -320,7 +320,25 @@ inert and stays in the array.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/email/send` | Send an email (gated). With `replyTo` (the id of the message it answers) the reply is threaded under that message |
+| POST | `/api/email/send` | Send (gated). `to`/`cc`/`bcc` are comma-separated, ≤ 50 recipients; `replyTo` threads it; `provider` picks the mailbox |
+| GET | `/api/email/accounts` | Connected Google / Microsoft 365 mailboxes |
+| GET | `/api/email/messages` | One folder page (`folder`, `q`, `unread`, `pageToken`, `limit` ≤ 50, `provider`, `refresh`) with stored triage and the inbox unread count |
+| GET | `/api/email/thread/:threadId` | A conversation, oldest first, with cc and attachments |
+| GET | `/api/email/message/:id/attachment/:attachmentId` | One attachment, always as a download (max 25 MB) |
+| POST | `/api/email/messages/batch` | `{ids ≤ 100, action}`: archive, unarchive, trash, untrash, read, unread, star, unstar. Nothing is deleted for good |
+| GET/PUT | `/api/email/triage/settings` | How "Triage inbox" runs: `scope`, `applyLabels`, `autoArchive`, `archiveCategories`, `instructions`, `skipDialog` |
+| POST | `/api/email/triage/preview` | `{items: [{id, unread}]}`: what a run would do and what the models are told. Asks no model |
+| POST | `/api/email/triage/run` | Start a background run over `items` or the `newest` N (202; 409 while one runs) |
+| GET | `/api/email/triage/run` | The current or last run: progress, then the result |
+| POST | `/api/email/triage/run/cancel` | Stop the current run |
+| PUT | `/api/email/triage/label/:id` | The owner's label `{priority, category, item?}`; with `item` any mail can be labelled |
+| GET | `/api/calendar/calendars` | The caller's calendars (own and shared), visibility preferences, `microsoftSharedAccess`; `?fresh=true` re-reads the providers |
+| PUT | `/api/calendar/preferences` | `{ visible?: ["google:<id>"], hideDeclined? }`; only the given fields change |
+| GET | `/api/calendar/events` | `from`, `to` (≤ 93 days): events of the visible calendars; `partial`, `failedCalendars`, `truncated` |
+| POST | `/api/calendar/events` | Create (`provider`, `calendarId?`, `title`, `start`, `end`, `allDay`, `location?`, `description?`, `attendees?`, `confirm: true`) |
+| PATCH | `/api/calendar/events/:id` | Change; 409 with `attendees` unless `notifyAttendees: true` when the event has guests |
+| DELETE | `/api/calendar/events/:id` | Body `{ provider, calendarId?, confirm: true, notifyAttendees? }` |
+| POST | `/api/calendar/events/:id/respond` | `{ provider, calendarId?, response: accepted \| tentative \| declined }` |
 | POST | `/api/email/triage` | Run email triage (`items`, `autoArchive`, `applyLabels` → Gmail label / Outlook category `Octipus/<category>`) |
 | GET | `/api/email/categories` | The user's triage categories and the presets |
 | PUT | `/api/email/categories` | Save the user's categories (`{categories: {name: description}}`, `null` resets) |

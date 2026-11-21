@@ -359,7 +359,12 @@ export function TriageDialog({ provider, items, run, onRun, onArchive, onUnarchi
                     )}
                   </>
                 )}
-                <button className={btnGhost} onClick={() => setReviewOpen(!reviewOpen)}>{reviewOpen ? 'Hide' : 'Check'} the answers the model was unsure of</button>
+              </section>
+            )}
+
+            {view !== 'running' && (
+              <section aria-label="Review" className="space-y-2 border-t border-outline-variant/40 pt-3">
+                <button className={btnGhost} aria-expanded={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}>{reviewOpen ? 'Hide the review' : 'Review the answers the model was unsure of, or label a backlog'}</button>
                 {reviewOpen && <TriageReview onClose={() => setReviewOpen(false)} />}
               </section>
             )}

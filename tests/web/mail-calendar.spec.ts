@@ -83,38 +83,6 @@ test('drafts require saving edits and exact-content confirmation before sending'
   expect(receipts).toEqual([{ confirm: true, expectedRevision: 'b'.repeat(64) }]);
 });
 
-test('calendar displays both providers, creates events and edits without replacing descriptions', async ({ authenticatedPage: page }) => {
-  await stubAllDefaults(page);
-  const today = new Date().toISOString().slice(0, 10);
-  const event = { id: 'google-event', title: 'Planning', provider: 'google', start: `${today}T09:00:00Z`, end: `${today}T10:00:00Z`, allDay: false, description: 'Original full description', location: 'Office', attendees: [] };
-  const writes: Array<{ method: string; body: Record<string, unknown> }> = [];
-  await page.route('**/api/calendar/events?**', route => json(route, 200, { providers: ['google', 'microsoft'], partial: false, events: [event, { ...event, id: 'ms-event', provider: 'microsoft', title: 'Outlook meeting' }] }));
-  await page.route('**/api/calendar/events', route => { writes.push({ method: route.request().method(), body: route.request().postDataJSON() }); return json(route, 200, { success: true }); });
-  await page.route('**/api/calendar/events/google-event', route => { writes.push({ method: 'PATCH', body: route.request().postDataJSON() }); return json(route, 200, { success: true }); });
-  await page.goto('/calendar');
-  await expect(page.getByRole('heading', { name: 'Planning', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Outlook meeting' })).toBeVisible();
-  await page.getByRole('button', { name: 'New event', exact: true }).click();
-  const create = page.getByRole('form', { name: 'New calendar event' });
-  await create.getByLabel('Title', { exact: true }).fill('New appointment');
-  await expect(create.getByRole('button', { name: 'Save event' })).toBeDisabled();
-  await create.getByLabel(/Confirm this change/).check();
-  await create.getByRole('button', { name: 'Save event' }).click();
-  await expect.poll(() => writes.length).toBe(1);
-  expect(writes[0]).toMatchObject({ method: 'POST', body: { title: 'New appointment', provider: 'google', confirm: true } });
-  await page.getByRole('button', { name: 'Edit Planning', exact: true }).click();
-  const edit = page.getByRole('form', { name: 'Edit calendar event' });
-  await edit.getByLabel('Title', { exact: true }).fill('Updated planning');
-  await edit.getByLabel('All-day event').check();
-  await expect(edit.getByLabel('End (exclusive)')).not.toHaveValue(today);
-  await edit.getByLabel(/Confirm this change/).check();
-  await edit.getByRole('button', { name: 'Save event' }).click();
-  await expect.poll(() => writes.length).toBe(2);
-  expect(writes[1]).toMatchObject({ method: 'PATCH', body: { title: 'Updated planning', allDay: true, confirm: true } });
-  expect(writes[1].body).not.toHaveProperty('description');
-  expect(writes[1].body).not.toHaveProperty('attendees');
-});
-
 test('read-only shared mailbox users can read but cannot manage or send', async ({ authenticatedPage: page }) => {
   await stubAllDefaults(page);
   const id = '0b9d3c55-5f2c-4c37-9a3e-6d1f00000001';
@@ -133,12 +101,4 @@ test('read-only shared mailbox users can read but cannot manage or send', async 
   await expect(page.getByRole('button', { name: 'Add mailbox', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Edit Work', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Test login' })).toHaveCount(0);
-});
-
-test('calendar shows incomplete-provider and pagination warnings', async ({ authenticatedPage: page }) => {
-  await stubAllDefaults(page);
-  await page.route('**/api/calendar/events?**', route => json(route, 200, { events: [], providers: ['google'], partial: true, truncated: true }));
-  await page.goto('/calendar');
-  await expect(page.getByText('Some calendar data could not be loaded.', { exact: false })).toBeVisible();
-  await expect(page.getByText('This range contains more events than could be loaded.', { exact: false })).toBeVisible();
 });

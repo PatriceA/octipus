@@ -1,7 +1,9 @@
 # Email and calendar: from a view of agent data to a client people use
 
-> **Status (2026-11-21):** phase 0 is built (see [Phase 0](#phase-0-fixes-built)).
-> Phases 1–6 are proposals. Three decisions are open, listed at the end.
+> **Status (2026-11-21):** phases 0–5 are built, and part of phase 6. See
+> [What is built](#what-is-built) and [Not built](#not-built). Nothing has run
+> against a real Google or Microsoft account yet: see
+> [Unverified against the providers](#unverified-against-the-providers).
 
 ## Why
 
@@ -145,12 +147,91 @@ version; inline label correction and "why" on each inbox row.
 | Phase | What | Size |
 |---|---|---|
 | 0. Fixes | The bugs marked above, calendar week and end times | built |
-| 1. Perceived speed | The page frame renders at once with skeleton rows; react-query cache that shows the last list while it refreshes; a short server-side cache; fewer Gmail calls per list; neighbouring calendar weeks fetched ahead | days |
-| 2. Triage dialog | The flow above | about 1 week |
-| 3. Shared calendars | Calendar list, colours, show/hide, Microsoft re-consent | about 1 week |
-| 4. Calendar grid | Week, day, month and agenda views; event popover with Join and RSVP; delete; drag to create and move; attendees; recurrence scope; confirmation only when attendees are notified | 2–3 weeks |
-| 5. Email client | Three panes that scroll on their own; conversations; search; folders; compose, reply-all, forward; attachments; bulk actions; shortcuts; HTML in a sandboxed frame | 3–4 weeks |
-| 6. One inbox | Google, Microsoft and IMAP in one list; several accounts per provider; triage, summary and drafts for IMAP mail | 2–3 weeks |
+| 1. Perceived speed | The page frame renders at once with placeholder rows; the last list stays while the next loads; a short server-side page memory; one Gmail batch request per list; neighbouring calendar ranges fetched ahead | built |
+| 2. Triage dialog | The flow above | built |
+| 3. Shared calendars | Calendar list, colours, show/hide, Microsoft re-consent | built |
+| 4. Calendar grid | Week, day, month and agenda views; event card with Join and RSVP; delete; drag to create and move; guests on create; confirmation only when guests are notified | built, see the gaps below |
+| 5. Email client | Three panes that scroll on their own; conversations; search; folders; compose, reply all, forward; attachments; bulk actions; shortcuts; HTML in a sandboxed frame | built |
+| 6. One inbox | Google and Microsoft in one list ("All inboxes"); IMAP mail in the same sandboxed frame | partly built |
+
+## What is built
+
+### Email (phases 1, 2, 5, part of 6)
+
+- **The page** (`web/components/mail/email-client.tsx` and its siblings) is a
+  mail window: folders, list and reading pane each scroll on their own, and on
+  a phone the opened conversation replaces the list. The frame renders at once.
+- **Lists** come from `GET /api/email/messages`: inbox, starred, sent, drafts,
+  archive and trash, search, an unread filter, paging, the inbox's unread
+  count. New mail is checked every minute while the inbox is open.
+- **Conversations.** Messages of one thread are one row; the reading pane
+  shows the thread, newest open.
+- **Actions:** archive, trash, read/unread, star, on one conversation or many,
+  with Undo for moves. Nothing is deleted for good. Keyboard: `j`/`k`, `e`,
+  `#`, `u`, `s`, `x`, `c`, `/`.
+- **Writing:** compose, reply, reply all, forward, cc and bcc. "Send" shows who
+  gets the mail; "Send now" delivers it. "Draft with AI" and "Save to drafts"
+  remain for replies.
+- **Reading:** mail HTML is drawn in a frame that runs no script and is always
+  light, so sender styling no longer fights the dark theme. Attachments
+  download.
+- **Triage** is the dialog described above. Each mail shows its triage, who
+  gave it and the reason, and the owner corrects it in place.
+- **Several mailboxes.** Every route can name its mailbox, so Outlook is
+  reachable with Google connected. "All inboxes" merges both by date and sends
+  each action to the mailbox the message lives in.
+- **Triage settings** live on the server (`users.preferences.emailTriage`).
+  Labelling the mailbox and auto-archive are both off until turned on, and the
+  archive categories are chosen, not tied to the names `spam` and `promotion`.
+- **Calibration** is keyed by the question wording, the category list and the
+  owner's instructions (`rubricKey`). The presets with no instructions keep
+  the earlier key, so existing calibration still counts.
+
+### Calendar (phases 3, 4)
+
+Described for users in [CALENDAR.md](../CALENDAR.md). In short: every calendar
+of a connected account can be shown or hidden, the choice is stored per user,
+and the page is a grid with week, day, month and agenda views, an event card
+(Join, RSVP, Edit, Delete), creation by click or drag, and moving by drag.
+
+## Not built
+
+- **Email:** several accounts of the same provider (two Gmail accounts); IMAP
+  mailboxes in the merged list, and triage, summaries and AI drafts for IMAP
+  mail (they keep their own simpler view, now with HTML rendering); a local
+  header index (decision 1 below), so search and counts are the provider's and
+  each list still costs provider calls; snooze; outgoing attachments;
+  forwarding the original's attachments; rich-text writing; triage in the
+  "All inboxes" view (it runs on one mailbox at a time); triage that starts by
+  itself when mail arrives.
+- **Calendar:** drag-move on touch, for all-day events and across midnight
+  (those use the edit dialog); drag-resize; editing a description or the guest
+  list; changing a whole series; creating recurring events; reminders;
+  free/busy lookup; more than 250 events per calendar and range. The heartbeat
+  probe and the meeting import still read the default calendar only.
+- **Old routes kept:** `POST /api/email/triage` (one synchronous request) and
+  `GET /api/email/inbox` still work for other clients. On Outlook the old
+  inbox route still lists every folder; the page no longer uses it.
+
+## Unverified against the providers
+
+Written from the providers' documentation and not yet run against a live
+account. Each has a fallback or fails visibly, but check these first when
+connecting a real mailbox:
+
+- **Gmail:** the batch endpoint and its response format (a list that cannot be
+  parsed falls back to one request per message: slow, not broken); the trash
+  and archive list queries; small attachments arriving inline.
+- **Microsoft Graph mail:** the well-known folder names as list paths and move
+  targets; search paging; listing a conversation by its id; the attachment
+  download path; flags for stars; cc and bcc on a reply.
+- **Microsoft Graph calendar:** whether all-day events really shift under the
+  UTC preference (if not, the fix does nothing); RSVP and writes on a calendar
+  in another mailbox; consent for `Calendars.ReadWrite.Shared` in tenants that
+  require admin approval.
+- **Google Calendar:** how guests are notified on change and delete.
+- **Desktop app:** whether its own content policy lets a mail's remote images
+  load after "Show images".
 
 ## Phase 0: fixes (built)
 
@@ -179,7 +260,10 @@ OAuth inbox test in `tests/web/mail-calendar.spec.ts`.
 
 ## Open decisions
 
-1. **A local index for Google and Microsoft mail.** Phases 5 and 6 are much
+Decisions 2 and 3 were taken by building: the grid is our own, and the phases
+ran in the recommended order. Decision 1 is still open.
+
+1. **A local index for Google and Microsoft mail.** The rest of phase 6 is much
    better with headers kept locally and synced through the Gmail history and
    Graph delta APIs: instant load, real unread counts, search across accounts.
    The cost is that sender and subject are stored on the server; IMAP mail is

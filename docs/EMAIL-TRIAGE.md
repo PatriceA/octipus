@@ -8,6 +8,30 @@ Thresholds fitted from labelled mail decide which of the two answers each mail.
 This page covers the setup, how the decision model is calibrated, and how to
 check it is working.
 
+## Starting a run
+
+**Email → Triage inbox** opens a window that shows, before anything starts:
+
+- **which mails** the run takes (not triaged yet, unread, all loaded, or the
+  newest N of the inbox) and how many that is;
+- **the categories**, editable there;
+- **what the model is told**: what it sees of a mail, the priority rules, the
+  worked examples, and **your instructions** ("anything from my accountant is
+  high"), which are saved and given to both models;
+- **who answers**: the decision model and the LLM by name;
+- **what happens afterwards**: label the mail in the mailbox, and archive
+  low-priority mail of the categories you choose. Both are off until you turn
+  them on. With archiving off, the run ends with a list of the mail it would
+  archive, for you to confirm.
+
+The run works in the background with a progress bar and can be stopped;
+answers given until then are kept. "Start right away next time" skips the
+window; the arrow next to the button always opens it.
+
+On each mail the reading pane shows its triage, who gave it (you, the decision
+model or the LLM) and the LLM's reason, and you can set the priority and
+category there. That stores your label, exactly like the review queue does.
+
 ## How a triage run works
 
 `triageInbox` (`src/core/email/service.ts`) handles each batch of inbox mail in
@@ -66,6 +90,13 @@ The LLM gets the same rubric as three priority levels, so both models answer
 the same question. Each question starts with a preamble saying that `examples`
 are labelled mails from the same sender or domain, and that the owner's labels
 (`labelledBy: owner`) outweigh model labels.
+
+**Rubric key.** Calibration is keyed by the question wording, your category
+list and your instructions (`rubricKey`): with the preset categories and no
+instructions the key is the bare version below, otherwise the version plus a
+hash. Changing categories or instructions therefore starts calibration again
+(the default threshold applies until 30 labelled answers exist), because the
+models now answer a different question.
 
 **Rubric version.** `PRIORITY_RUBRIC_VERSION` (currently `action-split-v4`) is
 stored with every answer. Change it whenever you change a question or a
@@ -131,7 +162,7 @@ take effect on the next run.
 ### Step 1: label a backlog with a reference model
 
 You don't need to wait for weeks of triage to collect data. In **Email →
-Review**:
+Triage inbox → Review the answers the model was unsure of**:
 
 1. Pick a model under **Label the inbox with**. It must be enabled and must not be a CLI
    agent. A strong, cheap API model such as DeepSeek works well.
@@ -241,7 +272,10 @@ answer about two thirds of all mail at 92–93% accuracy.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /api/email/triage` | Triage the inbox (the flow above). |
+| `POST /api/email/triage/run` | Start a background run (the page uses this); `GET` for progress and result, `/cancel` to stop. |
+| `POST /api/email/triage/preview` | What a run would do and what the models are told. |
+| `GET`/`PUT /api/email/triage/settings` | Scope, labels, auto-archive and its categories, instructions. |
+| `POST /api/email/triage` | One synchronous run (older clients). |
 | `GET /api/email/triage/review` | The review queue, statistics, fitted thresholds and backlog progress. |
 | `PUT /api/email/triage/label/:id` | Set your label `{priority, category}` for a mail triage has already seen; 404 otherwise. |
 | `POST /api/email/triage/backlog` | `{model, limit}`: start a labelling run; 409 while one is running. |
@@ -253,5 +287,7 @@ answer about two thirds of all mail at 92–93% accuracy.
 - `src/core/email/triage-labels.ts`: training set, examples, threshold fit,
   review queue.
 - `src/db/schema/email-triage-labels.ts`: table `email_triage_labels`.
+- `src/core/email/triage-run.ts`: settings, preview, the background run.
+- `web/components/mail/triage-dialog.tsx`: the Triage window.
 - `web/components/mail/triage-review.tsx`: the Review panel.
 - `src/models/decision.ts`: `decide()`, the privacy gate and the decision lane.

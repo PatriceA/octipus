@@ -27,6 +27,16 @@ interface OAuthTokenResponse {
   scope?: string;
 }
 
+/**
+ * What the provider says it granted. The configured list is what was asked
+ * for: after a scope is added there, an older connection has not been given
+ * it, and recording the configured list would claim it had.
+ */
+function grantedScopes(tokens: OAuthTokenResponse, asked: string[]): string[] {
+  const granted = typeof tokens.scope === 'string' ? tokens.scope.split(/\s+/).filter(Boolean) : [];
+  return granted.length ? granted : asked;
+}
+
 interface OAuthState {
   userId: string;
   provider: string;
@@ -128,6 +138,10 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
           'Mail.ReadWrite',
           'Mail.Send',
           'Calendars.ReadWrite',
+          // Calendars other people shared with the user. Asked for at connect
+          // time only: an account connected earlier keeps its consent (and its
+          // own calendars) until the user connects it again.
+          'Calendars.ReadWrite.Shared',
           'Files.ReadWrite.All',
           'Tasks.ReadWrite',
           'Contacts.ReadWrite',
@@ -255,7 +269,7 @@ export class OAuthManager {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt,
-      scopes: providerConfig.scopes,
+      scopes: grantedScopes(tokens, providerConfig.scopes),
     });
 
     securityLogger.info({ userId: stateData.userId, provider }, 'OAuth tokens stored');
@@ -360,7 +374,7 @@ export class OAuthManager {
     const metadata: Record<string, unknown> = {
       oauthConfig: {
         provider,
-        scopes: providerConfig.scopes,
+        scopes: grantedScopes(tokens, providerConfig.scopes),
         refreshToken: tokens.refresh_token || refreshToken, // Some providers rotate refresh tokens
         expiresAt,
       },

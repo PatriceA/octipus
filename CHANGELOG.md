@@ -7,6 +7,39 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Email is a mail client** ([plan](docs/plans/email-calendar-ux.md)).
+  - Folders, list and reading pane; conversations; search; bulk actions with
+    undo; compose, reply all and forward with a two-step send; attachments;
+    keyboard shortcuts. The page frame renders at once.
+  - Mail HTML is drawn in a sandboxed, always-light frame.
+  - Outlook is reachable with Google connected, and "All inboxes" merges both.
+  - **"Triage inbox" shows what it will do first**: which mails, the
+    categories, what the models are told, who answers and what happens
+    afterwards. It then runs in the background with progress and cancel, and
+    lists the mail it proposes to archive. Your own instructions can be saved
+    and are given to both models.
+  - **Behaviour changes:** triage settings are stored per user on the server,
+    and both "label in the mailbox" and auto-archive start off (the earlier
+    per-browser choices are not carried over). Changing categories or
+    instructions restarts the decision model's calibration.
+  - New routes: `/api/email/accounts`, `/messages`, `/thread/:id`,
+    `/messages/batch`, `/message/:id/attachment/:id`, `/triage/settings`,
+    `/triage/preview`, `/triage/run`. The older routes still work.
+- **Calendar is a calendar.** Week, day, month and agenda views; overlapping
+  events side by side; an all-day lane; an event card with Join, RSVP, Edit and
+  Delete; create by clicking or dragging, move by dragging; keyboard shortcuts.
+  - **Shared calendars.** Every calendar of a connected Google or Microsoft 365
+    account can be shown or hidden; the choice is stored per user. Read-only
+    calendars refuse writes.
+  - **Microsoft 365 users reconnect once** to open calendars shared with them
+    (new `Calendars.ReadWrite.Shared` permission; tenants without user consent
+    need admin approval). Their own calendars are unaffected.
+  - **Behaviour change:** the per-save confirmation tick is gone. Changing or
+    deleting an event with guests needs `notifyAttendees: true` (409 with the
+    guest count otherwise).
+  - Fix: Microsoft all-day events land on their own date in any timezone.
+  - OAuth connections record the scopes the provider granted, not the ones
+    asked for.
 - **Email and calendar fixes** (phase 0 of [the email and calendar plan](docs/plans/email-calendar-ux.md)).
   - Gmail mail with an attachment showed only its snippet; the body is now
     found at any MIME depth, and HTML-only mail renders as HTML.
