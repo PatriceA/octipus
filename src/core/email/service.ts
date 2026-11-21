@@ -21,7 +21,8 @@ import {
   normalizeM365List,
 } from './normalize';
 import { invalidateEmailCache, readMessage } from './mailbox';
-import { buildSendRaw, parseRecipients, replySubject } from './send-mime';
+import { sendFull } from './send-full';
+import { buildSendRaw, checkAttachments, type OutgoingFile, parseRecipients, replySubject } from './send-mime';
 import { detectProvider, gmailApi, graphApi } from './providers';
 import { type EmailMessage, type EmailProvider, type EmailTriage, type InboxItem, mailboxOf } from './types';
 import { mapLimit } from '@/utils/concurrency';
@@ -216,7 +217,7 @@ export function buildGmailRaw(to: string, subject: string, body: string): string
 export async function sendReply(
   userId: string,
   provider: EmailProvider,
-  payload: { to: string; cc?: string; bcc?: string; subject: string; body: string; replyTo?: string },
+  payload: { to: string; cc?: string; bcc?: string; subject: string; body: string; replyTo?: string; html?: string; attachments?: OutgoingFile[] },
 ): Promise<{ sent: boolean }> {
   const recipients = parseRecipients(payload);
   const graphList = (list: string[]) => list.map((address) => ({ emailAddress: { address } }));
@@ -225,7 +226,12 @@ export async function sendReply(
     ...(recipients.cc.length ? { ccRecipients: graphList(recipients.cc) } : {}),
     ...(recipients.bcc.length ? { bccRecipients: graphList(recipients.bcc) } : {}),
   };
-  if (provider === 'google') {
+  const attachments = payload.attachments ?? [];
+  if (payload.html || attachments.length > 0) {
+    // Formatting or files: send-full.ts. A plain mail keeps the path below.
+    checkAttachments(attachments);
+    await sendFull(userId, provider, { recipients, subject: payload.subject, text: payload.body, html: payload.html, attachments, replyTo: payload.replyTo });
+  } else if (provider === 'google') {
     if (payload.replyTo) {
       const original = (await gmailApi(userId, 'GET', `/messages/${encodeURIComponent(payload.replyTo)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`)) as GmailMessage;
       const header = (name: string) => original.payload?.headers?.find((h) => h.name.toLowerCase() === name)?.value;
@@ -244,7 +250,7 @@ export async function sendReply(
   }
   invalidateEmailCache(userId);
   // Counts only: no address, subject or body is logged.
-  coreLogger.info({ userId, provider, recipients: recipients.to.length + recipients.cc.length + recipients.bcc.length, threaded: !!payload.replyTo }, 'email: mail sent');
+  coreLogger.info({ userId, provider, recipients: recipients.to.length + recipients.cc.length + recipients.bcc.length, threaded: !!payload.replyTo, attachments: attachments.length, html: !!payload.html }, 'email: mail sent');
   return { sent: true };
 }
 

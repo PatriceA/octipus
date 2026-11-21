@@ -29,9 +29,12 @@ import { saveReplyDraft } from '@/core/email/drafts';
 import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
 import { upsertUserLabel } from '@/core/email/triage-labels';
 import { withMailboxAccount } from '@/core/email/account-context';
-import { resolveProvider } from '@/core/email/mailbox';
+import { getAttachment, resolveProvider } from '@/core/email/mailbox';
 import { type CheckedMailbox, checkSource, fallbackMailbox, triageSources } from '@/core/email/triage-sources';
 import { contentRepos } from '@/db/repositories/content';
+import { composeParts } from '@/core/email/compose-format';
+import { dropUploads, resolveAttachments } from '@/core/email/outgoing';
+import { MAX_ATTACHMENTS } from '@/core/email/send-mime';
 import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
 import type { EmailProvider } from '@/core/email/types';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
@@ -291,7 +294,13 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       try {
         const provider = await resolveProvider(user.id, body.provider);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        const sent = await sendReply(user.id, provider, { to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, body: body.body, replyTo: body.replyTo });
+        // Files: held uploads, and a forwarded message's own files fetched from the mailbox now.
+        const refs = body.attachments ?? [];
+        if (refs.length > MAX_ATTACHMENTS) { set.status = 400; return { error: `At most ${MAX_ATTACHMENTS} attachments per message.` }; }
+        const { files, uploads } = await resolveAttachments(user.id, refs, (messageId, attachmentId) => getAttachment(user.id, provider, messageId, attachmentId));
+        const { text, html } = composeParts(body.body, body.format);
+        const sent = await sendReply(user.id, provider, { to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, body: text, html, attachments: files, replyTo: body.replyTo });
+        dropUploads(user.id, uploads);
         if (body.replyTo) handledByOwner(user.id, provider, body.replyTo, 'replied');
         return sent;
       } catch (err) {
@@ -314,6 +323,13 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         confirm: t.Optional(t.Boolean()),
         // The message this answers: the reply is threaded under it.
         replyTo: t.Optional(t.String({ minLength: 1, maxLength: 256 })),
+        // `rich`: the body carries the compose box's light formatting; an HTML part is built from it.
+        format: t.Optional(t.Union([t.Literal('plain'), t.Literal('rich')])),
+        // Held uploads (POST /email/uploads) and files of a forwarded message.
+        attachments: t.Optional(t.Array(t.Union([
+          t.Object({ upload: t.String({ minLength: 1, maxLength: 64 }) }),
+          t.Object({ forward: t.Object({ messageId: t.String({ minLength: 1, maxLength: 1024 }), attachmentId: t.String({ minLength: 1, maxLength: 1024 }) }) }),
+        ]), { maxItems: 40 })),
       }),
       detail: { tags: ['email'] },
     }

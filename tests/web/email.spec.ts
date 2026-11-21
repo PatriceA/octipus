@@ -127,7 +127,7 @@ test('a conversation opens as a thread: images held back, attachments, label cor
   expect(sent).toHaveLength(0);
   await expect(compose.getByRole('alertdialog', { name: 'Confirm send' })).toContainText('Send to boss@example.com, cc cfo@example.com?');
   await compose.getByRole('button', { name: 'Send now' }).click();
-  await expect.poll(() => sent).toEqual([{ to: 'boss@example.com', cc: 'cfo@example.com', subject: 'Re: Budget', body: 'Confirmed.', confirm: true, provider: 'google', replyTo: 'm2' }]);
+  await expect.poll(() => sent).toEqual([{ to: 'boss@example.com', cc: 'cfo@example.com', subject: 'Re: Budget', body: 'Confirmed.', format: 'rich', confirm: true, provider: 'google', replyTo: 'm2' }]);
   await expect(page.getByRole('status')).toContainText('Message sent.');
 });
 

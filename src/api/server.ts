@@ -40,6 +40,7 @@ import { emailRoutes } from './routes/email';
 import { emailMailboxRoutes } from './routes/email-mailbox';
 import { emailIndexRoutes } from './routes/email-index';
 import { emailImapRoutes } from './routes/email-imap';
+import { emailComposeRoutes } from './routes/email-compose';
 import { calendarRoutes } from './routes/calendar';
 import { heartbeatRoutes } from './routes/heartbeat';
 import { onboardingRoutes } from './routes/onboarding';
@@ -492,6 +493,7 @@ export function createServer() {
         .use(emailMailboxRoutes)
         .use(emailIndexRoutes)
         .use(emailImapRoutes)
+        .use(emailComposeRoutes)
         .use(calendarRoutes)
         .use(heartbeatRoutes)
         .use(onboardingRoutes)

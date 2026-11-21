@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { EmailBatchAction } from '../../../src/shared/email';
 import type { ComposeMode } from './email-compose';
+import { SnoozeButton } from './email-snooze';
 import { addressList, btn, btnGhost, type Conversation, type EmailMessage, type EmailTriage, hasBlockedImages, MailHtml, priorityTone, shortDate, sourceLabel, who } from './email-shared';
 import { aiPath, attachmentPath, canDo, loadConversation, type Mailbox } from './mailboxes';
 
@@ -25,10 +26,12 @@ interface Props {
   onNotice: (text: string) => void;
   /** IMAP / POP3: a draft was deleted. */
   onDeleted?: () => void;
+  /** Snooze the conversation (its messages leave the inbox until `until`). Google / Microsoft only. */
+  onSnooze?: (conversation: Conversation, ids: string[], until: Date) => Promise<void>;
 }
 
 /** The read pane: one conversation, its newest message open, the earlier ones folded. */
-export function EmailReader({ conversation, mailbox, ai, categories, folder, onBack, onAction, onCompose, onLabel, onNotice, onDeleted }: Props) {
+export function EmailReader({ conversation, mailbox, ai, categories, folder, onBack, onAction, onCompose, onLabel, onNotice, onDeleted, onSnooze }: Props) {
   const thread = useQuery({ queryKey: ['email-thread', mailbox.key, conversation.key], queryFn: () => loadConversation(mailbox, conversation.latest), staleTime: 30_000 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showImages, setShowImages] = useState(false);
@@ -102,6 +105,7 @@ export function EmailReader({ conversation, mailbox, ai, categories, folder, onB
           : <button className={btnGhost} title="Archive (e)" aria-label="Archive" onClick={() => onAction(ids, 'archive')}><Archive className="h-4 w-4" /></button>)}
         {mailbox.moves && !inTrash && <button className={btnGhost} title="Move to trash (#)" aria-label="Move to trash" onClick={() => onAction(ids, 'trash')}><Trash2 className="h-4 w-4" /></button>}
         {canDo(mailbox, 'unread') && received && <button className={btnGhost} title="Mark unread (u)" aria-label="Mark unread" onClick={() => { onAction(ids.slice(-1), 'unread'); onBack(); }}><MailOpen className="h-4 w-4" /></button>}
+        {onSnooze && mailbox.moves && folder === 'inbox' && <SnoozeButton onSnooze={(until) => onSnooze(conversation, ids, until)} />}
         {mailbox.moves && <button className={btnGhost} title="Star (s)" aria-label={conversation.starred ? 'Remove star' : 'Star'} aria-pressed={conversation.starred} onClick={() => onAction(ids.slice(-1), conversation.starred ? 'unstar' : 'star')}><Star className={`h-4 w-4 ${conversation.starred ? 'fill-warning text-warning' : ''}`} /></button>}
         {ai && received && <span className="mx-1 h-5 w-px bg-outline-variant/50" />}
         {ai && received && <button className={btnGhost} disabled={!last || busy === 'summarize'} onClick={summarize}>{busy === 'summarize' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-accent" />} Summarize</button>}
