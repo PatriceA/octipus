@@ -82,7 +82,6 @@ are cleaned up within the hour.
 Testing a login (`POST /accounts/:id/test`) is part of setting up: in a space
 only its owners can do it.
 
-
 ### Writing and snoozing in Gmail and Outlook
 
 - **Attachments:** up to 20 files and 25 MB per mail, picked or dropped on the
