@@ -18,6 +18,8 @@ export interface StoredTriage {
   category?: string;
   reason?: string;
   source: 'decision' | 'llm';
+  /** The rubric key (question wording, categories, owner instructions) the answer was given under. */
+  rubric?: string;
   at: string;
 }
 

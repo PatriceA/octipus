@@ -79,12 +79,12 @@ describe('triageInbox with a decision model (live)', () => {
   });
 
   test('no decision model → LLM triage unchanged', async () => {
-    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r' } });
+    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r', source: 'llm' } });
   });
 
   test('owner labels win without asking any model', async () => {
     owner = { m1: { priority: 'high', category: 'finance' } };
-    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'finance' } });
+    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'finance', source: 'owner' } });
     expect(llmCalls).toBe(0);
     expect(decide).not.toHaveBeenCalled();
   });
@@ -118,10 +118,10 @@ describe('triageInbox with a decision model (live)', () => {
   test('confident decisions replace the LLM result; the gate is per question', async () => {
     answers = clef(0.9, 0.2, 'promotion', 0.9);
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.99);
-    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion', source: 'decision' });
     expect(llmCalls).toBe(0); // decided, not audited: no LLM call
     random.mockReturnValue(0); // audited: the LLM labels it, the decision still wins
-    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion', source: 'decision' });
     expect(llmCalls).toBe(1);
     const questions = vi.mocked(decide).mock.calls[0][2];
     expect(Object.keys(questions)).toEqual(['action', 'today', 'category']);

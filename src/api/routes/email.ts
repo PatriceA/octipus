@@ -27,6 +27,8 @@ import {
   type InboxItem,
 } from '@/core/email';
 import { saveReplyDraft } from '@/core/email/drafts';
+import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
+import { upsertUserLabel } from '@/core/email/triage-labels';
 import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
 import type { EmailProvider } from '@/core/email/types';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
@@ -42,6 +44,13 @@ function handledByOwner(userId: string, provider: EmailProvider, messageId: stri
   markEmailHandled({ userId, provider, messageId, outcome, note: 'Handled in the inbox page', taskId })
     .catch((err: unknown) => apiLogger.warn({ err, userId }, 'email: could not record a handled message'));
 }
+
+const triageItem = t.Object({
+  from: t.Object({ email: t.String({ maxLength: 320 }), name: t.Optional(t.String({ maxLength: 320 })) }),
+  subject: t.String({ maxLength: 2000 }),
+  snippet: t.String({ maxLength: 2000 }),
+});
+const triageScope = t.Union(TRIAGE_SCOPES.map((s) => t.Literal(s)));
 
 /**
  * Email triage-lite (feature #7). Read + assist over the connected mailbox,
@@ -312,7 +321,8 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         const items: InboxItem[] = req?.items
           ? req.items.map((it) => ({ ...it, provider, receivedAt: '', unread: false }))
           : (await getInbox(user.id, 30)).items;
-        const triage = await triageInbox(user.id, items);
+        const { settings } = await getTriageSettings(user.id);
+        const triage = await triageInbox(user.id, items, { instructions: settings.instructions });
         // Label first: an archived mail still gets its category label. A label
         // failure (e.g. a token without label scope) must not lose the triage.
         let labeled = 0;
@@ -321,7 +331,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
           try { labeled = await applyCategoryLabels(user.id, provider, triage); }
           catch (err) { labelError = (err as Error).message; }
         }
-        const archived = req?.autoArchive ? await autoArchive(user.id, provider, triage) : [];
+        const archived = req?.autoArchive ? await autoArchive(user.id, provider, triage, settings.archiveCategories) : [];
         return { triage, archived, labeled, ...(labelError ? { labelError } : {}) };
       } catch (err) {
         set.status = 400;
@@ -361,7 +371,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       const categories = await getCategories(user.id);
       if (!Object.hasOwn(categories, body.category)) { set.status = 400; return { error: `Unknown category: ${body.category}` }; }
-      if (!(await setUserLabel(user.id, params.id, body, (await detectProvider(user.id)) ?? undefined))) { set.status = 404; return { error: 'Triage has not seen this mail yet' }; }
+      const provider = await detectProvider(user.id);
+      const label = { priority: body.priority, category: body.category };
+      // With the row itself (the inbox list sends it) any mail can be labelled, seen by triage or not.
+      if (body.item && provider) {
+        await upsertUserLabel(user.id, provider, { ...body.item, id: params.id, provider, receivedAt: '', unread: false }, label);
+        return { ok: true };
+      }
+      if (!(await setUserLabel(user.id, params.id, label, provider ?? undefined))) { set.status = 404; return { error: 'Triage has not seen this mail yet' }; }
       return { ok: true };
     },
     {
@@ -369,6 +386,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       body: t.Object({
         priority: t.Union([t.Literal('low'), t.Literal('normal'), t.Literal('high')]),
         category: t.String({ minLength: 1, maxLength: 100 }),
+        item: t.Optional(triageItem),
       }),
       detail: { tags: ['email'] },
     }
@@ -393,4 +411,92 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       body: t.Object({ model: t.String({ minLength: 1, maxLength: 200 }), limit: t.Integer({ minimum: 1, maximum: 2000 }) }),
       detail: { tags: ['email'] },
     }
-  );
+  )
+
+  // How "Triage inbox" runs for this user. `saved: false` = never changed (defaults).
+  .get('/triage/settings', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    return getTriageSettings(user.id);
+  }, { detail: { tags: ['email'] } })
+
+  .put(
+    '/triage/settings',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return { settings: await setTriageSettings(user.id, body), saved: true };
+    },
+    {
+      body: t.Object({
+        scope: t.Optional(triageScope),
+        applyLabels: t.Optional(t.Boolean()),
+        autoArchive: t.Optional(t.Boolean()),
+        archiveCategories: t.Optional(t.Array(t.String({ maxLength: 32 }), { maxItems: 21 })),
+        instructions: t.Optional(t.String({ maxLength: 1000 })),
+        skipDialog: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['email'] },
+    }
+  )
+
+  // What a run over these rows would do and what the models are told. Asks no model.
+  .post(
+    '/triage/preview',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        return await triagePreview(user.id, provider, body.items);
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      body: t.Object({ items: t.Array(t.Object({ id: t.String({ minLength: 1, maxLength: 256 }), unread: t.Boolean() }), { maxItems: 500 }) }),
+      detail: { tags: ['email'] },
+    }
+  )
+
+  // Start a triage run in the background with the saved settings: either the
+  // rows the page shows (`items`) or the newest N of the inbox (`newest`).
+  .post(
+    '/triage/run',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        const items: InboxItem[] | undefined = body.items?.map((it: Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>) => ({ ...it, provider, receivedAt: '', unread: false }));
+        set.status = 202;
+        return { run: await startTriageRun(user.id, provider, { items, newest: body.newest, scope: body.scope }) };
+      } catch (err) {
+        set.status = err instanceof TriageBusyError ? 409 : 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      body: t.Object({
+        items: t.Optional(t.Array(t.Object({
+          id: t.String({ minLength: 1, maxLength: 256 }),
+          from: t.Object({ email: t.String({ maxLength: 320 }), name: t.Optional(t.String({ maxLength: 320 })) }),
+          subject: t.String({ maxLength: 2000 }),
+          snippet: t.String({ maxLength: 2000 }),
+        }), { maxItems: 500 })),
+        newest: t.Optional(t.Integer({ minimum: 1, maximum: 500 })),
+        scope: t.Optional(triageScope),
+      }),
+      detail: { tags: ['email'] },
+    }
+  )
+
+  // The user's current (or last) run: progress, then the result.
+  .get('/triage/run', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    return { run: currentTriageRun(user.id) };
+  }, { detail: { tags: ['email'] } })
+
+  .post('/triage/run/cancel', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    return { cancelled: cancelTriageRun(user.id), run: currentTriageRun(user.id) };
+  }, { detail: { tags: ['email'] } });

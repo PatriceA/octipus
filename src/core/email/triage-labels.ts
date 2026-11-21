@@ -119,11 +119,11 @@ export async function saveModelLabels(userId: string, provider: EmailProvider, i
 }
 
 /** Record the triage answers a run returned, with the model kind that gave each. */
-export async function saveTriageResults(userId: string, provider: EmailProvider, items: InboxItem[], answers: Record<string, EmailTriage>, sourceOf: (id: string) => StoredTriage['source']): Promise<void> {
+export async function saveTriageResults(userId: string, provider: EmailProvider, items: InboxItem[], answers: Record<string, EmailTriage>, sourceOf: (id: string) => StoredTriage['source'], rubric?: string): Promise<void> {
   const at = new Date().toISOString();
   const rows = items.filter(it => answers[it.id]).map(it => {
     const { priority, category, reason } = answers[it.id];
-    return { ...base(userId, provider, it), triage: { priority, ...(category ? { category } : {}), ...(reason ? { reason: reason.slice(0, 500) } : {}), source: sourceOf(it.id), at } };
+    return { ...base(userId, provider, it), triage: { priority, ...(category ? { category } : {}), ...(reason ? { reason: reason.slice(0, 500) } : {}), source: sourceOf(it.id), ...(rubric ? { rubric } : {}), at } };
   });
   if (!rows.length) return;
   await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
@@ -143,8 +143,8 @@ export async function storedTriage(userId: string, provider: EmailProvider, ids:
   ));
   const out: Record<string, EmailTriage> = {};
   for (const r of rows) {
-    if (r.labelSource === 'user' && r.labelPriority) out[r.messageId] = { priority: r.labelPriority, ...(r.labelCategory ? { category: r.labelCategory } : {}) };
-    else if (r.triage) out[r.messageId] = { priority: r.triage.priority, ...(r.triage.category ? { category: r.triage.category } : {}), ...(r.triage.reason ? { reason: r.triage.reason } : {}) };
+    if (r.labelSource === 'user' && r.labelPriority) out[r.messageId] = { priority: r.labelPriority, ...(r.labelCategory ? { category: r.labelCategory } : {}), source: 'owner' };
+    else if (r.triage) out[r.messageId] = { priority: r.triage.priority, ...(r.triage.category ? { category: r.triage.category } : {}), ...(r.triage.reason ? { reason: r.triage.reason } : {}), source: r.triage.source };
   }
   return out;
 }
@@ -156,6 +156,19 @@ export async function setUserLabel(userId: string, messageId: string, label: { p
     .where(and(eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.messageId, messageId), provider ? eq(emailTriageLabels.provider, provider) : undefined))
     .returning({ id: emailTriageLabels.id });
   return rows.length > 0;
+}
+
+/**
+ * The owner's label for a mail from the inbox list: unlike setUserLabel it
+ * also works for a mail no triage run has seen, so a label can be given (or
+ * corrected) on any row.
+ */
+export async function upsertUserLabel(userId: string, provider: EmailProvider, item: InboxItem, label: { priority: Priority; category: string }): Promise<void> {
+  const labelled = { labelPriority: label.priority, labelCategory: label.category, labelSource: 'user' as const, labelModel: null, labelRubric: null, labeledAt: new Date() };
+  await getDb().insert(emailTriageLabels).values({ ...base(userId, provider, item), ...labelled }).onConflictDoUpdate({
+    target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],
+    set: labelled,
+  });
 }
 
 async function labelledObservations(userId: string, rubric: string): Promise<EmailTriageLabel[]> {
