@@ -10,7 +10,9 @@
  * hours), and the Snoozed list shows why.
  *
  * Outlook gives a message a new id when it moves; the row keeps the ids the
- * messages have while archived, which is what the wake needs.
+ * messages have while archived, which is what the wake needs. The row names
+ * the account by its address, the default account too, so a later change of
+ * the default does not send the wake to another mailbox.
  */
 import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -59,6 +61,8 @@ export interface SnoozeView {
   /** Set when waking failed; it is tried again at `retryAt`. */
   error?: string;
   retryAt?: string;
+  /** Waking failed too often and is no longer tried: bring it back by hand, or let it go. */
+  gaveUp?: boolean;
 }
 
 export const snoozeView = (row: EmailSnooze): SnoozeView => ({
@@ -72,17 +76,21 @@ export const snoozeView = (row: EmailSnooze): SnoozeView => ({
   snippet: row.snippet,
   wakeAt: row.wakeAt.toISOString(),
   ...(row.lastError ? { error: row.lastError } : {}),
-  ...(row.lastError && row.nextAttemptAt ? { retryAt: row.nextAttemptAt.toISOString() } : {}),
+  ...(row.lastError && row.nextAttemptAt && !row.givenUpAt ? { retryAt: row.nextAttemptAt.toISOString() } : {}),
+  ...(row.givenUpAt ? { gaveUp: true } : {}),
 });
 
 /** Where snoozes are kept; the default is the database, tests pass their own. */
 export interface SnoozeStore {
-  insert(row: Omit<EmailSnooze, 'id' | 'createdAt' | 'attempts' | 'nextAttemptAt' | 'lastError'>): Promise<EmailSnooze>;
+  insert(row: Omit<EmailSnooze, 'id' | 'createdAt' | 'attempts' | 'nextAttemptAt' | 'lastError' | 'givenUpAt'>): Promise<EmailSnooze>;
   list(userId: string, provider?: EmailProvider): Promise<EmailSnooze[]>;
   get(userId: string, id: string): Promise<EmailSnooze | null>;
   due(now: Date, limit: number): Promise<EmailSnooze[]>;
   remove(id: string): Promise<void>;
+  /** What is still to be brought back (the rest already is: never moved twice). */
+  progress(id: string, messageIds: string[]): Promise<void>;
   failed(id: string, attempts: number, nextAttemptAt: Date, error: string): Promise<void>;
+  gaveUp(id: string, attempts: number, error: string, at: Date): Promise<void>;
 }
 
 export const dbSnoozeStore: SnoozeStore = {
@@ -98,44 +106,90 @@ export const dbSnoozeStore: SnoozeStore = {
     return row ?? null;
   },
   due: (now, limit) => getDb().select().from(emailSnoozes)
-    .where(and(lte(emailSnoozes.wakeAt, now), or(isNull(emailSnoozes.nextAttemptAt), lte(emailSnoozes.nextAttemptAt, now))))
+    .where(and(lte(emailSnoozes.wakeAt, now), isNull(emailSnoozes.givenUpAt), or(isNull(emailSnoozes.nextAttemptAt), lte(emailSnoozes.nextAttemptAt, now))))
     .orderBy(asc(emailSnoozes.wakeAt)).limit(limit),
   async remove(id) {
     await getDb().delete(emailSnoozes).where(eq(emailSnoozes.id, id));
   },
+  async progress(id, messageIds) {
+    await getDb().update(emailSnoozes).set({ messageIds }).where(eq(emailSnoozes.id, id));
+  },
   async failed(id, attempts, nextAttemptAt, error) {
     await getDb().update(emailSnoozes).set({ attempts, nextAttemptAt, lastError: error }).where(eq(emailSnoozes.id, id));
+  },
+  async gaveUp(id, attempts, error, at) {
+    await getDb().update(emailSnoozes).set({ attempts, lastError: error, givenUpAt: at, nextAttemptAt: null }).where(eq(emailSnoozes.id, id));
   },
 };
 
 /** An error's text without provider detail or mail content. */
 const safeError = (err: unknown) => String((err as Error)?.message ?? err).slice(0, 200);
+/** The provider says the message is not there (deleted, or already moved and renamed): nothing left to do for it. */
+const gone = (err: unknown) => /HTTP 404/.test(String((err as Error)?.message ?? err));
 
-/** Take messages out of the inbox. Returns the ids they have afterwards (Outlook moves change them). */
-async function archive(userId: string, provider: EmailProvider, ids: string[]): Promise<string[]> {
+/** Wake attempts before giving up: with the backoff that is about a day and a half of trying. */
+export const MAX_WAKE_ATTEMPTS = 12;
+
+/** What a move of several messages did: the ids moved (as they are now), the ids not moved, and why. */
+interface MoveResult { moved: string[]; left: string[]; error?: unknown }
+
+/** Take messages out of the inbox, as far as it goes. Outlook gives a moved message a new id; `moved` has those. */
+async function archive(userId: string, provider: EmailProvider, ids: string[]): Promise<MoveResult> {
   if (provider === 'google') {
-    await gmailApi(userId, 'POST', '/messages/batchModify', { ids, removeLabelIds: ['INBOX'] });
-    return ids;
+    try {
+      await gmailApi(userId, 'POST', '/messages/batchModify', { ids, removeLabelIds: ['INBOX'] });
+      return { moved: ids, left: [] };
+    } catch {
+      // One by one, so that one message that cannot be changed does not hold back the rest.
+      return oneByOne(ids, async (id) => { await gmailApi(userId, 'POST', `/messages/${encodeURIComponent(id)}/modify`, { removeLabelIds: ['INBOX'] }); return id; }, false);
+    }
   }
-  const moved: string[] = [];
-  for (const id of ids) {
+  return oneByOne(ids, async (id) => {
     const answer = (await graphApi(userId, 'POST', `/me/messages/${encodeURIComponent(id)}/move`, { destinationId: 'archive' })) as { id?: unknown };
-    moved.push(typeof answer?.id === 'string' && answer.id ? answer.id : id);
-  }
-  return moved;
+    return typeof answer?.id === 'string' && answer.id ? answer.id : id;
+  }, false);
 }
 
-/** Put messages back in the inbox, unread if asked. */
-async function restore(userId: string, provider: EmailProvider, ids: string[], unread: boolean): Promise<void> {
+/** Put messages back in the inbox, unread if asked. A message the provider no longer has counts as done. */
+async function restore(userId: string, provider: EmailProvider, ids: string[], unread: boolean): Promise<MoveResult> {
+  const labels = unread ? ['INBOX', 'UNREAD'] : ['INBOX'];
   if (provider === 'google') {
-    await gmailApi(userId, 'POST', '/messages/batchModify', { ids, addLabelIds: unread ? ['INBOX', 'UNREAD'] : ['INBOX'] });
-    return;
+    try {
+      await gmailApi(userId, 'POST', '/messages/batchModify', { ids, addLabelIds: labels });
+      return { moved: ids, left: [] };
+    } catch {
+      // A deleted id fails the whole batch: one by one, the others still come back.
+      return oneByOne(ids, async (id) => { await gmailApi(userId, 'POST', `/messages/${encodeURIComponent(id)}/modify`, { addLabelIds: labels }); return id; }, true);
+    }
   }
-  for (const id of ids) {
+  return oneByOne(ids, async (id) => {
     const answer = (await graphApi(userId, 'POST', `/me/messages/${encodeURIComponent(id)}/move`, { destinationId: 'inbox' })) as { id?: unknown };
     const now = typeof answer?.id === 'string' && answer.id ? answer.id : id;
-    if (unread) await graphApi(userId, 'PATCH', `/me/messages/${encodeURIComponent(now)}`, { isRead: false });
+    // Moved is what counts: a failed "unread" mark must not move it again.
+    if (unread) await graphApi(userId, 'PATCH', `/me/messages/${encodeURIComponent(now)}`, { isRead: false }).catch(() => {});
+    return now;
+  }, true);
+}
+
+async function oneByOne(ids: string[], move: (id: string) => Promise<string>, goneIsDone: boolean): Promise<MoveResult> {
+  const result: MoveResult = { moved: [], left: [] };
+  for (const id of ids) {
+    try {
+      result.moved.push(await move(id));
+    } catch (err) {
+      if (goneIsDone && gone(err)) continue;
+      result.left.push(id);
+      result.error ??= err;
+    }
   }
+  return result;
+}
+
+/** The address of the provider's default account (the account a request without one means). */
+async function defaultAccount(userId: string, provider: EmailProvider): Promise<string | null> {
+  const { getOAuthManager } = await import('@/security/oauth');
+  const accounts = await getOAuthManager().listAccounts(userId, provider).catch(() => []);
+  return accounts.find((a) => a.isDefault)?.account ?? null;
 }
 
 export interface SnoozeRequest {
@@ -147,27 +201,64 @@ export interface SnoozeRequest {
   snippet: string;
 }
 
-/** Snooze a conversation: archive it now, wake it at `wakeAt`. */
+export class SnoozePartialError extends Error {}
+
+/**
+ * Snooze a conversation: archive it now, wake it at `wakeAt`. Mail is never
+ * left archived without a row to bring it back: what could be moved is
+ * snoozed, and the rest stays in the inbox (SnoozePartialError says so).
+ */
 export async function snooze(userId: string, provider: EmailProvider, request: SnoozeRequest, store: SnoozeStore = dbSnoozeStore, now = Date.now()): Promise<SnoozeView> {
   const ids = [...new Set(request.ids)];
   if (ids.length === 0) throw new SnoozeInputError('Nothing to snooze.');
   if (ids.length > SNOOZE_MAX_MESSAGES) throw new SnoozeInputError(`At most ${SNOOZE_MAX_MESSAGES} messages at once.`);
   const wakeAt = checkWakeAt(request.wakeAt, now);
-  const archived = await archive(userId, provider, ids);
+  // The real address, also for the default account: the default can change before the mail wakes.
+  const account = selectedAccount(provider) ?? await defaultAccount(userId, provider);
+  const { moved, left, error } = await archive(userId, provider, ids);
   invalidateEmailCache(userId);
-  const row = await store.insert({
-    userId, provider, account: selectedAccount(provider) ?? null, messageIds: archived, threadId: request.threadId ?? null,
-    fromEmail: request.from.email.slice(0, 320), fromName: request.from.name?.slice(0, 320) ?? null,
-    subject: request.subject.slice(0, 500), snippet: request.snippet.slice(0, 300), wakeAt,
-  });
-  coreLogger.info({ userId, provider, messages: archived.length }, 'email: conversation snoozed');
-  return snoozeView(row);
+  if (moved.length === 0) throw error instanceof Error ? error : new Error(safeError(error));
+  let row: EmailSnooze;
+  try {
+    row = await store.insert({
+      userId, provider, account, messageIds: moved, threadId: request.threadId ?? null,
+      fromEmail: request.from.email.slice(0, 320), fromName: request.from.name?.slice(0, 320) ?? null,
+      subject: request.subject.slice(0, 500), snippet: request.snippet.slice(0, 300), wakeAt,
+    });
+  } catch (err) {
+    // No row, no wake: put the mail back now rather than lose it in the archive.
+    await restore(userId, provider, moved, false).catch(() => null);
+    throw err;
+  }
+  coreLogger.info({ userId, provider, messages: moved.length, notMoved: left.length }, 'email: conversation snoozed');
+  const view = await viewFor(userId, row);
+  if (left.length) throw Object.assign(new SnoozePartialError(`${moved.length} of ${ids.length} messages were snoozed; the other ${left.length} could not be moved and stay in the inbox.`), { snoozed: view });
+  return view;
+}
+
+/** Defaults per provider, asked once per call. */
+function defaults(userId: string) {
+  const known = new Map<string, Promise<string | null>>();
+  return (provider: EmailProvider) => {
+    if (!known.has(provider)) known.set(provider, defaultAccount(userId, provider));
+    return known.get(provider)!;
+  };
+}
+
+/** A row as the page sees it: `account` only for a further account, as everywhere else on the page. */
+async function viewFor(userId: string, row: EmailSnooze, defaultOf = defaults(userId)): Promise<SnoozeView> {
+  const view = snoozeView(row);
+  if (row.account && row.account === await defaultOf(row.provider as EmailProvider)) delete view.account;
+  return view;
 }
 
 /** Every snooze of the user; with `provider`, that mailbox's only (the account the request chose). */
 export const listSnoozed = async (userId: string, provider?: EmailProvider, store: SnoozeStore = dbSnoozeStore): Promise<SnoozeView[]> => {
-  const account = provider ? selectedAccount(provider) ?? null : undefined;
-  return (await store.list(userId, provider)).filter((row) => account === undefined || (row.account ?? null) === account).map(snoozeView);
+  const defaultOf = defaults(userId);
+  const views = await Promise.all((await store.list(userId, provider)).map((row) => viewFor(userId, row, defaultOf)));
+  if (!provider) return views;
+  const account = selectedAccount(provider);
+  return views.filter((view) => view.account === account);
 };
 
 /** Run `fn` in the account a snooze was made in: its mail is moved back there, with that account's token. */
@@ -178,25 +269,52 @@ const inAccountOf = <T>(row: Pick<EmailSnooze, 'provider' | 'account'>, fn: () =
 export async function unsnooze(userId: string, id: string, store: SnoozeStore = dbSnoozeStore): Promise<boolean> {
   const row = await store.get(userId, id);
   if (!row) return false;
-  await inAccountOf(row, () => restore(userId, row.provider as EmailProvider, row.messageIds, false));
-  await store.remove(row.id);
+  const { left, error } = await inAccountOf(row, () => restore(userId, row.provider as EmailProvider, row.messageIds, false));
   invalidateEmailCache(userId);
+  if (left.length) {
+    await store.progress(row.id, left);
+    throw new Error(`${left.length} of ${row.messageIds.length} messages could not be brought back: ${safeError(error)}`);
+  }
+  await store.remove(row.id);
   return true;
 }
 
-/** Wake what is due: back to the inbox, unread. A failure waits and is tried again. Returns how many woke. */
+/** Let a snooze go without moving anything: the mail stays where it is (in the archive). */
+export async function dismissSnooze(userId: string, id: string, store: SnoozeStore = dbSnoozeStore): Promise<boolean> {
+  const row = await store.get(userId, id);
+  if (!row) return false;
+  await store.remove(row.id);
+  return true;
+}
+
+/**
+ * Wake what is due: back to the inbox, unread. What came back is struck from
+ * the row at once, so a retry never moves a message twice (Outlook renames a
+ * moved message, and the old id would answer 404). A failure waits and is
+ * tried again; after MAX_WAKE_ATTEMPTS the row is given up and says so.
+ */
 export async function wakeDueSnoozes(now = new Date(), store: SnoozeStore = dbSnoozeStore): Promise<number> {
   let woke = 0;
   for (const row of await store.due(now, WAKE_BATCH)) {
     try {
-      await inAccountOf(row, () => restore(row.userId, row.provider as EmailProvider, row.messageIds, true));
-      await store.remove(row.id);
+      const { left, error } = await inAccountOf(row, () => restore(row.userId, row.provider as EmailProvider, row.messageIds, true));
       invalidateEmailCache(row.userId);
-      woke++;
+      if (left.length === 0) {
+        await store.remove(row.id);
+        woke++;
+        continue;
+      }
+      if (left.length < row.messageIds.length) await store.progress(row.id, left);
+      throw error instanceof Error ? error : new Error(safeError(error));
     } catch (err) {
       const attempts = row.attempts + 1;
-      await store.failed(row.id, attempts, new Date(+now + wakeBackoffMs(attempts)), safeError(err));
-      coreLogger.warn({ userId: row.userId, provider: row.provider, attempts, error: safeError(err) }, 'email: a snoozed conversation could not be woken; trying again later');
+      if (attempts >= MAX_WAKE_ATTEMPTS) {
+        await store.gaveUp(row.id, attempts, safeError(err), now);
+        coreLogger.warn({ userId: row.userId, provider: row.provider, attempts }, 'email: gave up waking a snoozed conversation');
+      } else {
+        await store.failed(row.id, attempts, new Date(+now + wakeBackoffMs(attempts)), safeError(err));
+        coreLogger.warn({ userId: row.userId, provider: row.provider, attempts, error: safeError(err) }, 'email: a snoozed conversation could not be woken; trying again later');
+      }
     }
   }
   return woke;

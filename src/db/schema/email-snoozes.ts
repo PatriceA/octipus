@@ -12,7 +12,7 @@ export const emailSnoozes = pgTable('email_snoozes', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   /** 'google' | 'microsoft' */
   provider: text('provider').notNull(),
-  /** Which account of the provider, where a user has several; null = the default one. */
+  /** The account's address. Null only on rows made before addresses were kept: the default account then. */
   account: text('account'),
   /** The provider's ids of the messages as they are while archived (Outlook gives a moved message a new id). */
   messageIds: jsonb('message_ids').$type<string[]>().notNull(),
@@ -26,6 +26,8 @@ export const emailSnoozes = pgTable('email_snoozes', {
   attempts: integer('attempts').notNull().default(0),
   nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
   lastError: text('last_error'),
+  /** Waking failed too often: no further tries; the Snoozed list says so and offers to bring it back or let it go. */
+  givenUpAt: timestamp('given_up_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index('email_snoozes_user_idx').on(t.userId, t.wakeAt),

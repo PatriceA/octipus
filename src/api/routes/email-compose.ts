@@ -4,7 +4,7 @@ import { withMailboxAccount } from '@/core/email/account-context';
 import { MailboxError, resolveProvider } from '@/core/email/mailbox';
 import { dropUploads, holdUpload } from '@/core/email/outgoing';
 import { EmailInputError } from '@/core/email/send-mime';
-import { listSnoozed, SnoozeInputError, snooze, unsnooze } from '@/core/email/snooze';
+import { dismissSnooze, listSnoozed, SnoozeInputError, SnoozePartialError, type SnoozeView, snooze, unsnooze } from '@/core/email/snooze';
 import { markEmailHandled } from '@/core/email/watch';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
@@ -50,13 +50,22 @@ export const emailComposeRoutes = new Elysia({ prefix: '/email' })
     try {
       const provider = await resolveProvider(user.id, body.provider);
       if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-      const snoozed = await snooze(user.id, provider, body);
+      let snoozed: SnoozeView;
+      let warning: string | undefined;
+      try {
+        snoozed = await snooze(user.id, provider, body);
+      } catch (err) {
+        // Some messages could not be moved: those stay in the inbox; the rest is snoozed.
+        if (!(err instanceof SnoozePartialError)) throw err;
+        snoozed = (err as SnoozePartialError & { snoozed: SnoozeView }).snoozed;
+        warning = err.message;
+      }
       // The owner dealt with it for now: the heartbeat's inbox watch leaves it alone.
       for (const messageId of body.ids) {
         markEmailHandled({ userId: user.id, provider, messageId, outcome: 'other', note: 'Snoozed in the inbox page' })
           .catch((err: unknown) => apiLogger.warn({ err, userId: user.id }, 'email: could not record a handled message'));
       }
-      return { snoozed };
+      return { snoozed, ...(warning ? { warning } : {}) };
     } catch (err) { return failure(err, set); }
   }), {
     body: t.Object({
@@ -87,5 +96,14 @@ export const emailComposeRoutes = new Elysia({ prefix: '/email' })
     try {
       if (!(await unsnooze(user.id, params.id))) { set.status = 404; return { error: 'Not snoozed' }; }
       return { unsnoozed: true };
+    } catch (err) { return failure(err, set); }
+  }, { params: t.Object({ id: t.String({ format: 'uuid' }) }), detail: { tags: ['email'] } })
+
+  // Let a snooze go: nothing is moved, the mail stays in the archive.
+  .post('/snoozed/:id/dismiss', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return NOT_AUTHENTICATED; }
+    try {
+      if (!(await dismissSnooze(user.id, params.id))) { set.status = 404; return { error: 'Not snoozed' }; }
+      return { dismissed: true };
     } catch (err) { return failure(err, set); }
   }, { params: t.Object({ id: t.String({ format: 'uuid' }) }), detail: { tags: ['email'] } });

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS email_snoozes (
   attempts integer NOT NULL DEFAULT 0,
   next_attempt_at timestamptz,
   last_error text,
+  given_up_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 --> statement-breakpoint

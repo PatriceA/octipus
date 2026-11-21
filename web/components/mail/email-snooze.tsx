@@ -20,6 +20,7 @@ export interface Snoozed {
   wakeAt: string;
   error?: string;
   retryAt?: string;
+  gaveUp?: boolean;
 }
 
 const at = (base: Date, days: number, hour: number) => { const d = new Date(base); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d; };
@@ -114,6 +115,14 @@ export function SnoozedPane({ keys, onUnsnoozed }: { keys: string[]; onUnsnoozed
       onUnsnoozed(`"${item.subject || '(no subject)'}" is back in the inbox.`);
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
+  const dismiss = async (item: Snoozed) => {
+    setBusy(item.id); setError('');
+    try {
+      await api.post(`/email/snoozed/${encodeURIComponent(item.id)}/dismiss`, {});
+      await list.refetch();
+      onUnsnoozed(`"${item.subject || '(no subject)'}" stays in the archive.`);
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
+  };
   const rows = (list.data?.snoozed ?? []).filter((s) => keys.includes(s.account ? `${s.provider}:${s.account}` : s.provider));
   return (
     <section aria-label="Snoozed" className="flex min-h-0 flex-col bg-surface lg:col-span-2">
@@ -138,11 +147,14 @@ export function SnoozedPane({ keys, onUnsnoozed }: { keys: string[]; onUnsnoozed
                 <p className="truncate text-xs text-on-surface-variant/80">{item.snippet}</p>
                 {item.error && (
                   <p className="mt-1 flex items-center gap-1.5 text-xs text-error">
-                    <AlertTriangle className="h-3.5 w-3.5" /> Could not bring it back: {item.error}{item.retryAt ? ` Trying again ${when(new Date(item.retryAt))}.` : ''}
+                    <AlertTriangle className="h-3.5 w-3.5" /> Could not bring it back: {item.error}{item.gaveUp ? ' No more automatic tries: bring it back by hand, or leave it in the archive.' : item.retryAt ? ` Trying again ${when(new Date(item.retryAt))}.` : ''}
                   </p>
                 )}
               </div>
-              <button className={btn} disabled={busy === item.id} onClick={() => unsnooze(item)}>{busy === item.id && <Loader2 className="h-4 w-4 animate-spin" />} Unsnooze</button>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <button className={btn} disabled={busy === item.id} onClick={() => unsnooze(item)}>{busy === item.id && <Loader2 className="h-4 w-4 animate-spin" />} {item.gaveUp ? 'Try again' : 'Unsnooze'}</button>
+                {item.gaveUp && <button className="text-xs text-on-surface-variant underline hover:text-on-surface" disabled={busy === item.id} onClick={() => dismiss(item)}>Leave in archive</button>}
+              </div>
             </li>
           ))}
         </ul>

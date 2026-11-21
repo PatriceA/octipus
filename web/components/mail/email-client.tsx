@@ -283,17 +283,19 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
     const box = boxOf(keyOf(c.latest));
     if (!box || box.kind !== 'oauth') return;
     try {
-      const res = await api.post<{ snoozed?: { id: string }; error?: string }>('/email/snooze', {
+      const res = await api.post<{ snoozed?: { id: string; messageIds: string[] }; warning?: string; error?: string }>('/email/snooze', {
         ids, wakeAt: until.toISOString(), ...mailboxBody(box), ...(c.latest.threadId ? { threadId: c.latest.threadId } : {}),
         from: c.latest.from, subject: c.latest.subject, snippet: c.latest.snippet,
       });
       if (res.error || !res.snoozed) throw new Error(res.error ?? 'Could not snooze the conversation.');
-      const gone = new Set([...ids, ...c.ids]);
+      // Some messages could not be moved: those stay in the list (the server says how many); reload to be exact.
+      const gone = new Set(res.warning ? [] : [...ids, ...c.ids]);
+      if (res.warning) void client.invalidateQueries({ queryKey: ['email-list', scope] });
       patchLists((rows) => rows.filter((it) => !gone.has(it.id)));
       setOpenKey(null);
       void client.invalidateQueries({ queryKey: ['email-snoozed'] });
       const id = res.snoozed.id;
-      setNotice({ text: `Snoozed until ${until.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`, action: { label: 'Undo', run: () => {
+      setNotice({ text: `${res.warning ? `${res.warning} ` : ''}Snoozed until ${until.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`, action: { label: 'Undo', run: () => {
         setNotice(null);
         void api.post(`/email/snoozed/${encodeURIComponent(id)}/unsnooze`, {})
           .then(() => client.invalidateQueries({ queryKey: ['email-list', scope] }), (err: unknown) => setError((err as Error).message));
