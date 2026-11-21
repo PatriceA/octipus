@@ -275,7 +275,8 @@ test('dragging an event moves it by the grid\'s quarter hours', async ({ authent
   await page.mouse.up();
   await expect(page.getByRole('status')).toContainText('Event moved.');
   // 72px is an hour and a half: 15:00–16:00 becomes 16:30–17:30. The drag does not open the card.
-  expect(api.writes).toEqual([{ method: 'PATCH', path: '/events/outlook', body: { provider: 'microsoft', calendarId: 'cal-default', confirm: true, title: 'Outlook meeting', allDay: false, start: at('16:30'), end: at('17:30'), timeZone: expect.any(String) } }]);
+  // The time only: the title is not sent with a move.
+  expect(api.writes).toEqual([{ method: 'PATCH', path: '/events/outlook', body: { provider: 'microsoft', calendarId: 'cal-default', confirm: true, allDay: false, start: at('16:30'), end: at('17:30'), timeZone: expect.any(String) } }]);
   await expect(page.getByRole('dialog', { name: 'Outlook meeting' })).toHaveCount(0);
 });
 
@@ -574,4 +575,29 @@ test('a new repeating event with a reminder and guests: their busy time, a free 
     start: expected.start, end: expected.end,
     recurrence: { frequency: 'weekly', byDay: [['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][new Date(expected.start).getDay()]], count: 6 },
   });
+});
+
+test('an untitled event stays untitled when it is moved or edited', async ({ authenticatedPage: page }) => {
+  const untitled = event('blank', '(no title)', '13:00', '14:00', { untitled: true });
+  const api = await stubCalendar(page, { events: [untitled] });
+  await page.goto('/calendar');
+  const box = (await block(page, '\\(no title\\)').boundingBox())!;
+  const x = box.x + box.width / 2;
+  await page.mouse.move(x, box.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(x, box.y + 30, { steps: 3 });
+  await page.mouse.move(x, box.y + 10 + 48, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByRole('status')).toContainText('Event moved.');
+  expect(api.writes.at(-1)!.body).not.toHaveProperty('title');
+  // Editing it: the title field is empty, not the placeholder, and saving without one sends none.
+  await block(page, '\\(no title\\)').click();
+  await page.getByRole('dialog', { name: '(no title)' }).getByRole('button', { name: 'Edit' }).click();
+  const form = page.getByRole('form', { name: 'Edit event' });
+  await expect(form.getByLabel('Title')).toHaveValue('');
+  await form.getByLabel('Location').fill('Room 2');
+  await form.getByRole('button', { name: 'Save changes' }).click();
+  await expect.poll(() => api.writes.length).toBe(2);
+  expect(api.writes.at(-1)!.body).not.toHaveProperty('title');
+  expect(api.writes.at(-1)!.body).toMatchObject({ location: 'Room 2' });
 });

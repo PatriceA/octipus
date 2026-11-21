@@ -91,6 +91,7 @@ export function parseGoogleEvents(response: unknown): CalendarEvent[] {
     const event: CalendarEvent = {
       id: item.id,
       title: item.summary?.trim() || '(no title)',
+      ...(item.summary?.trim() ? {} : { untitled: true }),
       // A date-only value is midnight local to the event; normalising to UTC
       // here keeps every downstream comparison on one clock.
       start: allDay ? `${startRaw}T00:00:00.000Z` : new Date(startRaw).toISOString(),
@@ -190,6 +191,7 @@ export function parseGraphEvents(response: unknown): CalendarEvent[] {
     const event: CalendarEvent = {
       id: item.id,
       title: item.subject?.trim() || '(no title)',
+      ...(item.subject?.trim() ? {} : { untitled: true }),
       // An all-day event is a date, not an instant: see graphAllDayDate.
       start: allDay ? `${graphAllDayDate(startRaw, item.originalStartTimeZone)}T00:00:00.000Z` : new Date(startRaw).toISOString(),
       allDay,

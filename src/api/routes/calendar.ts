@@ -17,7 +17,9 @@ const notifyAttendees = t.Optional(t.Boolean());
 /** For an occurrence of a repeating event: that one, or every event of the series. */
 const scope = t.Optional(t.Union([t.Literal('this'), t.Literal('all')]));
 const body = t.Object({
-  provider, account, calendarId, confirm: t.Boolean(), title: t.String({ minLength: 1, maxLength: 500 }),
+  provider, account, calendarId, confirm: t.Boolean(),
+  /** Required to create; on an edit, absent leaves the title as it is. */
+  title: t.Optional(t.String({ minLength: 1, maxLength: 500 })),
   start: t.String({ maxLength: 40 }), end: t.String({ maxLength: 40 }), allDay: t.Boolean(),
   location: t.Optional(t.String({ maxLength: 2000 })), description: t.Optional(t.String({ maxLength: 20000 })),
   /** On create: who is invited. On an edit: the complete new guest list; absent leaves it alone. */
@@ -114,6 +116,7 @@ export const calendarRoutes = new Elysia({ prefix: '/calendar' }).use(apiContext
   .post('/events', async ({ principal, body, set }) => {
     const refusal = allowed(principal, set); if (refusal) return refusal;
     if (!body.confirm) { set.status = 409; return { error: 'Confirm the event change before saving.' }; }
+    if (!body.title?.trim()) { set.status = 400; return { error: 'An event title is required.' }; }
     try {
       const denied = await calendarRefusal(principal.userId, body, set); if (denied) return denied;
       const input = writeOf(body, set); if ('error' in input) return input;
@@ -162,7 +165,8 @@ export const calendarRoutes = new Elysia({ prefix: '/calendar' }).use(apiContext
       const view = await calendarView(principal.userId);
       const [guests, mine] = await Promise.all([
         queryFreeBusy(principal.userId, body.provider, body.attendees, from, to, target.account),
-        listCalendarEvents(principal.userId, { from, to, limit: 250, allPages: true, calendars: view.calendars.filter((c) => c.visible) }),
+        // The reader's own busy time: their own calendars, not ones colleagues share with them.
+        listCalendarEvents(principal.userId, { from, to, limit: 250, allPages: true, calendars: view.calendars.filter((c) => c.visible && !c.shared) }),
       ]);
       // Free time, declined invitations and all-day notes do not block a slot.
       const own = mine.events.filter((e) => !e.allDay && e.end && e.showAs !== 'free' && e.responseStatus !== 'declined').map((e) => ({ start: e.start, end: e.end! }));

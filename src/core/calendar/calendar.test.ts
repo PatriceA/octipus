@@ -258,3 +258,14 @@ test('next-page links: Google by token, Graph only on graph.microsoft.com under 
     expect(graphNextPage({ '@odata.nextLink': link })).toBeNull();
   }
 });
+
+describe('untitled events', () => {
+  it('carry a placeholder title and say they have none of their own', () => {
+    const [google] = parseGoogleEvents({ items: [{ id: 'g', summary: '  ', start: { dateTime: '2026-09-02T10:00:00Z' } }] });
+    expect(google).toMatchObject({ title: '(no title)', untitled: true });
+    const [graph] = parseGraphEvents({ value: [{ id: 'm', start: { dateTime: '2026-09-02T10:00:00' } }] });
+    expect(graph).toMatchObject({ title: '(no title)', untitled: true });
+    const [named] = parseGoogleEvents({ items: [{ id: 'n', summary: 'Plan', start: { dateTime: '2026-09-02T10:00:00Z' } }] });
+    expect(named).not.toHaveProperty('untitled');
+  });
+});

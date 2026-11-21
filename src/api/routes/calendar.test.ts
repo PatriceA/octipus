@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
-const mock = vi.hoisted(() => ({ list: vi.fn(), write: vi.fn(), remove: vi.fn(), respond: vi.fn(), attendees: vi.fn(), view: vi.fn(), setPrefs: vi.fn(), shared: vi.fn() }));
+const mock = vi.hoisted(() => ({ list: vi.fn(), write: vi.fn(), remove: vi.fn(), respond: vi.fn(), attendees: vi.fn(), freebusy: vi.fn(), view: vi.fn(), setPrefs: vi.fn(), shared: vi.fn() }));
 vi.mock('@/core/calendar/events', () => ({ listCalendarEvents: mock.list }));
-vi.mock('@/core/calendar/manage', () => ({ writeCalendarEvent: mock.write, deleteCalendarEvent: mock.remove, respondToCalendarEvent: mock.respond, calendarEventAttendees: mock.attendees, CalendarInputError: class extends Error {} }));
+vi.mock('@/core/calendar/manage', () => ({ writeCalendarEvent: mock.write, deleteCalendarEvent: mock.remove, respondToCalendarEvent: mock.respond, calendarEventAttendees: mock.attendees, queryFreeBusy: mock.freebusy, CalendarInputError: class extends Error {} }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: {} }));
 vi.mock('@/security/oauth', async () => {
   const actual = await vi.importActual<typeof import('@/security/oauth')>('@/security/oauth');
@@ -172,4 +172,27 @@ test('a repeat rule and a reminder are checked at the boundary; a series change 
   expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.objectContaining({ reminderMinutes: null }), 'e1', { calendarId: undefined, notify: false, scope: 'all' });
   await call('DELETE', '/events/e1', { provider: 'google', confirm: true, scope: 'all' });
   expect(mock.remove).toHaveBeenLastCalledWith(alice.id, 'google', 'e1', { calendarId: undefined, notify: false, scope: 'all' });
+});
+
+test('find a time counts only the reader\'s own calendars as their busy time, never ones shared with them', async () => {
+  const own = { ...mine };
+  const colleague = { ...boss, visible: true };
+  mock.view.mockResolvedValue({ calendars: [own, colleague], providers: ['google'], partial: false, preferences: {} });
+  mock.freebusy.mockResolvedValue({ busy: {}, failed: {} });
+  mock.list.mockResolvedValue({ events: [], providers: ['google'], partial: false });
+  const res = await call('POST', '/freebusy', { provider: 'google', attendees: ['a@x.de'], from: '2026-11-04T00:00:00Z', to: '2026-11-05T00:00:00Z' });
+  expect(res.status).toBe(200);
+  expect(mock.list).toHaveBeenLastCalledWith(alice.id, expect.objectContaining({ calendars: [own] }));
+});
+
+test('an edit may leave the title out; creating without one is refused before the provider', async () => {
+  mock.view.mockResolvedValue({ calendars: [mine], providers: ['google'], partial: false, preferences: {} });
+  mock.attendees.mockResolvedValue(0);
+  const { title: _t, ...untitled } = input;
+  expect((await call('PATCH', '/events/e1', untitled)).status).toBe(200);
+  expect(mock.write).toHaveBeenLastCalledWith(alice.id, 'google', expect.not.objectContaining({ title: expect.anything() }), 'e1', expect.anything());
+  mock.write.mockClear();
+  const created = await call('POST', '/events', untitled);
+  expect(created.status).toBe(400);
+  expect(mock.write).not.toHaveBeenCalled();
 });

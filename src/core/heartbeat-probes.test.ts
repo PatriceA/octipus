@@ -147,9 +147,27 @@ describe('probeUpcomingEvents', () => {
     await probeUpcomingEvents('u1', NOW, 60, deps(undefined));
     expect(urls.map((u) => u.split('?')[0])).toEqual(['https://www.googleapis.com/calendar/v3/calendars/primary/events', 'https://graph.microsoft.com/v1.0/me/calendarView']);
   });
-  test('calendarsToProbe picks one provider\'s ids from the stored keys', () => {
-    expect(calendarsToProbe('google', undefined)).toEqual([undefined]);
-    expect(calendarsToProbe('google', ['google:a:b', 'microsoft:c'])).toEqual(['a:b']);
+  test('calendarsToProbe picks one provider\'s calendars from the stored keys, with the account of a further one', () => {
+    expect(calendarsToProbe('google', undefined)).toEqual([{}]);
+    expect(calendarsToProbe('google', ['google:me@x.dev', 'google:work@y.dev:team@group.calendar.google.com', 'microsoft:c'])).toEqual([
+      { calendarId: 'me@x.dev' },
+      { account: 'work@y.dev', calendarId: 'team@group.calendar.google.com' },
+    ]);
+    // A default-account id that itself holds ":" is not mistaken for an account.
+    expect(calendarsToProbe('google', ['google:a:b'])).toEqual([{ calendarId: 'a:b' }]);
     expect(calendarsToProbe('microsoft', [])).toEqual([]);
+  });
+  test('a calendar of a further account is read with that account\'s token and its own id', async () => {
+    const seen: Array<[string, string]> = [];
+    const out = await probeUpcomingEvents('u1', NOW, 60, {
+      getToken: async (_u, provider, account) => (provider === 'google' ? (account === 'work@y.dev' ? 'work-token' : 'home-token') : null),
+      fetchJson: async (url, headers) => { seen.push([url.split('?')[0], headers.Authorization]); return { items: [] }; },
+      visibleCalendars: async () => ['google:me@x.dev', 'google:work@y.dev:team@group.calendar.google.com'],
+    });
+    expect(out.partial).toBe(false);
+    expect(seen).toEqual([
+      ['https://www.googleapis.com/calendar/v3/calendars/me%40x.dev/events', 'Bearer home-token'],
+      ['https://www.googleapis.com/calendar/v3/calendars/team%40group.calendar.google.com/events', 'Bearer work-token'],
+    ]);
   });
 });

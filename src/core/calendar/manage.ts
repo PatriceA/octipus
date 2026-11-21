@@ -9,7 +9,8 @@ import {
 } from './recurrence';
 
 export interface CalendarWrite {
-  title: string;
+  /** Required to create; on an edit, absent leaves the title as it is (an untitled event stays untitled). */
+  title?: string;
   start: string;
   end: string;
   allDay: boolean;
@@ -76,7 +77,7 @@ export function mergeAttendees(provider: CalendarProvider, addresses: string[], 
 
 /** Validate the complete time range before opening any provider connection. */
 export function calendarWriteBody(provider: CalendarProvider, input: CalendarWrite, existingAttendees?: unknown[]): Record<string, unknown> {
-  if (!input.title.trim()) throw new CalendarInputError('An event title is required.');
+  if (input.title !== undefined && !input.title.trim()) throw new CalendarInputError('An event title is required.');
   const valid = (value: string) => {
     if (input.allDay) return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
     return /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
@@ -93,7 +94,7 @@ export function calendarWriteBody(provider: CalendarProvider, input: CalendarWri
   // On create an empty list means no guests; on an edit an explicit empty list removes them all.
   const guestList = attendees && (attendees.length || existingAttendees) ? mergeAttendees(provider, attendees, existingAttendees) : undefined;
   if (provider === 'google') return {
-    summary: input.title.trim(),
+    ...(input.title !== undefined ? { summary: input.title.trim() } : {}),
     // PATCH merges nested fields: explicitly clear the opposite time form.
     start: input.allDay ? { date: input.start, dateTime: null, timeZone: null } : { date: null, dateTime: new Date(input.start).toISOString(), timeZone: zone },
     end: input.allDay ? { date: input.end, dateTime: null, timeZone: null } : { date: null, dateTime: new Date(input.end).toISOString(), timeZone: zone },
@@ -107,7 +108,7 @@ export function calendarWriteBody(provider: CalendarProvider, input: CalendarWri
     ? { dateTime: `${value}T00:00:00`, timeZone: input.recurrence ? zone : 'UTC' }
     : input.recurrence ? { dateTime: wallTime(value, zone), timeZone: zone } : { dateTime: new Date(value).toISOString(), timeZone: 'UTC' });
   return {
-    subject: input.title.trim(), start: time(input.start), end: time(input.end), isAllDay: input.allDay,
+    ...(input.title !== undefined ? { subject: input.title.trim() } : {}), start: time(input.start), end: time(input.end), isAllDay: input.allDay,
     ...(input.location !== undefined ? { location: { displayName: input.location } } : {}),
     ...(input.description !== undefined ? { body: { contentType: 'Text', content: input.description } } : {}),
     ...(guestList ? { attendees: guestList } : {}),
@@ -158,9 +159,22 @@ export function calendarEventAttendees(userId: string, provider: CalendarProvide
 }
 
 async function calendarEventAttendeesInAccount(userId: string, provider: CalendarProvider, id: string, calendarId?: string): Promise<number> {
-  const query = provider === 'google' ? '?fields=attendees' : '?$select=attendees';
-  const event = await readJson<{ attendees?: unknown }>(userId, provider, `${eventUrl(provider, id, calendarId)}${query}`, 'could not read the event');
-  return Array.isArray(event.attendees) ? event.attendees.length : 0;
+  const query = provider === 'google' ? '?fields=attendees' : '?$select=attendees,organizer';
+  const event = await readJson<{ attendees?: unknown; organizer?: { emailAddress?: { address?: string } } }>(userId, provider, `${eventUrl(provider, id, calendarId)}${query}`, 'could not read the event');
+  return countGuests(provider, event.attendees, event.organizer?.emailAddress?.address);
+}
+
+/**
+ * How many people a change of the event reaches: the guests, not the reader,
+ * not the organiser and not booked rooms or equipment. Pure.
+ */
+export function countGuests(provider: CalendarProvider, attendees: unknown, organizer?: string): number {
+  if (!Array.isArray(attendees)) return 0;
+  if (provider === 'google') {
+    return (attendees as RawGoogleAttendee[]).filter((a) => a && !a.self && !a.organizer && !a.resource).length;
+  }
+  const own = organizer?.trim().toLowerCase();
+  return (attendees as RawGraphAttendee[]).filter((a) => a && a.type !== 'resource' && !(own && a.emailAddress?.address?.trim().toLowerCase() === own)).length;
 }
 
 async function currentAttendees(userId: string, provider: CalendarProvider, id: string, calendarId?: string): Promise<unknown[]> {
@@ -181,6 +195,7 @@ export function writeCalendarEvent(userId: string, provider: CalendarProvider, i
 }
 
 async function writeCalendarEventInAccount(userId: string, provider: CalendarProvider, input: CalendarWrite, id?: string, target: CalendarTarget = {}): Promise<{ id: string }> {
+  if (!id && !input.title?.trim()) throw new CalendarInputError('An event title is required.');
   // Validated before any provider connection.
   calendarWriteBody(provider, input);
   if (id && target.scope === 'all') return writeSeries(userId, provider, input, id, target);

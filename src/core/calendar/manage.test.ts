@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 const token = vi.hoisted(() => vi.fn());
 vi.mock('@/security/oauth', () => ({ getOAuthManager: () => ({ getValidToken: token }) }));
-import { calendarEventAttendees, calendarEventDetails, calendarWriteBody, deleteCalendarEvent, parseGoogleFreeBusy, parseGraphSchedule, queryFreeBusy, respondToCalendarEvent, writeCalendarEvent } from './manage';
+import { calendarEventAttendees, countGuests, calendarEventDetails, calendarWriteBody, deleteCalendarEvent, parseGoogleFreeBusy, parseGraphSchedule, queryFreeBusy, respondToCalendarEvent, writeCalendarEvent } from './manage';
 const input = { title: 'Review', start: '2026-11-04T09:00:00+01:00', end: '2026-11-04T10:00:00+01:00', allDay: false, location: '' };
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 test('timed events use absolute times and edits leave description and attendees untouched', () => {
@@ -219,4 +219,34 @@ test('every provider call of an operation on another account uses that account\'
   seen.length = 0;
   await calendarEventAttendees('alice', 'google', 'e1');
   expect(seen).toEqual(['Bearer home-token']);
+});
+
+test('only people are counted as guests: not the reader, the organiser, or rooms', () => {
+  expect(countGuests('google', [
+    { email: 'me@x.de', self: true, organizer: true }, { email: 'room@resource.calendar.google.com', resource: true }, { email: 'ana@x.de' },
+  ])).toBe(1);
+  expect(countGuests('google', [{ email: 'me@x.de', self: true, organizer: true }, { email: 'room@x', resource: true }])).toBe(0);
+  expect(countGuests('microsoft', [
+    { emailAddress: { address: 'Me@X.de' }, type: 'required' }, { emailAddress: { address: 'room@x.de' }, type: 'resource' }, { emailAddress: { address: 'ana@x.de' }, type: 'optional' },
+  ], 'me@x.de')).toBe(1);
+  expect(countGuests('microsoft', undefined)).toBe(0);
+});
+test('an event with only a booked room asks no guest confirmation', async () => {
+  token.mockResolvedValue('t');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"attendees":[{"email":"me@x.de","self":true,"organizer":true},{"email":"room@x","resource":true}]}')));
+  expect(await calendarEventAttendees('alice', 'google', 'e1')).toBe(0);
+});
+
+test('an edit without a title leaves it alone; creating needs one', async () => {
+  const { title: _t, ...untitled } = input;
+  expect(calendarWriteBody('google', untitled)).not.toHaveProperty('summary');
+  expect(calendarWriteBody('microsoft', untitled)).not.toHaveProperty('subject');
+  expect(() => calendarWriteBody('google', { ...input, title: ' ' })).toThrow(/title/);
+  token.mockResolvedValue('t');
+  const request = vi.fn(async () => new Response('{"id":"e1"}'));
+  vi.stubGlobal('fetch', request);
+  await expect(writeCalendarEvent('alice', 'google', untitled)).rejects.toThrow(/title/);
+  expect(request).not.toHaveBeenCalled();
+  await writeCalendarEvent('alice', 'google', untitled, 'e1');
+  expect(JSON.parse((request.mock.calls[0] as unknown as [string, { body: string }])[1].body)).not.toHaveProperty('summary');
 });

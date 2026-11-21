@@ -46,15 +46,31 @@ export const calendarKey = (c: { provider: CalendarProvider; id: string; account
 export function rekeyCalendarVisibility(visible: string[], provider: CalendarProvider, oldAccount: string | undefined, newAccount: string): string[] {
   const out: string[] = [];
   for (const key of visible) {
-    if (!key.startsWith(`${provider}:`)) { out.push(key); continue; }
-    const rest = key.slice(provider.length + 1);
-    // Account keys carry "<address>:<id>"; an address has an "@" before its first ":", a calendar id here has no ":".
-    const colon = rest.indexOf(':');
-    if (colon < 0) { if (oldAccount) out.push(`${provider}:${oldAccount}:${rest}`); continue; }
-    const account = rest.slice(0, colon).toLowerCase();
-    out.push(account === newAccount.toLowerCase() ? `${provider}:${rest.slice(colon + 1)}` : key);
+    const parsed = parseCalendarKey(key);
+    if (!parsed || parsed.provider !== provider) { out.push(key); continue; }
+    if (!parsed.account) { if (oldAccount) out.push(`${provider}:${oldAccount}:${parsed.id}`); continue; }
+    out.push(parsed.account.toLowerCase() === newAccount.toLowerCase() ? `${provider}:${parsed.id}` : key);
   }
   return [...new Set(out)];
+}
+
+/**
+ * The parts of a `calendarKey`. A further account's key is
+ * `provider:<address>:<id>`; the default account's is `provider:<id>`, and its
+ * id may itself contain ":" — so the middle part is an account only when it is
+ * an address (it holds "@" and the rest is non-empty). Null for a key that
+ * names no provider or no id.
+ */
+export function parseCalendarKey(key: string): { provider: CalendarProvider; account?: string; id: string } | null {
+  const sep = key.indexOf(':');
+  const provider = key.slice(0, sep);
+  if (sep < 0 || (provider !== 'google' && provider !== 'microsoft')) return null;
+  const rest = key.slice(sep + 1);
+  const next = rest.indexOf(':');
+  if (next > 0 && rest.slice(0, next).includes('@') && rest.length > next + 1) {
+    return { provider, account: rest.slice(0, next), id: rest.slice(next + 1) };
+  }
+  return rest ? { provider, id: rest } : null;
 }
 
 export interface CalendarAttendee {
@@ -67,6 +83,8 @@ export interface CalendarEvent {
   /** The provider's own id, stable across syncs. */
   id: string;
   title: string;
+  /** The event has no title of its own: `title` is a placeholder that must never be written back. */
+  untitled?: boolean;
   /**
    * ISO-8601 start. An all-day event is `YYYY-MM-DDT00:00:00.000Z`: its date
    * part is the calendar date for every reader, whatever their timezone.
