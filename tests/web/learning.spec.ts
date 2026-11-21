@@ -7,7 +7,8 @@ test('learning receipts show real outcomes and manual check stays out of chat', 
     if (route.request().method() === 'POST') { requested = true; return json(route, 202, { id: 'job2', status: 'queued' }); }
     return json(route, 200, { checks: [{ id: 'job1', title: 'Learning check: completed plan', status: 'error', stage: 'partial_failure',
       error: 'Indexing unavailable', createdAt: '2026-09-28T10:00:00Z',
-      result: { reason: 'Found a reusable fix', outputs: [{ kind: 'skill', status: 'proposed', id: 'proposal1' }, { kind: 'knowledge', status: 'saved_unindexed', id: 'note1' }] } }] });
+      result: { reason: 'Found a reusable fix', outputs: [{ kind: 'skill', status: 'proposed', id: 'proposal1' }, { kind: 'knowledge', status: 'saved_unindexed', id: 'note1' },
+        { kind: 'skill', status: 'merged', id: 'proposal2' }, { kind: 'skill', status: 'candidate', id: 'proposal3' }] } }] });
   });
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
@@ -17,6 +18,8 @@ test('learning receipts show real outcomes and manual check stays out of chat', 
   await expect(panel).toContainText('Found a reusable fix');
   await expect(panel).toContainText('skill: proposed');
   await expect(panel).toContainText('knowledge: saved unindexed');
+  await expect(panel).toContainText('skill: merged into an existing proposal');
+  await expect(panel).toContainText('skill: kept as a candidate');
   await panel.getByRole('button', { name: 'Check recent work' }).click();
   await expect.poll(() => requested).toBe(true);
   await expect(page.getByPlaceholder('Send a message or change direction...')).toHaveValue('');
