@@ -54,31 +54,40 @@ test('mailboxes can be added with SMTP, edited without resending credentials, te
   await expect(page.getByText('No IMAP or POP3 mailboxes connected yet.')).toBeVisible();
 });
 
+/** A stored IMAP message as the Email page's client routes return it. */
+const imapRow = (m: MailMessageView) => ({ id: m.id, provider: 'imap', mailbox: `imap:${m.accountId}`, status: m.status, from: { email: m.from?.address ?? '' }, to: m.to.map(a => ({ email: a.address })), subject: m.subject, snippet: m.snippet, receivedAt: m.date, unread: m.unread, hasAttachments: m.hasAttachments });
+const imapMessage = (m: MailMessageView) => ({ ...imapRow(m), cc: m.cc.map(a => ({ email: a.address })), body: m.text, attachments: [], revision: m.revision, sendError: m.error });
+
+// The Mailboxes page is the same mail window as Email now: a draft is saved on "Send", and the
+// confirmation shows (and sends) exactly the saved content.
 test('drafts require saving edits and exact-content confirmation before sending', async ({ authenticatedPage: page }) => {
   await stubAllDefaults(page);
   await page.route('**/api/mail/accounts', route => json(route, 200, [account()]));
-  await page.route('**/api/mail/messages?**', route => json(route, 200, []));
+  await page.route('**/api/mail/client/messages?**', route => json(route, 200, { provider: null, mailbox: 'imap:a1', items: [] }));
   let draft = { ...message('d1'), status: 'draft' as const, text: 'Hello', to: [{ address: 'recipient@example.com' }] };
-  let sends = 0; const receipts: unknown[] = [];
-  await page.route('**/api/mail/drafts', route => { const body = route.request().postDataJSON(); draft = { ...draft, subject: body.subject, text: body.body, to: [{ address: body.to }] }; return json(route, 201, draft); });
-  await page.route('**/api/mail/drafts/d1', route => { const body = route.request().postDataJSON(); draft = { ...draft, subject: body.subject, text: body.body, revision: 'b'.repeat(64) }; return json(route, 200, draft); });
+  let sends = 0; const receipts: unknown[] = []; const writes: Array<{ method: string; body: Record<string, unknown> }> = [];
+  await page.route('**/api/mail/drafts', route => { const body = route.request().postDataJSON(); writes.push({ method: 'POST', body }); draft = { ...draft, subject: body.subject, text: body.body, to: [{ address: body.to }] }; return json(route, 201, draft); });
+  await page.route('**/api/mail/drafts/d1', route => { const body = route.request().postDataJSON(); writes.push({ method: 'PATCH', body }); draft = { ...draft, subject: body.subject, text: body.body, revision: 'b'.repeat(64) }; return json(route, 200, draft); });
   await page.route('**/api/mail/drafts/d1/send', route => { sends++; receipts.push(route.request().postDataJSON()); return json(route, 200, { ...draft, status: 'sent' }); });
   await page.goto('/mail');
-  await page.getByRole('button', { name: 'New message' }).click();
-  const form = page.getByRole('form', { name: 'Mail draft' });
+  await page.getByRole('button', { name: 'Compose' }).click();
+  const form = page.getByRole('form', { name: 'New message' });
   await form.getByLabel('To', { exact: true }).fill('recipient@example.com');
   await form.getByLabel('Subject', { exact: true }).fill('First subject');
-  await form.getByLabel('Message', { exact: true }).fill('Hello');
-  await form.getByRole('button', { name: 'Save draft' }).click();
-  await expect(form.getByRole('button', { name: 'Review send' })).toBeEnabled();
+  await form.getByRole('textbox', { name: 'Message' }).fill('Hello');
+  await form.getByRole('button', { name: 'Send', exact: true }).click();
+  // Saved first; the confirmation shows the saved draft.
+  await expect(form.getByRole('alertdialog', { name: 'Confirm send' })).toContainText('First subject');
+  expect(writes).toEqual([{ method: 'POST', body: { accountId: 'a1', to: 'recipient@example.com', cc: '', subject: 'First subject', body: 'Hello' } }]);
+  // A change after saving takes the confirmation away, and is saved again before it can be sent.
   await form.getByLabel('Subject', { exact: true }).fill('Reviewed subject');
-  await expect(form.getByRole('button', { name: 'Review send' })).toBeDisabled();
+  await expect(form.getByRole('alertdialog')).toHaveCount(0);
   expect(sends).toBe(0);
-  await form.getByRole('button', { name: 'Save draft' }).click();
-  await form.getByRole('button', { name: 'Review send' }).click();
-  await expect(page.getByRole('alertdialog', { name: 'Confirm email send' })).toContainText('Reviewed subject');
+  await form.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(form.getByRole('alertdialog', { name: 'Confirm send' })).toContainText('Reviewed subject');
+  expect(writes[1]).toMatchObject({ method: 'PATCH', body: { subject: 'Reviewed subject' } });
   expect(sends).toBe(0);
-  await page.getByRole('button', { name: 'Confirm send', exact: true }).click();
+  await form.getByRole('button', { name: 'Send now', exact: true }).click();
   await expect.poll(() => sends).toBe(1);
   expect(receipts).toEqual([{ confirm: true, expectedRevision: 'b'.repeat(64) }]);
 });
@@ -91,11 +100,22 @@ test('read-only shared mailbox users can read but cannot manage or send', async 
   await page.route('**/api/spaces', route => json(route, 200, { spaces: [space] }));
   await page.route(`**/api/spaces/${id}`, route => json(route, 200, space));
   await page.route('**/api/mail/accounts', route => json(route, 200, [{ ...account(), workspaceId: id }]));
-  await page.route('**/api/mail/messages?**', route => json(route, 200, [message()]));
+  await page.route('**/api/mail/client/messages?**', route => json(route, 200, { provider: null, mailbox: 'imap:a1', items: [imapRow(message())] }));
+  await page.route('**/api/mail/client/messages/m1', route => json(route, 200, imapMessage(message())));
+  let changes = 0;
+  await page.route('**/api/mail/client/messages/batch', route => { changes++; return json(route, 200, { done: [], failed: [] }); });
+  await page.route('**/api/mail/accounts/a1/sync', route => { changes++; return json(route, 200, { stored: 0 }); });
   await page.goto('/mail');
   await expect(page.getByRole('button', { name: /Mail for a1/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'New message' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Sync inbox' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Compose' })).toHaveCount(0);
+  await page.getByRole('button', { name: /Mail for a1/ }).click();
+  const reader = page.getByRole('article', { name: 'Conversation: Mail for a1' });
+  await expect(reader.getByText('Safe plain text', { exact: false })).toBeVisible();
+  await expect(reader.getByRole('button', { name: 'Reply', exact: true })).toHaveCount(0);
+  await expect(reader.getByRole('button', { name: 'Mark unread' })).toHaveCount(0);
+  // Reading changes nothing, and Refresh does not sync a mailbox the viewer cannot change.
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  expect(changes).toBe(0);
   await page.getByRole('button', { name: 'Manage mailboxes' }).click();
   await expect(page.getByRole('heading', { name: 'Mailboxes', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add mailbox', exact: true })).toHaveCount(0);

@@ -201,8 +201,11 @@ test('Email switches between a Google mailbox and separate IMAP inboxes without 
   const message = (id: string, accountId: string): MailMessageView => ({ id, accountId, revision: 'a'.repeat(64), status: 'received', from: { address: 'sender@example.com' }, to: [{ address: `${accountId}@example.com` }], cc: [], subject: `Mail for ${accountId}`, snippet: 'Hello', date: now, unread: true, hasAttachments: false, protectionLevel: 2, messageIdHeader: null, inReplyTo: null, text: 'Safe plain text <script>malicious()</script>', html: '<p>Hello from a2</p><script>parent.document.body.dataset.pwned = "1"</script>', attachments: [], rawKept: false, error: null });
   await stubMailbox(page, [row('g1', { subject: 'Google message' })]);
   await page.route('**/api/mail/accounts', route => json(route, 200, [account('a1', 'Work'), account('a2', 'Personal')]));
-  await page.route('**/api/mail/messages?**', route => { const id = new URL(route.request().url()).searchParams.get('account')!; return json(route, 200, [message(`m-${id}`, id)]); });
-  await page.route('**/api/mail/messages/m-a2', route => json(route, 200, message('m-a2', 'a2')));
+  // IMAP mailboxes are read through the client routes, in the same shapes as Google mail.
+  const imapRow = (m: MailMessageView): InboxItem => ({ id: m.id, provider: 'imap', mailbox: `imap:${m.accountId}`, status: m.status, from: { email: m.from!.address }, to: m.to.map(a => ({ email: a.address })), subject: m.subject, snippet: m.snippet, receivedAt: m.date, unread: m.unread, hasAttachments: m.hasAttachments });
+  await page.route('**/api/mail/client/messages?**', route => { const id = new URL(route.request().url()).searchParams.get('account')!; return json(route, 200, { provider: null, mailbox: `imap:${id}`, items: [imapRow(message(`m-${id}`, id))] }); });
+  await page.route('**/api/mail/client/messages/m-a2', route => { const m = message('m-a2', 'a2'); return json(route, 200, { ...imapRow(m), cc: [], body: m.text, html: m.html, attachments: [] }); });
+  await page.route('**/api/mail/client/messages/batch', route => json(route, 200, { done: route.request().postDataJSON().ids, failed: [] }));
   await page.goto('/email');
   await expect(page.getByText('Google message')).toBeVisible();
   const mailbox = page.getByRole('combobox', { name: 'Mailbox', exact: true });
@@ -215,9 +218,9 @@ test('Email switches between a Google mailbox and separate IMAP inboxes without 
   await expect(page.getByRole('button', { name: /Mail for a1/ })).toHaveCount(0);
   await page.getByRole('button', { name: /Mail for a2/ }).click();
   // The mail's HTML is drawn in a frame that can run no script; nothing of it lands in the page itself.
-  const frame = page.locator('iframe[title="Message: Mail for a2"]');
+  const frame = page.locator('iframe[title="Message from sender@example.com"]');
   await expect(frame).toHaveAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
-  await expect(page.frameLocator('iframe[title="Message: Mail for a2"]').getByText('Hello from a2')).toBeVisible();
+  await expect(page.frameLocator('iframe[title="Message from sender@example.com"]').getByText('Hello from a2')).toBeVisible();
   expect(await page.evaluate(() => document.body.dataset.pwned)).toBeUndefined();
   await mailbox.selectOption('google');
   await expect(page.getByText('Google message')).toBeVisible();
@@ -254,8 +257,8 @@ test('All inboxes merges Gmail and Outlook by date and acts on each message in i
   await expect(rows.nth(1)).toContainText('Outlook');
   await expect(rows.nth(2)).toContainText('Oldest, Gmail');
   await expect(page.getByLabel('3 unread')).toBeVisible();
-  // Triage works on one mailbox at a time.
-  await expect(page.getByRole('button', { name: 'Triage inbox' })).toHaveCount(0);
+  // Triage covers every inbox of the view.
+  await expect(page.getByRole('button', { name: 'Triage inbox' })).toBeVisible();
   await page.getByLabel('Select conversation: Newest, Gmail').check();
   await page.getByLabel('Select conversation: Middle, Outlook').check();
   await page.getByRole('region', { name: 'Messages' }).getByRole('button', { name: 'Archive' }).click();

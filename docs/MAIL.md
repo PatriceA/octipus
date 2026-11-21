@@ -21,14 +21,36 @@ so a message is read exactly where its account is.
 ## Accounts
 
 Open **Settings → Mailboxes**, or choose **Manage mailboxes** on the Email or
-Mailboxes page. Add an address, incoming server and password, and optionally an
+Mail page. Add an address, incoming server and password, and optionally an
 SMTP server. Each account can be edited, tested, synced and removed there.
 Blank password fields retain a saved login; passwords are never read back.
 
 The Email page's mailbox selector switches between the Google and Microsoft
-mailboxes (or all of them at once) and individual IMAP/POP3 accounts. An IMAP
-mailbox keeps its own simpler view there. **Mailboxes** (`/mail`) also works when
-the separate Google/Microsoft inbox module is off. Accounts are scoped to the
+mailboxes, the IMAP/POP3 accounts, and **All inboxes** (every one of them in one
+list). **Mail** (`/mail`) is the same window with the IMAP/POP3 mailboxes only;
+it also works when the separate Google/Microsoft inbox module is off.
+
+### In the mail window
+
+An IMAP/POP3 mailbox opens in the same mail window as Gmail or Outlook:
+
+- **Folders:** Inbox (received), Sent, Drafts and Failed sends: what Octipus
+  stores. There is no archive, trash or star: nothing on the server changes.
+- **Reading** marks received mail read for editors; a viewer reads without
+  changing anything. Mail HTML is drawn in a sandboxed frame, remote images
+  held back until asked for. Attachments download when the raw message is kept.
+- **Writing** goes through a saved draft: **Send** saves the draft (a reply
+  takes its recipients, subject and quote from the original on the server),
+  then shows exactly what was saved; **Send now** sends that revision. A change
+  after saving is saved again first. A draft or failed send opens again from
+  its folder with **Edit draft**. Needs SMTP set up and the editor role.
+- **Refresh** syncs the mailbox now (editors); a failed sync is shown above
+  the list.
+- **AI help and triage** (summary, reply directions, AI drafts, a to-do,
+  priority and category) need the Email & calendar module. Mail at protection
+  level 3-4 goes to local models only while protection is on
+  ([EMAIL-TRIAGE.md](EMAIL-TRIAGE.md#which-mailboxes)).
+ Accounts are scoped to the
 selected local workspace; remote-install mailbox management is not supported.
 The `mail` module must be enabled in Settings → Modules.
 
@@ -197,6 +219,9 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 | `POST /drafts` | `{ replyTo, body, all }` or `{ accountId, to, cc, subject, body }` |
 | `PATCH /drafts/:id` | Change a draft or a failed send |
 | `DELETE /drafts/:id` | Remove a draft or a failed send |
+| `GET /client/messages` | The Email page's list: `account`, `folder` (`inbox`, `sent`, `drafts`, `failed`), `q`, `unread`, `pageToken`, `limit`; with the reader's triage |
+| `GET /client/messages/:id` | One message in the Email page's shape |
+| `POST /client/messages/batch` | `{ ids, action: read \| unread }` |
 | `POST /drafts/:id/send` | `{ confirm: true, expectedRevision? }`; the web UI supplies the saved message view's revision |
 
 ## Not yet
