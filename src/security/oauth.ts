@@ -495,7 +495,15 @@ export class OAuthManager {
       if (!account) throw new Error('The provider did not say which account was connected, so it was not added. Try again.');
       if (entries.length >= MAX_ACCOUNTS_PER_PROVIDER) throw new Error(`At most ${MAX_ACCOUNTS_PER_PROVIDER} accounts of one provider can be connected.`);
       target = undefined; // a new entry, next to the default
-    } else target = entries[0]; // connecting (again) without "add": the default account, as before
+    } else {
+      target = entries[0]; // connecting (again) without "add": the default account, as before
+      // ...but only as the same account. Signing in as another one here would put a
+      // second mailbox under the first one's name, with its triage, snoozes and calendars.
+      const current = target ? accountOf(target) ?? await this.addressOf(userId, provider, target) : undefined;
+      if (target && account && current && current !== account) {
+        throw new Error(`You signed in as ${account}, but this connection is ${current}. To connect ${account} as well, use "Add another account" in Settings → Integrations.`);
+      }
+    }
 
     const keepAccount = account ?? (target ? accountOf(target) : undefined);
     const keepDefault = target?.metadata?.oauthConfig?.isDefault;
@@ -567,11 +575,34 @@ export class OAuthManager {
     return entry === entries[0] ? 'default' : 'other';
   }
 
+  /** An entry's address: kept, else asked of the provider with its token. */
+  private async addressOf(userId: string, provider: string, entry: VaultEntry): Promise<string | undefined> {
+    const kept = accountOf(entry);
+    if (kept) return kept;
+    const token = await this.tokenOf(userId, provider, entry).catch(() => null);
+    return token ? (await fetchAccountAddress(provider, token).catch(() => undefined)) ?? undefined : undefined;
+  }
+
+  /** Data keyed as "the default account" follows the accounts when the default changes (core/accounts/default-change.ts). */
+  private async moveDefaultData(userId: string, provider: string, oldAccount: string | undefined, newAccount: string | undefined): Promise<void> {
+    if (provider !== 'google' && provider !== 'microsoft') return;
+    if (!newAccount) {
+      securityLogger.warn({ userId, provider }, 'New default account has no known address; its triage, snoozes and calendar choices were not moved');
+      return;
+    }
+    // Not best effort: a failure here would mix two mailboxes' data, so the caller hears of it.
+    const { moveDefaultAccountData } = await import('@/core/accounts/default-change');
+    await moveDefaultAccountData(userId, provider, oldAccount, newAccount);
+  }
+
   /** Make one of the user's connected accounts the provider's default. */
   async setDefaultAccount(userId: string, provider: string, account: string): Promise<void> {
     const entries = await this.providerEntries(userId, provider);
     const target = account ? pickAccount(entries, account) : null;
     if (!target) throw new Error('That account is not connected.');
+    if (entries[0]?.id === target.id) return;
+    // Move the data first: if that fails, the default stays as it was.
+    await this.moveDefaultData(userId, provider, entries[0] ? await this.addressOf(userId, provider, entries[0]) : undefined, await this.addressOf(userId, provider, target));
     for (const entry of entries) {
       const config = entry.metadata?.oauthConfig;
       if (!config) continue;
@@ -592,6 +623,9 @@ export class OAuthManager {
     const picked = account ? pickAccount(entries, account) : null;
     if (account && !picked) throw new Error('That account is not connected.');
     const doomed = picked ? [picked] : entries;
+    // The default goes and another account takes its place: its data follows (asked before the token is gone).
+    const successor = entries[0] && doomed.includes(entries[0]) ? entries.find((e) => !doomed.includes(e)) : undefined;
+    if (successor) await this.moveDefaultData(userId, provider, await this.addressOf(userId, provider, entries[0]), await this.addressOf(userId, provider, successor));
 
     for (const entry of doomed) {
       // Try to revoke the token with the provider

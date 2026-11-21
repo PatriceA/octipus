@@ -246,8 +246,8 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 ## Local index of Gmail and Outlook headers
 
 The Google and Microsoft 365 mailboxes are read through their providers'
-APIs, not over IMAP. So that the Email page's lists, its search and the
-inbox's unread count open at once, Octipus keeps a small index of those
+APIs, not over IMAP. So that the Email page's lists and the inbox's unread
+count open at once, Octipus keeps a small index of those
 mailboxes' **headers** (`src/core/email/mail-index.ts`, tables `email_index`
 and `email_index_state`). It is on unless the owner turns it off.
 
@@ -261,8 +261,7 @@ inbox. **Never stored:** a body, an attachment, or anything of the HTML.
 Nothing of it is logged.
 
 **Why:** without it, every list page costs one provider call per message,
-search waits for the provider, and nothing can be shown before the provider
-answers.
+and nothing can be shown before the provider answers.
 
 **How far back:** Gmail reads the newest 2000 messages of the last 90 days;
 Outlook reads each folder's 90 days whole (its change feed only continues
@@ -277,9 +276,10 @@ reading, starring or trashing in the Email page changes the index at once,
 and a sync follows a few seconds later. A list is served from the index only
 when the mailbox's last sync is less than 10 minutes old (and, on Outlook,
 the folder was read to its end); otherwise the page reads live, as before.
-Search words are matched in the subject, sender and preview; a search with
-the provider's own operators (`from:`, `has:attachment`, quotes) goes to the
-provider.
+**Search goes to the provider**, which also matches words in a body or an
+attachment name; the index holds too little for that. Only when the provider
+cannot answer a search does the index answer it, with what the subject,
+sender and preview match, and no further pages.
 
 **Deleted:** with the user; when the Google or Microsoft account is
 disconnected; and at once when the owner turns the index off in **Email →

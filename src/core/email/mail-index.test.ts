@@ -20,7 +20,7 @@ interface FakeGmail {
   inboxUnread: number;
   calls: string[];
 }
-const gmail: FakeGmail = { messages: new Map(), historyId: '100', history: [], historyGone: false, inboxUnread: 0, calls: [] };
+const gmail: FakeGmail & { searchFails?: boolean } = { messages: new Map(), historyId: '100', history: [], historyGone: false, inboxUnread: 0, calls: [] };
 const graph = { pages: new Map<string, unknown>(), calls: [] as string[], unread: 0 };
 let connected: Array<'google' | 'microsoft'> = ['google', 'microsoft'];
 const notFound = () => new Error('Mail provider returned an error (HTTP 404).');
@@ -46,6 +46,9 @@ vi.mock('./providers', () => ({
       return msg;
     }
     if (path.startsWith('/messages?')) {
+      // A search the provider cannot answer right now (the index's own reads carry newer_than:).
+      const q = new URLSearchParams(path.slice('/messages?'.length)).get('q') ?? '';
+      if (gmail.searchFails && q && !q.startsWith('newer_than:')) throw new Error('Mail provider returned an error (HTTP 503).');
       const max = Number(new URLSearchParams(path.slice('/messages?'.length)).get('maxResults') ?? 50);
       const ids = [...gmail.messages.values()].sort((a, b) => Number(b.internalDate) - Number(a.internalDate)).map((m) => ({ id: m.id }));
       return { messages: ids.slice(0, max) };
@@ -205,7 +208,7 @@ describe('the index', () => {
     return getDb().select().from(emailIndex).where(and(eq(emailIndex.userId, userId), eq(emailIndex.provider, provider)));
   };
 
-  test('Gmail: the first open reads live and starts the index; then lists, pages, counts and searches come from it', async () => {
+  test('Gmail: the first open reads live and starts the index; then lists, pages and counts come from it, searches from the provider', async () => {
     gmail.messages = new Map([
       ['m1', gmailMessage('m1', 1, ['INBOX', 'UNREAD'], 'Invoice for March')],
       ['m2', gmailMessage('m2', 2, ['INBOX'])],
@@ -245,10 +248,20 @@ describe('the index', () => {
     // Starred mail in the trash is trash.
     expect((await listMessages(owner, 'google', { folder: 'starred', limit: 10 })).items.map((it) => it.id)).toEqual(['m3']);
     expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, unread: true })).items.map((it) => it.id)).toEqual(['m1']);
-    expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'invoice MARCH' })).items.map((it) => it.id)).toEqual(['m1']);
-    expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'acme.io' })).items.map((it) => it.id)).toEqual(['m1', 'm2', 'm3']);
-    // A "%" is a character, not a wildcard.
-    expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: '%' })).items).toEqual([]);
+    // A search goes to the provider even with the index fresh: only it can match a body or an attachment name.
+    gmail.calls.length = 0;
+    await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'invoice' });
+    expect(gmail.calls.some((c) => c.startsWith('GET /messages?') && c.includes('invoice'))).toBe(true);
+    // Only when the provider cannot answer does the index, with what headers match and no live continuation.
+    gmail.searchFails = true;
+    try {
+      const fallback = await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'invoice MARCH' });
+      expect(fallback.items.map((it) => it.id)).toEqual(['m1']);
+      expect(fallback.nextPageToken).toBeUndefined();
+      expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'acme.io' })).items.map((it) => it.id)).toEqual(['m1', 'm2', 'm3']);
+      // A "%" is a character, not a wildcard.
+      expect((await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: '%' })).items).toEqual([]);
+    } finally { gmail.searchFails = false; }
     gmail.calls.length = 0;
     await listMessages(owner, 'google', { folder: 'inbox', limit: 10, q: 'from:anna' });
     expect(gmail.calls.some((c) => c.includes('from%3Aanna'))).toBe(true);

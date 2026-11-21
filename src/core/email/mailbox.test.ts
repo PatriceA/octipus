@@ -90,6 +90,11 @@ describe('Graph list paths and page tokens', () => {
     expect(() => mailbox.graphListPath({ ...base, folder: 'inbox', q: 'x', pageToken: 's25' })).toThrow(MailboxError);
     expect(() => mailbox.graphListPath({ ...base, folder: 'inbox', pageToken: 'kABC' })).toThrow(MailboxError);
   });
+  test('a search continuing with older mail is bounded by date, so it does not start again from the newest', () => {
+    const path = decodeURIComponent(mailbox.graphListPath({ ...base, folder: 'inbox', q: 'budget', before: new Date('2026-08-23T10:15:00Z') }));
+    expect(path).toContain('$search="budget received<=2026-08-23"');
+    expect(path).not.toMatch(/\$filter|\$orderby/);
+  });
   test('a page token is never a URL', () => {
     for (const bad of ['https://graph.microsoft.com/v1.0/me/messages?$skip=10', 's-1', 's12345678', 'k', 'k a', 'k"x', 'x10', 'k&$select=body']) {
       expect(() => mailbox.parseGraphPageToken(bad)).toThrow(MailboxError);

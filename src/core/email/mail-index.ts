@@ -595,6 +595,18 @@ export async function listWithIndex(
     const page = await live({ ...opts, pageToken: parsed.token, before: parsed.before });
     return { ...page, nextPageToken: page.nextPageToken ? liveToken(parsed.before, page.nextPageToken) : undefined };
   }
+  // A search goes to the provider: the index holds headers and a short preview,
+  // so it would miss every word in a body or an attachment name. The index
+  // answers a search only when the provider cannot (and says nothing more).
+  if ((opts.q ?? '').trim() && !token?.startsWith(INDEX_TOKEN)) {
+    try {
+      return await live(opts);
+    } catch (err) {
+      const fallback = await indexSearchFallback(userId, provider, opts).catch(() => null);
+      if (fallback) return fallback;
+      throw err;
+    }
+  }
   const enabled = await indexEnabled(userId).catch(() => false);
   if (enabled) {
     try {
@@ -613,6 +625,16 @@ export async function listWithIndex(
   }
   // An index token the index can no longer serve starts the folder again, live.
   return live({ ...opts, pageToken: token?.startsWith(INDEX_TOKEN) ? undefined : token });
+}
+
+/** A search the provider could not answer, from the index when it is fresh; null otherwise. */
+async function indexSearchFallback(userId: string, provider: EmailProvider, opts: ListOptions): Promise<EmailListResponse | null> {
+  if (!(await indexEnabled(userId))) return null;
+  const state = await stateOf(userId, provider);
+  if (!state || !isFresh(state, opts.folder)) return null;
+  const page = await indexPage(userId, provider, state, opts, null);
+  // Only what the headers match, and no live continuation (the provider just failed).
+  return page ? { ...page, nextPageToken: page.nextPageToken?.startsWith(INDEX_TOKEN) ? page.nextPageToken : undefined } : null;
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {

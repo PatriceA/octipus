@@ -194,7 +194,8 @@ export function graphListPath(opts: ListOptions): string {
   const params = [`$select=${GRAPH_LIST_SELECT}`, `$top=${opts.limit}`];
   const q = cleanQuery(opts.q).replace(/["\\]/g, ' ').trim();
   if (q) {
-    const kql = [q, ...(opts.unread ? ['isread:false'] : []), ...(opts.folder === 'starred' ? ['isflagged:true'] : [])].join(' ');
+    // KQL dates have day precision: "on or before that day" (the client drops the few repeats) rather than miss mail of that day.
+    const kql = [q, ...(opts.unread ? ['isread:false'] : []), ...(opts.folder === 'starred' ? ['isflagged:true'] : []), ...(opts.before ? [`received<=${opts.before.toISOString().slice(0, 10)}`] : [])].join(' ');
     params.push(`$search=${encodeURIComponent(`"${kql}"`)}`);
     if ('skipToken' in page) params.push(`$skiptoken=${encodeURIComponent(page.skipToken)}`);
     else if (page.skip > 0) throw new MailboxError('Invalid page token.');

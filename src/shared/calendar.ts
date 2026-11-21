@@ -36,6 +36,27 @@ export interface CalendarInfo {
  */
 export const calendarKey = (c: { provider: CalendarProvider; id: string; account?: string }) => (c.account ? `${c.provider}:${c.account}:${c.id}` : `${c.provider}:${c.id}`);
 
+/**
+ * Visible-calendar keys after a provider's default account changed: the old
+ * default's bare keys (`google:<id>`) name its account, and the new default's
+ * (`google:<account>:<id>`) become bare, so every choice stays on its
+ * calendar. `oldAccount` unknown: the old default's keys are left out (they
+ * would otherwise be read as the new default's). Pure.
+ */
+export function rekeyCalendarVisibility(visible: string[], provider: CalendarProvider, oldAccount: string | undefined, newAccount: string): string[] {
+  const out: string[] = [];
+  for (const key of visible) {
+    if (!key.startsWith(`${provider}:`)) { out.push(key); continue; }
+    const rest = key.slice(provider.length + 1);
+    // Account keys carry "<address>:<id>"; an address has an "@" before its first ":", a calendar id here has no ":".
+    const colon = rest.indexOf(':');
+    if (colon < 0) { if (oldAccount) out.push(`${provider}:${oldAccount}:${rest}`); continue; }
+    const account = rest.slice(0, colon).toLowerCase();
+    out.push(account === newAccount.toLowerCase() ? `${provider}:${rest.slice(colon + 1)}` : key);
+  }
+  return [...new Set(out)];
+}
+
 export interface CalendarAttendee {
   name?: string;
   email?: string;

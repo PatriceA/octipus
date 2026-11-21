@@ -232,4 +232,53 @@ describe('several accounts of one provider', () => {
       fetchSpy.mockRestore();
     }
   });
+
+  test('reconnecting as another account is refused; data keyed to the default follows a default change, both ways', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(fakeGoogle as typeof fetch);
+    try {
+      const { getDb } = await import('@/db/postgres');
+      const { emailTriageLabels } = await import('@/db/schema/email-triage-labels');
+      const { emailSnoozes } = await import('@/db/schema/email-snoozes');
+      const { users } = await import('@/db/schema/users');
+      const { and, eq } = await import('drizzle-orm');
+      const db = getDb();
+      codes.d1 = { access_token: 'one-at', refresh_token: 'one-rt', expires_in: 3600 };
+      addressOf['one-at'] = 'bob@one.example';
+      expect((await connect('d1', { as: 'bob' })).page).toMatch(/Google Connected/);
+
+      // Reconnect (not "add") but signed in as someone else: refused, the connection unchanged.
+      codes.d2 = { access_token: 'two-at', refresh_token: 'two-rt', expires_in: 3600 };
+      addressOf['two-at'] = 'bob@two.example';
+      expect((await connect('d2', { as: 'bob' })).page).toMatch(/Add another account/);
+      expect(await accounts('bob')).toEqual({ accounts: [{ account: 'bob@one.example', isDefault: true }] });
+      const { getOAuthManager } = await import('@/security/oauth');
+      expect(await getOAuthManager().getValidToken(bobId, 'google')).toBe('one-at');
+      // The same account again is an ordinary reconnect.
+      codes.d3 = { access_token: 'one-at-2', refresh_token: 'one-rt-2', expires_in: 3600 };
+      addressOf['one-at-2'] = 'bob@one.example';
+      expect((await connect('d3', { as: 'bob' })).page).toMatch(/Google Connected/);
+      expect(await getOAuthManager().getValidToken(bobId, 'google')).toBe('one-at-2');
+      expect((await connect('d2', { as: 'bob', addAccount: true })).page).toMatch(/Google Connected/);
+
+      // Data of each account, keyed the way it is while bob@one is the default.
+      const label = (key: string, messageId: string) => ({ userId: bobId, provider: key, messageId, fromEmail: 'x@y.z', subject: 's', snippet: '' });
+      await db.insert(emailTriageLabels).values([label('google', 'm-one'), label('google:bob@two.example', 'm-two'), label('imap:acc1', 'm-imap')]);
+      await db.insert(emailSnoozes).values({ userId: bobId, provider: 'google', account: null, messageIds: ['m-one'], fromEmail: 'x@y.z', subject: 's', snippet: '', wakeAt: new Date(Date.now() + 3_600_000) });
+      await db.update(users).set({ preferences: { calendar: { visible: ['google:bob@one.example', 'google:bob@two.example:bob@two.example', 'microsoft:cal-1'] } } }).where(eq(users.id, bobId));
+      const keys = async () => (await db.select().from(emailTriageLabels).where(eq(emailTriageLabels.userId, bobId))).map((r) => `${r.provider} ${r.messageId}`).sort();
+      const visible = async () => (await db.select().from(users).where(eq(users.id, bobId)))[0].preferences?.calendar?.visible;
+
+      expect((await call('bob', 'POST', '/api/auth/oauth/google/accounts/default', { body: { account: 'bob@two.example' } })).status).toBe(200);
+      expect(await keys()).toEqual(['google m-two', 'google:bob@one.example m-one', 'imap:acc1 m-imap']);
+      expect((await db.select().from(emailSnoozes).where(and(eq(emailSnoozes.userId, bobId))))[0].account).toBe('bob@one.example');
+      expect(await visible()).toEqual(['google:bob@one.example:bob@one.example', 'google:bob@two.example', 'microsoft:cal-1']);
+
+      // The default disconnected: the remaining account takes its place, and its data its bare keys again.
+      expect((await call('bob', 'POST', '/api/auth/oauth/google/disconnect', { body: { account: 'bob@two.example' } })).status).toBe(200);
+      expect(await keys()).toEqual(['google m-one', 'google:bob@two.example m-two', 'imap:acc1 m-imap']);
+      expect(await visible()).toEqual(['google:bob@one.example', 'google:bob@two.example:bob@two.example', 'microsoft:cal-1']);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
