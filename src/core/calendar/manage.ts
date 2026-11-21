@@ -342,13 +342,13 @@ export function calendarEventDetails(userId: string, provider: CalendarProvider,
 async function calendarEventDetailsInAccount(userId: string, provider: CalendarProvider, id: string, calendarId?: string): Promise<CalendarEventDetails> {
   const url = eventUrl(provider, id, calendarId);
   if (provider === 'google') {
-    const e = await readJson<{ description?: string; attendees?: RawGoogleAttendee[]; reminders?: unknown; recurringEventId?: string; recurrence?: unknown }>(
-      userId, provider, `${url}?fields=description,attendees,reminders,recurringEventId,recurrence`, 'could not read the event');
+    const e = await readJson<{ description?: string; attendees?: RawGoogleAttendee[]; reminders?: unknown; recurringEventId?: string; recurrence?: unknown; start?: { timeZone?: string } }>(
+      userId, provider, `${url}?fields=description,attendees,reminders,recurringEventId,recurrence,start`, 'could not read the event');
     const { text, formatted } = plainText(e.description ?? '');
-    let recurrence = parseGoogleRecurrence(e.recurrence);
+    let recurrence = parseGoogleRecurrence(e.recurrence, e.start?.timeZone);
     if (e.recurringEventId) {
-      const master = await readJson<{ recurrence?: unknown }>(userId, provider, `${eventUrl(provider, e.recurringEventId, calendarId)}?fields=recurrence`, 'could not read the series');
-      recurrence = parseGoogleRecurrence(master.recurrence) ?? 'custom';
+      const master = await readJson<{ recurrence?: unknown; start?: { timeZone?: string } }>(userId, provider, `${eventUrl(provider, e.recurringEventId, calendarId)}?fields=recurrence,start`, 'could not read the series');
+      recurrence = parseGoogleRecurrence(master.recurrence, master.start?.timeZone ?? e.start?.timeZone) ?? 'custom';
     }
     const reminder = parseGoogleReminder(e.reminders);
     return {
