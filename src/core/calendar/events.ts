@@ -26,8 +26,11 @@ import type { CalendarAttendee, CalendarEvent, CalendarInfo, CalendarProvider, C
 export type { CalendarEvent, CalendarProvider } from '@/shared/calendar';
 
 export interface CalendarDeps {
-  getToken: (userId: string, provider: CalendarProvider) => Promise<string | null>;
+  /** The user's token for the provider: its default account, or the named `account`. */
+  getToken: (userId: string, provider: CalendarProvider, account?: string) => Promise<string | null>;
   fetchJson: (url: string, headers: Record<string, string>) => Promise<unknown>;
+  /** The user's further accounts of a provider (not the default), by address. Absent: none. */
+  otherAccounts?: (userId: string, provider: CalendarProvider) => Promise<string[]>;
 }
 
 const CALENDAR_TIMEOUT_MS = 10_000;
@@ -39,8 +42,10 @@ async function defaultFetchJson(url: string, headers: Record<string, string>): P
 }
 
 export const defaultCalendarDeps: CalendarDeps = {
-  getToken: (userId, provider) => getOAuthManager().getValidToken(userId, provider),
+  getToken: (userId, provider, account) => getOAuthManager().getValidToken(userId, provider, account),
   fetchJson: defaultFetchJson,
+  otherAccounts: async (userId, provider) =>
+    (await getOAuthManager().listAccounts(userId, provider)).filter((a) => !a.isDefault && a.account).map((a) => a.account as string),
 };
 
 /** Only an https link is offered as a button to press. */
@@ -270,7 +275,7 @@ export interface CalendarListResult {
 }
 
 /** A calendar to read, as the calendar list describes it. */
-export type CalendarSource = Pick<CalendarInfo, 'provider' | 'id' | 'name' | 'color' | 'readOnly'>;
+export type CalendarSource = Pick<CalendarInfo, 'provider' | 'id' | 'name' | 'color' | 'readOnly' | 'account'>;
 
 /**
  * Events in a window, across whichever calendars the user connected.
@@ -293,14 +298,23 @@ export async function listCalendarEvents(
   const results = await Promise.all(PROVIDERS.map(async (spec) => {
     const token = await deps.getToken(userId, spec.provider).catch(() => null);
     if (!token) return { events: [] as CalendarEvent[], provider: null, failed: false, truncated: false };
+    // Each further account's calendars are read with that account's own token.
+    const tokens = new Map<string, Promise<string | null>>();
+    const tokenFor = (account?: string) => {
+      if (!account) return Promise.resolve(token);
+      if (!tokens.has(account)) tokens.set(account, deps.getToken(userId, spec.provider, account).catch(() => null));
+      return tokens.get(account)!;
+    };
     const read = async (calendar?: CalendarSource) => {
-      const response = await deps.fetchJson(spec.url(options.from, options.to, limit, calendar?.id), spec.headers(token));
+      const own = await tokenFor(calendar?.account);
+      if (!own) throw new Error('account not connected');
+      const response = await deps.fetchJson(spec.url(options.from, options.to, limit, calendar?.id), spec.headers(own));
       const parsed = spec.parse(response);
       const page = response as { nextPageToken?: string; '@odata.nextLink'?: string };
       return {
         truncated: parsed.length >= limit || !!page.nextPageToken || !!page['@odata.nextLink'],
         events: calendar
-          ? parsed.map((e) => ({ ...e, calendarId: calendar.id, calendarName: calendar.name, ...(calendar.color ? { color: calendar.color } : {}), ...(calendar.readOnly ? { readOnly: true } : {}) }))
+          ? parsed.map((e) => ({ ...e, ...(calendar.account ? { account: calendar.account } : {}), calendarId: calendar.id, calendarName: calendar.name, ...(calendar.color ? { color: calendar.color } : {}), ...(calendar.readOnly ? { readOnly: true } : {}) }))
           : parsed,
       };
     };

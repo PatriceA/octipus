@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { rawStore } from '@/db/cache';
 import { getDb } from '@/db/postgres';
-import { vault } from '@/db/schema/vault';
+import { vault, type VaultEntry } from '@/db/schema/vault';
 import { securityLogger } from '@/utils/logger';
 import { getVault } from './vault';
 
@@ -49,6 +49,11 @@ interface OAuthState {
    * account as the user's.
    */
   browserBinding: string;
+  /**
+   * Connect a further account of this provider next to the ones already
+   * connected, instead of reconnecting the default one.
+   */
+  addAccount?: boolean;
 }
 
 /** Same binding, in constant time. */
@@ -65,6 +70,66 @@ export interface ConnectionStatus {
   scopes?: string[];
   expiresAt?: string;
   email?: string;
+  /** How many accounts of this provider are connected. */
+  accounts?: number;
+}
+
+/** One connected account of a provider. */
+export interface OAuthAccount {
+  provider: string;
+  /** The account's address, lowercased. Absent while the provider has not told it. */
+  account?: string;
+  /** The account agents, the heartbeat and every request without an `account` use. */
+  isDefault: boolean;
+  scopes?: string[];
+  expiresAt?: string;
+}
+
+/** How many accounts of one provider a user may connect. */
+export const MAX_ACCOUNTS_PER_PROVIDER = 5;
+
+/** An account address as stored and compared: trimmed and lowercased. Null when it is not an address. */
+export function normalizeAccount(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  return v.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(v) ? v : null;
+}
+
+type OAuthEntry = Pick<VaultEntry, 'id' | 'createdAt' | 'metadata'>;
+const accountOf = (entry: OAuthEntry): string | undefined => normalizeAccount(entry.metadata?.oauthConfig?.account) ?? undefined;
+
+/**
+ * A provider's token entries, the default first: the one marked default,
+ * else the one connected first. An entry from before several accounts were
+ * possible carries no mark and is the only one, so it stays the default. Pure.
+ */
+export function orderAccounts<T extends OAuthEntry>(entries: T[], provider: string): T[] {
+  const rank = (e: T) => (e.metadata?.oauthConfig?.isDefault === true ? 0 : e.metadata?.oauthConfig?.isDefault === false ? 2 : 1);
+  return entries
+    .filter((e) => e.metadata?.oauthConfig?.provider === provider)
+    .sort((a, b) => rank(a) - rank(b) || new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
+}
+
+/** The entry a request means: the named account, else the default. Never another entry. Pure. */
+export function pickAccount<T extends OAuthEntry>(ordered: T[], account?: string | null): T | null {
+  if (!account) return ordered[0] ?? null;
+  const wanted = normalizeAccount(account);
+  return (wanted && ordered.find((e) => accountOf(e) === wanted)) || null;
+}
+
+/**
+ * The address of the account a token belongs to, asked of the provider with
+ * that token. Undefined when the provider does not say.
+ */
+async function fetchAccountAddress(provider: string, accessToken: string): Promise<string | undefined> {
+  const url = provider === 'google'
+    ? 'https://openidconnect.googleapis.com/v1/userinfo'
+    : provider === 'microsoft' ? 'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName' : null;
+  if (!url) return undefined;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) { await res.body?.cancel(); return undefined; }
+  const body = (await res.json().catch(() => null)) as { email?: unknown; mail?: unknown; userPrincipalName?: unknown } | null;
+  return normalizeAccount(body?.email ?? body?.mail ?? body?.userPrincipalName) ?? undefined;
 }
 
 // --- PKCE Helpers ---
@@ -165,7 +230,7 @@ export class OAuthManager {
    * Generate an authorization URL for the given provider.
    * Returns { url, state } — the frontend should redirect or open the URL.
    */
-  async generateAuthorizationUrl(userId: string, provider: string, opts: { browserBinding: string }): Promise<{ url: string }> {
+  async generateAuthorizationUrl(userId: string, provider: string, opts: { browserBinding: string; addAccount?: boolean }): Promise<{ url: string }> {
     if (!/^[0-9a-f]{64}$/.test(opts.browserBinding)) throw new Error('OAuth: the flow must be bound to the browser that starts it');
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
@@ -184,6 +249,7 @@ export class OAuthManager {
       codeVerifier,
       createdAt: Date.now(),
       browserBinding: opts.browserBinding,
+      ...(opts.addAccount ? { addAccount: true } : {}),
     };
 
     // Store state in Redis with 10-minute TTL
@@ -199,11 +265,13 @@ export class OAuthManager {
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
       ...providerConfig.additionalParams,
+      // A further account: let the person pick which one, not the one already signed in.
+      ...(opts.addAccount ? { prompt: provider === 'google' ? 'select_account consent' : 'select_account' } : {}),
     });
 
     const url = `${providerConfig.authorizationUrl}?${params.toString()}`;
 
-    securityLogger.info({ userId, provider }, 'OAuth authorization URL generated');
+    securityLogger.info({ userId, provider, addAccount: opts.addAccount === true }, 'OAuth authorization URL generated');
     return { url };
   }
 
@@ -264,27 +332,24 @@ export class OAuthManager {
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : undefined;
 
+    // Which account this is: asked of the provider with the new token itself.
+    const account = await fetchAccountAddress(provider, tokens.access_token).catch(() => undefined);
+
     // Store tokens in vault.
     await this.storeTokens(stateData.userId, provider, {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt,
       scopes: grantedScopes(tokens, providerConfig.scopes),
-    });
+    }, { account, addAccount: stateData.addAccount === true });
 
     securityLogger.info({ userId: stateData.userId, provider }, 'OAuth tokens stored');
     return { userId: stateData.userId };
   }
 
-  /**
-   * Get a valid access token, refreshing if necessary.
-   */
-  async getValidToken(userId: string, provider: string): Promise<string | null> {
-    const db = getDb();
-    const v = getVault();
-
-    // Find the OAuth credential for this user + provider
-    const entries = await db
+  /** The user's own OAuth entries for a provider, the default first. */
+  private async providerEntries(userId: string, provider: string): Promise<VaultEntry[]> {
+    const entries = await getDb()
       .select()
       .from(vault)
       .where(
@@ -297,13 +362,23 @@ export class OAuthManager {
           eq(vault.isActive, true)
         )
       );
+    return orderAccounts(entries, provider);
+  }
 
-    const entry = entries.find(
-      (e) => e.metadata?.oauthConfig?.provider === provider
-    );
-
+  /**
+   * Get a valid access token, refreshing if necessary. Without `account` the
+   * provider's default account (agents and the heartbeat only ever use this);
+   * with it that account of this user, or null when the user has not
+   * connected it.
+   */
+  async getValidToken(userId: string, provider: string, account?: string | null): Promise<string | null> {
+    const entry = pickAccount(await this.providerEntries(userId, provider), account);
     if (!entry) return null;
+    return this.tokenOf(userId, provider, entry);
+  }
 
+  /** One entry's access token, refreshed when it is about to expire. */
+  private async tokenOf(userId: string, provider: string, entry: VaultEntry): Promise<string | null> {
     const oauthConfig = entry.metadata?.oauthConfig;
     if (!oauthConfig) return null;
 
@@ -315,7 +390,7 @@ export class OAuthManager {
         // Try to refresh
         if (oauthConfig.refreshToken) {
           try {
-            return await this.refreshToken(userId, provider, entry.id, oauthConfig.refreshToken);
+            return await this.refreshToken(userId, provider, entry.id, oauthConfig.refreshToken, oauthConfig);
           } catch (err) {
             securityLogger.error({ userId, provider, error: (err as Error).message }, 'Token refresh failed');
             return null;
@@ -326,7 +401,7 @@ export class OAuthManager {
     }
 
     // Return current access token
-    return v.get(userId, entry.id);
+    return getVault().get(userId, entry.id);
   }
 
   /**
@@ -336,7 +411,8 @@ export class OAuthManager {
     userId: string,
     provider: string,
     credentialId: string,
-    refreshToken: string
+    refreshToken: string,
+    previous?: NonNullable<VaultEntry['metadata']>['oauthConfig']
   ): Promise<string> {
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
@@ -373,6 +449,9 @@ export class OAuthManager {
     const v = getVault();
     const metadata: Record<string, unknown> = {
       oauthConfig: {
+        // Which account this is, and whether it is the default, stay as they were.
+        ...(previous?.account ? { account: previous.account } : {}),
+        ...(typeof previous?.isDefault === 'boolean' ? { isDefault: previous.isDefault } : {}),
         provider,
         scopes: grantedScopes(tokens, providerConfig.scopes),
         refreshToken: tokens.refresh_token || refreshToken, // Some providers rotate refresh tokens
@@ -400,50 +479,50 @@ export class OAuthManager {
       refreshToken?: string;
       expiresAt?: string;
       scopes: string[];
-    }
+    },
+    options: { account?: string; addAccount?: boolean } = {}
   ): Promise<void> {
     const v = getVault();
-    const db = getDb();
+    const entries = await this.providerEntries(userId, provider);
+    const account = options.account ? normalizeAccount(options.account) ?? undefined : undefined;
 
-    // Check if we already have a credential for this provider
-    const existing = await db
-      .select()
-      .from(vault)
-      .where(
-        and(
-          eq(vault.userId, userId),
-          // The user's own tokens only: a space secret this user stored
-          // (scope 'space') is the space's, never theirs (§9.5).
-          eq(vault.scope, 'user'),
-          eq(vault.credentialType, 'oauth_token'),
-          eq(vault.isActive, true)
-        )
-      );
+    // The same account connected again updates its own entry; never a second copy.
+    const same = account ? entries.find((e) => accountOf(e) === account) : undefined;
+    let target: VaultEntry | undefined;
+    if (same) target = same;
+    else if (options.addAccount && entries.length > 0) {
+      // Accounts are told apart by their address: without it a second one cannot be kept apart from the first.
+      if (!account) throw new Error('The provider did not say which account was connected, so it was not added. Try again.');
+      if (entries.length >= MAX_ACCOUNTS_PER_PROVIDER) throw new Error(`At most ${MAX_ACCOUNTS_PER_PROVIDER} accounts of one provider can be connected.`);
+      target = undefined; // a new entry, next to the default
+    } else target = entries[0]; // connecting (again) without "add": the default account, as before
 
-    const existingEntry = existing.find(
-      (e) => e.metadata?.oauthConfig?.provider === provider
-    );
-
+    const keepAccount = account ?? (target ? accountOf(target) : undefined);
+    const keepDefault = target?.metadata?.oauthConfig?.isDefault;
     const metadata: Record<string, unknown> = {
       oauthConfig: {
         provider,
+        ...(keepAccount ? { account: keepAccount } : {}),
+        ...(typeof keepDefault === 'boolean' ? { isDefault: keepDefault } : {}),
         scopes: tokens.scopes,
         refreshToken: tokens.refreshToken,
         expiresAt: tokens.expiresAt,
       },
     };
 
-    if (existingEntry) {
+    if (target) {
       // Update existing credential
-      await v.update(userId, existingEntry.id, {
+      await v.update(userId, target.id, {
         value: tokens.accessToken,
         metadata,
       });
     } else {
-      // Create new credential
-      await v.store(userId, `oauth_${provider}`, tokens.accessToken, {
+      // A further account gets a name of its own; the first keeps the one it always had.
+      const first = entries.length === 0;
+      const name = first ? `oauth_${provider}` : `oauth_${provider}_${createHash('sha256').update(account ?? '').digest('hex').slice(0, 8)}`;
+      await v.store(userId, name, tokens.accessToken, {
         credentialType: 'oauth_token',
-        description: `OAuth access token for ${provider}`,
+        description: first ? `OAuth access token for ${provider}` : `OAuth access token for ${provider} (${account})`,
         tags: ['oauth', provider],
         allowedTools: provider === 'google' ? ['google-workspace'] : ['microsoft365'],
         metadata,
@@ -452,31 +531,67 @@ export class OAuthManager {
   }
 
   /**
+   * The connected accounts of a provider, the default first. An account
+   * connected before addresses were kept is asked for its address once.
+   */
+  async listAccounts(userId: string, provider: string): Promise<OAuthAccount[]> {
+    const entries = await this.providerEntries(userId, provider);
+    const known = new Set(entries.map(accountOf).filter(Boolean));
+    const out: OAuthAccount[] = [];
+    for (const [index, entry] of entries.entries()) {
+      let account = accountOf(entry);
+      if (!account) {
+        const token = await this.tokenOf(userId, provider, entry).catch(() => null);
+        const found = token ? await fetchAccountAddress(provider, token).catch(() => undefined) : undefined;
+        if (found && !known.has(found)) {
+          account = found;
+          known.add(found);
+          const current = entry.metadata?.oauthConfig;
+          if (current) await getVault().update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...current, account: found } } }).catch(() => null);
+        }
+      }
+      const config = entry.metadata?.oauthConfig;
+      out.push({ provider, ...(account ? { account } : {}), isDefault: index === 0, scopes: config?.scopes, expiresAt: config?.expiresAt });
+    }
+    return out;
+  }
+
+  /**
+   * Whether `account` is one of the user's connected accounts of the
+   * provider, and whether it is the default. Reads only what is stored.
+   */
+  async accountRole(userId: string, provider: string, account: string): Promise<'default' | 'other' | null> {
+    const entries = await this.providerEntries(userId, provider);
+    const entry = pickAccount(entries, account);
+    if (!entry) return null;
+    return entry === entries[0] ? 'default' : 'other';
+  }
+
+  /** Make one of the user's connected accounts the provider's default. */
+  async setDefaultAccount(userId: string, provider: string, account: string): Promise<void> {
+    const entries = await this.providerEntries(userId, provider);
+    const target = account ? pickAccount(entries, account) : null;
+    if (!target) throw new Error('That account is not connected.');
+    for (const entry of entries) {
+      const config = entry.metadata?.oauthConfig;
+      if (!config) continue;
+      await getVault().update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...config, isDefault: entry.id === target.id } } });
+    }
+    securityLogger.info({ userId, provider }, 'OAuth default account changed');
+  }
+
+  /**
    * Revoke and remove OAuth tokens for a provider.
    */
-  async revokeToken(userId: string, provider: string): Promise<void> {
-    const db = getDb();
+  async revokeToken(userId: string, provider: string, account?: string | null): Promise<void> {
     const v = getVault();
+    const entries = await this.providerEntries(userId, provider);
+    // Without an account: the provider is disconnected, every account of it.
+    const picked = account ? pickAccount(entries, account) : null;
+    if (account && !picked) throw new Error('That account is not connected.');
+    const doomed = picked ? [picked] : entries;
 
-    const entries = await db
-      .select()
-      .from(vault)
-      .where(
-        and(
-          eq(vault.userId, userId),
-          // The user's own tokens only: a space secret this user stored
-          // (scope 'space') is the space's, never theirs (§9.5).
-          eq(vault.scope, 'user'),
-          eq(vault.credentialType, 'oauth_token'),
-          eq(vault.isActive, true)
-        )
-      );
-
-    const entry = entries.find(
-      (e) => e.metadata?.oauthConfig?.provider === provider
-    );
-
-    if (entry) {
+    for (const entry of doomed) {
       // Try to revoke the token with the provider
       try {
         const accessToken = await v.get(userId, entry.id);
@@ -491,44 +606,38 @@ export class OAuthManager {
       }
 
       await v.delete(userId, entry.id);
-      securityLogger.info({ userId, provider }, 'OAuth token revoked');
     }
+    // The default went: the account connected next becomes it, said explicitly.
+    const rest = entries.filter((e) => !doomed.includes(e));
+    if (entries[0] && doomed.includes(entries[0]) && rest.length > 0) {
+      const next = rest[0];
+      for (const entry of rest) {
+        const config = entry.metadata?.oauthConfig;
+        if (config) await v.update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...config, isDefault: entry.id === next.id } } });
+      }
+    }
+    if (doomed.length) securityLogger.info({ userId, provider, accounts: doomed.length }, 'OAuth token revoked');
   }
 
   /**
    * Get connection status for a provider.
    */
   async getConnectionStatus(userId: string, provider: string): Promise<ConnectionStatus> {
-    const db = getDb();
-
-    const entries = await db
-      .select()
-      .from(vault)
-      .where(
-        and(
-          eq(vault.userId, userId),
-          // The user's own tokens only: a space secret this user stored
-          // (scope 'space') is the space's, never theirs (§9.5).
-          eq(vault.scope, 'user'),
-          eq(vault.credentialType, 'oauth_token'),
-          eq(vault.isActive, true)
-        )
-      );
-
-    const entry = entries.find(
-      (e) => e.metadata?.oauthConfig?.provider === provider
-    );
-
+    const entries = await this.providerEntries(userId, provider);
+    const entry = entries[0];
     if (!entry) {
       return { connected: false, provider };
     }
 
     const oauthConfig = entry.metadata?.oauthConfig;
+    const email = accountOf(entry);
     return {
       connected: true,
       provider,
       scopes: oauthConfig?.scopes,
       expiresAt: oauthConfig?.expiresAt,
+      ...(email ? { email } : {}),
+      accounts: entries.length,
     };
   }
 }

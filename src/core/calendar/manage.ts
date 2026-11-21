@@ -16,6 +16,8 @@ export interface CalendarWrite {
 /** Where a write goes. Without `calendarId` it is the account's default calendar. */
 export interface CalendarTarget {
   calendarId?: string;
+  /** Which connected account of the provider (its address). Absent: the default account. */
+  account?: string;
   /** Tell the attendees (Google sends nothing unless asked; Microsoft always tells them). */
   notify?: boolean;
 }
@@ -65,8 +67,9 @@ function eventsUrl(provider: CalendarProvider, calendarId?: string): string {
 const notifyQuery = (provider: CalendarProvider, notify?: boolean) => (provider === 'google' && notify ? '?sendUpdates=all' : '');
 
 /** One call with the caller's own token. `what` words the failure for the reader. */
-async function providerCall(userId: string, provider: CalendarProvider, method: string, url: string, what: string, body?: unknown): Promise<Response> {
-  const token = await getOAuthManager().getValidToken(userId, provider);
+async function providerCall(userId: string, provider: CalendarProvider, method: string, url: string, what: string, body?: unknown, account?: string): Promise<Response> {
+  // The caller's own account of that provider; an account they have not connected has no token.
+  const token = await getOAuthManager().getValidToken(userId, provider, account);
   if (!token) throw new CalendarInputError('This calendar is not connected. Connect it in Settings → Integrations.');
   const response = await fetch(url, {
     method, headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
@@ -83,9 +86,9 @@ async function providerCall(userId: string, provider: CalendarProvider, method: 
  * How many attendees an event has now: a change of an event with attendees
  * reaches them (the provider sends or refreshes their copies).
  */
-export async function calendarEventAttendees(userId: string, provider: CalendarProvider, id: string, calendarId?: string): Promise<number> {
+export async function calendarEventAttendees(userId: string, provider: CalendarProvider, id: string, calendarId?: string, account?: string): Promise<number> {
   const query = provider === 'google' ? '?fields=attendees' : '?$select=attendees';
-  const response = await providerCall(userId, provider, 'GET', `${eventsUrl(provider, calendarId)}/${encodeURIComponent(id)}${query}`, 'could not read the event');
+  const response = await providerCall(userId, provider, 'GET', `${eventsUrl(provider, calendarId)}/${encodeURIComponent(id)}${query}`, 'could not read the event', undefined, account);
   const event = (await response.json()) as { attendees?: unknown };
   return Array.isArray(event.attendees) ? event.attendees.length : 0;
 }
@@ -99,14 +102,14 @@ export async function writeCalendarEvent(userId: string, provider: CalendarProvi
   const body = calendarWriteBody(provider, id ? { ...input, attendees: undefined } : input);
   const base = eventsUrl(provider, target.calendarId);
   const notify = target.notify ?? (!id && !!input.attendees?.length);
-  const response = await providerCall(userId, provider, id ? 'PATCH' : 'POST', `${id ? `${base}/${encodeURIComponent(id)}` : base}${notifyQuery(provider, notify)}`, 'rejected the change', body);
+  const response = await providerCall(userId, provider, id ? 'PATCH' : 'POST', `${id ? `${base}/${encodeURIComponent(id)}` : base}${notifyQuery(provider, notify)}`, 'rejected the change', body, target.account);
   const answer = (await response.json().catch(() => null)) as { id?: unknown } | null;
   return { id: typeof answer?.id === 'string' ? answer.id : (id ?? '') };
 }
 
 /** Remove one event (for a repeating event: the listed occurrence). */
 export async function deleteCalendarEvent(userId: string, provider: CalendarProvider, id: string, target: CalendarTarget = {}): Promise<void> {
-  const response = await providerCall(userId, provider, 'DELETE', `${eventsUrl(provider, target.calendarId)}/${encodeURIComponent(id)}${notifyQuery(provider, target.notify)}`, 'did not delete the event');
+  const response = await providerCall(userId, provider, 'DELETE', `${eventsUrl(provider, target.calendarId)}/${encodeURIComponent(id)}${notifyQuery(provider, target.notify)}`, 'did not delete the event', undefined, target.account);
   await response.body?.cancel();
 }
 
@@ -116,16 +119,16 @@ const GRAPH_RSVP: Record<Exclude<CalendarResponse, 'needsAction'>, string> = { a
 export async function respondToCalendarEvent(userId: string, provider: CalendarProvider, id: string, response: Exclude<CalendarResponse, 'needsAction'>, target: CalendarTarget = {}): Promise<void> {
   const item = `${eventsUrl(provider, target.calendarId)}/${encodeURIComponent(id)}`;
   if (provider === 'microsoft') {
-    const answer = await providerCall(userId, provider, 'POST', `${item}/${GRAPH_RSVP[response]}`, 'did not record the answer', { sendResponse: true });
+    const answer = await providerCall(userId, provider, 'POST', `${item}/${GRAPH_RSVP[response]}`, 'did not record the answer', { sendResponse: true }, target.account);
     await answer.body?.cancel();
     return;
   }
   // Google has no answer endpoint: the caller's own row in the guest list is changed.
-  const current = (await (await providerCall(userId, provider, 'GET', `${item}?fields=attendees`, 'could not read the event')).json()) as { attendees?: Array<{ self?: boolean; responseStatus?: string }> };
+  const current = (await (await providerCall(userId, provider, 'GET', `${item}?fields=attendees`, 'could not read the event', undefined, target.account)).json()) as { attendees?: Array<{ self?: boolean; responseStatus?: string }> };
   const attendees = Array.isArray(current.attendees) ? current.attendees : [];
   if (!attendees.some((a) => a.self)) throw new CalendarInputError('You are not on the guest list of this event, so there is nothing to answer.');
   const answer = await providerCall(userId, provider, 'PATCH', `${item}?sendUpdates=all`, 'did not record the answer', {
     attendees: attendees.map((a) => (a.self ? { ...a, responseStatus: response } : a)),
-  });
+  }, target.account);
   await answer.body?.cancel();
 }

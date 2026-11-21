@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getOAuthManager } from '@/security/oauth';
+import { getOAuthManager, normalizeAccount } from '@/security/oauth';
 import { bindBrowser, callbackBrowser } from '@/api/oauth-browser';
 import { sendPopupCallback } from '@/api/popup-callback';
 
@@ -11,7 +11,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
   // Generate authorization URL — requires authenticated user
   .get(
     '/:provider/authorize',
-    async ({ user, params, set, request }) => {
+    async ({ user, params, query, set, request }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };
@@ -26,7 +26,8 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
         const manager = getOAuthManager();
         // Bound to this browser: the callback checks the cookie.
         const browser = bindBrowser(request);
-        const result = await manager.generateAuthorizationUrl(user.id, params.provider, { browserBinding: browser.binding });
+        // `addAccount`: connect a further account next to the ones connected, instead of reconnecting the default.
+        const result = await manager.generateAuthorizationUrl(user.id, params.provider, { browserBinding: browser.binding, addAccount: query.addAccount === 'true' });
         set.headers['Set-Cookie'] = browser.setCookie;
         return result;
       } catch (err) {
@@ -36,6 +37,7 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
     },
     {
       params: t.Object({ provider: t.String() }),
+      query: t.Object({ addAccount: t.Optional(t.String({ maxLength: 5 })) }),
       detail: { tags: ['auth'] },
     }
   )
@@ -103,10 +105,64 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
     }
   )
 
-  // Disconnect — requires authenticated user
+  // The connected accounts of a provider, the default first — requires authenticated user
+  .get(
+    '/:provider/accounts',
+    async ({ user, params, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      if (!SUPPORTED_PROVIDERS.includes(params.provider)) {
+        set.status = 400;
+        return { error: `Unsupported provider: ${params.provider}` };
+      }
+      const accounts = await getOAuthManager().listAccounts(user.id, params.provider);
+      // Scopes and expiry are the connection's business, not the page's.
+      return { provider: params.provider, accounts: accounts.map(({ account, isDefault }) => ({ ...(account ? { account } : {}), isDefault })) };
+    },
+    {
+      params: t.Object({ provider: t.String() }),
+      detail: { tags: ['auth'] },
+    }
+  )
+
+  // Make one connected account the provider's default — requires authenticated user
+  .post(
+    '/:provider/accounts/default',
+    async ({ user, params, body, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      if (!SUPPORTED_PROVIDERS.includes(params.provider)) {
+        set.status = 400;
+        return { error: `Unsupported provider: ${params.provider}` };
+      }
+      const account = normalizeAccount(body.account);
+      if (!account) {
+        set.status = 400;
+        return { error: 'account must be an email address' };
+      }
+      try {
+        await getOAuthManager().setDefaultAccount(user.id, params.provider, account);
+        return { success: true, provider: params.provider, account };
+      } catch (err) {
+        set.status = 404;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      params: t.Object({ provider: t.String() }),
+      body: t.Object({ account: t.String({ minLength: 3, maxLength: 320 }) }),
+      detail: { tags: ['auth'] },
+    }
+  )
+
+  // Disconnect — requires authenticated user. With `account`, that account only; without, every account of the provider.
   .post(
     '/:provider/disconnect',
-    async ({ user, params, set, request }) => {
+    async ({ user, params, body, set }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };
@@ -117,12 +173,22 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
         return { error: `Unsupported provider: ${params.provider}` };
       }
 
-      const manager = getOAuthManager();
-      await manager.revokeToken(user.id, params.provider);
-      return { success: true, provider: params.provider };
+      const account = body?.account === undefined ? undefined : normalizeAccount(body.account);
+      if (account === null) {
+        set.status = 400;
+        return { error: 'account must be an email address' };
+      }
+      try {
+        await getOAuthManager().revokeToken(user.id, params.provider, account);
+      } catch (err) {
+        set.status = 404;
+        return { error: (err as Error).message };
+      }
+      return { success: true, provider: params.provider, ...(account ? { account } : {}) };
     },
     {
       params: t.Object({ provider: t.String() }),
+      body: t.Optional(t.Object({ account: t.Optional(t.String({ maxLength: 320 })) })),
       detail: { tags: ['auth'] },
     }
   );

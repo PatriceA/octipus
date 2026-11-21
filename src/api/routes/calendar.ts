@@ -3,15 +3,18 @@ import { apiContext } from '@/api/context';
 import { calendarView, microsoftSharedAccess, setCalendarPreferences, validateCalendarPreferences } from '@/core/calendar/calendars';
 import { listCalendarEvents } from '@/core/calendar/events';
 import { CalendarInputError, calendarEventAttendees, deleteCalendarEvent, respondToCalendarEvent, writeCalendarEvent } from '@/core/calendar/manage';
+import { getOAuthManager, normalizeAccount } from '@/security/oauth';
 import { isAuthenticated, type Principal } from '@/security/principal';
 
 const provider = t.Union([t.Literal('google'), t.Literal('microsoft')]);
 /** Which calendar of the account. Absent: its default calendar. */
 const calendarId = t.Optional(t.String({ minLength: 1, maxLength: 1024 }));
+/** Which connected account of the provider (its address). Absent: the default account. */
+const account = t.Optional(t.String({ minLength: 3, maxLength: 320 }));
 /** The caller has been told the event's guests are notified, and agreed. */
 const notifyAttendees = t.Optional(t.Boolean());
 const body = t.Object({
-  provider, calendarId, confirm: t.Boolean(), title: t.String({ minLength: 1, maxLength: 500 }),
+  provider, account, calendarId, confirm: t.Boolean(), title: t.String({ minLength: 1, maxLength: 500 }),
   start: t.String({ maxLength: 40 }), end: t.String({ maxLength: 40 }), allDay: t.Boolean(),
   location: t.Optional(t.String({ maxLength: 2000 })), description: t.Optional(t.String({ maxLength: 20000 })),
   attendees: t.Optional(t.Array(t.String({ minLength: 3, maxLength: 320 }), { maxItems: 100 })),
@@ -28,11 +31,20 @@ function allowed(principal: Principal, set: Reply) {
 
 /**
  * A write names a calendar the caller has and may write to. The default
- * calendar (no id) is always the caller's own.
+ * calendar (no id) is always the caller's own; an `account` must be one of
+ * the caller's own connected accounts.
  */
-async function calendarRefusal(userId: string, target: { provider: 'google' | 'microsoft'; calendarId?: string }, set: Reply) {
+async function calendarRefusal(userId: string, target: { provider: 'google' | 'microsoft'; calendarId?: string; account?: string }, set: Reply) {
+  const wanted = target.account ? normalizeAccount(target.account) : undefined;
+  if (wanted === null) { set.status = 400; return { error: 'account must be an email address.' }; }
+  if (wanted) {
+    const role = await getOAuthManager().accountRole(userId, target.provider, wanted);
+    if (!role) { set.status = 404; return { error: `${wanted} is not one of your connected accounts.` }; }
+    // The default account named explicitly is the default account.
+    if (role === 'default') target.account = undefined; else target.account = wanted;
+  }
   if (!target.calendarId) return null;
-  const find = async (fresh: boolean) => (await calendarView(userId, { fresh })).calendars.find((c) => c.provider === target.provider && c.id === target.calendarId);
+  const find = async (fresh: boolean) => (await calendarView(userId, { fresh })).calendars.find((c) => c.provider === target.provider && c.id === target.calendarId && (c.account ?? undefined) === target.account);
   // A calendar shared a moment ago is not in a kept list yet.
   const calendar = (await find(false)) ?? (await find(true));
   if (!calendar) { set.status = 404; return { error: 'This calendar is not one of your connected calendars.' }; }
@@ -44,9 +56,9 @@ async function calendarRefusal(userId: string, target: { provider: 'google' | 'm
  * Changing or deleting an event with guests reaches them. The caller says it
  * knows (`notifyAttendees`), or is told how many people that is.
  */
-async function attendeeRefusal(userId: string, target: { provider: 'google' | 'microsoft'; calendarId?: string; notifyAttendees?: boolean }, id: string, set: Reply) {
+async function attendeeRefusal(userId: string, target: { provider: 'google' | 'microsoft'; calendarId?: string; account?: string; notifyAttendees?: boolean }, id: string, set: Reply) {
   if (target.notifyAttendees === true) return null;
-  const attendees = await calendarEventAttendees(userId, target.provider, id, target.calendarId);
+  const attendees = await calendarEventAttendees(userId, target.provider, id, target.calendarId, target.account);
   if (attendees === 0) return null;
   set.status = 409;
   return { error: `This event has ${attendees} ${attendees === 1 ? 'guest' : 'guests'}, who will be notified of the change.`, requiresAttendeeConfirmation: true, attendees };
@@ -85,7 +97,7 @@ export const calendarRoutes = new Elysia({ prefix: '/calendar' }).use(apiContext
     if (!body.confirm) { set.status = 409; return { error: 'Confirm the event change before saving.' }; }
     try {
       const denied = await calendarRefusal(principal.userId, body, set); if (denied) return denied;
-      const { id } = await writeCalendarEvent(principal.userId, body.provider, body, undefined, { calendarId: body.calendarId });
+      const { id } = await writeCalendarEvent(principal.userId, body.provider, body, undefined, { calendarId: body.calendarId, account: body.account });
       return { success: true, id };
     } catch (error) { return failure(error, set); }
   }, { body })
@@ -94,7 +106,7 @@ export const calendarRoutes = new Elysia({ prefix: '/calendar' }).use(apiContext
     if (!body.confirm) { set.status = 409; return { error: 'Confirm the event change before saving.' }; }
     try {
       const denied = (await calendarRefusal(principal.userId, body, set)) ?? (await attendeeRefusal(principal.userId, body, params.id, set)); if (denied) return denied;
-      await writeCalendarEvent(principal.userId, body.provider, body, params.id, { calendarId: body.calendarId, notify: body.notifyAttendees === true });
+      await writeCalendarEvent(principal.userId, body.provider, body, params.id, { calendarId: body.calendarId, account: body.account, notify: body.notifyAttendees === true });
       return { success: true };
     } catch (error) { return failure(error, set); }
   }, { body, params: eventId })
@@ -104,15 +116,18 @@ export const calendarRoutes = new Elysia({ prefix: '/calendar' }).use(apiContext
     if (!body.confirm) { set.status = 409; return { error: 'Confirm the deletion first.' }; }
     try {
       const denied = (await calendarRefusal(principal.userId, body, set)) ?? (await attendeeRefusal(principal.userId, body, params.id, set)); if (denied) return denied;
-      await deleteCalendarEvent(principal.userId, body.provider, params.id, { calendarId: body.calendarId, notify: body.notifyAttendees === true });
+      await deleteCalendarEvent(principal.userId, body.provider, params.id, { calendarId: body.calendarId, account: body.account, notify: body.notifyAttendees === true });
       return { success: true };
     } catch (error) { return failure(error, set); }
-  }, { body: t.Object({ provider, calendarId, confirm: t.Boolean(), notifyAttendees }), params: eventId })
+  }, { body: t.Object({ provider, account, calendarId, confirm: t.Boolean(), notifyAttendees }), params: eventId })
   // The caller's own answer to an invitation; the organiser is told.
   .post('/events/:id/respond', async ({ principal, params, body, set }) => {
     const refusal = allowed(principal, set); if (refusal) return refusal;
     try {
-      await respondToCalendarEvent(principal.userId, body.provider, params.id, body.response, { calendarId: body.calendarId });
+      // The account is checked; a read-only calendar may still be answered on, so no calendar is named here.
+      const target = { provider: body.provider, account: body.account };
+      const denied = await calendarRefusal(principal.userId, target, set); if (denied) return denied;
+      await respondToCalendarEvent(principal.userId, body.provider, params.id, body.response, { calendarId: body.calendarId, account: target.account });
       return { success: true };
     } catch (error) { return failure(error, set); }
-  }, { body: t.Object({ provider, calendarId, response: t.Union([t.Literal('accepted'), t.Literal('tentative'), t.Literal('declined')]) }), params: eventId });
+  }, { body: t.Object({ provider, account, calendarId, response: t.Union([t.Literal('accepted'), t.Literal('tentative'), t.Literal('declined')]) }), params: eventId });

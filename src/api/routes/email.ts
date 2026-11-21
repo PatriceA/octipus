@@ -28,6 +28,7 @@ import {
 import { saveReplyDraft } from '@/core/email/drafts';
 import { cancelTriageRun, currentTriageRun, getTriageSettings, setTriageSettings, startTriageRun, TRIAGE_SCOPES, TriageBusyError, triagePreview } from '@/core/email/triage-run';
 import { upsertUserLabel } from '@/core/email/triage-labels';
+import { withMailboxAccount } from '@/core/email/account-context';
 import { resolveProvider } from '@/core/email/mailbox';
 import { type EmailOutcome, markEmailHandled } from '@/core/email/watch';
 import type { EmailProvider } from '@/core/email/types';
@@ -82,7 +83,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Inbox list (read-only).
   .get(
     '/inbox',
-    async ({ user, principal, query, set }) => {
+    withMailboxAccount(async ({ user, principal, query, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const limit = Math.min(Math.max(Number(query?.limit) || 20, 1), 50);
@@ -97,14 +98,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { query: t.Object({ limit: t.Optional(t.String()), pageToken: t.Optional(t.String()) }), detail: { tags: ['email'] } }
   )
 
   // Mark a message read (clears the unread flag in the provider).
   .post(
     '/message/:id/mark-read',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -114,14 +115,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Propose reply directions for the user to choose BEFORE drafting.
   .post(
     '/message/:id/reply-options',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -132,14 +133,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Read a full message.
   .get(
     '/message/:id',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -152,14 +153,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Summarize a message.
   .post(
     '/message/:id/summarize',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -170,14 +171,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Draft a reply (NOT sent — opens in the editable draft view).
   .post(
     '/message/:id/draft',
-    async ({ request, user, principal, params, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -188,7 +189,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), body: t.Object({ instruction: t.Optional(t.String()) }), detail: { tags: ['email'] } }
   )
 
@@ -197,7 +198,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // back to the thread; a triaged "high" email lands as a high-priority task.
   .post(
     '/message/:id/task',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -210,14 +211,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Undo an archive (the UI's Undo after auto-archive).
   .post(
     '/message/:id/unarchive',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -227,14 +228,14 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Archive a message (explicit).
   .post(
     '/message/:id/archive',
-    async ({ request, user, principal, params, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -246,7 +247,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
@@ -254,7 +255,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // threaded under the message. Nothing is sent.
   .post(
     '/message/:id/save-draft',
-    async ({ request, user, principal, params, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -266,7 +267,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       params: t.Object({ id: t.String() }),
       body: t.Object({ body: t.String({ minLength: 1, maxLength: 100_000 }) }),
@@ -277,7 +278,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // Send a reply — ASK-gated. Requires confirm:true; never sends automatically.
   .post(
     '/send',
-    async ({ user, principal, body, set }) => {
+    withMailboxAccount(async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       // Strict identity check — defeats any truthy/coerced value; only a real
       // boolean true passes the gate. A draft is never sent without it.
@@ -295,7 +296,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({
         // Comma-separated address lists; validated (and capped at 50 recipients) before anything is sent.
@@ -304,6 +305,8 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         bcc: t.Optional(t.String({ maxLength: 8000 })),
         // Which connected mailbox sends, when both are; the default one otherwise.
         provider: t.Optional(t.Union([t.Literal('google'), t.Literal('microsoft')])),
+        // Which account of that provider sends, when the user connected several; the default otherwise.
+        account: t.Optional(t.String({ maxLength: 320 })),
         subject: t.String({ maxLength: 998 }),
         body: t.String({ minLength: 1, maxLength: 100_000 }),
         confirm: t.Optional(t.Boolean()),
@@ -320,7 +323,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // inbox (older clients). `autoArchive` archives low-priority spam/marketing.
   .post(
     '/triage',
-    async ({ request, user, principal, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -345,7 +348,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Optional(t.Object({
         items: t.Optional(t.Array(t.Object({
@@ -365,17 +368,17 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // the reference model disagree on, plus how well it does against the labels.
   .get(
     '/triage/review',
-    async ({ user, principal, set }) => {
+    withMailboxAccount(async ({ user, principal, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       return { ...(await triageReview(user.id)), progress: backlogProgress(user.id) };
-    },
+    }),
     { detail: { tags: ['email'] } }
   )
 
   // The owner's label for one mail: it wins over every model from now on.
   .put(
     '/triage/label/:id',
-    async ({ request, user, principal, params, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       const categories = await getCategories(user.id);
       if (!Object.hasOwn(categories, body.category)) { set.status = 400; return { error: `Unknown category: ${body.category}` }; }
@@ -388,7 +391,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       }
       if (!(await setUserLabel(user.id, params.id, label, provider ?? undefined))) { set.status = 404; return { error: 'Triage has not seen this mail yet' }; }
       return { ok: true };
-    },
+    }),
     {
       params: t.Object({ id: t.String({ minLength: 1, maxLength: 256 }) }),
       body: t.Object({
@@ -404,7 +407,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // model over it: the thresholds are fitted from the first triage on.
   .post(
     '/triage/backlog',
-    async ({ request, user, principal, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         if (!(await mailboxOf(user.id, request).catch(() => null))) { set.status = 400; return { error: 'No mailbox connected' }; }
@@ -414,7 +417,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = err instanceof BacklogBusyError ? 409 : 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({ model: t.String({ minLength: 1, maxLength: 200 }), limit: t.Integer({ minimum: 1, maximum: 2000 }) }),
       detail: { tags: ['email'] },
@@ -422,17 +425,17 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   )
 
   // How "Triage inbox" runs for this user. `saved: false` = never changed (defaults).
-  .get('/triage/settings', async ({ user, principal, set }) => {
+  .get('/triage/settings', withMailboxAccount(async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     return getTriageSettings(user.id);
-  }, { detail: { tags: ['email'] } })
+  }), { detail: { tags: ['email'] } })
 
   .put(
     '/triage/settings',
-    async ({ user, principal, body, set }) => {
+    withMailboxAccount(async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       return { settings: await setTriageSettings(user.id, body), saved: true };
-    },
+    }),
     {
       body: t.Object({
         scope: t.Optional(triageScope),
@@ -449,7 +452,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // What a run over these rows would do and what the models are told. Asks no model.
   .post(
     '/triage/preview',
-    async ({ request, user, principal, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -459,7 +462,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({ items: t.Array(t.Object({ id: t.String({ minLength: 1, maxLength: 256 }), unread: t.Boolean() }), { maxItems: 500 }) }),
       detail: { tags: ['email'] },
@@ -470,7 +473,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   // rows the page shows (`items`) or the newest N of the inbox (`newest`).
   .post(
     '/triage/run',
-    async ({ request, user, principal, body, set }) => {
+    withMailboxAccount(async ({ request, user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await mailboxOf(user.id, request);
@@ -482,7 +485,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         set.status = err instanceof TriageBusyError ? 409 : 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({
         items: t.Optional(t.Array(t.Object({
@@ -499,12 +502,12 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   )
 
   // The user's current (or last) run: progress, then the result.
-  .get('/triage/run', async ({ user, principal, set }) => {
+  .get('/triage/run', withMailboxAccount(async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     return { run: currentTriageRun(user.id) };
-  }, { detail: { tags: ['email'] } })
+  }), { detail: { tags: ['email'] } })
 
-  .post('/triage/run/cancel', async ({ user, principal, set }) => {
+  .post('/triage/run/cancel', withMailboxAccount(async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     return { cancelled: cancelTriageRun(user.id), run: currentTriageRun(user.id) };
-  }, { detail: { tags: ['email'] } });
+  }), { detail: { tags: ['email'] } });
