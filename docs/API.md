@@ -531,9 +531,13 @@ In a personal workspace these routes answer 404.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/skills/proposals` | List pending skill proposals, including `kind: "patch"` proposals against a learned skill (`targetSkillId`, `patchOldText`, `patchNewText`, `baseContentHash`, plus `currentContent` and `stale`). |
-| POST | `/api/skills/proposals/:id/approve` | Promote a proposal to a skill, or apply a patch. Body: `{ name?, systemPrompt? }` (not for patches: `400 override`). `409 {code: "stale" \| "locked" \| "missing" \| "invalid"}` when it cannot be applied as it stands; it stays pending. See [Session learning](SESSION-LEARNING.md#repairing-a-learned-skill). |
-| POST | `/api/skills/proposals/:id/reject` | Reject and suppress for 90 days. |
+| GET | `/api/skills/proposals?include=candidates` | `{ proposals, candidateCount }`. `proposals`: the caller's pending proposals (every user's for an admin), most `exemplarCount` first, then oldest; with `include=candidates`, the candidates follow in the same order (`status: "candidate"`). Each row adds `sourceRefs`, `sessionCount`, `signal`, `previousDraft`, `surfacedAt`, `mergedIntoId` and `similarSkill: {id, name, similarity} \| null`; patch rows (`kind: "patch"`: `targetSkillId`, `patchOldText`, `patchNewText`, `baseContentHash`) add `currentContent` and `stale`. The embedding is never returned. `candidateCount`: candidates not shown yet, in the same scope. See [Session learning](SESSION-LEARNING.md#the-life-of-a-skill-proposal). |
+| POST | `/api/skills/proposals/:id/approve` | Promote a pending proposal or a candidate to a skill, or apply a patch. Body: `{ name?, systemPrompt? }` (not for patches: `400 override`). `404` when it is not an open proposal of the caller. `409 {code: "stale" \| "locked" \| "missing" \| "invalid"}` when it cannot be applied as it stands; it stays pending. See [Session learning](SESSION-LEARNING.md#repairing-a-learned-skill). |
+| POST | `/api/skills/proposals/:id/reject` | Reject a pending proposal or a candidate and suppress it for 90 days; returns `{ rejected: true, suppressedUntil }`. The proposals merged into it are rejected with it. `404` when it is not open (a `merged` proposal cannot be rejected). |
+| POST | `/api/skills/proposals/bulk-reject` | Body `{ ids: string[] }` (1-100, else `422`); returns `{ rejected: string[], notFound: string[] }`; an id that is not an open proposal of the caller is listed in `notFound`. |
+| POST | `/api/skills/proposals/:id/merge` | Body `{ intoId }`: merge `:id` into `intoId` with the background model (count-only without it); `:id` becomes `merged`; returns `{ merged: true, verdict: "merged" \| "unchanged", mergeDegraded, proposal }` (the target). `404 not_found` (either is not the caller's), `409 not_open`, `400 same \| patch \| owner`. |
+| POST | `/api/skills/proposals/:id/surface` | Show a candidate now, without the recurrence gate or the caps; returns `{ surfaced: true, proposal }`. `404` when it is not a candidate of the caller. |
+| POST | `/api/skills/proposals/consolidate` | Consolidate the caller's own proposals (admins included); returns `{ merged, expired, promoted, embedded, degraded }`. `401` without a user. |
 
 ## Knowledge
 

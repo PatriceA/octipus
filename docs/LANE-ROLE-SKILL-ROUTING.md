@@ -159,7 +159,9 @@ when the session recorded [verification evidence](OBSERVABILITY.md) — only whe
 none of it failed. The distiller model resolves via the `skill_distillation`
 topic, which canonicalizes to the shared **`background`** lane (bind a cheap /
 local model there); an unbound lane fails loud. Distillation is never a silent
-write: it always produces a *pending proposal*.
+write: it produces a *pending proposal*, or is merged into an open proposal on
+the same topic, or is dropped when a live skill or a still suppressed rejection
+covers it ([the life of a skill proposal](SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
 
 **Promote (approval).** `POST /api/skills/proposals/:id/approve` promotes a
 proposal. It branches on `kind`:
@@ -174,12 +176,13 @@ proposal. It branches on `kind`:
 Each promotion is atomic with the status flip (no orphan skill if the
 status update fails). Rejecting a proposal suppresses re-proposal for 90 days.
 
-**Prune (curation).** `runSkillCurator` flags skills unused for 30 days and
-auto-archives after 90, least recently used first; it skips system skills and
-skills the owner has edited (`owner_edited_at`). "Used" means the body was
-loaded, not that the skill was listed in an index. Nothing schedules the
-curator yet (see the roadmap "Skill auto-extension" item for the
-generative-refresh follow-up).
+**Prune (curation).** `runSkillCurator` runs once a day with the daily
+learning maintenance. It flags skills unused for 30 days (in the log only) and
+auto-archives those unused for 90, and those never used whatever their age,
+least recently used first; it skips system skills and skills the owner has
+edited (`owner_edited_at`). "Used" means the body was loaded, not that the
+skill was listed in an index. See
+[Usage and stale skills](SESSION-LEARNING.md#usage-and-stale-skills).
 
 ## Pipeline Stages
 
@@ -244,7 +247,10 @@ Run manually:
 
     npm run db:backfill-skill-embeddings
 
-Recommended: cron every 15 minutes. Skill description edits invalidate the
-embedding immediately at write time; the cron refills lazily. With no
+The server now does the same work itself (`ensureSkillEmbeddings` in
+`src/skills/embedding-backfill.ts`): up to 20 skills before every skill
+proposal comparison, and all of them in the daily learning maintenance, so a
+cron is no longer needed; the script is for filling everything at once. Skill
+description edits invalidate the embedding immediately at write time. With no
 embedding model configured, the script exits cleanly — discovery still
 works via triggers + always_inject + stale-fallback.

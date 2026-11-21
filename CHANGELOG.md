@@ -7,6 +7,57 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
+  [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
+  - Skills → Proposals shows one proposal per topic: a new suggestion on the
+    same topic is merged into the open one by the background model ("seen N×
+    in M sessions", a diff of what the merge changed). A learned proposal is
+    shown once it recurs in a second session or comes from your correction;
+    until then it waits under **Not shown yet**, with **Show now** and
+    **Reject**. The list is sorted by how often a proposal was seen.
+  - **Consolidate now** merges the existing backlog (also run daily),
+    **Reject selected** rejects many at once, **Merge into…** merges two by
+    hand, and a card says when a live skill is similar. `/proposals` shows
+    `×N` for a proposal seen more than once and lists in the same order.
+  - Learning checks read only the execution evidence since the session's
+    previous check, are shown the nearest skills and open proposals, and are
+    asked to extend or patch those rather than file a new skill.
+  - **Behaviour changes and new defaults:**
+    - Automatic checks run after 40 tool results instead of 10
+      (`learning.reviewEveryToolCalls`), and at most every 30 minutes per
+      session (`learning.minReviewIntervalMinutes`).
+    - A learned skill proposal seen once is a hidden candidate, not a pending
+      proposal (`learning.recurrenceSessions` = 2). Candidates not seen again
+      within 30 days are deleted.
+    - At most 2 learned proposals become pending per user per 24 hours, and
+      none while 10 are pending. `distill_skill` and patches are not held
+      back, except that a `distill_skill` result merged into a candidate
+      leaves it a candidate until it qualifies.
+    - Rejecting a proposal now also suppresses differently named proposals
+      with the same meaning (with an embedding model), and rejects the
+      proposals merged into it.
+    - Skill and proposal embeddings are computed by the server; the
+      `db:backfill-skill-embeddings` cron is no longer needed.
+    - **The skill curator now runs daily** (it was never scheduled). It
+      archives every non-system skill without an owner-edit lock that was last
+      loaded more than 90 days ago or never — including a skill approved
+      today that has not been loaded yet — across all users, about a minute
+      after the server starts and then once a day. There is no unarchive in
+      the API or the UI. Check your skills before upgrading.
+    - Migration `0197_skill_proposal_consolidation`: statuses `candidate`
+      and `merged`; columns `embedding`, `source_refs`, `signal`,
+      `previous_draft`, `merged_into_id`, `surfaced_at`. Existing pending
+      proposals stay pending.
+  - New routes: `POST /api/skills/proposals/bulk-reject`, `/:id/merge`,
+    `/:id/surface`, `/consolidate`; `GET /api/skills/proposals` takes
+    `?include=candidates`, adds `candidateCount`, sorts by `exemplarCount`
+    then oldest (was oldest first) and serves a view of each row (new fields,
+    no `rejectedUntil`); approve and reject accept candidates.
+  - New config keys (defaults only; not yet settable at runtime):
+    `learning.minReviewIntervalMinutes`, `recurrenceSessions`,
+    `maxSkillProposalsPerDay`, `maxPendingSkillProposals`,
+    `duplicateSimilarity`, `relatedSimilarity`, `candidateTtlDays`
+    ([CONFIGURATION.md](docs/CONFIGURATION.md#learning-config)).
 - **Email is a mail client** ([plan](docs/plans/email-calendar-ux.md)).
   - Folders, list and reading pane; conversations; search; bulk actions with
     undo; compose, reply all and forward with a two-step send; attachments;

@@ -1,6 +1,8 @@
 # Self-learning: fewer, better skill proposals
 
-Status: in implementation. Reference for behaviour once shipped: `docs/SESSION-LEARNING.md`.
+Status: implemented (commits `6f4ddeb`..`855382a`). The behaviour as built is
+described in `docs/SESSION-LEARNING.md`; where the code differs from the design
+below, the section says so under "As built".
 
 ## Problem
 
@@ -75,6 +77,13 @@ Session count of a proposal = distinct session ids parsed from `source_refs`
 `distill_skill` (the user asked) is exempt from the gate and both caps.
 Patches are exempt from all of it.
 
+As built: these keys are schema defaults only. They are not in
+`src/config/settings-registry.ts`, so no setting, environment variable or
+settings API changes them at runtime; tuning means changing the default.
+`distill_skill` is exempt only when it files a new row: merged into an existing
+candidate, it leaves the candidate subject to `promoteIfEligible` (gate and
+caps).
+
 ### Embeddings (`src/skills/embedding-backfill.ts`)
 
 `ensureSkillEmbeddings({ limit })`: embeds DB skills whose embedding is null or
@@ -84,6 +93,10 @@ proposals. Both return counts, do nothing when the embedding capability is off,
 and throw only on unexpected errors (a missing embedding model is logged once
 and returns 0). Called before every dedup comparison (limit 20) and by the
 daily consolidation.
+
+As built: `ensureProposalEmbeddings` also embeds rejected proposals that are
+still suppressed (suppression by meaning needs their vectors), and the review's
+`existing` ranking calls both functions (limit 20) too.
 
 ### Dedup and filing (`src/tools/skill-distill/dedup.ts`, `src/services/file-skill-proposal.ts`)
 
@@ -143,7 +156,11 @@ Result shape of `fileSkillProposal` keeps `distilled`, `deduped`, `proposalId`,
   skills and up to 5 nearest open proposals (`ref`, `name`, `description`,
   600-character excerpt), ranked by embedding of the plan title/goal plus the
   last typed user messages; without embeddings, the 10 most recent open
-  proposals and up to 30 learned-skill names. Patch targets become: skills the
+  proposals and up to 30 learned-skill names. As built: the gathering lives in
+  `evidence.ts` (`gatherReviewContext`, `previousReviewThrough`); the fallback
+  lists up to 30 names of the owner's non-archived skills, owner-edited ones
+  included; `existing` is capped at 8,000 characters; an `extends` naming a
+  proposal that was not offered is dropped in `parseLearningReview`. Patch targets become: skills the
   session loaded (as today) plus the nearest patchable learned skills, still at
   most `MAX_PATCHABLE_SKILLS` within `MAX_PATCH_TARGET_CHARS`. Passes
   `origin: 'learning'`, `signal`, `extendsProposalId` to `fileSkillProposal`;
@@ -168,10 +185,20 @@ Result shape of `fileSkillProposal` keeps `distilled`, `deduped`, `proposalId`,
 4. `promoteIfEligible` for remaining candidates, oldest first.
 Returns `{ merged, expired, promoted, embedded, degraded }`.
 
-Scheduling: `startLearningQueue` also runs `runDailyLearningMaintenance()` on an
-hourly tick; it runs at most once per 24 h (last run stored in `kv_store`),
-consolidates every user with open proposals, then calls `runSkillCurator()`.
-Failures are logged, never thrown into the timer.
+As built: the pending member wins; between two pending members the one with
+more observations, then the older; between two candidates the older (their
+counts are not compared).
+Expiry also deletes the `merged` rows pointing at an expired candidate.
+Promotion stops at the first cap hit.
+
+Scheduling (as built): not in `startLearningQueue`. `src/index.ts` calls
+`startLearningMaintenance()` (`consolidation.ts`), an unref'd hourly
+`setInterval` whose first tick is one minute after boot. Each tick calls
+`runDailyLearningMaintenance()`, which claims the day with one conditional
+upsert of `kv_store` key `learning:maintenance:last-run` (epoch ms) before it
+runs, so concurrent processes run it once; a run that dies is not retried for
+24 h. It consolidates every user with open non-patch proposals, then calls
+`runSkillCurator()`. Failures are logged, never thrown into the timer.
 
 ### API
 
@@ -186,6 +213,15 @@ Failures are logged, never thrown into the timer.
 Approve and reject accept `pending` and `candidate` rows. Rejecting a `merged`
 row is not possible; rejecting the target suppresses the fingerprints of its
 absorbed rows too (they are set to `rejected` with the same `rejected_until`).
+
+As built: with `?include=candidates` the candidates follow the pending rows in
+the same order; `candidateCount` has the same owner scope as the list (all
+users for an admin); rows are served as `SkillProposalView`, which also drops
+`rejected_until` and adds `mergedIntoId`. `similarSkill` is set at or above
+`relatedSimilarity`. Merge errors: `404 not_found`, `409 not_open`,
+`400 same | patch | owner`; bulk-reject body errors are `422`; consolidate is
+`401` without a user and always scoped to the caller. Merging a pending row
+into a candidate by hand surfaces the candidate without the caps.
 
 `/proposals` (gateway and TUI) lists pending only, with `×N` after the name
 when `exemplar_count > 1`.
