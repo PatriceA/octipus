@@ -164,6 +164,15 @@ think you need to break one, open an issue first.
    review.)
 9. **No feature flags** for work you'll finish next week. Ship it or don't.
 10. **No `.env` / secrets in commits.** Ever. `git diff --cached` before push.
+11. **Fix every bug you find.** A bug or failing test met on the way is fixed
+    in the same session, in its own commit with a test that fails without the
+    fix, whether or not your change caused it. "Not from this change" and
+    "already on `main`" are not reasons to leave it. This is the one exception
+    to "one thing per PR": the fix rides along as a separate commit. If it is
+    an environment gap rather than a repo bug (a missing browser, a tool CI
+    installs), say so and show it passes once provided. If a fix is too large
+    or too risky to do now, open an issue, link it in the PR, and say so; never
+    drop it silently.
 
 ## Workflow expectations
 
@@ -197,10 +206,8 @@ think you need to break one, open an issue first.
 - **PR description:** why, what changes (defaults and migrations included),
   limits, and validation with exact commands and counts — see
   [CONTRIBUTING.md](./CONTRIBUTING.md#pr-description).
-- **Fix what you find.** A failing test or bug met on the way is fixed in the
-  same session (its own commit), not left for later. If it is an environment
-  gap rather than a repo bug (a missing browser, a tool CI installs), say so
-  and show it passes once provided.
+- **Fix what you find:** house rule 11. A review finding in code you did not
+  write is a bug you found.
 - **Don't reformat** files you aren't otherwise touching. Biome's formatter is
   off on purpose.
 

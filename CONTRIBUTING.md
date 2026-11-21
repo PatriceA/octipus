@@ -202,6 +202,7 @@ and hides the tools of a module or capability that is off (wrap the group in
 - **Branch naming:** `fix/short-desc`, `feat/short-desc`, `docs/short-desc`, `refactor/short-desc`. Branches created by a coding-agent session (`claude/…`, `ccr-…`) keep their generated name. One logical change per PR; a branch reused for a follow-up PR starts after the previous one merged.
 - **Commit messages:** short imperative summary line ("Fix classifier crash on empty input", not "Fixed"), blank line, body explaining the *why*.
 - **One thing per PR.** A refactor and a feature in the same PR is two PRs. Stacked PRs: see [AGENT.md](./AGENT.md#workflow-expectations) for the merge order.
+- **Fix every bug you find** ([house rule 11](./AGENT.md#house-rules-must-follow)). A bug or failing test you meet is fixed in the same session, in its own commit with a test that fails without the fix, whether or not your change caused it. This is the one exception to "one thing per PR". An environment gap is reported as one; a fix too large for the session becomes a linked issue.
 - **Link the issue.** `Closes #123` in the PR body if applicable.
 - **AI-assisted work is welcome; you own it.** Most changes here are written with coding agents ([AGENT.md](./AGENT.md) is their guide). The person opening the PR reads the diff, runs the checks, and claims only what was verified. Keep the agent's attribution footer.
 
@@ -218,6 +219,7 @@ There is no template; recent PRs follow this shape:
 
 - [ ] Code compiles and all tests pass locally (`npm run typecheck && npm run lint && npm test`)
 - [ ] New code has tests; a bug fix has a test that fails without it
+- [ ] Every bug or failing test found on the way is fixed in its own commit (or is an explained environment gap, or a linked issue)
 - [ ] `npm run catalog:check` passes (run `npm run catalog` when routes, module edges or gateway events changed)
 - [ ] User- or operator-visible changes have an entry under `## Unreleased` in `CHANGELOG.md`, and the affected docs are updated
 - [ ] Routing, prompt, role or tool-selection changes report their eval results (or say why none ran)
@@ -328,6 +330,7 @@ If you disagree with any of these, open an issue — don't silently re-enable.
 - Do not duplicate types between backend and web. Import shared definitions.
 - Do not add feature flags for work you plan to finish next week — ship it or don't.
 - Do not check in `.env`, credentials, or private tokens. Ever.
+- Do not leave a bug you found because your change did not cause it. Fix it, in its own commit.
 
 ---
 
