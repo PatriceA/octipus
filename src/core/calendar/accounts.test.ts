@@ -62,8 +62,8 @@ describe('several accounts of one provider', () => {
     const result = await listCalendarEvents('alice', {
       from: new Date('2026-11-01'), to: new Date('2026-11-08'), deps: twoAccounts(urls),
       calendars: [
-        { provider: 'google', id: 'primary-home', name: 'Home' },
-        { provider: 'google', id: 'primary-work', name: 'Work', account: 'me@work.example' },
+        { provider: 'google', id: 'primary-home', name: 'Home', readOnly: false },
+        { provider: 'google', id: 'primary-work', name: 'Work', readOnly: false, account: 'me@work.example' },
       ],
     });
     expect(urls.map((u) => [u.token, u.url.includes('primary-work') ? 'work' : 'home'])).toEqual(expect.arrayContaining([['token:home', 'home'], ['token:me@work.example', 'work']]));

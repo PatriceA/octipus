@@ -6,19 +6,19 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { EmailBatchAction, EmailThreadResponse } from '../../../src/shared/email';
 import type { ComposeMode } from './email-compose';
-import { addressList, btn, btnGhost, type Conversation, type EmailMessage, type EmailProvider, type EmailTriage, hasBlockedImages, MailHtml, priorityTone, shortDate, sourceLabel, who } from './email-shared';
+import { addressList, btn, btnGhost, mailboxQuery, type Conversation, type EmailMessage, type EmailProvider, type EmailTriage, hasBlockedImages, MailHtml, priorityTone, shortDate, sourceLabel, who } from './email-shared';
 
 const size = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 /** The messages of a conversation, oldest first. A provider without thread ids gives the one message. */
-async function loadThread(conversation: Conversation, provider: EmailProvider): Promise<EmailMessage[]> {
+async function loadThread(conversation: Conversation, provider: EmailProvider, account?: string): Promise<EmailMessage[]> {
   const { latest } = conversation;
   if (latest.threadId) {
-    const res = await api.get<EmailThreadResponse & { error?: string }>(`/email/thread/${encodeURIComponent(latest.threadId)}?provider=${provider}`);
+    const res = await api.get<EmailThreadResponse & { error?: string }>(`/email/thread/${encodeURIComponent(latest.threadId)}?${mailboxQuery(provider, account)}`);
     if (res.error) throw new Error(res.error);
     if (res.messages?.length) return res.messages;
   }
-  const msg = await api.get<EmailMessage & { error?: string }>(`/email/message/${encodeURIComponent(latest.id)}?provider=${provider}`);
+  const msg = await api.get<EmailMessage & { error?: string }>(`/email/message/${encodeURIComponent(latest.id)}?${mailboxQuery(provider, account)}`);
   if (msg.error) throw new Error(msg.error);
   return [msg];
 }
@@ -26,6 +26,8 @@ async function loadThread(conversation: Conversation, provider: EmailProvider): 
 interface Props {
   conversation: Conversation;
   provider: EmailProvider;
+  /** The account of the provider, when it is not the default one. */
+  account?: string;
   categories: string[];
   folder: string;
   onBack: () => void;
@@ -36,8 +38,8 @@ interface Props {
 }
 
 /** The read pane: one conversation, its newest message open, the earlier ones folded. */
-export function EmailReader({ conversation, provider, categories, folder, onBack, onAction, onCompose, onLabel, onNotice }: Props) {
-  const thread = useQuery({ queryKey: ['email-thread', provider, conversation.key], queryFn: () => loadThread(conversation, provider), staleTime: 30_000 });
+export function EmailReader({ conversation, provider, account, categories, folder, onBack, onAction, onCompose, onLabel, onNotice }: Props) {
+  const thread = useQuery({ queryKey: ['email-thread', provider, account ?? '', conversation.key], queryFn: () => loadThread(conversation, provider, account), staleTime: 30_000 });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showImages, setShowImages] = useState(false);
   const [summary, setSummary] = useState('');
@@ -60,19 +62,19 @@ export function EmailReader({ conversation, provider, categories, folder, onBack
   };
   const summarize = () => run('summarize', async () => {
     if (!last) return;
-    const res = await api.post<{ summary?: string; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/summarize?provider=${provider}`, {});
+    const res = await api.post<{ summary?: string; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/summarize?${mailboxQuery(provider, account)}`, {});
     if (res.error) throw new Error(res.error);
     setSummary(res.summary ?? '');
   });
   // An email that needs something from me becomes a to-do, linked to the thread.
   const toTask = () => run('task', async () => {
     if (!last) return;
-    const res = await api.post<{ task?: { title: string }; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/task?provider=${provider}`, {});
+    const res = await api.post<{ task?: { title: string }; error?: string }>(`/email/message/${encodeURIComponent(last.id)}/task?${mailboxQuery(provider, account)}`, {});
     if (res.error) throw new Error(res.error);
     onNotice(`Added to your to-do list: ${res.task?.title ?? last.subject}`);
   });
   const download = (message: EmailMessage, attachment: { id: string; name: string }) => run(`att:${attachment.id}`, async () => {
-    const blob = await api.getBlob(`/email/message/${encodeURIComponent(message.id)}/attachment/${encodeURIComponent(attachment.id)}?provider=${provider}`);
+    const blob = await api.getBlob(`/email/message/${encodeURIComponent(message.id)}/attachment/${encodeURIComponent(attachment.id)}?${mailboxQuery(provider, account)}`);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url; link.download = attachment.name; link.click();

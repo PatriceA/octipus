@@ -147,7 +147,7 @@ function PersonalCalendar() {
     void attempt(options.notify === true);
   }), [refresh]);
 
-  const target = (event: CalendarEvent) => ({ provider: event.provider, ...(event.calendarId ? { calendarId: event.calendarId } : {}) });
+  const target = (event: CalendarEvent) => ({ provider: event.provider, ...(event.account ? { account: event.account } : {}), ...(event.calendarId ? { calendarId: event.calendarId } : {}) });
   const eventPath = (event: CalendarEvent) => `/calendar/events/${encodeURIComponent(event.id)}`;
 
   const save = (draft: EventDraft, event?: CalendarEvent) => write({

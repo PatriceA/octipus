@@ -2,7 +2,9 @@
 
 Open **Calendar** (`/calendar`) to see and manage the calendars of your
 connected Google and Microsoft 365 accounts: your own and the ones other people
-shared with you. Connect accounts in **Settings → Integrations**. The Email &
+shared with you. Connect accounts in **Settings → Integrations**; **Add another
+account** connects a second Google or Microsoft 365 account next to the first,
+and each account's calendars are listed under its address. The Email &
 calendar (`inbox`) module must be enabled.
 
 Calendar access is personal: switch out of a shared or remote workspace to use

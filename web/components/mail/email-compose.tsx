@@ -3,7 +3,7 @@
 import { FileText, Loader2, Send, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
-import { addressList, btn, btnGhost, btnPrimary, type EmailMessage, type EmailProvider, field, who } from './email-shared';
+import { addressList, btn, btnGhost, btnPrimary, type EmailMessage, type EmailProvider, field, type Mailbox, mailboxKeyOf, mailboxQuery, who } from './email-shared';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
 export interface ComposeDraft {
@@ -42,12 +42,14 @@ const TITLE: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply',
  * The compose panel, docked at the bottom of the mail window. Sending is two
  * steps: "Send" shows who gets the mail, "Send now" delivers it.
  */
-export function EmailCompose({ draft, provider, accounts, onProvider, onChange, onClose, onSent }: {
+export function EmailCompose({ draft, provider, account, accounts, onProvider, onChange, onClose, onSent }: {
   draft: ComposeDraft;
   provider: EmailProvider;
+  /** The account of that provider that sends, when it is not the default one. */
+  account?: string;
   /** For a new message with several mailboxes connected: which one sends it. */
-  accounts?: Array<{ provider: EmailProvider; address?: string }>;
-  onProvider?: (provider: EmailProvider) => void;
+  accounts?: Mailbox[];
+  onProvider?: (mailbox: Mailbox) => void;
   onChange: (draft: ComposeDraft) => void;
   onClose: () => void;
   onSent: (notice: string) => void;
@@ -65,7 +67,7 @@ export function EmailCompose({ draft, provider, accounts, onProvider, onChange, 
     try {
       const res = await api.post<{ sent?: boolean; error?: string }>('/email/send', {
         to: draft.to, ...(draft.cc.trim() ? { cc: draft.cc } : {}), ...(draft.bcc.trim() ? { bcc: draft.bcc } : {}),
-        subject: draft.subject, body: draft.body, confirm: true, provider,
+        subject: draft.subject, body: draft.body, confirm: true, provider, ...(account ? { account } : {}),
         ...(isReply && draft.source ? { replyTo: draft.source.id } : {}),
       });
       if (res.error) { setError(res.error); setConfirming(false); } else onSent('Message sent.');
@@ -77,7 +79,7 @@ export function EmailCompose({ draft, provider, accounts, onProvider, onChange, 
     if (!draft.source) return;
     setBusy('save'); setError('');
     try {
-      const res = await api.post<{ saved?: boolean; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/save-draft?provider=${provider}`, { body: draft.body });
+      const res = await api.post<{ saved?: boolean; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/save-draft?${mailboxQuery(provider, account)}`, { body: draft.body });
       if (res.error) setError(res.error); else onSent('Saved to your mailbox drafts. Nothing was sent.');
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
@@ -87,7 +89,7 @@ export function EmailCompose({ draft, provider, accounts, onProvider, onChange, 
     if (!draft.source) return;
     setBusy('options'); setError('');
     try {
-      const res = await api.post<{ options?: string[]; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/reply-options?provider=${provider}`, {});
+      const res = await api.post<{ options?: string[]; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/reply-options?${mailboxQuery(provider, account)}`, {});
       if (res.error) setError(res.error); else setOptions(res.options?.length ? res.options : ['Write a reply']);
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
@@ -95,7 +97,7 @@ export function EmailCompose({ draft, provider, accounts, onProvider, onChange, 
     if (!draft.source) return;
     setBusy('draft'); setError('');
     try {
-      const res = await api.post<{ body?: string; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/draft?provider=${provider}`, { instruction });
+      const res = await api.post<{ body?: string; error?: string }>(`/email/message/${encodeURIComponent(draft.source.id)}/draft?${mailboxQuery(provider, account)}`, { instruction });
       if (res.error) setError(res.error);
       else { set({ body: `${res.body ?? ''}${draft.body.startsWith('\n\nOn ') ? draft.body : ''}` }); setOptions(null); }
     } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
@@ -115,8 +117,8 @@ export function EmailCompose({ draft, provider, accounts, onProvider, onChange, 
         {error && <p role="alert" className="rounded-md bg-error/10 px-2.5 py-1.5 text-sm text-error">{error}</p>}
         {accounts && (
           <label className="flex items-center gap-2 text-sm text-on-surface-variant">From
-            <select aria-label="From" value={provider} onChange={(e) => onProvider?.(e.target.value as EmailProvider)} className={field}>
-              {accounts.map((a) => <option key={a.provider} value={a.provider}>{a.address ?? (a.provider === 'google' ? 'Gmail' : 'Outlook')}</option>)}
+            <select aria-label="From" value={mailboxKeyOf({ provider, account })} onChange={(e) => { const m = accounts.find((a) => a.key === e.target.value); if (m) onProvider?.(m); }} className={field}>
+              {accounts.map((a) => <option key={a.key} value={a.key}>{a.address ?? (a.provider === 'google' ? 'Gmail' : 'Outlook')}</option>)}
             </select>
           </label>
         )}

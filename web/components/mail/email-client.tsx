@@ -10,7 +10,7 @@ import type { EmailAccountsResponse, EmailBatchAction, EmailBatchResponse, Email
 import type { MailAccountView } from '../../../src/shared/mail';
 import { type ComposeDraft, type ComposeMode, composeFor, EmailCompose } from './email-compose';
 import { EmailReader } from './email-reader';
-import { btn, btnGhost, btnPrimary, type Conversation, conversations, type EmailFolder, type EmailMessage, type EmailProvider, type EmailTriage, field, type InboxItem, ListSkeleton, priorityTone, providerLabel, shortDate, triageWhy, who } from './email-shared';
+import { btn, btnGhost, btnPrimary, type Conversation, conversations, type EmailFolder, type EmailMessage, type EmailProvider, type EmailTriage, field, type InboxItem, ListSkeleton, type Mailbox, mailboxesOf, mailboxKeyOf, mailboxQuery, priorityTone, providerLabel, shortDate, triageWhy, who } from './email-shared';
 import { MailboxInbox } from './mailbox-inbox';
 import { MailboxManager, mailAccountsKey } from './mailbox-manager';
 import { rowsInScope, startTriage, TriageDialog, type TriageRun, type TriageSettings } from './triage-dialog';
@@ -46,15 +46,22 @@ function Client() {
   const imap = useQuery({ queryKey: mailAccountsKey(workspace), enabled: mailOn, queryFn: () => api.get<MailAccountView[]>('/mail/accounts') });
   const [picked, setPicked] = useState('');
   const [manage, setManage] = useState(false);
-  const oauth = useMemo(() => accounts.data?.accounts ?? [], [accounts.data]);
-  const selection = picked || oauth[0]?.provider || imap.data?.[0]?.id || '';
-  // "All inboxes" reads every connected Google / Microsoft mailbox as one list.
+  // One entry per connected account: two Gmail accounts are two mailboxes.
+  const oauth = useMemo(() => mailboxesOf(accounts.data?.accounts ?? []), [accounts.data]);
+  const selection = picked || oauth[0]?.key || imap.data?.[0]?.id || '';
+  // "All inboxes" reads every connected Google / Microsoft account as one list.
   const all = selection === 'all' && oauth.length > 1;
-  const provider: EmailProvider | null = all ? oauth[0].provider : selection === 'google' || selection === 'microsoft' ? selection : null;
-  const providers = useMemo<EmailProvider[]>(() => (all ? oauth.map((a) => a.provider) : provider ? [provider] : []), [all, oauth, provider]);
-  const scope = all ? 'all' : provider;
+  const mailbox: Mailbox | undefined = all ? undefined : oauth.find((m) => m.key === selection);
+  const provider: EmailProvider | null = all ? oauth[0].provider : mailbox?.provider ?? null;
+  /** The account of the chosen mailbox, when it is not its provider's default. */
+  const account = mailbox?.account;
+  const boxes = useMemo<Mailbox[]>(() => (all ? oauth : mailbox ? [mailbox] : []), [all, oauth, mailbox]);
+  const scope = all ? 'all' : mailbox?.key ?? null;
   const imapAccount = imap.data?.find((a) => a.id === selection);
-  const addressOf = (p: EmailProvider) => oauth.find((a) => a.provider === p)?.address;
+  /** The address of the mailbox a message is in (left out of reply-all recipients). */
+  const addressOf = (m: { provider: EmailProvider; account?: string }) => oauth.find((b) => b.key === mailboxKeyOf(m))?.address;
+  /** Which account a row is in, shown in "All inboxes" when that is not obvious. */
+  const sameProviderTwice = new Set(oauth.map((m) => m.provider)).size < oauth.length;
   const settled = !accounts.isLoading && (!mailOn || !imap.isLoading);
 
   const [folder, setFolder] = useState<EmailFolder>('inbox');
@@ -70,7 +77,7 @@ function Client() {
   const [run, setRun] = useState<TriageRun | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const fresh = useRef(false);
-  const [composeFrom, setComposeFrom] = useState<EmailProvider | null>(null);
+  const [composeFrom, setComposeFrom] = useState<Mailbox | null>(null);
 
   const listKey = useMemo(() => ['email-list', scope, folder, q, filter === 'unread'] as const, [scope, folder, q, filter]);
   const list = useInfiniteQuery({
@@ -79,17 +86,19 @@ function Client() {
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }): Promise<EmailListResponse> => {
       // One page per mailbox. With several, the page token carries each mailbox's own token.
-      const tokens: Partial<Record<EmailProvider, string>> = !pageParam ? {} : all ? JSON.parse(pageParam) : { [provider!]: pageParam };
-      const pages = await Promise.all(providers.filter((p) => !pageParam || tokens[p]).map(async (p) => {
-        const params = new URLSearchParams({ folder, provider: p, limit: '30' });
+      const tokens: Record<string, string> = !pageParam ? {} : all ? JSON.parse(pageParam) : { [mailbox!.key]: pageParam };
+      const pages = await Promise.all(boxes.filter((m) => !pageParam || tokens[m.key]).map(async (m) => {
+        const params = new URLSearchParams({ folder, provider: m.provider, limit: '30' });
+        if (m.account) params.set('account', m.account);
         if (q) params.set('q', q);
         if (filter === 'unread') params.set('unread', 'true');
-        if (tokens[p]) params.set('pageToken', tokens[p]);
+        if (tokens[m.key]) params.set('pageToken', tokens[m.key]);
         // Refresh asks the provider, past the server's short memory of this page.
         if (fresh.current) params.set('refresh', 'true');
         const res = await api.get<EmailListResponse & { error?: string }>(`/email/messages?${params}`);
         if (res.error) throw new Error(res.error);
-        return [p, res] as const;
+        // Each row names its account, so an action on it goes to the account it is in.
+        return [m.key, { ...res, items: res.items.map((it) => (m.account ? { ...it, account: m.account } : it)) }] as const;
       }));
       if (!all) return pages[0][1];
       const next = Object.fromEntries(pages.filter(([, res]) => res.nextPageToken).map(([p, res]) => [p, res.nextPageToken]));
@@ -146,13 +155,13 @@ function Client() {
     } else if (action === 'read' || action === 'unread') patchLists((rows) => rows.map((it) => (hit.has(it.id) ? { ...it, unread: action === 'unread' } : it)));
     else patchLists((rows) => rows.map((it) => (hit.has(it.id) ? { ...it, starred: action === 'star' } : it)));
     try {
-      // Each message is changed in the mailbox it lives in.
-      const owner = new Map(items.map((it) => [it.id, it.provider]));
+      // Each message is changed in the mailbox (the account) it lives in.
+      const owner = new Map(items.map((it) => [it.id, mailboxKeyOf(it)]));
       let failed = 0;
-      for (const p of providers) {
-        const own = ids.filter((id) => (owner.get(id) ?? provider) === p);
+      for (const m of boxes) {
+        const own = ids.filter((id) => (owner.get(id) ?? boxes[0]?.key) === m.key);
         if (!own.length) continue;
-        const res = await api.post<EmailBatchResponse & { error?: string }>('/email/messages/batch', { ids: own, action, provider: p });
+        const res = await api.post<EmailBatchResponse & { error?: string }>('/email/messages/batch', { ids: own, action, provider: m.provider, ...(m.account ? { account: m.account } : {}) });
         if (res.error) throw new Error(res.error);
         failed += res.failed?.length ?? 0;
       }
@@ -165,7 +174,7 @@ function Client() {
       void client.invalidateQueries({ queryKey: ['email-list', scope] });
       return false;
     }
-  }, [provider, providers, scope, patchLists, items, client]);
+  }, [provider, boxes, scope, patchLists, items, client]);
 
   /** `apply`, and for a move a notice that can undo it. */
   const act = useCallback(async (ids: string[], action: EmailBatchAction, quiet = false) => {
@@ -178,7 +187,7 @@ function Client() {
 
   const label = async (message: EmailMessage, value: { priority: EmailTriage['priority']; category: string }) => {
     try {
-      await api.put(`/email/triage/label/${encodeURIComponent(message.id)}?provider=${message.provider}`, { ...value, item: { from: message.from, subject: message.subject, snippet: message.snippet } });
+      await api.put(`/email/triage/label/${encodeURIComponent(message.id)}?${mailboxQuery(message.provider, message.account)}`, { ...value, item: { from: message.from, subject: message.subject, snippet: message.snippet } });
       const ids = new Set(open?.ids ?? [message.id]);
       patchLists((rows) => rows.map((it) => (ids.has(it.id) ? { ...it, triage: { ...value, source: 'owner' } } : it)));
     } catch (err) { setError((err as Error).message); }
@@ -216,7 +225,7 @@ function Client() {
   const triageNow = async () => {
     const s = settings.data?.settings;
     if (!s?.skipDialog || run?.finished) { setTriageOpen(true); return; }
-    try { setRun(await startTriage(provider!, rowsInScope(items, s.scope), s.scope)); }
+    try { setRun(await startTriage(provider!, rowsInScope(items, s.scope), s.scope, undefined, account)); }
     catch (err) { setError((err as Error).message); }
   };
   const triageSummary = (() => {
@@ -266,7 +275,7 @@ function Client() {
         <select aria-label="Mailbox" value={selection} onChange={(e) => { setPicked(e.target.value); setOpenKey(null); setChecked(new Set()); setManage(false); }} className={`${field} w-auto max-w-56`}>
           {!selection && <option value="">{settled ? 'No mailbox connected' : 'Loading mailboxes…'}</option>}
           {oauth.length > 1 && <option value="all">All inboxes</option>}
-          {oauth.map((a) => <option key={a.provider} value={a.provider}>{providerLabel(a.provider)}{a.address ? ` — ${a.address}` : ''}</option>)}
+          {oauth.map((m) => <option key={m.key} value={m.key}>{providerLabel(m.provider)}{m.address ? ` — ${m.address}` : ''}</option>)}
           {imap.data?.map((a) => <option key={a.id} value={a.id}>{a.label} — {a.address}</option>)}
         </select>
         {provider && (
@@ -384,7 +393,7 @@ function Client() {
                         <span className="flex items-baseline gap-2">
                           {c.unread && <span aria-label="Unread" className="h-2 w-2 shrink-0 self-center rounded-full bg-primary" />}
                           <span className={`min-w-0 flex-1 truncate text-sm ${c.unread ? 'font-semibold text-on-surface' : 'text-on-surface'}`}>{person}{c.ids.length > 1 && <span className="ml-1.5 text-xs font-normal text-on-surface-variant">{c.ids.length}</span>}</span>
-                          {all && <span className="shrink-0 self-center rounded bg-surface-container-high px-1 text-[10px] text-on-surface-variant">{providerLabel(it.provider)}</span>}
+                          {all && <span className="shrink-0 self-center max-w-28 truncate rounded bg-surface-container-high px-1 text-[10px] text-on-surface-variant">{sameProviderTwice ? addressOf(it) ?? providerLabel(it.provider) : providerLabel(it.provider)}</span>}
                           {it.hasAttachments && <Paperclip aria-label="Has attachments" className="h-3.5 w-3.5 shrink-0 self-center text-on-surface-variant" />}
                           {c.starred && <Star aria-label="Starred" className="h-3.5 w-3.5 shrink-0 self-center fill-warning text-warning" />}
                           <time className={`shrink-0 text-xs ${c.unread ? 'font-medium text-on-surface' : 'text-on-surface-variant'}`}>{shortDate(it.receivedAt)}</time>
@@ -415,11 +424,12 @@ function Client() {
                 key={open.key}
                 conversation={open}
                 provider={open.latest.provider}
+                account={open.latest.account}
                 categories={categories}
                 folder={folder}
                 onBack={() => setOpenKey(null)}
                 onAction={(ids, action) => void act(ids, action)}
-                onCompose={(mode: ComposeMode, source: EmailMessage) => setCompose(composeFor(mode, source, addressOf(source.provider)))}
+                onCompose={(mode: ComposeMode, source: EmailMessage) => setCompose(composeFor(mode, source, addressOf(source)))}
                 onLabel={label}
                 onNotice={(text) => setNotice({ text })}
               />
@@ -438,7 +448,8 @@ function Client() {
         <EmailCompose
           key={`${compose.mode}:${compose.source?.id ?? 'new'}`}
           draft={compose}
-          provider={compose.source?.provider ?? composeFrom ?? provider}
+          provider={compose.source?.provider ?? composeFrom?.provider ?? provider}
+          account={compose.source ? compose.source.account : composeFrom ? composeFrom.account : account}
           accounts={compose.mode === 'new' && oauth.length > 1 ? oauth : undefined}
           onProvider={setComposeFrom}
           onChange={setCompose}
@@ -450,6 +461,7 @@ function Client() {
       {triageOpen && provider && (
         <TriageDialog
           provider={provider}
+          account={account}
           items={items}
           run={run}
           onRun={(next) => { setRun(next); void settings.refetch(); }}

@@ -29,6 +29,8 @@ export interface CalendarsResponse {
 /** What the event dialog sends. */
 export interface EventDraft {
   provider: CalendarProvider;
+  /** The connected account of the provider, when it is not the default one. */
+  account?: string;
   calendarId?: string;
   title: string;
   allDay: boolean;
@@ -47,7 +49,7 @@ export interface NewEventSeed { day: string; startMin?: number; endMin?: number;
 export const providerName = (provider: CalendarProvider) => (provider === 'google' ? 'Google' : 'Microsoft 365');
 
 /** One event among all calendars: an id is only unique within its calendar. */
-export const eventKey = (event: CalendarEvent) => `${event.provider}:${event.calendarId ?? ''}:${event.id}`;
+export const eventKey = (event: CalendarEvent) => (event.account ? `${event.provider}:${event.account}:${event.calendarId ?? ''}:${event.id}` : `${event.provider}:${event.calendarId ?? ''}:${event.id}`);
 
 /** For calendars the provider gives no colour. */
 const FALLBACK_COLORS: Record<CalendarProvider, string> = { google: '#2f7f79', microsoft: '#3f76b5' };
