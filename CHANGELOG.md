@@ -25,6 +25,27 @@ labels reflect blast radius, not contract guarantees.
   - New routes: `/api/email/accounts`, `/messages`, `/thread/:id`,
     `/messages/batch`, `/message/:id/attachment/:id`, `/triage/settings`,
     `/triage/preview`, `/triage/run`. The older routes still work.
+- **Writing in Gmail and Outlook:** attachments (20 files, 25 MB), forwarding
+  keeps the original's files, a formatting toolbar (text and HTML). **Snooze**
+  takes a conversation out of the inbox until a chosen time; a Snoozed folder
+  lists it. Migration `0195_email_snooze`, job `email-snooze`.
+- **Several accounts of one provider.** Settings → Integrations → **Add another
+  account** connects a second Google or Microsoft 365 account; each is its own
+  mailbox and has its own calendars, and "All inboxes" merges them. **Make
+  default** picks the account agents and the heartbeat use. Mail routes and
+  calendar writes take an optional `account`.
+- **IMAP/POP3 mailboxes in the mail window**, with summaries, AI drafts and
+  triage (with protection on, mail at level 3–4 reaches local models only).
+  `/mail` is the same window with IMAP mailboxes only.
+- **Triage over All inboxes** in one run, and **automatic triage** (opt-in) of
+  new mail every few minutes, at most 20 mails at a time. Every run uses the
+  bound models.
+- **Local index of Gmail and Outlook headers.** Lists, search and the unread
+  count open at once from an index of the default account's last 90 days of
+  headers (sender, recipients, subject, date, folders, flags, the 300-character
+  preview). Bodies and attachments are never stored. On by default; turned
+  off in the Email page's mailbox settings, which deletes it. Migration
+  `0196_email_index`, job `email-index`.
 - **Calendar is a calendar.** Week, day, month and agenda views; overlapping
   events side by side; an all-day lane; an event card with Join, RSVP, Edit and
   Delete; create by clicking or dragging, move by dragging; keyboard shortcuts.
@@ -37,6 +58,14 @@ labels reflect blast radius, not contract guarantees.
   - **Behaviour change:** the per-save confirmation tick is gone. Changing or
     deleting an event with guests needs `notifyAttendees: true` (409 with the
     guest count otherwise).
+  - **Editing is complete:** drag-resize, dragging on touch, all-day and
+    across midnight; repeating events (create; change "This event" or "All
+    events"); reminders; guests and description on edit; "Find a time" from
+    everyone's busy time; up to 2,500 events per calendar and range.
+  - The heartbeat's upcoming-event check and the meeting import follow the
+    calendars shown on the Calendar page.
+  - **Behaviour change:** on `PATCH /api/calendar/events/:id`, `attendees`
+    now replaces the guest list (it was ignored on edit).
   - Fix: Microsoft all-day events land on their own date in any timezone.
   - OAuth connections record the scopes the provider granted, not the ones
     asked for.
