@@ -319,6 +319,7 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
     if (!nextBoxes.some((b) => b.folders.includes(folder))) setFolder('inbox');
   };
   // Snooze is Google / Microsoft only: the IMAP backend changes nothing on its server.
+  const sameProviderTwice = new Set(boxes.filter((b) => b.kind === 'oauth').map((b) => b.provider)).size < boxes.filter((b) => b.kind === 'oauth').length;
   const snoozeKeys = inView.filter((b) => b.kind === 'oauth').map((b) => b.key);
   const checkedIds = visible.filter((c) => checked.has(c.key)).flatMap((c) => c.ids);
   const filters: Array<[string, string]> = [['all', 'All'], ['unread', 'Unread']];
@@ -458,7 +459,9 @@ function Client({ imapOnly }: { imapOnly: boolean }) {
                   const isChecked = checked.has(c.key);
                   const outgoing = folder === 'sent' || folder === 'drafts' || folder === 'failed';
                   const person = outgoing ? `To: ${it.to?.map(who).join(', ') || '(no recipient)'}` : who(it.from);
-                  const badge = showBadges ? boxOf(keyOf(it))?.short : undefined;
+                  const box = showBadges ? boxOf(keyOf(it)) : undefined;
+                  // Two accounts of one provider: the address says which; otherwise the mailbox's short name.
+                  const badge = box ? (box.kind === 'oauth' && sameProviderTwice ? box.address ?? box.short : box.short) : undefined;
                   return (
                     <li key={c.key} className={`group relative flex gap-2.5 border-l-[3px] px-2.5 py-2.5 ${it.triage?.priority === 'high' ? 'border-l-error' : 'border-l-transparent'} ${isOpen ? 'bg-primary-container/50' : isChecked ? 'bg-surface-container-high' : 'hover:bg-surface-container-low'}`}>
                       <label className="relative mt-0.5 h-8 w-8 shrink-0 cursor-pointer">

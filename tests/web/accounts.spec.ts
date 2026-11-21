@@ -123,3 +123,48 @@ test('Settings lists each connected account: add another, make one the default, 
   await expect(page.getByRole('list', { name: 'Google Workspace accounts' })).toHaveCount(0);
   await expect(page.getByText('Connected as:')).toContainText('me@work.example');
 });
+
+test('All inboxes with two Gmail accounts and an IMAP mailbox: triage names each mailbox, and only Gmail mail offers attachments', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await stubTwoGmail(page);
+  const imapId = '5c0f2a1e-1111-4222-8333-444455556666';
+  await page.route('**/api/mail/accounts', route => json(route, 200, [{
+    id: imapId, workspaceId: null, label: 'Office', address: 'info@office.example', displayName: null, protocol: 'imap',
+    incoming: { host: 'imap.office.example', port: 993, security: 'tls', username: 'info@office.example' },
+    outgoing: { host: 'smtp.office.example', port: 465, security: 'tls', username: 'info@office.example' },
+    folder: 'INBOX', enabled: true, fileAttachments: false, defaultProtectionLevel: null,
+    passwordSet: { incoming: true, outgoing: true }, lastSyncAt: null, lastError: null, createdAt: new Date().toISOString(),
+  }]));
+  await page.route('**/api/mail/client/messages?**', route => json(route, 200, { provider: null, items: [{
+    id: 'i1', provider: 'imap', mailbox: `imap:${imapId}`, status: 'received', from: { email: 'clerk@court.example' }, subject: 'Office mail',
+    snippet: '', receivedAt: new Date(Date.now() - 10 * 60_000).toISOString(), unread: false,
+  }] }));
+  let preview: { items: Array<{ id: string; mailbox?: string }> } | undefined;
+  await page.route('**/api/email/triage/preview**', route => {
+    preview = route.request().postDataJSON();
+    return json(route, 200, { error: 'stop here' });
+  });
+  await page.goto('/email');
+  await page.getByRole('combobox', { name: 'Mailbox', exact: true }).selectOption('all');
+  const rows = page.getByRole('region', { name: 'Messages' }).getByRole('listitem');
+  await expect(rows).toHaveCount(4);
+  await page.getByRole('button', { name: 'Triage inbox' }).click();
+  // Each row names its own mailbox: the default account bare, the other by its address, IMAP by its id.
+  await expect.poll(() => Object.fromEntries((preview?.items ?? []).map((it) => [it.id, it.mailbox]))).toEqual({
+    h1: 'google', h2: 'google', w1: 'google:me@work.example', i1: `imap:${imapId}`,
+  });
+  await page.keyboard.press('Escape');
+  // A reply in the work account can carry files; one in the IMAP mailbox says it cannot.
+  await page.route('**/api/email/thread/t-w1?**', route => json(route, 200, { messages: [{ ...row('w1', 'Work mail', 5), account: 'me@work.example', body: 'Hi', attachments: [] }] }));
+  await page.route('**/api/mail/client/messages/i1', route => json(route, 200, { id: 'i1', provider: 'imap', mailbox: `imap:${imapId}`, status: 'received', from: { email: 'clerk@court.example' }, subject: 'Office mail', snippet: '', receivedAt: new Date().toISOString(), unread: false, cc: [], body: 'Letter', attachments: [] }));
+  await page.getByRole('region', { name: 'Messages' }).getByRole('button', { name: /Work mail/ }).click();
+  await page.getByRole('button', { name: 'Reply', exact: true }).click();
+  await expect(page.getByRole('form', { name: 'Reply' }).getByRole('button', { name: 'Attach files' })).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Reply' }).getByRole('toolbar', { name: 'Formatting' })).toBeVisible();
+  await page.getByRole('form', { name: 'Reply' }).getByRole('button', { name: 'Discard' }).click();
+  await page.getByRole('region', { name: 'Messages' }).getByRole('button', { name: /Office mail/ }).click();
+  await page.getByRole('button', { name: 'Reply', exact: true }).click();
+  const imapReply = page.getByRole('form', { name: 'Reply' });
+  await expect(imapReply.getByText('An IMAP / POP3 mailbox sends plain text without attachments.')).toBeVisible();
+  await expect(imapReply.getByRole('button', { name: 'Attach files' })).toHaveCount(0);
+});

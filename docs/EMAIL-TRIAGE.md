@@ -34,8 +34,8 @@ category there. That stores your label, exactly like the review queue does.
 
 ## Which mailboxes
 
-Triage works on every mailbox the Email page shows: a connected Gmail or
-Outlook mailbox and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
+Triage works on every mailbox the Email page shows: each connected Gmail or
+Outlook account and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
 
 - **One mailbox or all of them.** In **All inboxes** one run covers every
   inbox on screen. Progress counts across them, and each mail is triaged,
@@ -53,9 +53,17 @@ Outlook mailbox and the IMAP / POP3 mailboxes of [MAIL.md](MAIL.md).
   the decision model (if one is bound) and the everyday LLM both run locally.
   Otherwise it is left out and the result counts it. The same holds for the
   summary, the reply directions and AI drafts of such mail.
+- **Several accounts of one provider.** A further Gmail or Outlook account
+  (Settings → Integrations → **Add another account**) is its own mailbox: a run
+  names it `google:<address>` / `microsoft:<address>`, the server checks it is
+  one of the caller's own accounts, and that mailbox's part of the run reads,
+  labels and archives with that account's token. Automatic triage covers the
+  default account of each provider and personal IMAP mailboxes.
 - **Per person.** Triage answers and labels are kept per user and mailbox
-  (`email_triage_labels.provider` is `google`, `microsoft` or
-  `imap:<account id>`). In a space's shared mailbox every member triages for
+  (`email_triage_labels.provider` is `google` or `microsoft` for the default
+  account, `google:<address>` / `microsoft:<address>` for a further one, or
+  `imap:<account id>`; an address always holds "@" and an IMAP id never does,
+  so the kinds of key cannot meet). In a space's shared mailbox every member triages for
   themselves: one member's labels are not another's.
 
 ## Automatic triage

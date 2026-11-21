@@ -135,7 +135,7 @@ test('triage shows what it will do before it starts, runs with progress, and onl
   await stubAllDefaults(page);
   const box = await stubMailbox(page, [row('a', { unread: true }), row('b', { subject: 'Big sale' }), row('c', { triage: { priority: 'normal', category: 'work', source: 'owner' } })]);
   const calls: Record<string, unknown> = {};
-  await page.route('**/api/email/triage/preview?**', route => {
+  await page.route('**/api/email/triage/preview**', route => {
     calls.preview = route.request().postDataJSON();
     return json(route, 200, {
       settings: { scope: 'untriaged', applyLabels: false, autoArchive: false, archiveCategories: ['promotion'], instructions: '', skipDialog: false },

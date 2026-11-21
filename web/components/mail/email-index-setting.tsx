@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { providerLabel } from './email-shared';
 import type { EmailProvider } from '../../../src/shared/email';
@@ -25,18 +26,21 @@ const STATUS_TEXT: Record<IndexStatus['mailboxes'][number]['status'], string> = 
 export function EmailIndexSetting() {
   const client = useQueryClient();
   const status = useQuery({ queryKey: ['email-index'], queryFn: () => api.get<IndexStatus>('/email/index'), refetchInterval: 15_000 });
+  // The switch moves at once (set in the same event); the server's answer follows, and a failure puts it back.
+  const [asked, setAsked] = useState<boolean | null>(null);
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.put<IndexStatus>('/email/index', { enabled }),
     onSuccess: (data) => {
       client.setQueryData(['email-index'], data);
       void client.invalidateQueries({ queryKey: ['email-list'] });
     },
+    onSettled: () => setAsked(null),
   });
-  const enabled = status.data?.enabled ?? true;
+  const enabled = asked ?? status.data?.enabled ?? true;
   return (
     <section aria-label="Local mail index" className="mb-6 max-w-2xl space-y-2 rounded-lg border border-outline-variant/50 bg-surface p-4 text-sm">
       <label className="flex cursor-pointer items-start gap-2">
-        <input type="checkbox" className="mt-0.5" checked={enabled} disabled={!status.data || toggle.isPending} onChange={(e) => toggle.mutate(e.target.checked)} />
+        <input type="checkbox" className="mt-0.5" checked={enabled} disabled={!status.data || asked !== null} onChange={(e) => { setAsked(e.target.checked); toggle.mutate(e.target.checked); }} />
         <span>
           <span className="font-medium text-on-surface">Keep a local index of Gmail and Outlook headers</span>
           <span className="block text-on-surface-variant">

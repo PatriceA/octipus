@@ -40,7 +40,7 @@ async function stubMailbox(page: Page, message: EmailMessage): Promise<Box> {
     items = [];
     return json(route, 200, { snoozed: { id: 's1' } });
   });
-  await page.route('**/api/email/snoozed?**', route => json(route, 200, { snoozed: box.snoozes.length && !box.unsnoozed.length ? [{
+  await page.route('**/api/email/snoozed', route => json(route, 200, { snoozed: box.snoozes.length && !box.unsnoozed.length ? [{
     id: 's1', provider: 'google', messageIds: ['m1'], threadId: message.threadId, from: message.from, subject: message.subject, snippet: message.snippet,
     wakeAt: new Date(Date.now() + 86_400_000).toISOString(), error: 'Mail provider returned an error (HTTP 503).', retryAt: new Date(Date.now() + 120_000).toISOString(),
   }] : [] }));

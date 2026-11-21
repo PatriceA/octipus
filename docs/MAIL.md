@@ -82,6 +82,23 @@ are cleaned up within the hour.
 Testing a login (`POST /accounts/:id/test`) is part of setting up: in a space
 only its owners can do it.
 
+
+### Writing and snoozing in Gmail and Outlook
+
+- **Attachments:** up to 20 files and 25 MB per mail, picked or dropped on the
+  compose panel. They are held in the server's memory for an hour, for their
+  uploader only, until the mail is sent. A forward takes the original's files
+  along (removable); the server fetches them from the mailbox at send time.
+- **Formatting:** a toolbar adds `**bold**`, `_italic_`, links, lists and
+  quotes as signs in the text; the server builds the HTML part from those
+  signs and sanitizes it. **Plain text** sends the text alone.
+- **Snooze:** a conversation leaves the inbox until a chosen time and comes
+  back unread (table `email_snoozes`, job `email-snooze`). The **Snoozed**
+  folder lists what is out, says why a wake failed, and has **Unsnooze**. A
+  snooze in a further account is woken in that account.
+- An IMAP / POP3 mailbox sends plain text without attachments and has no
+  snooze: Octipus changes nothing on its server.
+
 ### Hosts
 
 The Octipus server opens the connection, so a mailbox setting must not turn
