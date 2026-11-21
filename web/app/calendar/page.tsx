@@ -186,6 +186,8 @@ function PersonalCalendar() {
 
   const savePreferences = async (change: { visible?: string[]; hideDeclined?: boolean }) => {
     setSavingPrefs(true);
+    // A re-read still in flight carries the choice before this one: drop it, or it would overwrite what is shown.
+    await client.cancelQueries({ queryKey: ['calendar-list', workspace] });
     // Shown at once; the server's answer follows.
     client.setQueryData<CalendarsResponse>(['calendar-list', workspace], (old) => old && {
       ...old, preferences: { ...old.preferences, ...change },

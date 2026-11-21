@@ -43,8 +43,10 @@ async function stubCalendar(page: Page, options: { events?: CalendarEvent[]; cal
     writes.push(write);
     return write;
   };
-  await page.route('**/api/calendar/calendars**', route => json(route, 200, { calendars: options.calendars ?? CALENDARS, providers: ['google', 'microsoft'], partial: false, preferences: {}, microsoftSharedAccess: false, ...options.extra }));
-  await page.route('**/api/calendar/preferences', route => { const w = record(route); return json(route, 200, { preferences: w.body }); });
+  // Like the server, the stub remembers what was saved: a re-read must not undo it.
+  const saved: Record<string, unknown> = {};
+  await page.route('**/api/calendar/calendars**', route => json(route, 200, { calendars: options.calendars ?? CALENDARS, providers: ['google', 'microsoft'], partial: false, preferences: saved, microsoftSharedAccess: false, ...options.extra }));
+  await page.route('**/api/calendar/preferences', route => { const w = record(route); Object.assign(saved, w.body); return json(route, 200, { preferences: saved }); });
   let events = options.events ?? EVENTS;
   await page.route('**/api/calendar/events?**', route => { reads++; return json(route, 200, { events, providers: ['google', 'microsoft'], partial: false, ...options.list }); });
   await page.route('**/api/calendar/events', route => { record(route); return json(route, 200, { success: true, id: 'new' }); });
