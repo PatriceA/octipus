@@ -3,15 +3,15 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Repeat } from 'lucide-react';
 import type { CalendarEvent } from '../../../src/shared/calendar';
+import { daysBetween, minutesInto, movedTimes, resizedEnd, shiftAllDay } from '../../../src/shared/calendar-free';
 import { instantAt, layoutAllDay, layoutDay, noonOf, segmentsForDay, snapMinutes } from '../../../src/shared/calendar-layout';
+import { beginDrag, DRAG_PX } from './drag';
 import { clock, colorOf, eventKey, hourLabel, type NewEventSeed, timeLabel, tint } from './model';
 
 /** Height of one hour, in px. */
 const HOUR = 48;
 const GUTTER = 56;
 const DAY_MIN = 24 * 60;
-/** Pointer travel before a press counts as a drag. */
-const DRAG_PX = 5;
 
 const toPx = (minutes: number) => (minutes / 60) * HOUR;
 const range = (startMin: number, endMin: number) => `${clock(new Date(2000, 0, 1, 0, startMin))} – ${clock(new Date(2000, 0, 1, 0, endMin))}`;
@@ -42,18 +42,24 @@ interface Props {
   selectedKey?: string;
   onSelect: (event: CalendarEvent, anchor: DOMRect) => void;
   onCreate: (seed: NewEventSeed) => void;
-  onMove: (event: CalendarEvent, start: string, end: string) => void;
+  /** A drag or a resize ended. Timed: ISO instants. All-day: first day and exclusive end date. */
+  onMove: (event: CalendarEvent, start: string, end: string, kind: 'move' | 'resize') => void;
   onOpenDay: (day: string) => void;
 }
 
 interface Draft { day: string; startMin: number; endMin: number }
-interface Ghost extends Draft { key: string }
+/** Where a dragged timed event would land, as instants (ms): it may cover two days. */
+interface Ghost { key: string; start: number; end: number; label: string }
+/** Where a dragged all-day event would land. */
+interface DayGhost { key: string; first: string; end: string }
 
 export function TimeGrid({ days, events, loading, today, nowMin, selectedKey, onSelect, onCreate, onMove, onOpenDay }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const columns = useRef(new Map<string, HTMLDivElement>());
   const [draft, setDraft] = useState<Draft | null>(null);
   const [ghost, setGhost] = useState<Ghost | null>(null);
+  const [dayGhost, setDayGhost] = useState<DayGhost | null>(null);
+  const [pickedUp, setPickedUp] = useState<string | null>(null);
   const creating = useRef<{ day: string; anchorMin: number; y: number; moved: boolean } | null>(null);
   const justDragged = useRef(false);
 
@@ -99,58 +105,104 @@ export function TimeGrid({ days, events, loading, today, nowMin, selectedKey, on
     setDraft(null);
   };
 
-  // ── Move: drag an event to another time or day ────────────────────────────
+  // ── Move and resize: drag an event to another time or day, or its bottom edge ──
+  /** The day whose column is under the pointer; outside the grid, the nearest one. */
+  const dayUnder = (clientX: number, fallback: string) => {
+    let target = fallback;
+    let best = Infinity;
+    for (const [d, el] of columns.current) {
+      const rect = el.getBoundingClientRect();
+      const distance = clientX < rect.left ? rect.left - clientX : clientX > rect.right ? clientX - rect.right : 0;
+      if (distance < best) { best = distance; target = d; }
+    }
+    return target;
+  };
   const ghostRef = useRef<Ghost | null>(null);
-  const startMove = (event: CalendarEvent, day: string, startMin: number, endMin: number) => (e: ReactPointerEvent<HTMLButtonElement>) => {
-    if (e.button !== 0 || e.pointerType === 'touch' || event.readOnly) return;
-    const origin = { x: e.clientX, y: e.clientY };
-    const grab = minuteAt(day, e.clientY) - startMin;
-    const length = endMin - startMin;
-    let moved = false;
-    const move = (ev: PointerEvent) => {
-      if (!moved && Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y) <= DRAG_PX) return;
-      moved = true;
-      // The day whose column the pointer is over; outside the grid, the nearest one.
-      let target = day;
-      let best = Infinity;
-      for (const [d, el] of columns.current) {
-        const rect = el.getBoundingClientRect();
-        const distance = ev.clientX < rect.left ? rect.left - ev.clientX : ev.clientX > rect.right ? ev.clientX - rect.right : 0;
-        if (distance < best) { best = distance; target = d; }
-      }
-      const start = Math.max(0, Math.min(DAY_MIN - 15, snapMinutes(minuteAt(target, ev.clientY) - grab)));
-      ghostRef.current = { key: eventKey(event), day: target, startMin: start, endMin: Math.min(DAY_MIN, start + length) };
-      setGhost(ghostRef.current);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-      const g = ghostRef.current;
-      ghostRef.current = null;
-      setGhost(null);
-      if (!moved) return;
-      // The click that follows a drag must not open the event.
-      justDragged.current = true;
-      setTimeout(() => { justDragged.current = false; }, 0);
-      if (!g || (g.day === day && g.startMin === startMin)) return;
-      const start = instantAt(g.day, g.startMin);
-      const duration = event.end ? Date.parse(event.end) - Date.parse(event.start) : 60 * 60_000;
-      onMove(event, start, new Date(Date.parse(start) + duration).toISOString());
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-    abandonMove.current = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
+  const dayGhostRef = useRef<DayGhost | null>(null);
+  const abandonMove = useRef<(() => void) | null>(null);
+  // A drag left unfinished when the grid goes away must not leave listeners behind.
+  useEffect(() => () => abandonMove.current?.(), []);
+  const afterDrag = () => {
+    // The click that follows a drag must not open the event.
+    justDragged.current = true;
+    setTimeout(() => { justDragged.current = false; }, 0);
+  };
+  const ghostLabel = (start: number, end: number) => `${clock(new Date(start))} – ${clock(new Date(end))}`;
+  const endDrag = () => { ghostRef.current = null; dayGhostRef.current = null; setGhost(null); setDayGhost(null); setPickedUp(null); };
+
+  /** Drag a timed event (any of its day segments) to another time or day. */
+  const startMove = (event: CalendarEvent, day: string) => (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 || event.readOnly) return;
+    // Where in the event it was grabbed: the morning part of a late event was grabbed after its start.
+    const grab = minuteAt(day, e.clientY) - minutesInto(day, event.start);
+    const key = eventKey(event);
+    abandonMove.current?.();
+    abandonMove.current = beginDrag(e, {
+      onPickUp: () => setPickedUp(key),
+      onMove: (ev) => {
+        const target = dayUnder(ev.clientX, day);
+        const { start, end } = movedTimes(event, target, Math.round((minuteAt(target, ev.clientY) - grab) / 15) * 15);
+        ghostRef.current = { key, start: Date.parse(start), end: Date.parse(end), label: 'Move here' };
+        setGhost(ghostRef.current);
+      },
+      onEnd: (dropped) => {
+        const g = ghostRef.current;
+        endDrag();
+        if (!dropped) return;
+        afterDrag();
+        if (!g || g.start === Date.parse(event.start)) return;
+        onMove(event, new Date(g.start).toISOString(), new Date(g.end).toISOString(), 'move');
+      },
+    });
   };
 
-  // A drag left unfinished when the grid goes away must not leave listeners behind.
-  const abandonMove = useRef<(() => void) | null>(null);
-  useEffect(() => () => abandonMove.current?.(), []);
+  /** Drag the bottom edge of a timed event: a new end, 15 minutes at least. */
+  const startResize = (event: CalendarEvent, day: string) => (e: ReactPointerEvent<HTMLSpanElement>) => {
+    if (e.button !== 0 || event.readOnly) return;
+    e.stopPropagation();
+    const key = eventKey(event);
+    abandonMove.current?.();
+    abandonMove.current = beginDrag(e, {
+      onPickUp: () => setPickedUp(key),
+      onMove: (ev) => {
+        const end = resizedEnd(event, day, snapMinutes(minuteAt(day, ev.clientY)));
+        ghostRef.current = { key, start: Date.parse(event.start), end: Date.parse(end), label: 'New end' };
+        setGhost(ghostRef.current);
+      },
+      onEnd: (dropped) => {
+        const g = ghostRef.current;
+        endDrag();
+        if (!dropped) return;
+        afterDrag();
+        if (!g || (event.end && g.end === Date.parse(event.end))) return;
+        onMove(event, event.start, new Date(g.end).toISOString(), 'resize');
+      },
+    });
+  };
+
+  /** Drag an all-day event along the all-day lane: it moves by whole days. */
+  const startDayMove = (event: CalendarEvent) => (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 || event.readOnly) return;
+    const grabbed = dayUnder(e.clientX, days[0]);
+    const key = eventKey(event);
+    abandonMove.current?.();
+    abandonMove.current = beginDrag(e, {
+      onPickUp: () => setPickedUp(key),
+      onMove: (ev) => {
+        const { start, end } = shiftAllDay(event, daysBetween(grabbed, dayUnder(ev.clientX, grabbed)));
+        dayGhostRef.current = { key, first: start, end };
+        setDayGhost(dayGhostRef.current);
+      },
+      onEnd: (dropped) => {
+        const g = dayGhostRef.current;
+        endDrag();
+        if (!dropped) return;
+        afterDrag();
+        if (!g || g.first === event.start.slice(0, 10)) return;
+        onMove(event, g.first, g.end, 'move');
+      },
+    });
+  };
 
   return (
     <div ref={scroller} data-testid="time-grid" className="h-full overflow-auto rounded-md border border-outline-variant/60 bg-surface">
@@ -182,14 +234,23 @@ export function TimeGrid({ days, events, loading, today, nowMin, selectedKey, on
               {spans.map((span) => {
                 const look = eventStyle(span.event);
                 return (
-                  <button key={eventKey(span.event)} onClick={(e) => onSelect(span.event, e.currentTarget.getBoundingClientRect())}
+                  <button key={eventKey(span.event)} data-event={eventKey(span.event)}
+                    onPointerDown={span.event.readOnly ? undefined : startDayMove(span.event)}
+                    onClick={(e) => { if (!justDragged.current) onSelect(span.event, e.currentTarget.getBoundingClientRect()); }}
+                    onContextMenu={(e) => e.preventDefault()}
                     aria-label={`${span.event.title}, ${timeLabel(span.event)}`}
-                    className={`z-10 mx-0.5 px-1.5 text-xs text-left truncate rounded-xs cursor-pointer ${look.className} ${selectedKey === eventKey(span.event) ? 'ring-2 ring-primary' : ''}`}
+                    className={`z-10 mx-0.5 px-1.5 text-xs text-left truncate rounded-xs cursor-pointer select-none [-webkit-touch-callout:none] ${look.className} ${selectedKey === eventKey(span.event) ? 'ring-2 ring-primary' : ''} ${dayGhost?.key === eventKey(span.event) ? 'opacity-40' : ''} ${pickedUp === eventKey(span.event) ? 'ring-2 ring-primary shadow-lg' : ''}`}
                     style={{ ...look.style, gridColumn: `${span.start + 1} / span ${span.length}`, gridRow: span.row + 1 }}>
                     {span.continuesBefore ? '‹ ' : ''}{span.event.title}{span.continuesAfter ? ' ›' : ''}
                   </button>
                 );
               })}
+              {dayGhost && (() => {
+                const first = dayGhost.first <= days[0] ? 0 : days.indexOf(dayGhost.first);
+                const last = days.findLastIndex((d) => d < dayGhost.end);
+                if (first < 0 || last < first) return null;
+                return <div data-testid="day-ghost" className="z-20 mx-0.5 rounded-xs border-2 border-dashed border-primary bg-primary-container/40 pointer-events-none" style={{ gridColumn: `${first + 1} / span ${last - first + 1}`, gridRow: 1 }} aria-hidden />;
+              })()}
             </div>
           </div>
         </div>
@@ -216,13 +277,14 @@ export function TimeGrid({ days, events, loading, today, nowMin, selectedKey, on
                   const dragging = ghost?.key === key;
                   const height = Math.max(toPx(item.endMin - item.startMin) - 2, 18);
                   const look = eventStyle(item.event, isPast || (day === today && item.endMin < nowMin));
-                  const movable = !item.event.readOnly && !item.continuesBefore && !item.continuesAfter;
+                  const movable = !item.event.readOnly;
                   return (
                     <button key={key} data-event={key}
-                      onPointerDown={movable ? startMove(item.event, day, item.startMin, item.endMin) : undefined}
+                      onPointerDown={movable ? startMove(item.event, day) : undefined}
                       onClick={(e) => { if (!justDragged.current) onSelect(item.event, e.currentTarget.getBoundingClientRect()); }}
+                      onContextMenu={(e) => e.preventDefault()}
                       aria-label={`${item.event.title}, ${timeLabel(item.event)}`}
-                      className={`absolute z-10 overflow-hidden rounded-xs px-1.5 py-0.5 text-left text-xs leading-tight cursor-pointer hover:brightness-95 ${look.className} ${selectedKey === key ? 'ring-2 ring-primary' : ''} ${dragging ? 'opacity-40' : ''}`}
+                      className={`group absolute z-10 overflow-hidden rounded-xs px-1.5 py-0.5 text-left text-xs leading-tight cursor-pointer select-none [-webkit-touch-callout:none] hover:brightness-95 ${look.className} ${selectedKey === key ? 'ring-2 ring-primary' : ''} ${dragging ? 'opacity-40' : ''} ${pickedUp === key ? 'ring-2 ring-primary shadow-lg' : ''}`}
                       style={{ ...look.style, top: toPx(item.startMin) + 1, height, left: `calc(${(item.column / item.columns) * 100}% + 2px)`, width: `calc(${(item.span / item.columns) * 100}% - 4px)` }}>
                       <span className="block font-medium truncate">
                         {item.event.recurring && <Repeat className="inline w-3 h-3 mr-1 -mt-0.5 opacity-70" aria-hidden />}
@@ -230,11 +292,21 @@ export function TimeGrid({ days, events, loading, today, nowMin, selectedKey, on
                       </span>
                       {height >= 34 && <span className="block truncate text-[11px] opacity-80">{timeLabel(item.event)}</span>}
                       {height >= 52 && item.event.location && <span className="block truncate text-[11px] opacity-70">{item.event.location}</span>}
+                      {movable && !item.continuesAfter && (
+                        <span data-resize={key} aria-hidden onPointerDown={startResize(item.event, day)}
+                          className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize opacity-0 group-hover:opacity-100 bg-[linear-gradient(to_bottom,transparent,color-mix(in_srgb,currentColor_25%,transparent))]" />
+                      )}
                     </button>
                   );
                 })}
-                {draft?.day === day && <Preview startMin={draft.startMin} endMin={draft.endMin} label="New event" />}
-                {ghost?.day === day && <Preview startMin={ghost.startMin} endMin={ghost.endMin} label="Move here" />}
+                {draft?.day === day && <Preview startMin={draft.startMin} endMin={draft.endMin} label={`New event · ${range(draft.startMin, draft.endMin)}`} />}
+                {ghost && (() => {
+                  // A moved late event can cover two days: each column shows its part.
+                  const dayStart = Date.parse(instantAt(day, 0));
+                  const from = Math.max(0, (ghost.start - dayStart) / 60_000);
+                  const to = Math.min(DAY_MIN, (ghost.end - dayStart) / 60_000);
+                  return to > from ? <Preview startMin={from} endMin={to} label={`${ghost.label} · ${ghostLabel(ghost.start, ghost.end)}`} /> : null;
+                })()}
                 {day === today && (
                   <div data-testid="now-line" className="absolute left-0 right-0 z-10 pointer-events-none" style={{ top: toPx(nowMin) }} aria-hidden>
                     <div className="h-0.5 bg-error" />
@@ -255,9 +327,9 @@ const SKELETON: ReadonlyArray<readonly [number, number]> = [[9 * 60, 10 * 60], [
 
 function Preview({ startMin, endMin, label }: { startMin: number; endMin: number; label: string }) {
   return (
-    <div className="absolute left-0.5 right-0.5 z-20 rounded-xs border-2 border-dashed border-primary bg-primary-container/40 px-1.5 py-0.5 text-[11px] text-on-surface pointer-events-none"
+    <div data-testid="ghost" className="absolute left-0.5 right-0.5 z-20 rounded-xs border-2 border-dashed border-primary bg-primary-container/40 px-1.5 py-0.5 text-[11px] text-on-surface pointer-events-none"
       style={{ top: toPx(startMin), height: Math.max(toPx(endMin - startMin), 16) }}>
-      {label} · {range(startMin, endMin)}
+      {label}
     </div>
   );
 }

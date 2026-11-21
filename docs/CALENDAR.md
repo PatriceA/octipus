@@ -77,18 +77,60 @@ a link to the event in Google Calendar or Outlook.
 - **Answer an invitation** with Accept, Maybe or Decline. The organiser is told.
 - **Create** by clicking an empty slot (one hour), by dragging over a time
   range, by clicking the all-day lane, or with **New event**. Choose the
-  calendar (only ones you can write to are offered), and optionally add guests,
-  who get an invitation by email.
-- **Move** a timed event by dragging it to another time or day. It snaps to
-  quarter hours. Events that run over midnight, and all-day events, are moved
-  in the edit dialog instead. Dragging needs a mouse or pen.
-- **Edit** changes title, time, all-day and location. The description and the
-  guest list stay as they are.
+  calendar (only ones you can write to are offered).
+- **Move** by dragging. A timed event snaps to quarter hours and keeps its
+  length, also when it runs over midnight (each day shows its part). An
+  all-day event moves by whole days along the all-day lane; in the month view
+  any event can be dragged to another day, at the same time of day.
+- **Change the end** by dragging the bottom edge of a timed event.
+- On a **touch screen** an event is picked up by resting a finger on it for a
+  moment; a quick swipe scrolls the page as usual.
+- **Edit** changes everything the dialog shows: title, time, all-day,
+  location, reminder, guests and description. It first reads the event's whole
+  description and guest list (the event list only carries a preview), and it
+  sends only what you changed: a description you did not touch keeps its
+  formatting, a guest list you did not touch is not rewritten. A changed
+  description is saved as plain text; the dialog says so when the original has
+  formatting.
 - **Delete** asks once before removing the event.
 
-A repeating event is listed as its occurrences. Editing, moving or deleting one
-changes that occurrence only; the card and the dialog say so. Changing the
-whole series is done in the provider's own calendar.
+### Guests
+
+Add guests by address, remove them with ×. Guests who stay keep their answer,
+new guests get an invitation, removed guests are told. An address typed but not
+yet added still counts when you save.
+
+With guests on a timed event the dialog shows **Availability** for the chosen
+day: your busy time (from the calendars you show) and each guest's, from the
+provider of the event's calendar (Google free/busy, Microsoft `getSchedule`).
+**Find a time** suggests the next free slots of the event's length for
+everyone, within 9:00–17:00 on weekdays this week. A guest whose schedule
+cannot be read is marked "schedule unknown" and is left out of the suggestions,
+never treated as free.
+
+### Reminders
+
+A reminder at the start, or 5, 10, 15, 30 minutes, 1 hour or 1 day before; or
+none; or the calendar's own default (Google's per-calendar setting; Microsoft's
+default is used when an event is made without one).
+
+### Repeating events
+
+**Repeat** makes a new event daily, weekly on chosen days, monthly (on the
+start's day of the month) or yearly, every n days, weeks, months or years, and
+ending never, on a date, or after a number of times. The series keeps your time
+zone, so a 09:00 meeting stays at 09:00 across a clock change.
+
+A repeating event is listed as its occurrences. Moving, editing or deleting one
+asks: **This event** or **All events**.
+
+- *All events* moves every occurrence by as much as you moved this one. It
+  cannot move them all to another day: change the repeat days instead. Its
+  repeat rule can be changed in the dialog unless it is one the page does not
+  make (for example "the second Tuesday"); such a rule is kept as it is.
+- *This and following events* is not offered: neither provider has a single
+  call for it, and splitting a series by hand is left to the provider's own
+  calendar.
 
 ### When guests are notified
 
@@ -104,8 +146,9 @@ and delete tools, which take a calendar id. Creation and updates use
 `calendar_write` (ASK by default); deletes use the separate dangerous delete
 permission. These tools run on the calling user's connected account.
 
-The heartbeat's "starts soon" check and the meeting-notes import still read
-each account's default calendar only.
+The heartbeat's "starts soon" check and the meeting-notes import read the
+calendars you show on the Calendar page; until you choose, each account's
+default calendar.
 
 ## API
 
@@ -115,10 +158,12 @@ All under `/api/calendar`. Refused with 403 in a shared workspace.
 |---|---|
 | `GET /calendars` | Your calendars (`provider`, `id`, `name`, `color`, `primary`, `readOnly`, `shared`, `owner`, `visible`), your preferences, and `microsoftSharedAccess` (`false`: reconnect to open shared calendars). `?fresh=true` asks the providers again; the list is otherwise kept for two minutes |
 | `PUT /preferences` | `{ visible?: ["google:<id>", …], hideDeclined?: boolean }`. Only the given fields change |
-| `GET /events` | `from`, `to` (at most 93 days). Events of the visible calendars, each with `calendarId`, `calendarName`, `color`, `readOnly`, `responseStatus`, `meetingUrl`, `recurring`, `showAs`, `webUrl`. `partial` with `failedCalendars` when a calendar could not be read; `truncated` past 250 events per calendar |
-| `POST /events` | Create: `provider`, `calendarId?`, `title`, `start`, `end`, `allDay`, `location?`, `description?`, `attendees?`, `confirm: true` |
-| `PATCH /events/:id` | Change: the same body without `description` and `attendees`; `notifyAttendees: true` once the reader agreed |
-| `DELETE /events/:id` | Body `{ provider, calendarId?, confirm: true, notifyAttendees? }` |
+| `GET /events` | `from`, `to` (at most 93 days). Events of the visible calendars, each with `calendarId`, `calendarName`, `color`, `readOnly`, `responseStatus`, `meetingUrl`, `recurring`, `seriesId`, `showAs`, `webUrl`. The providers' pages are followed up to 2500 events per calendar; `truncated` beyond that. `partial` with `failedCalendars` when a calendar could not be read |
+| `POST /events` | Create: `provider`, `calendarId?`, `title`, `start`, `end`, `allDay`, `location?`, `description?`, `attendees?`, `reminderMinutes?` (null: none), `recurrence?` (`{ frequency, interval?, byDay?, until? \| count? }`), `timeZone?` (IANA; required with `recurrence`), `confirm: true` |
+| `PATCH /events/:id` | Change: the same body. Fields left out are not changed; `attendees` is the complete new guest list. `scope: "all"` changes the whole series of an occurrence (`recurrence` only then); `notifyAttendees: true` once the reader agreed |
+| `GET /events/:id/details` | `provider`, `calendarId?`: the whole description as text (`descriptionHasFormatting`), guests with answers, `reminderMinutes`, the series' `recurrence` (`"custom"` when the page cannot show it) and `seriesId` |
+| `DELETE /events/:id` | Body `{ provider, calendarId?, confirm: true, notifyAttendees?, scope? }`; `scope: "all"` deletes the whole series |
+| `POST /freebusy` | `{ provider, attendees (≤ 20), from, to (≤ 8 days) }`: `busy` per guest, `failed` per guest who could not be read, `own` busy time from the visible calendars, `ownPartial` |
 | `POST /events/:id/respond` | `{ provider, calendarId?, response: "accepted" \| "tentative" \| "declined" }` |
 
 An event is addressed by provider, calendar and id; without `calendarId` it is
@@ -130,9 +175,13 @@ are encoded as one path segment.
 
 ## Not yet
 
-- Changing a whole repeating series, and making an event repeat.
-- Editing the description or the guest list of an existing event.
-- Reminders, and free/busy lookup for finding a time.
+- *This and following events* for a repeating event.
+- Moving a whole series to another day (change its repeat days instead), or
+  switching a whole series between all-day and timed.
+- Repeat rules beyond the four simple ones (for example "the second Tuesday").
+- Resizing all-day events by dragging, and resizing on a touch screen by the
+  edge (the edit dialog changes the end).
 - Moving an event to another calendar.
-- More than 250 events per calendar in one range.
+- Rooms and resources as guests; working hours other than 9:00–17:00 for
+  **Find a time**.
 - Several accounts of the same provider.

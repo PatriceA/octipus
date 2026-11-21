@@ -17,7 +17,8 @@ interface Props {
   busy: boolean;
   onClose: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  /** `all`: every event of the series this occurrence belongs to. */
+  onDelete: (scope: 'this' | 'all') => void;
   onRespond: (response: Answer) => void;
 }
 
@@ -64,7 +65,7 @@ export function EventPopover({ event, anchor, busy, onClose, onEdit, onDelete, o
 
           <div className="space-y-1.5 text-sm text-on-surface">
             <p>{whenLabel(event)}</p>
-            {event.recurring && <p className="flex items-center gap-1.5 text-on-surface-variant"><Repeat className="w-3.5 h-3.5 shrink-0" aria-hidden />Repeats. Changes here apply to this occurrence only.</p>}
+            {event.recurring && <p className="flex items-center gap-1.5 text-on-surface-variant"><Repeat className="w-3.5 h-3.5 shrink-0" aria-hidden />Repeats. You choose whether a change reaches this event or the whole series.</p>}
             <p className="flex items-center gap-1.5 text-on-surface-variant">
               <CalendarDays className="w-3.5 h-3.5 shrink-0" aria-hidden />
               <span className="truncate">{event.calendarName ?? 'Calendar'} · {providerName(event.provider)}</span>
@@ -110,11 +111,18 @@ export function EventPopover({ event, anchor, busy, onClose, onEdit, onDelete, o
           {confirmDelete ? (
             <div role="alertdialog" aria-label="Delete event" className="border-t border-outline-variant/40 pt-3 space-y-2">
               <p className="text-sm text-on-surface">
-                Delete “{event.title}”{event.recurring ? ' (this occurrence only)' : ''}?
+                Delete “{event.title}”{event.recurring ? ': only this event, or every event of the series?' : '?'}
                 {guests > 0 && <> Its {guests === 1 ? 'guest' : `${guests} guests`} will be told it is cancelled.</>}
               </p>
-              <div className="flex gap-2">
-                <button disabled={busy} onClick={onDelete} className={buttonDanger}><Trash2 className="w-3.5 h-3.5" aria-hidden />{guests > 0 ? 'Delete and notify' : 'Delete event'}</button>
+              <div className="flex flex-wrap gap-2">
+                {event.recurring ? (
+                  <>
+                    <button disabled={busy} onClick={() => onDelete('this')} className={buttonDanger}><Trash2 className="w-3.5 h-3.5" aria-hidden />This event</button>
+                    <button disabled={busy} onClick={() => onDelete('all')} className={buttonDanger}>All events</button>
+                  </>
+                ) : (
+                  <button disabled={busy} onClick={() => onDelete('this')} className={buttonDanger}><Trash2 className="w-3.5 h-3.5" aria-hidden />{guests > 0 ? 'Delete and notify' : 'Delete event'}</button>
+                )}
                 <button disabled={busy} onClick={() => setConfirmDelete(false)} className={buttonQuiet}>Keep it</button>
               </div>
             </div>

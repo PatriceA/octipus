@@ -74,6 +74,8 @@ export interface CalendarEvent {
   meetingUrl?: string;
   /** An occurrence of a repeating event. */
   recurring?: boolean;
+  /** The repeating event this occurrence belongs to (Google `recurringEventId`, Graph `seriesMasterId`). */
+  seriesId?: string;
   showAs?: CalendarShowAs;
   /** The event in the provider's own calendar app. */
   webUrl?: string;
@@ -84,4 +86,57 @@ export interface CalendarPreferences {
   /** Calendar keys (`provider:id`) to show. Unset: the provider's own selection. */
   visible?: string[];
   hideDeclined?: boolean;
+}
+
+/** How often an event repeats. Monthly repeats on the start's day of the month, yearly on its date. */
+export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** A repeat rule the Calendar page can make and show. */
+export interface CalendarRecurrence {
+  frequency: RecurrenceFrequency;
+  /** Every n days/weeks/months/years; 1 when absent. */
+  interval?: number;
+  /** For weekly: the days it falls on; the start's weekday when absent. */
+  byDay?: Weekday[];
+  /** The last day it may fall on (`YYYY-MM-DD`). */
+  until?: string;
+  /** How many times it happens in all. Not with `until`. */
+  count?: number;
+}
+
+/** Which events of a series a change or a deletion reaches. */
+export type RecurrenceScope = 'this' | 'all';
+
+/** Reminder choices offered on the page, in minutes before the start. */
+export const REMINDER_CHOICES: readonly number[] = [0, 5, 10, 15, 30, 60, 1440];
+
+/** What the edit dialog reads about one event that the event list leaves out or shortens. */
+export interface CalendarEventDetails {
+  /** The full description as text. */
+  description: string;
+  /** The description has formatting (HTML) that a changed text would drop. */
+  descriptionHasFormatting: boolean;
+  attendees: CalendarAttendee[];
+  /** Minutes before the start; null: no reminder; absent: the calendar's default. */
+  reminderMinutes?: number | null;
+  /** The series' rule, when this is one of a repeating event. `custom`: a rule the page cannot show or change. */
+  recurrence?: CalendarRecurrence | 'custom';
+  seriesId?: string;
+}
+
+/** A busy stretch of someone's time. */
+export interface BusyInterval { start: string; end: string }
+
+/** POST /api/calendar/freebusy */
+export interface FreeBusyResponse {
+  /** Busy stretches per guest address. */
+  busy: Record<string, BusyInterval[]>;
+  /** Guests whose schedule could not be read, with why. Their time is unknown, never free. */
+  failed: Record<string, string>;
+  /** The reader's own busy time, from the calendars they show. */
+  own: BusyInterval[];
+  /** Some of the reader's calendars could not be read. */
+  ownPartial: boolean;
 }

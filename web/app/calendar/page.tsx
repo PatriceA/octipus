@@ -9,14 +9,14 @@ import { EventPopover } from '@/components/calendar/event-popover';
 import { AgendaView, MonthView } from '@/components/calendar/list-views';
 import {
   buttonPrimary, buttonQuiet, type CalendarsResponse, type CalendarViewName, type EventDraft, eventKey, type EventsResponse, firstWeekday,
-  type NewEventSeed, rangeTitle, stepAnchor, today as todayOf, viewDays, VIEWS,
+  type NewEventSeed, rangeTitle, readerTimeZone, stepAnchor, today as todayOf, viewDays, VIEWS,
 } from '@/components/calendar/model';
 import { TimeGrid } from '@/components/calendar/time-grid';
 import { Modal } from '@/components/ui/modal';
 import { PageHeader } from '@/components/ui/page-header';
 import { api, ApiError } from '@/lib/api';
 import { useWorkspace, useWorkspaceId } from '@/lib/workspace-context';
-import { calendarKey, type CalendarEvent, type CalendarInfo, type CalendarResponse } from '../../../src/shared/calendar';
+import { calendarKey, type CalendarEvent, type CalendarInfo, type CalendarResponse, type RecurrenceScope } from '../../../src/shared/calendar';
 import { addDays } from '../../../src/shared/calendar-layout';
 
 export default function CalendarPage() {
@@ -40,6 +40,8 @@ const isView = (value: string | null): value is CalendarViewName => VIEWS.some((
 interface Notice { text: string; error?: boolean }
 /** A change that reaches guests, waiting for the reader to agree. */
 interface Ask { what: string; attendees: number; confirm: () => void; cancel: () => void }
+/** A change to a repeating event, waiting for the reader to say which events it reaches. */
+interface AskScope { what: string; choose: (scope: RecurrenceScope | null) => void }
 
 function PersonalCalendar() {
   const client = useQueryClient();
@@ -57,6 +59,7 @@ function PersonalCalendar() {
   const [editor, setEditor] = useState<{ event?: CalendarEvent; seed: NewEventSeed } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
+  const [askScope, setAskScope] = useState<AskScope | null>(null);
   const [busy, setBusy] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [calendarsOpen, setCalendarsOpen] = useState(false);
@@ -157,24 +160,44 @@ function PersonalCalendar() {
       : api.post('/calendar/events', { ...draft, confirm: true }),
   });
 
-  const move = (event: CalendarEvent, start: string, end: string) => {
+  /** For a repeating event: which events a change reaches. Resolves null when the reader backs out. */
+  const chooseScope = (event: CalendarEvent, what: string) => new Promise<RecurrenceScope | null>((resolve) => {
+    if (!event.recurring) { resolve('this'); return; }
+    setAskScope({ what, choose: (scope) => { setAskScope(null); resolve(scope); } });
+  });
+
+  /**
+   * A drag or a resize. Timed events take instants; all-day ones dates
+   * (`start` the first day, `end` the day after the last). For a repeating
+   * event the reader first says whether it is this one or all of them.
+   */
+  const move = async (event: CalendarEvent, start: string, end: string, what = 'Move') => {
+    const scope = await chooseScope(event, `${what} “${event.title}”`);
+    if (!scope) return;
     const key = eventKey(event);
-    patchEvents((list) => list.map((e) => (eventKey(e) === key ? { ...e, start, end } : e)));
+    const shown = event.allDay ? { start: `${start}T00:00:00.000Z`, end: `${end}T00:00:00.000Z` } : { start, end };
+    // Every event of the series moves on the provider; the list shows it once it is read again.
+    if (scope === 'this') patchEvents((list) => list.map((e) => (eventKey(e) === key ? { ...e, ...shown } : e)));
     setSelected(null);
     void write({
-      what: `Move “${event.title}”`, done: 'Event moved.',
-      call: (notify) => api.patch(eventPath(event), { ...target(event), confirm: true, title: event.title, allDay: false, start, end, ...(notify ? { notifyAttendees: true } : {}) }),
+      what: `${what} “${event.title}”${scope === 'all' ? ' (all events)' : ''}`, done: what === 'Resize' ? 'Event changed.' : 'Event moved.',
+      call: (notify) => api.patch(eventPath(event), {
+        ...target(event), confirm: true, title: event.title, allDay: event.allDay, start, end, timeZone: readerTimeZone(),
+        ...(event.recurring ? { scope } : {}), ...(notify ? { notifyAttendees: true } : {}),
+      }),
     });
   };
 
-  const remove = (event: CalendarEvent) => {
+  const remove = (event: CalendarEvent, scope: RecurrenceScope = 'this') => {
     const key = eventKey(event);
+    const series = scope === 'all' && event.seriesId;
     setSelected(null);
-    patchEvents((list) => list.filter((e) => eventKey(e) !== key));
-    // The card already named the guests and the reader pressed "Delete and notify".
+    // All events of the series go from view at once; the rest follows when the list is read again.
+    patchEvents((list) => list.filter((e) => (series ? !(e.provider === event.provider && e.calendarId === event.calendarId && e.seriesId === event.seriesId) : eventKey(e) !== key)));
+    // The card already named the guests and the reader pressed delete.
     void write({
-      what: `Delete “${event.title}”`, done: 'Event deleted.', notify: event.attendees.length > 0,
-      call: (notify) => api.delete(eventPath(event), { ...target(event), confirm: true, ...(notify ? { notifyAttendees: true } : {}) }),
+      what: `Delete “${event.title}”${scope === 'all' ? ' (all events)' : ''}`, done: scope === 'all' ? 'Series deleted.' : 'Event deleted.', notify: event.attendees.length > 0,
+      call: (notify) => api.delete(eventPath(event), { ...target(event), confirm: true, ...(event.recurring ? { scope } : {}), ...(notify ? { notifyAttendees: true } : {}) }),
     });
   };
 
@@ -213,7 +236,7 @@ function PersonalCalendar() {
   const canCreate = writable.length > 0;
 
   // ── Keyboard ────────────────────────────────────────────────────────────
-  const overlayOpen = !!editor || !!ask;
+  const overlayOpen = !!editor || !!ask || !!askScope;
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (overlayOpen || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -300,21 +323,33 @@ function PersonalCalendar() {
               <p className="text-on-surface font-medium">No calendar connected</p>
               <p className="text-sm mt-1">Connect Google or Microsoft 365 in <a className="text-primary underline" href="/settings?tab=integrations">Settings → Integrations</a>.</p>
             </div>
-          ) : view === 'month' ? <MonthView days={days} month={anchor} {...common} />
+          ) : view === 'month' ? <MonthView days={days} month={anchor} onMove={(event, start, end) => void move(event, start, end)} {...common} />
             : view === 'agenda' ? <AgendaView days={days} {...common} />
-            : <TimeGrid key={view} days={days} nowMin={nowMin} onMove={move} {...common} />}
+            : <TimeGrid key={view} days={days} nowMin={nowMin} onMove={(event, start, end, kind) => void move(event, start, end, kind === 'resize' ? 'Resize' : 'Move')} {...common} />}
         </div>
       </div>
 
       {selected && selectedEvent && (
         <EventPopover key={eventKey(selectedEvent)} event={selectedEvent} anchor={selected.anchor} busy={busy} onClose={() => setSelected(null)}
           onEdit={() => { setEditor({ event: selectedEvent, seed: { day: anchor } }); setSelected(null); }}
-          onDelete={() => remove(selectedEvent)} onRespond={(response) => respond(selectedEvent, response)} />
+          onDelete={(scope) => remove(selectedEvent, scope)} onRespond={(response) => respond(selectedEvent, response)} />
       )}
       {editor && (
         <EventDialog key={editor.event ? eventKey(editor.event) : `new-${editor.seed.day}-${editor.seed.startMin ?? ''}`} event={editor.event} seed={editor.seed} calendars={writable}
           onClose={() => setEditor(null)}
           onSave={async (draft) => { const saved = await save(draft, editor.event); if (saved) setEditor(null); return saved; }} />
+      )}
+      {askScope && (
+        <Modal open onClose={() => askScope.choose(null)} title="This is a repeating event" maxWidth="sm">
+          <div role="alertdialog" aria-label="Which events" className="space-y-3 text-sm text-on-surface">
+            <p>{askScope.what}: only this event, or every event of the series?</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button className={buttonQuiet} onClick={() => askScope.choose(null)}>Cancel</button>
+              <button className={buttonQuiet} onClick={() => askScope.choose('all')}>All events</button>
+              <button className={buttonPrimary} onClick={() => askScope.choose('this')}>This event</button>
+            </div>
+          </div>
+        </Modal>
       )}
       {ask && (
         <Modal open onClose={ask.cancel} title="Guests will be notified" maxWidth="sm">
