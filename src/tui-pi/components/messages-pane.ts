@@ -20,6 +20,8 @@ import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 import { wheelDirection } from '../terminal-actions';
 import { renderThinking, renderToolGroup, type ThinkingItem, type ToolGroupItem, toolGroupText } from './tool-group';
+import { finishRows, linkPlain } from '../links';
+import { renderImageItem, type ImageItem } from './image-item';
 
 export interface ChatMessage {
   kind?: 'message';
@@ -36,7 +38,7 @@ export interface TranscriptNotice { kind: 'notice'; text: string }
  * plus a case in `renderItem`; `entries()` decides what `/copy` and
  * `/export` take from it.
  */
-export type TranscriptItem = ChatMessage | TranscriptNotice | ToolGroupItem | ThinkingItem;
+export type TranscriptItem = ChatMessage | TranscriptNotice | ToolGroupItem | ThinkingItem | ImageItem;
 /** Items that fold: one row collapsed, everything expanded. */
 export type FoldableItem = ToolGroupItem | ThinkingItem;
 const isFoldable = (item: TranscriptItem): item is FoldableItem => item.kind === 'tools' || item.kind === 'thinking';
@@ -242,6 +244,7 @@ export class MessagesPane implements Component {
       if (isMessage(item)) return [{ role: item.role, content: this.raw.get(item) ?? item.content, timestamp: item.timestamp }];
       if (item.kind === 'tools' && item.calls.length) return [{ role: 'system' as const, content: toolGroupText(item), timestamp: new Date(item.calls[0]?.startedAt ?? Date.now()) }];
       if (item.kind === 'thinking') return [{ role: 'system' as const, content: `Thinking:\n${item.text}`, timestamp: new Date() }];
+      if (item.kind === 'image') return [{ role: 'system' as const, content: `[image: ${item.name}]`, timestamp: new Date() }];
       return [];
     });
     if (this.liveRaw) all.push({ role: 'assistant', content: this.liveRaw, timestamp: new Date() });
@@ -333,6 +336,8 @@ export class MessagesPane implements Component {
       lines.push(...renderToolGroup(item, width));
     } else if (item.kind === 'thinking') {
       lines.push(...renderThinking(item, width));
+    } else if (item.kind === 'image') {
+      lines.push(...renderImageItem(item, width));
     } else {
       const error = item.tone === 'error';
       const colour = error ? p.error : item.role === 'user' ? p.accent : p.dim;
@@ -341,8 +346,8 @@ export class MessagesPane implements Component {
       }
       const markdown = item.role === 'assistant' && this.options.markdown !== false && item.markdown !== false;
       const body = markdown
-        ? this.markdownFor(item.content, live).render(inner)
-        : wrapTextWithAnsi((error ? 'Error · ' : '') + item.content, inner);
+        ? finishRows(this.markdownFor(item.content, live).render(inner))
+        : wrapTextWithAnsi(linkPlain((error ? 'Error · ' : '') + item.content), inner);
       for (const line of body) {
         const rail = item.role === 'user' ? chalk.hex(p.accent)('│ ') : item.role === 'system' ? chalk.hex(colour)(error ? '! ' : '· ') : '  ';
         lines.push(rail + (item.role === 'system' ? chalk.hex(colour)(line) : item.role === 'user' ? chalk.hex(p.fg)(line) : line));

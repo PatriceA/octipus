@@ -16,6 +16,7 @@ import { displayText, wrapTextWithAnsi } from '@/tui-kit';
 import { computeLineDiff } from '@/shared/diff';
 import type { ToolEventState } from '../gateway-adapter';
 import { chalk, getPalette } from '../theme/defaults';
+import { linkPlain } from '../links';
 
 export interface ToolCallRecord {
   callId?: string;
@@ -120,7 +121,7 @@ export function renderToolGroup(group: ToolGroupItem, width: number): string[] {
   if (!group.expanded) return rows;
   const dim = chalk.hex(p.dim);
   const push = (text: string, style: (t: string) => string, indent: string) => {
-    for (const line of wrapTextWithAnsi(displayText(text), Math.max(1, inner - indent.length))) rows.push(rail + indent + style(line));
+    for (const line of wrapTextWithAnsi(linkPlain(displayText(text)), Math.max(1, inner - indent.length))) rows.push(rail + indent + style(line));
   };
   for (const call of group.calls) {
     const mark = call.state === 'running' ? '…' : call.state === 'error' ? '✗' : '✓';

@@ -15,6 +15,8 @@ import type { TranscriptSearch } from '@/tui-kit/transcript-search';
 import type { Attention } from './attention';
 import { getFuzzyListTheme, getPalette, paletteForBackground, type PaletteName, setPalette, THEME_SETTINGS, type ThemeSetting } from './theme/defaults';
 import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
+import { configureLinks } from './links';
+import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -209,6 +211,7 @@ export class OctipusTuiApp {
     this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
+    configureLinks({ enabled: hyperlinksEnabled(), cwd: this.projectPath ?? process.cwd() });
 
     // Layout: transcript, then activity, subagents, composer, status bar LAST.
     // The bar carries counters that have to stay readable — at the top it
@@ -733,6 +736,9 @@ export class OctipusTuiApp {
       this.pendingImages.push({ marker, attachment });
       this.composer.insertTextAtCursor(marker + ' ');
       this.pushMessage('system', `${marker} received: ${attachment.name}. Send your message to pass it to the agent.`);
+      // Drawn where the terminal draws images; a line naming it elsewhere.
+      this.messages.pushItem({ kind: 'image', name: attachment.name, mimeType: attachment.mimeType, data: attachment.data });
+      if (this.messages.getScrollOffset() === 0) this.messages.scrollToBottom();
       this.tui.requestRender();
     } catch (error) {
       this.pushMessage('system', `Image not attached: ${error instanceof Error ? error.message : String(error)}`);
@@ -1072,6 +1078,7 @@ export class OctipusTuiApp {
         } else {
           this.projectPath = value;
           this.status.setProject(value.split(/[/\\]/).pop());
+          configureLinks({ enabled: hyperlinksEnabled(), cwd: value });
           this.pushMessage('system', `Project set to: ${value}`);
         }
         return;
