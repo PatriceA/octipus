@@ -8,7 +8,7 @@
  * The overlay anchors `bottom-center` and uses pi-tui's focus stack
  * so the composer doesn't see y/n/Esc while the prompt is up.
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth, displayLine } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
 
 export interface PermissionPromptOptions {
@@ -47,7 +47,7 @@ export class PermissionPrompt implements Component, Focusable {
     const bold = (text: string) => chalk.bold.hex(palette.warn)(text);
 
     const header = bold('⚠ Permission required');
-    const detail = this.options.detail;
+    const detail = displayLine(this.options.detail);
     const hint = dim('y/Enter approve · n deny · Esc cancel');
 
     const maxInner = Math.max(1, width - 4);

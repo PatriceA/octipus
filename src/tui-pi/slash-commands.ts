@@ -10,7 +10,7 @@
  * registry, so a command added on either side without the other fails CI.
  * Extension-registered commands still only appear in `/help`.
  */
-import type { SlashCommand } from '@mariozechner/pi-tui';
+import type { SlashCommand } from '@/tui-kit';
 
 /** Where the command runs — drives Phase 4 styling and tests. */
 export type SlashCommandSource = 'tui' | 'gateway';
@@ -27,7 +27,11 @@ const gw = (entry: Omit<OctipusSlashCommand, 'source'>): OctipusSlashCommand => 
 export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   // ── TUI-local ───────────────────────────────────────────────────
   tui({ name: 'attach', description: 'Attach an image from clipboard or file', argumentHint: '[image-path]' }),
-  tui({ name: 'copy', description: 'Request terminal clipboard copy of response or loaded transcript', argumentHint: '[last|transcript]' }),
+  tui({ name: 'copy', description: 'Copy the last response or the loaded transcript to the clipboard', argumentHint: '[last|transcript|code]' }),
+  tui({ name: 'export', description: 'Write the transcript to a Markdown file', argumentHint: '[path]' }),
+  tui({ name: 'scrollback', description: 'Show the transcript in the terminal scrollback; any key returns' }),
+  tui({ name: 'theme', description: 'Switch the theme and save it (auto follows the terminal background)', argumentHint: '[auto|dark|light|high-contrast]' }),
+  tui({ name: 'search', description: 'Search the transcript (also Ctrl+F); Enter / Shift+Enter move, Esc returns' }),
   tui({ name: 'exit',     description: 'Quit the TUI' }),
   tui({ name: 'quit',     description: 'Quit the TUI' }),
   tui({ name: 'project',  description: 'Show or set the active project path',
@@ -37,13 +41,13 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   tui({ name: 'whoami',   description: 'Show which account this terminal is acting as' }),
   tui({ name: 'workspace', description: 'Show or switch the active workspace (- for default)',
         argumentHint: '<slug|->' }),
-  tui({ name: 'resume',   description: 'Reopen a session from /sessions by number or id',
-        argumentHint: '<n|id>' }),
+  tui({ name: 'resume',   description: 'Reopen a session: alone, a picker; or by number or id from /sessions list',
+        argumentHint: '[n|id]' }),
   tui({ name: 'hotkeys',  description: 'Show the chat shell keybindings' }),
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
-  gw({ name: 'skills', description: 'List skills or select Automatic, Always, or This session',
+  gw({ name: 'skills', description: 'Pick a skill and how it is used (Automatic, Always, This session); with arguments as before',
        argumentHint: '[<id or name> always|session|auto] [--global]' }),
   gw({ name: 'status',    description: 'Show current session status and agents',            aliases: ['s'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
@@ -56,7 +60,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
        argumentHint: '[focus]' }),
   gw({ name: 'clear',     description: 'Reset rootAgent context and clear the chat',     aliases: ['cls', 'reset'] }),
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
-  gw({ name: 'sessions',  description: 'List your recent sessions' }),
+  gw({ name: 'sessions',  description: 'Pick a recent session to resume (/sessions list: as text)', argumentHint: '[list]' }),
   gw({ name: 'history',   description: 'Replay this session\'s conversation' }),
   gw({ name: 'persona',   description: 'Configure the root agent persona' }),
   gw({ name: 'proposals', description: 'Review distilled skill/expert proposals — list, approve, reject',

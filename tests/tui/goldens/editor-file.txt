@@ -1,0 +1,71 @@
+00|Plan · 1/3 steps done · Check rendering
+01|[done] Inspect
+02|[active] Check rendering
+03|[pending] Verify
+04|/plan-hide · /plan-feedback <change>
+05|● Octipus  connected  @tester  · project
+06|  Files                  │▸ Editor                                 │  Chat
+07|▾ [+] project            │ example.ts ×                            │· Welcome to Octipus. Project:
+08|      example.ts         │1 const greeting = "hello";              │· project  Type a message or
+09|                         │2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│· /help. Wheel: scroll · Drag:
+10|                         │3                                        │· select and copy · /copy last:
+11|                         │~                                        │· copy reply.
+12|                         │~                                        │
+13|                         │~                                        │
+14|                         │~                                        │
+15|                         │~                                        │
+16|                         │~                                        │
+17|                         │~                                        │
+18|                         │~                                        │
+19|                         │~                                        │
+20|                         │~                                        │
+21|                         │~                                        │
+22|                         │~                                        │
+23|                         │~                                        │
+24|                         │~                                        │────────────────────────────────
+25|                         │~                                        │
+26|                         │~                                        │────────────────────────────────
+27|EDIT  focus:editor  L1:1  example.ts  typescript
+
+--- styles
+00|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+01|cccccccccccccc
+02|cccccccccccccccccccccccc
+03|cccccccccccccccc
+04|dddddddddddddddddddddddddddddddddddd
+05|ebfffffffbbdddddddddbbeeeeeeebbccccccccc
+06|dddddddbbbbbbbbbbbbbbbbbbgaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgdddddd
+07|aaaaaaaaaaaaabbbbbbbbbbbbghhhhhhhhhhhhhhbbbbbbbbbbbbbbbbbbbbbbbbbbbgdddddddddddddddddddddddddddddd
+08|iiiiiiiiiiiiiiiibbbbbbbbbgjjhaaaabbbbbbbbbbabeeeeeeecbbbbbbbbbbbbbbgdddddddddddddddddddddddddddd
+09|bbbbbbbbbbbbbbbbbbbbbbbbbgddbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgdddddddddddddddddddddddddddddd
+10|bbbbbbbbbbbbbbbbbbbbbbbbbgddbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgddddddddddddddddddddddddddddddd
+11|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgddddddddddddd
+12|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+13|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+14|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+15|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+16|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+17|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+18|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+19|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+20|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+21|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+22|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+23|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg
+24|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbggggggggggggggggggggggggggggggggg
+25|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgbk
+26|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbggggggggggggggggggggggggggggggggg
+27|ffffbbddddddddddddbbddddbbccccccccccbbdddddddddd
+
+--- legend
+a = fg #92c9c5 bg default
+b = fg default bg default
+c = fg #b9ded9 bg default
+d = fg #a6babd bg default
+e = fg #7fd39a bg default
+f = fg #92c9c5 bg default bold
+g = fg #5e8590 bg default
+h = fg #071923 bg #92c9c5
+i = fg #edf5f3 bg default
+j = fg #b9ded9 bg default bold
+k = fg default bg default inverse

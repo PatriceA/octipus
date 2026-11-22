@@ -1,52 +1,52 @@
 /**
  * Buffer store — the editor's working set.
  *
- * Each buffer pairs a file path with an in-memory text buffer +
- * cursor + selection + dirty flag. The store mediates "open file"
- * (load from FS, dedupe by path), "save" (write through), and
- * "close" (drop). The text buffer itself lives in
- * `editor/buffer.ts` so the store doesn't double as the data
- * structure for cursor / undo logic.
+ * Each buffer pairs a file path with an in-memory text buffer + cursor +
+ * selection, and the text it was last loaded from or saved as. The store
+ * mediates "open file" (dedupe by path), "saved" (new baseline), Save As
+ * (rebind to a path) and "close" (drop). The text buffer itself lives in
+ * `editor/buffer.ts` so the store doesn't double as the data structure for
+ * cursor / undo logic; reading and writing files is the bridge's
+ * (`workspace-fs-bridge.ts`).
  *
- * Path keys are absolute. Display labels strip the workspace root
+ * `dirty` is a comparison, not a flag: the buffer's text differs from the
+ * saved text. Undoing back to what was saved makes the buffer clean again.
+ *
+ * Ids are a counter, not the path (two records never share one, whatever
+ * Save As and rename do); `findByPath` is the only path lookup. Paths are
+ * absolute. Display labels strip the workspace root
  * for shorter tab labels.
  */
 import { Buffer as TextBuffer } from '../editor/buffer';
+import { detectIndent } from '../editor/indent';
 import { detectLanguage, type Language } from '../editor/lang';
+import type { DiskInfo } from '../workspace-fs-bridge';
 
 export interface BufferRecord {
-  id: string;            // stable id; `file:<absPath>` for file-backed buffers
+  /**
+   * `buffer:<n>`, unique for the store's life and never derived from the
+   * path: Save As and rename change `path`, never `id`, and a path opened
+   * again after its buffer moved away gets a new id.
+   */
+  id: string;
   path: string | null;   // absolute path; null for scratch buffers
   label: string;         // display name (basename or "Scratch <n>")
   language: Language;
   buffer: TextBuffer;
-  /** True when the in-memory text differs from the last save. */
+  /** The text as last read from or written to disk (`''` for a scratch buffer). */
+  savedText: string;
+  /** The file as last seen on disk; null for a scratch buffer or one not yet saved. */
+  disk: DiskInfo | null;
+  /** What the Tab key inserts: `'\t'` or the file's indent of spaces. */
+  indent: string;
+  /** True when the in-memory text differs from `savedText`. */
   dirty: boolean;
   /**
-   * When the agent has taken a write lock on this buffer (Phase 4
-   * diff overlay), the user's input is blocked until they accept /
-   * reject the pending diff. Only meaningful when `lockMode` is
-   * `'lock'`.
+   * When the agent has taken a write lock on this buffer (the diff
+   * overlay), the user's input is blocked until they accept /
+   * reject the pending diff.
    */
   agentLocked: boolean;
-  /**
-   * How agent edits to this buffer are presented:
-   *
-   *   - `'lock'`  (default) — the diff overlay opens, the user
-   *     accepts / rejects, the buffer is read-only meanwhile.
-   *
-   *   - `'merge'` — the agent's edit applies directly to the
-   *     buffer's text. The change lands on the buffer's undo
-   *     stack so Ctrl+Z rolls it back, and a one-line "merged
-   *     edit from agent" notice shows in the chat for traceability.
-   *     The user keeps typing alongside the agent without an
-   *     interrupting overlay.
-   *
-   * Per-buffer setting so a user can have a "scratchpad" merge
-   * buffer open while keeping their main code under the safer
-   * `'lock'` discipline.
-   */
-  lockMode: 'lock' | 'merge';
   createdAt: number;
 }
 
@@ -57,10 +57,21 @@ export interface BufferState {
   activeId: string | null;
 }
 
+export interface OpenFileOptions {
+  label?: string;
+  disk?: DiskInfo | null;
+  /** False: open it as a tab without making it the active one (a file opened in the background). */
+  activate?: boolean;
+}
+
 export class BufferStore {
   private state: BufferState = { buffers: [], activeId: null };
   private listeners = new Set<BufferListener>();
   private scratchCounter = 1;
+  /** Never reset, not even by `reset()`: an id handed out once is never handed out again. */
+  private idCounter = 0;
+
+  private nextId(): string { return `buffer:${++this.idCounter}`; }
 
   get(): BufferState { return this.state; }
 
@@ -74,59 +85,72 @@ export class BufferStore {
     for (const fn of this.listeners) fn(this.state);
   }
 
+  private update(id: string, patch: (b: BufferRecord) => Partial<BufferRecord>): void {
+    this.set({ buffers: this.state.buffers.map((b) => b.id === id ? withDirty({ ...b, ...patch(b) }) : b) });
+  }
+
   /** Find by path (for the dedup behavior of `open`). */
   findByPath(absPath: string): BufferRecord | null {
     return this.state.buffers.find((b) => b.path === absPath) ?? null;
   }
 
+  byId(id: string): BufferRecord | null {
+    return this.state.buffers.find((b) => b.id === id) ?? null;
+  }
+
   /**
-   * Open or focus a file-backed buffer. Initial text is whatever
-   * the caller supplies — the bridge `workspace-fs-bridge` reads
-   * the file and hands it in, keeping this store's I/O surface
-   * empty.
+   * Open or focus a file-backed buffer. `savedText` is the file's text as
+   * the bridge read it; it is both the buffer's content and its baseline.
    *
    * Returns the buffer (existing if dedup fires, new otherwise).
    */
-  openFile(absPath: string, initialText: string, label?: string): BufferRecord {
+  openFile(absPath: string, savedText: string, options: OpenFileOptions = {}): BufferRecord {
     const existing = this.findByPath(absPath);
     if (existing) {
-      this.set({ activeId: existing.id });
+      if (options.activate !== false) this.set({ activeId: existing.id });
       return existing;
     }
-    const id = `file:${absPath}`;
-    const language = detectLanguage(absPath);
-    const buf = new TextBuffer(initialText);
-    const rec: BufferRecord = {
-      id,
+    const rec = this.track({
+      id: this.nextId(),
       path: absPath,
-      label: label ?? basename(absPath),
-      language,
-      buffer: buf,
+      label: options.label ?? basename(absPath),
+      language: detectLanguage(absPath),
+      buffer: new TextBuffer(savedText),
+      savedText,
+      disk: options.disk ?? null,
+      indent: detectIndent(savedText),
       dirty: false,
       agentLocked: false,
-      lockMode: 'lock',
       createdAt: Date.now(),
-    };
-    this.set({ buffers: [...this.state.buffers, rec], activeId: id });
+    });
+    const background = options.activate === false && this.state.activeId !== null;
+    this.set({ buffers: [...this.state.buffers, rec], activeId: background ? this.state.activeId : rec.id });
     return rec;
   }
 
   /** Open an unbacked scratch buffer ("Scratch 1", "Scratch 2", …). */
   openScratch(language: Language = 'text'): BufferRecord {
     const n = this.scratchCounter++;
-    const id = `scratch:${n}`;
-    const rec: BufferRecord = {
-      id,
+    const rec = this.track({
+      id: this.nextId(),
       path: null,
       label: `Scratch ${n}`,
       language,
       buffer: new TextBuffer(''),
+      savedText: '',
+      disk: null,
+      indent: detectIndent(''),
       dirty: false,
       agentLocked: false,
-      lockMode: 'lock',
       createdAt: Date.now(),
-    };
-    this.set({ buffers: [...this.state.buffers, rec], activeId: id });
+    });
+    this.set({ buffers: [...this.state.buffers, rec], activeId: rec.id });
+    return rec;
+  }
+
+  /** Every change to a buffer's text re-checks it against its saved text. */
+  private track(rec: BufferRecord): BufferRecord {
+    rec.buffer.onChange = () => this.update(rec.id, () => ({}));
     return rec;
   }
 
@@ -134,6 +158,7 @@ export class BufferStore {
   close(id: string): void {
     const idx = this.state.buffers.findIndex((b) => b.id === id);
     if (idx === -1) return;
+    this.state.buffers[idx].buffer.onChange = null;
     const next = [...this.state.buffers.slice(0, idx), ...this.state.buffers.slice(idx + 1)];
     let active = this.state.activeId;
     if (active === id) {
@@ -152,48 +177,25 @@ export class BufferStore {
     return this.state.buffers.find((b) => b.id === this.state.activeId) ?? null;
   }
 
-  /** Mark a buffer dirty / clean — called after edits and saves. */
-  markDirty(id: string, dirty: boolean): void {
-    const next = this.state.buffers.map((b) => b.id === id ? { ...b, dirty } : b);
-    this.set({ buffers: next });
+  /** The buffer's text is now what is on disk: after a save, a reload, or a check that found the disk had caught up. */
+  markSaved(id: string, savedText: string, disk: DiskInfo | null): void {
+    this.update(id, () => ({ savedText, disk }));
+  }
+
+  /** Give a buffer a (new) file: Save As. Its id stays the same. */
+  rebind(id: string, absPath: string, savedText: string, disk: DiskInfo): void {
+    this.update(id, () => ({ path: absPath, label: basename(absPath), language: detectLanguage(absPath), savedText, disk }));
+  }
+
+  /** Put the saved text back (Discard). One undo step. */
+  revert(id: string): void {
+    const rec = this.byId(id);
+    if (rec && rec.dirty) rec.buffer.setText(rec.savedText);
   }
 
   /** Take or release the agent write lock for a buffer. */
   setAgentLocked(id: string, locked: boolean): void {
-    const next = this.state.buffers.map((b) => b.id === id ? { ...b, agentLocked: locked } : b);
-    this.set({ buffers: next });
-  }
-
-  /** Switch a buffer between `'lock'` and `'merge'` agent-edit modes. */
-  setLockMode(id: string, mode: 'lock' | 'merge'): void {
-    const next = this.state.buffers.map((b) => b.id === id ? { ...b, lockMode: mode } : b);
-    this.set({ buffers: next });
-  }
-
-  /**
-   * Apply an agent-proposed edit to a buffer.
-   *
-   *   - `'lock'` mode: take the agent lock and return false. The
-   *     caller (the chat → diff-overlay glue) is expected to open
-   *     the diff overlay against `proposed`; the user accepts or
-   *     rejects.
-   *   - `'merge'` mode: replace the buffer's text in-place via the
-   *     existing `setText` (which pushes onto the undo stack), mark
-   *     the buffer dirty, and return true. No overlay needed.
-   *
-   * Returns whether the edit was applied directly. `false` means
-   * the caller should open the overlay flow.
-   */
-  applyAgentEdit(id: string, proposed: string): boolean {
-    const rec = this.state.buffers.find((b) => b.id === id);
-    if (!rec) return false;
-    if (rec.lockMode === 'merge') {
-      rec.buffer.setText(proposed);
-      this.markDirty(id, true);
-      return true;
-    }
-    this.setAgentLocked(id, true);
-    return false;
+    this.update(id, () => ({ agentLocked: locked }));
   }
 
   /**
@@ -212,12 +214,18 @@ export class BufferStore {
    * to reset between cases.
    */
   reset(): void {
+    for (const b of this.state.buffers) b.buffer.onChange = null;
     this.set({ buffers: [], activeId: null });
     this.scratchCounter = 1;
   }
 }
 
+function withDirty(rec: BufferRecord): BufferRecord {
+  rec.dirty = rec.buffer.text() !== rec.savedText;
+  return rec;
+}
+
 function basename(p: string): string {
-  const i = p.lastIndexOf('/');
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   return i === -1 ? p : p.slice(i + 1);
 }

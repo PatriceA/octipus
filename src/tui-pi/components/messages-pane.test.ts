@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { Markdown, visibleWidth } from '@mariozechner/pi-tui';
+import { Markdown, visibleWidth } from '@/tui-kit';
 import { MessagesPane } from './messages-pane';
 const strip = (lines: string[]) => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ''));
 const push = (pane: MessagesPane, content: string, role: 'user' | 'assistant' | 'system' = 'system') => pane.push({ role, content, timestamp: new Date() });
@@ -52,7 +52,8 @@ test('streaming does not reparse historical Markdown', () => {
     for (let n = 0; n < 100; n++) push(pane, `**Answer ${n}**`, 'assistant');
     pane.render(80); const count = render.mock.calls.length;
     for (let n = 0; n < 20; n++) { pane.setLive(`stream ${n}`); pane.render(80); }
-    expect(render.mock.calls.length).toBe(count);
+    // One Markdown render per frame: the streaming reply's own, never the history's.
+    expect(render.mock.calls.length).toBe(count + 20);
   } finally { render.mockRestore(); }
 });
 
@@ -87,4 +88,48 @@ test('resizing reflows frozen history so the right edge stays reachable', () => 
   expect(strip(pane.render(20)).slice(0, -1).join('\n')).not.toContain('new incoming');
   pane.setHeight(6);
   expect(strip(pane.render(90)).join('\n')).toContain('RIGHTEDGE');
+});
+
+const REPLY = [
+  '# Plan', '', 'First **bold** step, then a list:', '', '- one', '- two', '',
+  '| Name | Size |', '|---|---|', '| a.ts | 12 |', '| b.ts | 40 |', '', '```ts', 'const answer = 42;', 'console.log(answer);', '```', '', 'Done.',
+].join('\n');
+
+test('the reply renders as Markdown while it streams, and completing it changes no row', () => {
+  for (const width of [30, 80]) {
+    const live = new MessagesPane({ maxVisible: 80 });
+    push(live, 'question', 'user');
+    // Every prefix the stream passes through renders, rows bounded.
+    for (let end = 1; end <= REPLY.length; end += 7) {
+      live.setLive(REPLY.slice(0, end));
+      expect(live.render(width).every(row => visibleWidth(row) <= width)).toBe(true);
+    }
+    live.setLive(REPLY);
+    const streaming = live.render(width);
+    live.setLive(null);
+    push(live, REPLY, 'assistant');
+    expect(live.render(width)).toEqual(streaming);
+  }
+});
+
+test('blocks above the one being written keep their rows while the stream grows', () => {
+  const pane = new MessagesPane({ maxVisible: 80 });
+  const head = REPLY.slice(0, REPLY.indexOf('```ts'));
+  pane.setLive(head);
+  const before = strip(pane.render(60));
+  pane.setLive(`${head}\`\`\`ts\nconst answer`);
+  const after = strip(pane.render(60));
+  expect(after.slice(0, before.length - 1)).toEqual(before.slice(0, -1));
+  // Styled as it streams: headings and bold lose their markers, the table has its borders.
+  expect(before.join('\n')).not.toContain('# Plan');
+  expect(before.join('\n')).not.toContain('**bold**');
+  expect(before.join('\n')).toMatch(/│ a\.ts\s+│ 12\s+│/);
+});
+
+test('an unterminated code fence mid-stream is a closed code block running to the end', () => {
+  const pane = new MessagesPane({ maxVisible: 40 });
+  pane.setLive('Look:\n\n```ts\nconst a = 1;\nconst b');
+  const rows = strip(pane.render(60)).map(row => row.trimEnd()).join('\n');
+  // Drawn as a closed, indented block that runs to the end of what arrived.
+  expect(rows).toContain('  ```ts\n    const a = 1;\n    const b\n  ```');
 });

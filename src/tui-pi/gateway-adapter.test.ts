@@ -146,10 +146,23 @@ describe('decodeGatewayEvent', () => {
     // Row identity is now the human title, not the raw tool name.
     expect(toolEvent.tool.name).toBe('Read poem.md (3 lines)');
     expect(toolEvent.tool.preview).toBe('roses are red');
-    // Narration uses the title too.
-    const narration = out.find((e) => e.kind === 'message');
-    if (!narration || narration.kind !== 'message') throw new Error('expected narration');
-    expect(narration.content).toContain('writing arm · Read poem.md (3 lines)');
+    // The tool group shows the full text and the duration; no separate narration line repeats them.
+    expect(toolEvent.tool).toMatchObject({ toolName: 'filesystem__read_file', title: 'Read poem.md (3 lines)', durationMs: 200, output: 'roses are red\nviolets are blue' });
+    expect(out.filter((e) => e.kind === 'message')).toEqual([]);
+  });
+
+  test('calls and results carry the call id, the arguments and the full output', () => {
+    const call = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: { type: 'cli_tool_use', id: 'c1', toolName: 'Bash', args: { command: 'ls' } } } }));
+    const result = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: { type: 'cli_tool_result', id: 'c1', toolName: 'Bash', output: 'a\nb\nc' } } }));
+    if (call.kind !== 'tool' || result.kind !== 'tool') throw new Error('expected tool events');
+    expect(call.tool).toMatchObject({ state: 'pending', callId: 'c1', args: { command: 'ls' } });
+    expect(result.tool).toMatchObject({ state: 'completed', callId: 'c1', output: 'a\nb\nc', preview: 'a' });
+    const edit = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: {
+      type: 'tool_call_complete', toolCallId: 't9', name: 'edit_file', status: 'ok', durationMs: 40,
+      title: 'Edited a.ts (+1 −1)', input: { kind: 'path', value: 'a.ts' }, result: { kind: 'diff', patch: '-old\n+new', added: 1, removed: 1 },
+    } } }));
+    if (edit.kind !== 'tool') throw new Error('expected tool');
+    expect(edit.tool).toMatchObject({ callId: 't9', toolName: 'edit_file', diff: '-old\n+new', input: 'a.ts', durationMs: 40 });
   });
 
   test('agent.action → tool_call_complete falls back to name + resultPreview (old server)', () => {
@@ -178,6 +191,13 @@ describe('decodeGatewayEvent', () => {
   test('chat.response is decoded after session filtering', () => {
     const out = decodeGatewayEvent({ type: 'chat.response', payload: { response: 'hi' } });
     expect(out).toEqual([{ kind: 'message', role: 'assistant', content: 'hi' }]);
+    // The send's turn id, echoed by message-handler.ts, rides along.
+    expect(decodeGatewayEvent({ type: 'chat.response', payload: { response: { response: 'hi', outcome: 'success' }, turnId: 't-1' } }))
+      .toEqual([{ kind: 'message', role: 'assistant', content: 'hi', turnId: 't-1' }]);
+    expect(decodeGatewayEvent({ type: 'chat.error', payload: { error: 'boom', cancelled: true, turnId: 't-1' } }))
+      .toEqual([{ kind: 'chat.error', message: 'boom', cancelled: true, turnId: 't-1' }]);
+    expect(decodeGatewayEvent({ type: 'agent.stopped', payload: { agentId: 'root-1', stoppedBy: 'u', root: true } }))
+      .toEqual([{ kind: 'agent.stopped', agentId: 'root-1', root: true }]);
   });
 
   test('unknown event type produces no events', () => {
@@ -260,10 +280,26 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
 
     const root = decodeGatewayEvent({
       type: 'agent.spawned',
-      payload: { agentId: 'root-1', role: 'general' },
+      payload: { agentId: 'root-1', role: 'general', root: true },
     }).find((e) => e.kind === 'agent.start');
     if (root?.kind !== 'agent.start') throw new Error('wrong kind');
     expect(root.subagent).toBeUndefined();
+    expect(root.root).toBe(true);
+  });
+
+  // The shapes root-runner.ts and worker-spawner.ts emit (`worker_spawned` /
+  // `worker_completed`): a worker is `workerId`, never `agentId`, and only the
+  // root says `root: true`.
+  test('a worker spawned and completed decodes with its workerId and as no root', () => {
+    const start = decodeGatewayEvent({ type: 'agent.spawned', payload: { workerId: 'w-1', role: 'research', model: 'm', parentAgentId: 'root-1' } })[0];
+    expect(start).toMatchObject({ kind: 'agent.start', nodeId: 'w-1', root: false, subagent: true });
+    const end = decodeGatewayEvent({ type: 'agent.completed', payload: { workerId: 'w-1', role: 'research', result: 'r', iterations: 3, durationMs: 4000, totalTokens: 1500 } })[0];
+    expect(end).toMatchObject({ kind: 'agent.end', nodeId: 'w-1', root: false, stats: { tokens: 1500, durationMs: 4000, iterations: 3 } });
+  });
+
+  test('the root completed decodes as the root, by the workerId it carries', () => {
+    const end = decodeGatewayEvent({ type: 'agent.completed', payload: { workerId: 'root-1', role: 'general', root: true, result: '', totalTokens: 900, iterations: 2 } })[0];
+    expect(end).toMatchObject({ kind: 'agent.end', nodeId: 'root-1', root: true, stats: { tokens: 900 } });
   });
 
   test.each(['root', 'rootAgent'])('does not announce a %s swarm node as a delegated agent', (kind) => {

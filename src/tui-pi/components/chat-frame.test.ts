@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { CURSOR_MARKER, visibleWidth } from '@mariozechner/pi-tui';
-import { renderChatFrame } from './chat-frame';
+import { CURSOR_MARKER, visibleWidth } from '@/tui-kit';
+import { ChatFooter, renderChatFooter, renderChatFrame } from './chat-frame';
 import { MessagesPane } from './messages-pane';
 const fixed = (lines: string[]) => ({ render: () => lines, invalidate() {} });
 test('composer cursor remains visible with a large paste and expanded plan', () => {
@@ -24,4 +24,27 @@ test('one or two rows keep the status line first, then the composer', () => {
   expect(two).toHaveLength(2);
   expect(two[0]).toContain(CURSOR_MARKER);
   expect(two[1]).toBe('status line');
+});
+
+test('the footer is sticky rows, activity and composer above the status line, and never taller than the screen', () => {
+  const composer = fixed([`${CURSOR_MARKER}typing`]);
+  const parts = { composer, activity: fixed(['working']), status: fixed(['status line']), sticky: fixed(['queued 1', 'queued 2']) };
+  expect(renderChatFooter(40, 24, parts)).toEqual(['queued 1', 'queued 2', 'working', `${CURSOR_MARKER}typing`, 'status line']);
+  // Short of rows: the sticky rows go first, the newest kept; the status line and the composer stay.
+  expect(renderChatFooter(40, 4, parts, 1)).toEqual(['working', `${CURSOR_MARKER}typing`, 'status line']);
+  expect(renderChatFooter(40, 2, parts)).toEqual([`${CURSOR_MARKER}typing`, 'status line']);
+  for (const height of [1, 2, 3, 5, 12]) expect(new ChatFooter(parts, () => height).render(40).length).toBeLessThanOrEqual(height);
+});
+
+test('a click on a sticky row reaches the sticky component in its own row numbers', () => {
+  const clicks: number[] = [];
+  const sticky = { render: () => ['old 1', 'queued 2', 'queued 3'], invalidate() {}, handleMouse: (event: { y: number }) => { clicks.push(event.y); return { handled: true }; } };
+  const parts = { composer: fixed([`${CURSOR_MARKER}typing`]), activity: fixed([]), status: fixed(['status line']), sticky };
+  // 8 rows: the sticky budget is two rows, so the first sticky row is left out.
+  const footer = new ChatFooter(parts, () => 8);
+  expect(footer.render(40)).toEqual(['queued 2', 'queued 3', `${CURSOR_MARKER}typing`, 'status line']);
+  const event = { type: 'click' as const, button: 'left' as const, x: 2, screenX: 2, screenY: 0, width: 40, height: 4, shift: false, alt: false, ctrl: false };
+  expect(footer.handleMouse({ ...event, y: 1 })).toEqual({ handled: true });
+  expect(footer.handleMouse({ ...event, y: 2 })).toBeUndefined();
+  expect(clicks).toEqual([2]);
 });

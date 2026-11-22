@@ -1,0 +1,120 @@
+/**
+ * What the user asks for: a line submitted in the chat composer (a message,
+ * an editor command, a gateway command) and the global hotkeys.
+ *
+ * The handlers take a `CommandHost`, the actions the app offers, so this
+ * module holds the routing and nothing else.
+ */
+import { getKeybindings, matchesKey } from '@/tui-kit';
+import { handleTerminalCommand, wheelDirection } from '@/tui-pi/terminal-actions';
+import type { ChatPane } from '../components/chat-pane';
+import type { EditorContext } from './context';
+import type { FileCommands } from './file-commands';
+import type { EditorOverlays } from './overlay-actions';
+
+export interface CommandHost {
+  ctx: EditorContext;
+  chat: ChatPane;
+  overlays: EditorOverlays;
+  fileCommands: FileCommands;
+  /** Clear the info notice in the mode bar; returns whether there was one. */
+  clearInfoNotice(): boolean;
+  hidePlanDetails(): void;
+  setVimMode(on: boolean): void;
+  setSoftWrap(on: boolean): void;
+  /** Go to `target` (`N` or `N:C`), or ask for it when empty. */
+  goToLine(target: string): void;
+  /** Copy the editor's selection, when the editor has the focus and something selected; returns whether it did. */
+  copySelection(): boolean;
+  newScratch(): void;
+  /** Open the oldest background prompt (file changed on disk, agent edit to review). */
+  openPending(): void;
+  saveAsCommand(path: string): void;
+  reloadKeybindings(): void;
+  closeActiveBuffer(): void;
+  openSaveAsForActive(): void;
+  requestQuit(): void;
+  shutdownAndExit(): void;
+  sendCommand(name: string, value: string): void;
+  sendChat(text: string): void;
+}
+
+export function handleChatSubmit(host: CommandHost, rawText: string): void {
+  const { ctx, chat } = host;
+  if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, ctx.tui, chat.messages, text => ctx.pushMessage('system', text))) return;
+  const text = rawText.trim();
+  if (!text) return;
+  chat.messages.push({ role: 'user', content: text, timestamp: new Date() });
+  ctx.tui.requestRender();
+
+  if (text.startsWith('/')) {
+    // The name ends at the first whitespace; the rest is the argument as typed: a path may hold runs of spaces.
+    const match = /^(\S*)\s*([\s\S]*)$/.exec(text.slice(1));
+    const name = match?.[1] ?? '';
+    const value = match?.[2] ?? '';
+    // TUI-local commands intercepted before going to the gateway.
+    if (name === 'plan-hide') { host.hidePlanDetails(); return; }
+    if (name === 'vim') {
+      host.setVimMode(value === 'on' ? true : value === 'off' ? false : ctx.layout.get().editorMode !== 'vim');
+      return;
+    }
+    if (name === 'wrap') {
+      host.setSoftWrap(value === 'on' ? true : value === 'off' ? false : !ctx.layout.get().softWrap);
+      return;
+    }
+    if (name === 'new') { host.newScratch(); return; }
+    if (name === 'goto' || name === 'line') { host.goToLine(value); return; }
+    if (name === 'search') { host.overlays.openProjectSearch(value); return; }
+    if (name === 'new-file') { host.fileCommands.newFile(value); return; }
+    if (name === 'rename') { host.fileCommands.rename(value); return; }
+    if (name === 'delete') { host.fileCommands.deleteCommand(value); return; }
+    if (name === 'revert') { host.fileCommands.revert(); return; }
+    if (name === 'save-as') { host.saveAsCommand(value); return; }
+    if (name === 'quit' || name === 'exit' || name === 'q') { host.shutdownAndExit(); return; }
+    if (name === 'keys' || name === 'hotkeys' || name === 'help-keys') { host.overlays.openHotkeys(); return; }
+    if (name === 'palette') { host.overlays.openCommandPalette(); return; }
+    if (name === 'reload' || name === 'reload-keybindings') { host.reloadKeybindings(); return; }
+    host.sendCommand(name, value);
+    return;
+  }
+  host.sendChat(text);
+}
+
+export function handleGlobalKey(host: CommandHost, data: string): { consume: true } | undefined {
+  const { ctx, chat, overlays } = host;
+  const kb = getKeybindings();
+  if (host.clearInfoNotice()) ctx.tui.requestRender();
+  if (ctx.tui.hasOverlay()) return undefined;
+  if (kb.matches(data, 'app.subagents.scrollUp')) { if (chat.subagents.scroll(-1)) { ctx.tui.requestRender(); return { consume: true }; } }
+  if (kb.matches(data, 'app.subagents.scrollDown')) { if (chat.subagents.scroll(1)) { ctx.tui.requestRender(); return { consume: true }; } }
+  if (kb.matches(data, 'app.subagents.toggle')) { chat.subagents.toggle(); ctx.tui.requestRender(); return { consume: true }; }
+  if (ctx.layout.get().focused === 'chat') {
+    if (chat.messages.handleScrollInput(data)) { ctx.tui.requestRender(); return { consume: true }; }
+  }
+  // The tree and the editor do not scroll by wheel yet; a notch must not reach them as input.
+  if (wheelDirection(data)) return { consume: true };
+  if (kb.matches(data, 'app.tree.toggle'))   { ctx.layout.toggleTree(); return { consume: true }; }
+  if (kb.matches(data, 'app.chat.toggle'))   { ctx.layout.toggleChat(); return { consume: true }; }
+  if (kb.matches(data, 'app.pane.cycle'))    { ctx.layout.cycleFocus(1); ctx.refocus(); return { consume: true }; }
+  if (kb.matches(data, 'app.buffer.next'))   { ctx.buffers.cycle(1); return { consume: true }; }
+  if (kb.matches(data, 'app.buffer.prev'))   { ctx.buffers.cycle(-1); return { consume: true }; }
+  if (kb.matches(data, 'app.buffer.close'))  { host.closeActiveBuffer(); return { consume: true }; }
+  if (kb.matches(data, 'app.file.open'))     { overlays.openFilePicker(); return { consume: true }; }
+  if (kb.matches(data, 'app.file.saveAs'))   { host.openSaveAsForActive(); return { consume: true }; }
+  if (kb.matches(data, 'app.vim.toggle'))    { host.setVimMode(ctx.layout.get().editorMode !== 'vim'); return { consume: true }; }
+  if (kb.matches(data, 'app.view.wrap'))     { host.setSoftWrap(!ctx.layout.get().softWrap); return { consume: true }; }
+  if (kb.matches(data, 'app.goto.line'))     { host.goToLine(''); return { consume: true }; }
+  if (kb.matches(data, 'app.search.project')) { overlays.openProjectSearch(''); return { consume: true }; }
+  if (kb.matches(data, 'app.file.new'))      { host.fileCommands.newFile(''); return { consume: true }; }
+  if (kb.matches(data, 'app.pending.open'))  { host.openPending(); return { consume: true }; }
+  if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
+  if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
+  if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }
+  if (kb.matches(data, 'app.mcp.list'))      { void overlays.openMCPServerList(); return { consume: true }; }
+  if (kb.matches(data, 'app.palette.open'))  { overlays.openCommandPalette(); return { consume: true }; }
+  if (kb.matches(data, 'app.help.open'))     { overlays.openHotkeys(); return { consume: true }; }
+  // Ctrl+C copies what is selected in the editor; with nothing selected it is the quit key, as everywhere.
+  if (matchesKey(data, 'ctrl+c')) { if (!host.copySelection()) host.requestQuit(); return { consume: true }; }
+  if (kb.matches(data, 'app.quit'))          { host.shutdownAndExit(); return { consume: true }; }
+  return undefined;
+}

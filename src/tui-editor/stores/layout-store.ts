@@ -6,15 +6,6 @@
  * tiny `useStore(store, selector)` hook (defined alongside).
  */
 export type PaneId = 'tree' | 'editor' | 'chat';
-export type OverlayId =
-  | { kind: 'palette' }
-  | { kind: 'file-picker' }
-  | { kind: 'workspace-picker' }
-  | { kind: 'goto-line' }
-  | { kind: 'find' }
-  | { kind: 'replace' }
-  | { kind: 'help' }
-  | null;
 
 export type EditorMode = 'modeless' | 'vim';
 
@@ -22,7 +13,6 @@ export interface LayoutState {
   treeVisible: boolean;
   chatVisible: boolean;
   focused: PaneId;
-  overlay: OverlayId;
   /** Last terminal size we know about — used by editor scroll math. */
   cols: number;
   rows: number;
@@ -33,6 +23,11 @@ export interface LayoutState {
    * falls through to the modeless path so typing feels unchanged.
    */
   editorMode: EditorMode;
+  /** Long lines break into rows instead of scrolling sideways. */
+  softWrap: boolean;
+  /** Widths the user dragged the dividers to; null for the default share of the screen. */
+  treeWidth: number | null;
+  chatWidth: number | null;
 }
 
 export type LayoutListener = (s: LayoutState) => void;
@@ -42,10 +37,12 @@ export class LayoutStore {
     treeVisible: true,
     chatVisible: true,
     focused: 'editor',
-    overlay: null,
     cols: 120,
     rows: 30,
     editorMode: 'modeless',
+    softWrap: false,
+    treeWidth: null,
+    chatWidth: null,
   };
   private listeners = new Set<LayoutListener>();
 
@@ -81,10 +78,15 @@ export class LayoutStore {
 
   focus(p: PaneId): void { this.set({ focused: p }); }
 
-  openOverlay(o: OverlayId): void { this.set({ overlay: o }); }
-  closeOverlay(): void { this.set({ overlay: null }); }
-
   setSize(cols: number, rows: number): void { this.set({ cols, rows }); }
 
   setEditorMode(mode: EditorMode): void { this.set({ editorMode: mode }); }
+
+  setSoftWrap(on: boolean): void { if (on !== this.state.softWrap) this.set({ softWrap: on }); }
+
+  /** A side pane's width, from dragging its divider (null: back to the default). */
+  setPaneWidth(pane: 'tree' | 'chat', width: number | null): void {
+    const key = pane === 'tree' ? 'treeWidth' : 'chatWidth';
+    if (this.state[key] !== width) this.set({ [key]: width });
+  }
 }

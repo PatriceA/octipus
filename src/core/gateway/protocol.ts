@@ -89,6 +89,10 @@ export type GatewayEventType =
   | 'agent.spawned'
   | 'agent.completed'
   | 'agent.stopped'
+  // A `session.stop` was handled: how many of the caller's running agents of
+  // the session it stopped and how many of their queued messages it dropped
+  // (both 0: nothing of theirs had started yet). Envelope `sessionId`.
+  | 'session.stopped'
   | 'agent.event'
   // Tool-call stream from the agent's executor — start / complete /
   // file_change / cli_tool_use payloads land here. Distinct subtype
@@ -168,6 +172,10 @@ export type GatewayEventType =
   // which a client summing the agent.completed events it happened to see is
   // not), plus how full the last prompt left the context window.
   | 'session.stats'
+  // A session's work plan was saved (agent, /plan-feedback, the web's
+  // feedback): payload `{ revision }`, envelope `sessionId`. Clients refresh
+  // their plan summary on it instead of polling (`saveWorkPlan`).
+  | 'session.plan_updated'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'
@@ -385,6 +393,14 @@ export const ChatSendSchema = z.object({
   inlineUi: InlineUiSendSchema.optional(),
   /** What to do when a turn is running (`SEND_MODES`); `auto` when omitted. */
   mode: SendModeSchema.optional(),
+  /**
+   * The client's own id for this turn, echoed on what ends it — its
+   * `chat.response` and `chat.error` payloads, its `chat.delivery`, and the
+   * `error` frames this send gets (with `sessionId`) — so a client can tell
+   * the answer it waits for from the late answer of a turn it already gave
+   * up on (stopped, disconnected).
+   */
+  turnId: z.string().min(1).max(64).optional(),
 });
 
 export const CommandSchema = z.object({
@@ -436,6 +452,17 @@ export const ApprovalRespondSchema = z.object({
 export const AgentStopSchema = z.object({
   type: z.literal('agent.stop'),
   agentId: z.string(),
+});
+
+/**
+ * Stop the caller's turn in ONE session: their running agents in it and their
+ * messages queued behind it — never their agents in other sessions (that is
+ * the `/abort` command). For a client that has not learnt the turn's root
+ * agent yet (Esc right after sending). Answered with a `session.stopped` event.
+ */
+export const SessionStopSchema = z.object({
+  type: z.literal('session.stop'),
+  sessionId: z.string().uuid(),
 });
 
 /**
@@ -646,6 +673,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   PermissionRespondSchema,
   ApprovalRespondSchema,
   AgentStopSchema,
+  SessionStopSchema,
   PingSchema,
   VoiceSetSchema,
   ReplaySchema,
@@ -705,6 +733,9 @@ export interface ErrorMessage {
   type: 'error';
   code: string;
   message: string;
+  /** Set when the error answers a `chat.send`: its session, and its `turnId` when it carried one. */
+  sessionId?: string;
+  turnId?: string;
 }
 
 export interface PongMessage {
@@ -802,6 +833,8 @@ export interface ChatDeliveryMessage {
   ahead?: number;
   /** Why a `refused` was refused, or why `auto`/`restart` queued instead. */
   reason?: string;
+  /** The send's `turnId`, when it carried one. */
+  turnId?: string;
 }
 
 /** Answer to a `room.post`: stored (and queued when addressed). */

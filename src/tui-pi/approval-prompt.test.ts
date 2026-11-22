@@ -108,3 +108,32 @@ describe('rendering', () => {
     expect(text).toMatch(/Esc decline/);
   });
 });
+
+describe('a question taller than the screen', () => {
+  const strip = (lines: string[]) => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ''));
+  const question = Array.from({ length: 40 }, (_, n) => `question line ${n}`).join('\n');
+
+  test('scrolls inside the box; the choices and the keys to answer stay', () => {
+    const prompt = new ApprovalPrompt({ summary: '', question, options: ['Keep', 'Revise'], onRespond: vi.fn() });
+    prompt.setMaxRows(12);
+    let rows = strip(prompt.render(60));
+    expect(rows).toHaveLength(12);
+    expect(rows.join('\n')).toContain('question line 0');
+    expect(rows.join('\n')).toContain('1. Keep');
+    expect(rows.join('\n')).toContain('Esc decline');
+    expect(rows.at(-1)).toMatch(/^└─+┘$/);
+    for (let n = 0; n < 5; n++) prompt.handleInput('\x1b[B');
+    rows = strip(prompt.render(60));
+    expect(rows.join('\n')).not.toContain('question line 0');
+    expect(rows.join('\n')).toContain('question line 5');
+    expect(rows.join('\n')).toMatch(/lines 6–\d+ of 40/);
+    for (let n = 0; n < 100; n++) prompt.handleInput('\x1b[B');
+    expect(strip(prompt.render(60)).join('\n')).toContain('question line 39');
+  });
+
+  test('a question that fits is shown whole, without a scroll line', () => {
+    const prompt = new ApprovalPrompt({ summary: '', question: 'one\ntwo', options: [], onRespond: vi.fn() });
+    prompt.setMaxRows(12);
+    expect(strip(prompt.render(60)).join('\n')).not.toContain('↑/↓');
+  });
+});

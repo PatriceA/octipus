@@ -26,9 +26,9 @@ import {
   KeybindingsManager,
   TUI_KEYBINDINGS,
   setKeybindings as setGlobalKeybindings,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 
-declare module '@mariozechner/pi-tui' {
+declare module '@/tui-kit' {
   interface Keybindings {
     // Editor surface
     'app.tree.toggle': true;
@@ -53,6 +53,11 @@ declare module '@mariozechner/pi-tui' {
     'app.subagents.toggle': true;
     'app.subagents.scrollUp': true;
     'app.subagents.scrollDown': true;
+    'app.transcript.dump': true;
+    'app.queue.edit': true;
+    'app.tools.toggle': true;
+    'app.history.search': true;
+    'app.copy.code': true;
   }
 }
 
@@ -81,6 +86,11 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.subagents.toggle':{ defaultKeys: ['alt+s', 'f7'],    description: 'Expand/collapse the subagent panel' },
   'app.subagents.scrollUp':   { defaultKeys: 'alt+up',   description: 'Scroll the expanded subagent panel up' },
   'app.subagents.scrollDown': { defaultKeys: 'alt+down', description: 'Scroll the expanded subagent panel down' },
+  'app.transcript.dump': { defaultKeys: 'alt+o', description: 'Show the transcript in the terminal scrollback (any key returns)' },
+  'app.queue.edit':      { defaultKeys: 'alt+e', description: 'Take the newest queued message back into the composer' },
+  'app.tools.toggle':    { defaultKeys: 'ctrl+o', description: 'Expand or collapse tool calls and thinking in the transcript' },
+  'app.history.search':  { defaultKeys: 'ctrl+r', description: 'Search what you sent before and put it back in the composer' },
+  'app.copy.code':       { defaultKeys: 'alt+c', description: 'Copy the last code block of the latest reply' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFAULT_USER_PATH = join(homedir(), '.octipus', 'keybindings.json');

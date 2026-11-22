@@ -72,6 +72,305 @@ labels reflect blast radius, not contract guarantees.
     record gains `bar` (no migration). The row still stores no message,
     passage or answer text.
 
+- **Terminal editor: a chat message sent while disconnected is reported.** The
+  editor's chat pane showed it as sent and the gateway never got it; it now
+  says the message was not sent.
+- **Terminal clients start faster.** `octi edit` drew its first frame after
+  about 2 s and now after about 0.5 s: it no longer loads the MCP bridge
+  (some 200 server modules) at start, only when the MCP list (`/mcp`) is
+  opened; the status row's MCP count appears from then on, as it effectively
+  did before. `octi tui` and `octi edit` are launched with Node directly
+  instead of through `npm run`, which saved about 0.4 s more, and the stored
+  login no longer loads the server logger. Measured in a PTY on a loaded
+  container, from `bin/octi`'s launch command to the first full frame: chat
+  0.9–1.0 s → 0.5 s, editor 2.0 s → 0.55 s. `bin/octi.cmd` on Windows still
+  goes through npm.
+- **Terminal clients refuse a terminal they cannot draw on.** With
+  `TERM=dumb` (an Emacs shell buffer, a CI log), or with input or output
+  piped, `octi tui` and `octi edit` exit with status 2 and say why, instead
+  of filling the output with escape sequences.
+- **Terminal compatibility documented and tested.** `docs/guides/tui.md`
+  has a "Terminal compatibility" section: tmux (with recommended `mouse`,
+  `set-clipboard` and `allow-passthrough` settings), SSH, the Linux console,
+  small windows, Windows, screen readers, and what is not tested. Contributors:
+  the terminal suites fail at once with a message when the PTY relay's Python
+  is missing (`TUI_PTY_PYTHON` picks another), and golden screens
+  (`tests/tui/goldens/`, `UPDATE_TUI_GOLDENS=1`) guard the main states of both
+  clients.
+- **Terminal editor: failures it used to swallow are now said.** A folder that
+  cannot be read shows `⚠ cannot read this folder: …` in the tree and is named
+  in the file picker; the fallback project search says how many files it could
+  not read, and its preview why one could not be shown; a corrupt saved state
+  or a failing recovery checkpoint, a tree-sitter module or grammar that did
+  not load (highlighting falls back to the line highlighter), and an
+  unavailable MCP status are written to the transcript once each; a gateway
+  URL that is not a URL is refused instead of replaced by `localhost:3005`. A
+  file removed since it was listed, or a dangling symlink, is still skipped
+  quietly.
+- **Terminal editor: a paste into a tab under agent review says it was not
+  pasted.** It used to vanish silently; the bottom bar now says the review has
+  to be finished first.
+- **Terminal editor: `/delete <path>` deletes that path, and paths keep their
+  spaces.** `/delete` ignored its argument and offered to delete the active
+  tab's file instead; `/rename` and `/save-as` collapsed a run of spaces in
+  the path to one. The argument is now everything after the command name, as
+  typed.
+- **Terminal editor: project search results keep non-ASCII text intact.**
+  ripgrep's output was decoded one chunk at a time, so a character split
+  between two chunks showed as `��` and shifted the match highlight. The
+  output is now decoded as one stream.
+- **Terminal editor: saving keeps a file's owner and works in read-only
+  folders.** The atomic save renamed a temporary file created by you over the
+  original, so a file owned by another user or group (a shared file, one
+  edited under sudo) changed owner, and a writable file in a folder you cannot
+  write to could not be saved at all. The temporary file now takes the
+  original's owner and group; where that is not allowed, or the folder refuses
+  the temporary file, the file is written in place.
+- **Terminal editor: opening a named pipe or a device no longer hangs it.**
+  The editor read whatever path it was given, so a FIFO blocked it until
+  something wrote to the pipe. Anything that is not a regular file is now
+  refused with the reason.
+- **Terminal editor: vim mode edits the text vim would.** `yyp` put the line
+  at the cursor instead of below it; `$` left the cursor after the last
+  character, so `$a` appended on the next line; `x` at the end of a line
+  joined it with the next; and VISUAL `d` / `y` left out the character under
+  the cursor. The NORMAL cursor now stays on the line's last character,
+  line-wise registers go below the line, `x` never joins lines, and VISUAL
+  selections are inclusive.
+- **Terminal editor: very long lines stay responsive.** With soft wrap on, a
+  long line (a minified bundle, a JSON log line) was broken into rows again
+  for every visible row and every cursor or scroll step: a 200 KB line took
+  about 25 seconds to draw and move through. Rows are now cached per line text
+  and width, and a line over 2,000 characters is highlighted and styled only
+  where it is on screen, with or without wrap.
+- **Terminal editor: escape sequences in file names stay text.** A file named
+  with ESC, OSC or BEL bytes reached the terminal through the tab strip, the
+  unsaved-changes prompt and the rename / Save As fields prefilled with its
+  path, so a file name could change the window title, clear the screen or ring
+  the bell, and its tab's clickable `×` drifted. Tab labels, prompt labels and
+  errors are drawn without escape sequences, and text fields show control
+  bytes as pictures (`␛`, `␇`).
+- **Terminal editor: auto-reload no longer grows memory without bound.** Every
+  reload of a changed file kept a full copy of the old and new text in the
+  undo history (up to 200 steps), so a log file appended to every second could
+  take hundreds of MB. A reload now records only what changed, the undo
+  history is capped by size as well as by steps, and the watcher reads a
+  changed file once per check instead of three times.
+- **Terminal editor: a rejected agent edit stays rejected.** The agent's edit
+  reaches the editor before the tool writes the file, so after you rejected it
+  the watcher saw the file change a moment later and reloaded the agent's
+  version into the clean tab. Now, when the file becomes the text you
+  rejected, the tab keeps your version, unsaved against the new file, and says
+  so.
+- **Terminal editor: accepting an agent edit no longer reverts your unsaved
+  changes.** The review compared the buffer with the agent's whole file, which
+  was written against the file on disk, so your unsaved edits showed as hunks
+  and accepting everything undid them. The review is now three-way: only the
+  agent's changes are hunks, your edits are kept, a change over lines you
+  edited is marked as a conflict (`!`) and starts rejected, and the tab stays
+  unsaved while it differs from the file.
+- **Terminal editor: fragment edits by the agent are reviewed.** A
+  `str_replace_editor` `str_replace`, or an `edit` with `old_string`, reached
+  the editor as an edit of one fragment and was dropped. It is now applied to
+  the text the agent works from (its waiting edit, the open tab, or the file
+  on disk) and reviewed hunk by hunk like a whole-file write; a fragment that
+  is not in the file, or occurs more than once, is reported instead of
+  guessed.
+- **Terminal editor: background prompts no longer take the keyboard.** A file
+  changed on disk under unsaved edits and an agent edit ready for review used
+  to open their prompt at once, switching tabs and taking focus mid-typing, so
+  the next keystroke (`r`, `o`, `a`) picked reload, overwrite, accept-all or
+  reject-all. Both now wait: the mode bar shows `⚑ … — press alt+y to
+  resolve`, and the prompt opens on `Alt+Y` (`app.pending.open`) or when you
+  save that tab. An agent edit to a file that is not open opens it in a
+  background tab. Prompts you open yourself (Ctrl+S on a changed file) work as
+  before.
+- **Terminal editor: Save As no longer leaves two tabs sharing one identity.**
+  Saving `a.ts` as `b.ts` and then opening `a.ts` again gave both tabs the
+  same internal id, so Ctrl+S in the `a.ts` tab wrote `b.ts`, closing one tab
+  closed the other and highlighting mixed the two files. Every buffer now has
+  an id of its own that never follows its path.
+- **Terminal editor: review the agent's edits hunk by hunk.** The diff box
+  accepts (`y`) or rejects (`n`) each change on its own, moves between them
+  with `]` / `[`, folds unchanged lines (`z`), highlights the words that
+  changed inside a line, and applies with Enter (`a` / `r` still take or drop
+  everything). An edit to a file that is not open opens it in a tab for review
+  instead of going by unseen. A CRLF file is compared without its CRs and saved
+  CRLF. If the file also changed on disk outside the agent while you review,
+  saving asks before overwriting it — the editor used to take that version as
+  saved. Large files are compared with a bounded Myers diff; one too changed to
+  compare line by line is shown as a single replacement and says so.
+- **Terminal editor: the mouse works.** Click to place the cursor, drag to
+  select (the copy is the file's text, without line numbers or the tree),
+  double-click a word, triple-click a line, Shift+click to extend. Click a tab
+  to switch to it and its `×` to close it, a tree row to open a file or expand
+  a folder, a pane's title to focus it; drag a divider to resize the side
+  panes; the wheel scrolls the pane under the pointer whatever has the focus;
+  the editor's scrollbar takes clicks and drags. A drag in the chat pane copies
+  only the chat's text.
+- **Terminal editor: navigation and editing basics.** PageUp/PageDown,
+  Ctrl+Home/End, Shift with any motion to select, Ctrl+X / Ctrl+V (and Ctrl+C
+  on a selection) through the clipboard, `Ctrl+G` or `/goto` to go to a line,
+  soft wrap (`Alt+Z`, `/wrap`, remembered per project), a scrollbar, Enter that
+  keeps the indentation (one step deeper after an opening bracket), the
+  matching bracket highlighted, and three lines kept around the cursor when it
+  moves.
+- **Terminal editor: search and files.** Replace one match at a time
+  (`Alt+Enter` in the replace box, with a preview of the current match) as well
+  as all at once; search the whole project (`Ctrl+Shift+F` / `Alt+G`,
+  `/search`), with ripgrep when installed and the project index otherwise, a
+  preview of each match, and Enter to open it. New file (`Alt+N`,
+  `/new-file`), rename (`/rename`), delete with confirmation (`/delete`), and
+  reload from disk (`/revert`); in the tree `n`, `m` and `d`. Open files are
+  watched: a file changed on disk is reloaded when you have no unsaved edits,
+  and you are asked when you have.
+- **Terminal editor: C1 control characters in a file are shown.** U+0080 to
+  U+009F (such as U+009B, which terminals treat as the start of an escape
+  sequence) were written to the terminal as they were; they are drawn as
+  `�` now. Found by the new invariant suite for the editor
+  (`tests/tui/editor-invariants.e2e.test.ts`).
+
+- **Terminal chat: stop, queue, fold, search, pick, notify, theme, link.**
+  `Esc` stops the running turn (twice with none running clears the draft).
+  A message sent while a turn runs waits above the composer — `Alt+E` or a
+  click takes it back to edit — and goes out as its own turn when the turn
+  ends; before, the gateway steered it into the running turn. A turn's tool
+  calls are one collapsed row with counts, failures and time; a click or
+  `Ctrl+O` shows every call's arguments, full output and edits as diffs.
+  Reasoning before tool calls is a folded "Thinking" row, and the per-call
+  "<role> arm · …" lines are gone. Replies render as Markdown while they
+  stream, without the jump at the end. Transcript search (`Ctrl+F`, also
+  `Ctrl+Shift+F`, `/search`) now returns to where you were on `Escape`;
+  `Ctrl+R` searches what you sent. `/sessions`, `/resume`, `/skills` and
+  `/theme` alone open pickers (the text forms still work), and the command
+  palette is the same fuzzy list with a preview. While the terminal is
+  unfocused, a finished turn or a waiting decision notifies (bell, OSC 9 or
+  OSC 777: `notify` in `~/.octipus/tui.json`), and the window title shows
+  idle / working / waiting. Themes: `auto` follows the terminal background
+  (OSC 11), plus `light` and `high-contrast`, `NO_COLOR` honoured, `/theme`
+  saves the choice; the dark border and four light colours changed to reach
+  WCAG contrast. URLs and `path:line` references are OSC 8 links where the
+  terminal shows them (`http`, `https`, `file` only), and attached images are
+  drawn inline on Kitty-graphics terminals (iTerm2 with `--inline`).
+  `Ctrl+F` no longer moves the composer's cursor right (Right does).
+  `Alt+C` / `/copy code` copies the latest reply's last code block.
+- **Gateway: `session.plan_updated`.** Every save of a session's work plan
+  (agent tools, `/plan-feedback`, the web's feedback route) publishes
+  `session.plan_updated` (`{ revision }`) to the owner's connections. The
+  terminal clients refresh their plan summary on it instead of asking every
+  4 seconds. The gateway client gains `stopAgent` and an optional send mode
+  on `sendChat`.
+- **Terminal editor: an agent's `str_replace` edit no longer offers to
+  replace the whole file with the fragment.** The chat adapter reported
+  `str_replace_editor`'s `new_str` as the file's new text, so the editor's
+  diff showed the file reduced to the replacement. A fragment edit is now its
+  own event (`agent.edit`: old and new fragment), which the editor does not
+  review yet; `create` (`file_text`) and whole-file writes are reviewed as
+  before.
+- **Terminal chat and editor run on the alternate screen; drag selects
+  without Shift.** `octi tui` and `octi edit` now open on the terminal's
+  alternate screen. What you had in the terminal before launch survives —
+  resizing no longer erased it (`ESC[3J`) — and quitting restores the screen
+  instead of leaving a dead frame behind. In the chat the transcript scrolls
+  in the app with the composer and status pinned below it; dragging selects
+  transcript text (without the rail) and copies it on release, the wheel
+  scrolls with nothing held, Shift+drag (Option+drag in iTerm2) still gives
+  the terminal's own selection, and `Ctrl+Shift+F` searches. Copying goes
+  through a chain — `pbcopy` / `clip.exe` / `wl-copy` / `xclip` / `xsel`
+  locally, the tmux buffer in tmux, OSC 52 otherwise — and says which one was
+  used, or that none worked. On quit the last exchange and
+  `octi tui --session <id>` are printed. New: `/export [path]` (Markdown),
+  `/scrollback` and `Alt+O` (the transcript in the terminal's own scrollback),
+  `--inline` (the previous main-screen drawing), and the `tui.mouse` setting
+  (`app` | `native` | `off`, in `~/.octipus/tui.json` or `--mouse`). Long
+  sessions render only the newest 200 messages and keep at most 5,000 in
+  memory, with a notice when older ones were dropped.
+- **pi-tui moved to `@earendil-works/pi-tui` 1.6.0.** `@mariozechner/pi-tui`
+  is deprecated upstream; its maintained successor is pinned to an exact
+  version. It ships small prebuilt native helpers (clipboard reads, modifier
+  keys) for macOS, Windows and Linux/X11; Octipus does not call them, pi-tui
+  loads the macOS/Windows one only to tell Shift+Enter apart in Terminal.app
+  and to enable VT input on Windows, and nothing on Linux or in the Docker
+  image loads one. `chalk`, which the terminal theme always used but only got
+  through the old package, is now a declared dependency.
+- **Terminal editor: saving is safe, and unsaved means unsaved.** Saving
+  writes a temporary file and renames it over the original, keeping its
+  permissions, its line endings (a CRLF file stays CRLF) and its byte-order
+  mark. If the file changed on disk since you opened it, Ctrl+S asks whether
+  to reload it, overwrite it or cancel instead of silently replacing the other
+  version. A file that is not UTF-8 is refused with the reason rather than
+  opened and rewritten. Scratch buffers can be saved: Ctrl+S asks for a path,
+  and F12 or `/save-as` saves any buffer under a new name; `/new` opens a
+  scratch buffer. The unsaved marker compares the buffer with what was saved,
+  so undoing back to it clears the marker.
+- **Terminal editor: emoji and accented letters edit as one character, and
+  undo undoes what you did.** Backspace after an emoji no longer leaves half of
+  it, and the arrow keys no longer stop inside a flag or a letter with its
+  accent. Ctrl+Z undoes a typed word, a paste or a replace-all in one step; a
+  replace-all with more than 200 matches used to be impossible to undo fully.
+- **Terminal editor: vim mode can be switched on, and you can see what you
+  select.** Alt+M or `/vim` switches vim mode; the bottom bar shows the mode
+  and the `:` command being typed, and `:w`, `:q`, `:wq` and `:qa` work. Ctrl+S
+  saves in NORMAL mode. Escape works with the kitty keyboard protocol. The
+  selection is drawn, so VISUAL mode is visible.
+- **Terminal editor: find shows its matches.** Matches are highlighted in the
+  file, the search starts at the cursor, and Esc puts the cursor back where it
+  was (Alt+Enter keeps it on the match). Find, replace and the file filter take
+  paste, emoji and input-method text. Regex replace understands `$1`. Tab
+  inserts what the file indents with.
+- **Terminal editor: the file picker finds every file.** It lists the project
+  with `git ls-files` (so `.gitignore` is respected) or a folder walk, in the
+  background, and ranks all files by fuzzy match; it used to stop at the first
+  1,000 names in alphabetical order.
+- **Terminal editor: smaller fixes.** An agent edit to a file named relative to
+  the project now reaches its open tab, and after rejecting an edit the agent
+  already wrote to disk the tab shows as unsaved. Syntax colours follow edits.
+  The diff box fits short terminals without skipping lines when paging. Opening
+  the workspace or MCP list twice quickly opens it once, and a server that does
+  not answer the workspace list times out after 5 seconds with the reason shown.
+- **Terminal chat and editor: the composer no longer vanishes during a turn.**
+  A tool call whose preview spanned lines (a multi-line shell command, a
+  carriage return or tab in a result, an escape sequence in tool output) was
+  painted as one row but took several, so the bottom of the screen — the input
+  line and status — scrolled out of the window until the turn ended or the
+  window was resized. Text from the model, tools and the server is now reduced
+  to printable text before it is drawn, one rendered row is always one
+  terminal row, and escape sequences in tool output can no longer reach your
+  terminal. An agent question that spans lines shows every line in its box.
+- **Terminal editor: Up and Down keep their column, and odd bytes in a file are
+  shown.** Moving onto a shorter line used to skip a line (Down) or stay put
+  (Up); the cursor now lands at the end of the shorter line and returns to its
+  column on the next long one. A control byte in a file — the `\r` of a CRLF
+  file, an escape sequence in a captured log — is drawn as its control picture
+  (`␍`, `␛`) instead of being sent to the terminal, where it corrupted the
+  screen. The file itself is unchanged.
+- **Terminal chat and editor: a crash no longer leaves your shell broken.**
+  The terminal was restored only on Ctrl+C and SIGTERM. After an uncaught
+  error, an unhandled promise rejection, a plain `process.exit` or a hangup
+  the shell stayed in raw mode with mouse reporting on and no cursor — every
+  click printed an escape sequence and typing did not echo. Every exit path
+  now turns mouse reporting off, shows the cursor and leaves raw mode first,
+  then prints the error and exits non-zero.
+- **Terminal chat and editor: pop-up boxes get the same guard as the main
+  screen.** Every box — prompts, the command palette and the editor's file
+  picker, find, diff and other boxes — is drawn one terminal row per row and
+  cut to its width, so a control byte in what it shows cannot break the frame.
+- **Terminal chat and editor: a long agent question fits on the screen.** A
+  question taller than the window pushed the choices and the keys to answer
+  off the bottom and covered the status line. The question now scrolls inside
+  its box (Up/Down), and the choices, the keys and the status line stay
+  visible; no box is drawn taller than the screen.
+- **Terminal chat: `/copy` copies the reply as it arrived.** Since the
+  composer fix a copied reply had its tabs turned into spaces and its line
+  endings and escape sequences altered — the screen's cleaned version. It now
+  copies the original text.
+- **Terminal chat and editor: emoji sequences no longer shift the frame.** An
+  emoji family, a skin tone or a flag made of joined pieces is measured as two
+  cells, but most terminals (xterm, GNOME Terminal and other VTE terminals,
+  tmux) draw every piece — so the row wrapped. Such sequences are now drawn as
+  their separate emoji (👨‍👩‍👧 as 👨👩👧, 👍🏽 as 👍), and invisible format
+  characters (variation selectors, soft hyphens, bidi controls) are removed
+  from displayed text. `/copy` still copies the original.
 - **Interactive answers as views: forms, tables and charts that answer back**
   ([spec](docs/plans/inline-ui-views-spec.md), [reference](docs/INLINE-UI.md)).
   - An interactive answer can now be a *view*: JSON naming ready-made
@@ -536,6 +835,75 @@ labels reflect blast radius, not contract guarantees.
   environment, phone calls use the bound engines instead of a fixed whisper
   and Voxtral voice (`voice.ttsVoice` picks the voice), the TUI transcribes and
   speaks through the server, and speech calls are recorded in usage/spend.
+- **Terminal chat: a worker finishing no longer ends the turn.** The chat
+  read `agentId` from `agent.completed`, which names every agent `workerId`, so
+  any worker finishing looked like the root ending: the next queued message
+  went out while the root still ran, and the root's live reply was wiped. The
+  turn now ends only on the agent the server marks `root: true`; workers get a
+  row in the subagent panel, and their token counts are read again.
+- **Terminal chat: Esc stops this chat only.** Esc pressed before the turn's
+  root agent was known sent `/abort`, which stops every agent of the user in
+  every session — a pipeline in a browser tab included. It now sends the new
+  gateway frame `session.stop` (`{ sessionId }`): the caller's running agents
+  in that one session stop and their messages queued in it are dropped, and a
+  `session.stopped` event says how many. When nothing had started yet the chat
+  says so and stops the root as soon as it starts. The `/abort` command is
+  unchanged.
+- **Terminal chat: only the turn's own answer ends it.** Any gateway `error`
+  frame ended the running turn (a stale permission answer, an expired
+  approval, a rate limit, dropped events), a late `CHAT_CANCELLED` of a
+  stopped turn ended the next one and wiped its live reply, and another tab's
+  stop ended this tab's turn. `chat.send` now takes an optional `turnId`
+  that the gateway echoes on the turn's `chat.response`, `chat.error`,
+  `chat.delivery` and on the `error` frames that answer the send (with its
+  `sessionId`; also `RATE_LIMITED` and `INVALID_MESSAGE` for a refused send).
+  The terminal ends a turn only on its own answer, its root agent, or its
+  session's stop, and shows a late answer without touching the next turn.
+  `agent.stopped` now carries the session on its envelope and `root` in its
+  payload.
+- **Terminal chat: a queued message goes below the reply it waited for.** The
+  next queued message was sent, and shown, before the reply of the turn it
+  waited on — the root agent finishing arrives just ahead of its reply — so the
+  transcript, `/export` and the exit summary read user, user, reply. The turn
+  now ends on its answer, after it is shown (or 5 s after the root finished if
+  no answer comes).
+- **Terminal chat: nothing typed while disconnected is lost.** A message sent
+  while the gateway connection was down was dropped by the socket without a
+  word, and the chat then waited forever for its reply. It now waits in the
+  visible queue ("not connected: sent when the connection is back") and goes
+  out on reconnect; a command, a decision's answer or a stop that cannot be
+  sent says so. `GatewayClient`'s send methods return whether the frame went
+  out.
+- **Security — terminal chat: a clicked file link is no longer opened.** A
+  `path:line` or `file:` link in a reply was handed to the desktop opener on
+  click, so a model-written `notes.command:1` ran on macOS, and
+  `file://host/share` (any host was accepted) made Windows send the user's
+  NTLM credentials to that host. `file:` links are now kept only for this
+  machine (no host, `localhost` or its own name), and a click on one copies
+  its path and says so; `http`/`https` links still open in the browser.
+- **Terminal chat: `/clear` keeps the composer and status rows.** On the
+  alternate screen `/clear` left them blank until something redrew them.
+- **Terminal chat: transcript search finds every message in memory.** It
+  searched only the rendered window of the newest 200–400 messages, so older
+  ones were neither found nor counted.
+- **Terminal chat: reasoning reads before the tool calls it led to.** The
+  folded "Thinking" row used to appear below the turn's tool calls.
+- **Terminal chat: long replies stream without eating the CPU.** Each delta
+  re-sanitised and re-rendered the whole reply (a 154 KB reply in 2,000 deltas
+  cost about 3 s of CPU). The text is now sanitised incrementally and a long
+  reply is redrawn on a budget that grows with its length; the finished reply
+  still takes exactly the rows of the last streamed frame.
+- **Terminal chat and editor: the window title is restored on exit.** It kept
+  the app's last title; the terminal's title stack now saves and restores it.
+- **Terminal chat: a failed image upload notifies a failure.** It used to send
+  "The reply is ready" for a message that was never sent.
+- **Terminal chat: a cancelled picker stays cancelled.** Closing the session
+  or skills picker before its list arrived printed the late list into the
+  transcript.
+- **Terminal chat and editor: they reconnect after the server goes away.** A
+  connection cut without a close frame (a crashed or restarted server, a
+  dropped network) reported an error first, and the client then never tried
+  to reconnect.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

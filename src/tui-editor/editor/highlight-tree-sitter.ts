@@ -11,19 +11,19 @@
  * Architecture
  * ────────────
  * Tree-sitter is buffer-oriented; the editor's render path calls
- * `highlight(line, lang)` once per line. Re-parsing the entire
- * buffer on every line lookup would be wasteful, so we cache the
- * last parse keyed on `(lang, sourceHash)` per language. The
- * source hash comes from `setSource(lang, text)` which the editor
- * calls whenever the buffer's content changes; calls without a
- * matching cache just fall through to the line-based highlighter.
+ * `highlight(line, lang)` once per line. Re-parsing the entire buffer on
+ * every line lookup would be wasteful, so each open buffer has its own
+ * parse, keyed by the buffer's id: `setSource(key, lang, text)` parses and
+ * caches tokens by line, `hintLine(key, index)` tells the next lookup which
+ * buffer and row it is for, and `dropSource(key)` frees it when the buffer
+ * closes. Two files of the same language no longer evict each other.
  *
- * For now the wrapper does whole-buffer parsing on `setSource` and
- * stores the resulting node ranges keyed by line. A real-world
- * editor would use tree-sitter's incremental parsing (the package
- * exposes `Parser.parse(callback, oldTree)`); we leave that hook in
- * place via `parser.parse(text, oldTree)` and a per-language
- * `lastTree` slot, to be wired once the editor exposes edit deltas.
+ * The editor calls `setSource` when a buffer opens and again, debounced,
+ * after edits. Each call is a full parse: an incremental parse needs the
+ * old tree edited first (`tree.edit`), and handing tree-sitter an unedited
+ * old tree reuses nodes at the wrong offsets. Until the new parse lands,
+ * a line whose text no longer matches the cached parse is drawn by the
+ * line-based highlighter instead of with stale colours.
  *
  * Capture mapping
  * ───────────────
@@ -88,16 +88,47 @@ const GRAMMAR_FILES: Partial<Record<EditorLang, { pkg: string; file: string }>> 
 let module: ParserModule | null = null;
 let initOnce: Promise<void> | null = null;
 
-/** Per-language state. `tree` holds the most recent parse for `source`. */
-interface LangState {
-  parser: WtsParser;
+/** One parser per language, shared by every buffer of that language. */
+const parsers = new Map<EditorLang, WtsParser>();
+
+/** Per-buffer parse. `cache` holds per-line tokens for `source`. */
+interface SourceState {
+  lang: EditorLang;
   tree: WtsTree | null;
   source: string;
-  /** Cached per-line tokens for the current `source`. */
   cache: Map<number, Token[]> | null;
+  /** Bumped by every `setSource`, so a parse that finishes late does not overwrite a newer one. */
+  generation: number;
 }
 
-const langs = new Map<EditorLang, LangState>();
+const sources = new Map<string, SourceState>();
+
+/**
+ * Why tree-sitter highlighting is not used where it would be: the module or
+ * a grammar did not load, a parse threw. Highlighting falls back to the
+ * line highlighter either way, and each reason is told once to whoever
+ * listens (`onHighlighterProblem`; the editor puts it in the transcript).
+ * Told before anyone listens, it waits for the first listener.
+ */
+const problemListeners = new Set<(problem: string) => void>();
+const toldProblems = new Set<string>();
+const waitingProblems: string[] = [];
+
+function reportProblem(problem: string): void {
+  if (toldProblems.has(problem)) return;
+  toldProblems.add(problem);
+  if (problemListeners.size === 0) { waitingProblems.push(problem); return; }
+  for (const fn of problemListeners) fn(problem);
+}
+
+/** Be told why tree-sitter highlighting is not in use; returns the unsubscriber. */
+export function onHighlighterProblem(fn: (problem: string) => void): () => void {
+  problemListeners.add(fn);
+  for (const problem of waitingProblems.splice(0)) fn(problem);
+  return () => problemListeners.delete(fn);
+}
+
+const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 async function loadModule(): Promise<ParserModule | null> {
   try {
@@ -107,9 +138,10 @@ async function loadModule(): Promise<ParserModule | null> {
       ?? (m as unknown as ParserModule).Parser;
     const Language = (m as unknown as { Language?: ParserModule['Language'] }).Language
       ?? (m as unknown as ParserModule).Language;
-    if (!Parser || !Language) return null;
+    if (!Parser || !Language) { reportProblem('Syntax highlighting uses the line highlighter: web-tree-sitter has no Parser or Language export.'); return null; }
     return { Parser, Language };
-  } catch {
+  } catch (error) {
+    reportProblem(`Syntax highlighting uses the line highlighter: web-tree-sitter could not be loaded (${reason(error)}).`);
     return null;
   }
 }
@@ -125,7 +157,8 @@ async function ensureInitialized(): Promise<ParserModule | null> {
         await module.Parser.init({
           locateFile: (file) => (wtsRoot ? join(wtsRoot, file) : file),
         });
-      } catch {
+      } catch (error) {
+        reportProblem(`Syntax highlighting uses the line highlighter: tree-sitter did not start (${reason(error)}).`);
         module = null;
       }
     })();
@@ -134,8 +167,8 @@ async function ensureInitialized(): Promise<ParserModule | null> {
   return module;
 }
 
-async function ensureLang(lang: EditorLang): Promise<LangState | null> {
-  const cached = langs.get(lang);
+async function ensureParser(lang: EditorLang): Promise<WtsParser | null> {
+  const cached = parsers.get(lang);
   if (cached) return cached;
   const mod = await ensureInitialized();
   if (!mod) return null;
@@ -146,37 +179,55 @@ async function ensureLang(lang: EditorLang): Promise<LangState | null> {
   try {
     const wasm = readFileSync(wasmPath);
     const language = await mod.Language.load(wasm);
-    const parser = new mod.Parser();
+    const parser = parsers.get(lang) ?? new mod.Parser();
     parser.setLanguage(language);
-    const state: LangState = { parser, tree: null, source: '', cache: null };
-    langs.set(lang, state);
-    return state;
-  } catch {
+    parsers.set(lang, parser);
+    return parser;
+  } catch (error) {
+    reportProblem(`The ${lang} grammar could not be loaded (${reason(error)}); ${lang} files use the line highlighter.`);
     return null;
   }
 }
 
 /**
- * Tell the highlighter what the full buffer for a language looks
- * like. The editor calls this on buffer load + after edits; the
- * next per-line lookup uses the cached parse instead of re-tokenizing.
+ * Tell the highlighter what buffer `key` (a buffer id) now holds. The next
+ * per-line lookups for that buffer use the parse instead of the line-based
+ * highlighter.
  *
- * Errors are swallowed so a malformed buffer never breaks rendering;
- * the line-based fallback handles those lines.
+ * A grammar that fails to load or a parse that throws leaves the buffer on
+ * the line-based highlighter; rendering never breaks on a malformed buffer.
  */
-export async function setSource(lang: EditorLang, source: string): Promise<void> {
-  const state = await ensureLang(lang);
-  if (!state) return;
-  if (state.source === source && state.tree) return;
+export async function setSource(key: string, lang: EditorLang, source: string): Promise<void> {
+  const previous = sources.get(key);
+  if (previous && previous.lang === lang && previous.source === source && previous.tree) return;
+  const generation = (previous?.generation ?? 0) + 1;
+  const state: SourceState = previous && previous.lang === lang ? previous : { lang, tree: null, source: '', cache: null, generation };
+  state.generation = generation;
+  sources.set(key, state);
+  const parser = await ensureParser(lang);
+  if (!parser || sources.get(key) !== state || state.generation !== generation) return;
   try {
-    const tree = state.parser.parse(source, state.tree);
+    const tree = parser.parse(source);
     state.tree?.delete?.();
     state.tree = tree;
     state.source = source;
     state.cache = tree ? buildLineCache(source, tree) : null;
-  } catch {
+  } catch (error) {
+    reportProblem(`Parsing a ${lang} buffer failed (${reason(error)}); it uses the line highlighter.`);
     state.cache = null;
   }
+}
+
+/** Forget buffer `key`'s parse (the buffer closed). */
+export function dropSource(key: string): void {
+  sources.get(key)?.tree?.delete?.();
+  sources.delete(key);
+}
+
+/** Test aid: whether buffer `key` has a parse for exactly `source`. */
+export function hasParse(key: string, source: string): boolean {
+  const state = sources.get(key);
+  return !!state?.cache && state.source === source;
 }
 
 /**
@@ -184,11 +235,10 @@ export async function setSource(lang: EditorLang, source: string): Promise<void>
  * `setSource` to update on edits.
  */
 export function _resetTreeSitterForTests(): void {
-  for (const state of langs.values()) {
-    state.tree?.delete?.();
-    state.parser.delete?.();
-  }
-  langs.clear();
+  for (const state of sources.values()) state.tree?.delete?.();
+  sources.clear();
+  for (const parser of parsers.values()) parser.delete?.();
+  parsers.clear();
   module = null;
   initOnce = null;
 }
@@ -326,18 +376,20 @@ function materialize(line: string, spans: LineSpan[]): Token[] {
 }
 
 /**
- * The `HighlighterFn` we install via `setHighlighter`. Per-line:
- *   1. If we have a cached parse for this language and this line
- *      lives in the cache, return it.
- *   2. Otherwise fall back to the regex highlighter — keeps the
- *      editor responsive on languages without a vendored grammar
- *      and on the very first frame before `setSource` runs.
+ * The `HighlighterFn` we install via `setHighlighter`. Per line:
+ *   1. If the hinted buffer has a parse of this language and the line's
+ *      text still matches it, return the parsed tokens.
+ *   2. Otherwise fall back to the regex highlighter — keeps the editor
+ *      responsive on languages without a vendored grammar, on the first
+ *      frame before `setSource` lands, and on lines edited since.
  */
-function lookupCachedLine(line: string, lang: EditorLang, lineIndex?: number): Token[] | null {
-  if (lineIndex === undefined) return null;
-  const state = langs.get(lang);
-  if (!state || !state.cache) return null;
-  const tokens = state.cache.get(lineIndex);
+let hint: { key: string; line: number } | null = null;
+
+function lookupCachedLine(line: string, lang: EditorLang): Token[] | null {
+  if (!hint) return null;
+  const state = sources.get(hint.key);
+  if (!state || state.lang !== lang || !state.cache) return null;
+  const tokens = state.cache.get(hint.line);
   if (!tokens) return null;
   // Validate: cached line text must match what the renderer is
   // asking about. If the buffer drifted from the last setSource,
@@ -347,21 +399,15 @@ function lookupCachedLine(line: string, lang: EditorLang, lineIndex?: number): T
   return tokens;
 }
 
-const treeSitterHighlighter: HighlighterFn = (line, lang) => {
-  const idx = (treeSitterHighlighter as unknown as { _lineIndex?: number })._lineIndex;
-  const cached = lookupCachedLine(line, lang as EditorLang, idx);
-  if (cached) return cached;
-  return highlightLine(line, lang);
-};
+const treeSitterHighlighter: HighlighterFn = (line, lang) => lookupCachedLine(line, lang as EditorLang) ?? highlightLine(line, lang);
 
 /**
- * Hint the next call's line index. The editor calls this just
- * before each `highlight()` so the per-line cache lookup knows
- * which row to fetch — keeping the existing
- * `(line, lang) => Token[]` contract intact.
+ * Hint the next call's buffer and line. The editor calls this just before
+ * each `highlight()` so the cache lookup knows which buffer and row to
+ * fetch — keeping the existing `(line, lang) => Token[]` contract intact.
  */
-export function hintLineIndex(idx: number): void {
-  (treeSitterHighlighter as unknown as { _lineIndex?: number })._lineIndex = idx;
+export function hintLine(key: string, line: number): void {
+  hint = { key, line };
 }
 
 /** Install the tree-sitter highlighter. Idempotent; safe to call from app start. */

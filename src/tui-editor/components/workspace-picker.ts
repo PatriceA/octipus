@@ -11,13 +11,13 @@
  */
 import {
   type Component,
+  displayLine,
   type Focusable,
   matchesKey,
   type SelectItem,
   SelectList,
-  truncateToWidth,
-  visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
+import { drawBox, fitBoxWidth } from '@/tui-kit/overlay-frame';
 import type { WorkspaceMeta, WorkspaceStore } from '../stores/workspace-store';
 import { chalk, getPalette, getSelectListTheme } from '@/tui-pi/theme/defaults';
 
@@ -25,6 +25,8 @@ export interface WorkspacePickerOptions {
   workspaces: WorkspaceStore;
   onPick: (slug: string | null) => void;
   onCancel: () => void;
+  /** Why the list could not be refreshed; shown above the list (or instead of it). */
+  error?: string;
 }
 
 export class WorkspacePicker implements Component, Focusable {
@@ -58,17 +60,13 @@ export class WorkspacePicker implements Component, Focusable {
     const header = accent('Switch workspace');
     const help = dim('Enter switch · Esc cancel');
 
-    const bodyLines = this.list
+    const error = this.options.error ? [chalk.hex(palette.error)(`Could not load workspaces: ${displayLine(this.options.error)}`)] : [];
+    const bodyLines = [...error, ...(this.list
       ? this.list.render(width - 4)
-      : [dim('No workspaces loaded — single-tenant install or workspace fetch pending.')];
+      : [dim(this.options.error ? 'No workspaces to choose from.' : 'No workspaces loaded — single-tenant install.')])];
 
-    const innerWidth = Math.max(visibleWidth(header), visibleWidth(help), ...bodyLines.map(visibleWidth));
-    const boxWidth = Math.min(width, innerWidth + 4);
-    const inner = boxWidth - 4;
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
-    return [top, middle(header), ...bodyLines.map(middle), middle(help), bottom];
+    const body = [header, ...bodyLines, help];
+    return drawBox([body], fitBoxWidth(body, width), border);
   }
 }
 
@@ -78,10 +76,4 @@ function makeItems(workspaces: readonly WorkspaceMeta[]): SelectItem[] {
     label: w.name,
     description: `${w.slug}${w.isDefault ? ' · default' : ''}`,
   }));
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }

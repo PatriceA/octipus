@@ -808,7 +808,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 251 |
+| `api` | `core` | 252 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -847,7 +847,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 76 |
-| `core` | `db` | 541 |
+| `core` | `db` | 542 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
@@ -860,7 +860,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 87 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 263 |
+| `core` | `utils` | 264 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -961,12 +961,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `utils` | 43 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 7 |
-| `tui-editor` | `mcp` | 2 |
+| `tui-editor` | `mcp` | 1 |
 | `tui-editor` | `shared` | 1 |
-| `tui-editor` | `tui-pi` | 29 |
+| `tui-editor` | `tui-kit` | 43 |
+| `tui-editor` | `tui-pi` | 34 |
 | `tui-editor` | `utils` | 2 |
 | `tui-pi` | `core` | 3 |
-| `tui-pi` | `shared` | 2 |
+| `tui-pi` | `shared` | 3 |
+| `tui-pi` | `tui-kit` | 30 |
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
@@ -1066,7 +1068,9 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `room.typing` | yes | — | `*` |
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
+| `session.plan_updated` | yes | `src/core/agent/work-plan-store.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `session.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `space.presence` | yes | — | `*` |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*` |

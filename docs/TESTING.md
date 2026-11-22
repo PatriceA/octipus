@@ -124,7 +124,7 @@ webServer block times out, bump its `timeout:` in `playwright.config.ts`.
 `vitest.config.ts`. `npm run test:web` is the only thing that runs them.
 
 **TUI test failures**: the current clients use pi-tui, with tests under
-`src/tui-pi/` and `src/tui-editor/`. Run `npm run test:tui`; the retired Ink
+`src/tui-kit/`, `src/tui-pi/`, `src/tui-editor/` and `tests/tui/`. Run `npm run test:tui`; the retired Ink
 `src/tui/test-utils.tsx` shim no longer exists.
 
 ## Consolidation acceptance lanes

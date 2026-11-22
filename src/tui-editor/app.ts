@@ -1,74 +1,68 @@
-import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
-import { UnsavedPrompt } from './components/unsaved-prompt';
-import { DecisionQueue } from '@/tui-pi/decision-queue';
-import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
 /**
- * OctipusEditorApp — pi-tui-based editor + chat surface.
+ * OctipusEditorApp — the editor + chat surface, put together.
  *
- * Wiring:
- *   - LayoutStore drives pane visibility + focus
- *   - BufferStore drives the open files / active buffer
- *   - WorkspaceStore tracks the active workspace slug for the gateway
- *   - AgentStore mirrors gateway events for tests / extensions (the
- *     chat pane consumes events directly via the GatewayAdapter
- *     subscription)
- *   - GatewayAdapter wraps the WebSocket protocol the chat shell
- *     also uses
+ * This file is the composition root: it builds the stores, the panes and the
+ * gateway connection, and wires them to the parts of the shell that do the
+ * work (`shell/`):
  *
- * Phase 5 ships a working skeleton: open files via Ctrl+O picker
- * (deferred to Phase 5.x; for now use --project to seed the tree),
- * edit + save (Ctrl+S), toggle panes (Ctrl+B / Ctrl+J), cycle focus
- * (Ctrl+\), cycle buffers (Ctrl+Tab / Ctrl+Shift+Tab), close buffer
- * (Ctrl+W). Vim mode and the diff overlay come in Phase 5.x once
- * this scaffold proves out.
+ *   - `overlay-slots.ts`   which overlays are open, and closing them
+ *   - `overlay-actions.ts` opening the palette, pickers, find and replace
+ *   - `file-ops.ts`        open, save, Save As, reload, the unsaved prompt
+ *   - `agent-review.ts`    the agent's edits, reviewed as diffs
+ *   - `commands.ts`        composer commands and global hotkeys
+ *   - `persistence.ts`     the per-project checkpoint
+ *   - `highlight-parses.ts` re-parsing highlighting after edits
  */
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
-import { installOctipusKeybindings } from '@/tui-pi/keybindings';
+import { Container, getKeybindings, type TUI, type TuiMouseEvent } from '@/tui-kit';
+import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
+import { StatusBar } from '@/tui-pi/components/status-bar';
+import { DecisionQueue } from '@/tui-pi/decision-queue';
+import { type AgentSessionEvent, GatewayAdapter } from '@/tui-pi/gateway-adapter';
+import { loadOctipusKeybindings } from '@/tui-pi/keybindings';
+import { createOverlayController } from '@/tui-pi/overlays/registry';
+import { terminalClipboard } from '@/tui-pi/terminal-actions';
+import { readClipboard } from '@/tui-kit/clipboard-read';
+import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
-import { detectLanguage } from './editor/lang';
-import { installTreeSitterHighlighter, setSource as treeSitterSetSource } from './editor/highlight-tree-sitter';
-import { DiffOverlay } from './components/diff-overlay';
-import { FilePicker } from './components/file-picker';
 import { FileTree } from './components/file-tree';
-import { FindOverlay } from './components/find-overlay';
-import { HotkeysOverlay } from './components/hotkeys-overlay';
-import { MCPServerList, bridgeProvider } from './components/mcp-server-list';
 import { ModeBar } from './components/mode-bar';
-import { ReplaceOverlay } from './components/replace-overlay';
 import { SplitPane } from './components/split-pane';
+import { EditorPane } from './components/editor-pane';
+import { InputPrompt, parseLineTarget } from './components/input-prompt';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
-import { WorkspacePicker } from './components/workspace-picker';
-import { loadPersistedState, pathForProject, savePersistedState } from './persist';
-import { AgentStore } from './stores/agent-store';
+import { installTreeSitterHighlighter, onHighlighterProblem } from './editor/highlight-tree-sitter';
+import type { VimCommand } from './editor/vim';
+import { installEditorKeybindings } from './keybindings';
+import { AgentReview } from './shell/agent-review';
+import { type CommandHost, handleChatSubmit, handleGlobalKey } from './shell/commands';
+import type { EditorContext } from './shell/context';
+import { FileCommands } from './shell/file-commands';
+import { FileWatcher } from './shell/file-watcher';
+import { FileOps, PROMPT_OVERLAY } from './shell/file-ops';
+import { HighlightParses } from './shell/highlight-parses';
+import { EditorOverlays } from './shell/overlay-actions';
+import { APP_OVERLAYS, OverlaySlots } from './shell/overlay-slots';
+import { PendingPrompts } from './shell/pending-prompts';
+import { EditorPersistence } from './shell/persistence';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
 import { bindStore } from './stores/use-store';
-import { WorkspaceStore, type WorkspaceMeta } from './stores/workspace-store';
-import { readFileForBuffer, writeFileForBuffer } from './workspace-fs-bridge';
-import { StatusBar } from '@/tui-pi/components/status-bar';
-import { GatewayAdapter, type AgentSessionEvent } from '@/tui-pi/gateway-adapter';
-import { createOverlayController, type OverlayController } from '@/tui-pi/overlays/registry';
-import { chalk } from '@/tui-pi/theme/defaults';
-import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
+import { WorkspaceStore } from './stores/workspace-store';
 
 export interface OctipusEditorAppOptions {
   gatewayUrl?: string;
   exit?: (code: number) => void;
   projectPath?: string;
   /**
-   * Optional shutdown hook for /exit, /quit, and Ctrl+Q. Without it, the
-   * editor calls process.exit() directly without tearing down the alt-screen,
-   * leaving the shell prompt drawn on top of the editor's bottom border.
+   * Optional shutdown hook for /exit, /quit, and Ctrl+Q: the runtime restores
+   * the terminal and drains stdin. Without it the editor calls process.exit()
+   * with the terminal still in raw mode.
    */
   onShutdown?: () => Promise<void>;
-}
-
-function newSessionId(): string {
-  return randomUUID();
 }
 
 export class OctipusEditorApp {
@@ -77,7 +71,8 @@ export class OctipusEditorApp {
   readonly layout = new LayoutStore();
   readonly buffers = new BufferStore();
   readonly workspace = new WorkspaceStore();
-  readonly agent = new AgentStore();
+  /** Background questions (file changed on disk, agent edit to review) waiting for the resolve key. */
+  readonly pending = new PendingPrompts();
 
   private readonly status = new StatusBar();
   private readonly tabs: TabStrip;
@@ -86,31 +81,36 @@ export class OctipusEditorApp {
   private readonly tree: FileTree;
   private readonly chat: ChatPane;
   private readonly split: SplitPane;
-  private readonly overlays: OverlayController;
   private readonly session: ChatSessionPresenter;
   private readonly decisions: DecisionQueue;
-  private readonly sessionId = newSessionId();
+  private readonly sessionId = randomUUID();
   private readonly projectPath: string;
-  private paletteHandle: OverlayHandle | null = null;
-  private filePickerHandle: OverlayHandle | null = null;
-  private findHandle: OverlayHandle | null = null;
-  private replaceHandle: OverlayHandle | null = null;
-  private diffHandle: OverlayHandle | null = null;
-  private diffQueue: Array<{ bufferId: string; label: string; before: string; after: string }> = [];
-  private workspaceHandle: OverlayHandle | null = null;
-  private mcpHandle: OverlayHandle | null = null;
-  private hotkeysHandle: OverlayHandle | null = null;
-  private apiClient: ApiClient;
-  private unsavedHandle: OverlayHandle | null = null;
+  private readonly ctx: EditorContext;
+  private readonly slots: OverlaySlots;
+  private readonly files: FileOps;
+  private readonly fileCommands: FileCommands;
+  private readonly watcher: FileWatcher;
+  private readonly review: AgentReview;
+  private readonly overlays: EditorOverlays;
+  private readonly persistence: EditorPersistence;
+  private readonly parses: HighlightParses;
+  private readonly commands: CommandHost;
   private exiting = false;
   private readonly exit: (code: number) => void;
   private mcpPoll: ReturnType<typeof setInterval> | null = null;
-  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private mcpBridge: typeof import('@/mcp/bridge') | null = null;
   private readonly onShutdown?: () => Promise<void>;
+  /** Everything to release on shutdown: store subscriptions, input listeners, the adapter listener. */
+  private readonly disposers: Array<() => void> = [];
+  /** What the editor copied last: pasted when the system clipboard cannot be read. */
+  private lastCopy: string | null = null;
+  /** Why the MCP status could not be read last, told once until it changes. */
+  private mcpProblem: string | null = null;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
     this.exit = options.exit ?? (code => process.exit(code));
+    installEditorKeybindings();
     this.adapter = new GatewayAdapter({
       url: options.gatewayUrl,
       getWorkspace: () => this.workspace.get().activeSlug,
@@ -118,43 +118,98 @@ export class OctipusEditorApp {
     });
     this.projectPath = options.projectPath ? resolve(options.projectPath) : process.cwd();
     this.onShutdown = options.onShutdown;
-    this.overlays = createOverlayController(tui);
-    this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) this.refocus(); });
+    const controller = createOverlayController(tui);
+    this.slots = new OverlaySlots(controller, tui, () => this.refocus());
+    this.ctx = {
+      tui,
+      buffers: this.buffers,
+      layout: this.layout,
+      overlays: this.slots,
+      pending: this.pending,
+      projectPath: this.projectPath,
+      notice: (text, tone) => this.modeBar.setNotice(text, tone),
+      pushMessage: (role, content) => this.pushMessage(role, content),
+      log: (content) => this.chat.messages.push({ role: 'system', content, timestamp: new Date() }),
+      refocus: () => this.refocus(),
+      exiting: () => this.exiting,
+    };
+    this.decisions = new DecisionQueue(controller, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) this.refocus(); });
     // The API base URL mirrors the gateway URL but on HTTP. Best-effort —
     // fetches return null on failure and the overlays cope.
-    this.apiClient = new ApiClient({
+    const apiClient = new ApiClient({
       baseUrl: deriveApiBase(options.gatewayUrl),
       workspaceStore: this.workspace,
     });
+    this.parses = new HighlightParses(this.buffers, () => this.tui.requestRender());
+    this.files = new FileOps(this.ctx, (id) => this.parses.reparse(id));
+    this.review = new AgentReview(this.ctx, this.files);
+    this.watcher = new FileWatcher(this.ctx, this.files, this.review);
+    this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
-    this.tabs = new TabStrip(this.buffers);
+    const copy = terminalClipboard(tui);
+    this.tabs = new TabStrip(this.buffers, {
+      onClose: (id) => this.files.confirmUnsaved([id], () => this.buffers.close(id)),
+    });
     this.editor = new TextEditor(this.buffers, {
-      onSave: (record) => this.saveBuffer(record),
+      onSave: (record) => { this.files.saveBuffer(record.id); },
+      onVimCommand: (command, record) => this.runVimCommand(command, record.id),
+      onNotice: (text) => { this.modeBar.setNotice(text); this.tui.requestRender(); },
       layout: this.layout,
+      clipboard: {
+        copy: (text) => {
+          this.lastCopy = text;
+          void copy(text).then(
+            (result) => { this.modeBar.setNotice(result.message, result.ok ? 'info' : 'error'); this.tui.requestRender(); },
+            (error: unknown) => { this.modeBar.setNotice(`Not copied: ${error instanceof Error ? error.message : String(error)}`); this.tui.requestRender(); },
+          );
+        },
+        paste: async () => (await readClipboard()).text ?? this.lastCopy,
+      },
+      onFocus: () => { if (this.layout.get().focused !== 'editor') this.layout.focus('editor'); },
+      requestRender: () => this.tui.requestRender(),
     });
     this.modeBar = new ModeBar(this.layout, this.buffers, {
       getVimMode: () => this.editor.getVimState().mode,
+      getVimCommandLine: () => this.editor.getVimState().commandLine,
+      getAttention: () => this.pending.summary(),
     });
     this.tree = new FileTree({
       root: this.projectPath,
-      onOpen: (path) => this.openFile(path),
+      onOpen: (path) => this.files.openFile(path),
+      onFocus: () => { if (this.layout.get().focused !== 'tree') this.layout.focus('tree'); },
+      onNewFile: (folder) => this.fileCommands.newFile('', folder),
+      onRename: (path) => this.fileCommands.rename('', path),
+      onDelete: (path) => this.fileCommands.delete(path),
     });
+    this.fileCommands = new FileCommands(this.ctx, this.files, () => { this.tree.refresh(); this.tui.requestRender(); }, (id) => this.parses.reparse(id));
     this.chat = new ChatPane({
       tui,
       basePath: this.projectPath,
       onSubmit: (text) => this.handleChatSubmit(text),
+      onFocus: () => { if (this.layout.get().focused !== 'chat') this.layout.focus('chat'); },
+      onCopy: (text) => { void copy(text).then((result) => this.pushMessage('system', result.ok ? result.message : `Error: ${result.message}`)); },
     });
+    this.overlays = new EditorOverlays(this.ctx, {
+      editor: this.editor,
+      workspace: this.workspace,
+      adapter: this.adapter,
+      apiClient,
+      openFile: (path) => this.files.openFile(path),
+      runCommand: (text) => this.handleChatSubmit(text),
+      onMcpBridgeLoaded: (bridge) => this.watchMcpStatus(bridge),
+    });
+    this.commands = this.commandHost();
     this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
     this.chat.messages.push({
       role: 'system',
-      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Wheel: scroll · Shift+drag: select · /copy last: copy reply.`,
+      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Wheel: scroll · Drag: select and copy · /copy last: copy reply.`,
       timestamp: new Date(),
     });
 
     this.split = new SplitPane({
       layout: this.layout,
       tree: this.tree,
-      editor: buildEditorPane(this.tabs, this.editor),
+      editor: new EditorPane(this.tabs, this.editor),
       chat: this.chat,
       onResize: (_sizes) => {
         const paneRows = Math.max(0, tui.terminal.rows - this.status.render(tui.terminal.columns).length - 2);
@@ -164,11 +219,17 @@ export class OctipusEditorApp {
       },
     });
 
-    // Status bar is the single top line; mode bar is the single bottom line.
+    // Status rows on top (up to a third of the screen); the mode bar is the single bottom row.
     this.status.setProject(basenameOf(this.projectPath));
     const status = this.status;
+    // On the alternate screen the renderer parses mouse reports and hands each to the pane under
+    // the pointer (`SplitPane.handleMouse`). While a modal is open the panes behind it take nothing.
     const root = new class extends Container {
       override render(width: number): string[] { status.setMaxRows(Math.max(1, Math.floor(tui.terminal.rows / 3))); return super.render(width).slice(0, tui.terminal.rows); }
+      override handleMouse(event: TuiMouseEvent): ReturnType<Container['handleMouse']> {
+        if (tui.hasOverlay()) return { handled: true, target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height } };
+        return super.handleMouse(event);
+      }
     }();
     root.addChild(this.status);
     root.addChild(this.split);
@@ -177,45 +238,120 @@ export class OctipusEditorApp {
     tui.setFocus(this.editor);
 
     // Re-render whenever any store updates so dirty markers, tabs, mode bar etc. stay current.
-    bindStore(this.buffers, this.tabs,    tui);
-    bindStore(this.buffers, this.modeBar, tui);
-    bindStore(this.layout,  this.modeBar, tui);
-    bindStore(this.layout,  this.split,   tui);
-
-    // Global hotkeys (Phase 6 will move these into keybindings.json).
-    tui.addInputListener((data) => this.handleGlobalKey(data));
+    this.disposers.push(
+      bindStore(this.buffers, this.tabs,    tui),
+      bindStore(this.buffers, this.modeBar, tui),
+      bindStore(this.layout,  this.modeBar, tui),
+      bindStore(this.layout,  this.split,   tui),
+      // Global hotkeys (Phase 6 will move these into keybindings.json).
+      tui.addInputListener((data) => this.handleGlobalKey(data)),
+      // Re-parse highlighting after edits; forget the parse of a closed buffer.
+      this.buffers.subscribe((state) => this.parses.schedule(state.buffers)),
+      // Why tree-sitter highlighting is not in use (a grammar that did not load), once per reason.
+      onHighlighterProblem((problem) => this.ctx.log(problem)),
+      // A closed buffer's waiting prompts and agent edits go with it.
+      this.buffers.subscribe(() => { this.pending.prune((id) => this.buffers.byId(id) !== null); this.review.prune(); }),
+      this.pending.subscribe(() => this.tui.requestRender()),
+    );
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
     this.layout.setSize(tui.terminal.columns, tui.terminal.rows);
-    this.layout.subscribe(() => { if (!this.tui.hasOverlay()) this.refocus(); });
+    this.disposers.push(this.layout.subscribe((state) => { this.editor.setWrap(state.softWrap); if (!this.tui.hasOverlay()) this.refocus(); }));
 
     // Restore persisted state — failures are non-fatal (defaults applied).
-    this.hydrate();
+    this.disposers.push(...this.persistence.hydrate());
 
-    this.adapter.on((event) => this.handleEvent(event));
+    this.disposers.push(this.adapter.on((event) => this.handleEvent(event)));
+  }
 
-    // Poll MCP bridge for status — the bridge emits events but the
-    // surface area is small enough that a 10s poll keeps the wiring
-    // trivial. Failures are silent (no MCP installed / not loaded yet).
-    void this.refreshMcpStatus();
-    this.mcpPoll = setInterval(() => { void this.refreshMcpStatus(); }, 10_000);
+  /**
+   * Show this process's MCP connections in the status row, once the MCP
+   * list (`/mcp`) has loaded the bridge.
+   *
+   * The poll used to import `@/mcp/bridge` from the constructor. That module
+   * pulls in some 200 server modules (the database schema, the vault, the
+   * shell sandbox) and took about a second on the main thread, so the first
+   * frame waited for it: time to first frame 1.6–1.9 s, against about 0.5 s
+   * for the chat. And until the MCP list connects a server the bridge in
+   * this process has none, so the count it reported was always 0 of 0, which
+   * the status row does not show. Starting when the list loads the bridge
+   * shows the same thing at every moment, without the cost.
+   */
+  private watchMcpStatus(bridge: typeof import('@/mcp/bridge')): void {
+    if (this.mcpPoll || this.exiting) return;
+    this.mcpBridge = bridge;
+    // The bridge emits events but the surface area is small enough that a
+    // 10s poll keeps the wiring trivial.
+    this.refreshMcpStatus();
+    this.mcpPoll = setInterval(() => this.refreshMcpStatus(), 10_000);
     this.mcpPoll.unref?.();
   }
 
-  private async refreshMcpStatus(): Promise<void> {
+  /** The actions `shell/commands.ts` routes composer lines and hotkeys to. */
+  private commandHost(): CommandHost {
+    return {
+      ctx: this.ctx,
+      chat: this.chat,
+      overlays: this.overlays,
+      fileCommands: this.fileCommands,
+      clearInfoNotice: () => this.modeBar.clearInfo(),
+      hidePlanDetails: () => { this.status.setPlanDetails(null); this.tui.requestRender(); },
+      setVimMode: (on) => this.setVimMode(on),
+      setSoftWrap: (on) => {
+        this.layout.setSoftWrap(on);
+        this.modeBar.setNotice(on ? 'Soft wrap on: long lines break into rows.' : 'Soft wrap off: long lines scroll sideways.', 'info');
+        this.tui.requestRender();
+      },
+      goToLine: (target) => this.goToLine(target),
+      copySelection: () => this.layout.get().focused === 'editor' && this.editor.copySelection(),
+      newScratch: () => { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); },
+      openPending: () => {
+        if (!this.pending.openNext()) this.modeBar.setNotice('Nothing is waiting: no file changed on disk, no agent edit to review.', 'info');
+        this.tui.requestRender();
+      },
+      saveAsCommand: (value) => {
+        const active = this.buffers.active();
+        if (!active) { this.pushMessage('system', 'Error: No buffer to save.'); return; }
+        if (!value) { this.files.openSaveAs(active.id); return; }
+        const result = this.files.saveAs(active.id, value, value);
+        if (result !== 'saved') this.pushMessage('system', `Error: ${result.error}`);
+      },
+      reloadKeybindings: () => {
+        installEditorKeybindings(loadOctipusKeybindings());
+        this.ctx.log('Reloaded keybindings from ~/.octipus/keybindings.json.');
+        this.tui.requestRender();
+      },
+      closeActiveBuffer: () => { const a = this.buffers.active(); if (a) this.files.confirmUnsaved([a.id], () => this.buffers.close(a.id)); },
+      openSaveAsForActive: () => { const a = this.buffers.active(); if (a) this.files.openSaveAs(a.id); },
+      requestQuit: () => this.requestQuit(),
+      shutdownAndExit: () => this.requestQuit(),
+      sendCommand: (name, value) => this.adapter.sendCommand(name, value ? { value } : undefined),
+      sendChat: (text) => {
+        if (this.adapter.sendChat(this.sessionId, text, this.projectPath)) return;
+        const shown = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+        this.pushMessage('system', `Not connected: "${shown}" was not sent. Send it again once the status row says connected.`);
+      },
+    };
+  }
+
+  private refreshMcpStatus(): void {
+    if (!this.mcpBridge) return;
     try {
-      const { getMCPBridge } = await import('@/mcp/bridge');
-      const bridge = getMCPBridge();
-      const all = bridge.getAllConnections();
+      const all = this.mcpBridge.getMCPBridge().getAllConnections();
       this.status.setMcp({
         connected: all.filter((c) => c.status === 'connected').length,
         total: all.length,
       });
-      this.tui.requestRender();
-    } catch {
+      this.mcpProblem = null;
+    } catch (error) {
       this.status.setMcp(null);
+      const problem = error instanceof Error ? error.message : String(error);
+      if (problem !== this.mcpProblem) this.ctx.log(`MCP server status is not available: ${problem}`);
+      this.mcpProblem = problem;
     }
+    this.tui.requestRender();
   }
+
 
   async start(): Promise<void> {
     // Install the tree-sitter highlighter eagerly. The setHighlighter
@@ -224,111 +360,69 @@ export class OctipusEditorApp {
     // failure, so this never blocks startup.
     installTreeSitterHighlighter();
     this.tui.start();
-    await this.adapter.connect();
+    this.watcher.start();
+    try {
+      await this.adapter.connect();
+    } catch (error) {
+      // Put the terminal back before the error is reported, not after.
+      await this.stop();
+      throw error;
+    }
   }
 
-  // ── Persistence ────────────────────────────────────────────────
-
-  private hydrate(): void {
-    const persisted = loadPersistedState(pathForProject(this.projectPath));
-    if (persisted.treeVisible !== undefined && persisted.treeVisible !== this.layout.get().treeVisible) this.layout.toggleTree();
-    if (persisted.chatVisible !== undefined && persisted.chatVisible !== this.layout.get().chatVisible) this.layout.toggleChat();
-    if (persisted.editorMode) this.layout.setEditorMode(persisted.editorMode);
-    for (const path of persisted.openPaths ?? []) {
-      this.openFile(path, { activate: false });
-      const cursor = persisted.cursorByPath?.[path];
-      if (cursor) {
-        const rec = this.buffers.findByPath(path);
-        rec?.buffer.setCursor(cursor);
-      }
+  private runVimCommand(command: VimCommand, id: string): void {
+    switch (command) {
+      case 'write': this.files.saveBuffer(id); break;
+      case 'quit': this.files.confirmUnsaved([id], () => this.buffers.close(id)); break;
+      case 'quit!': this.buffers.revert(id); this.buffers.close(id); break;
+      case 'write-quit': if (this.files.saveBuffer(id)) this.buffers.close(id); break;
+      case 'quit-all': this.requestQuit(); break;
+      case 'quit-all!':
+        for (const b of this.buffers.get().buffers) this.buffers.revert(b.id);
+        void this.stop().then(() => this.exit(0));
+        break;
     }
-    if (persisted.activePath) {
-      const rec = this.buffers.findByPath(persisted.activePath);
-      if (rec) this.buffers.setActive(rec.id);
-    }
+    this.tui.requestRender();
+  }
 
-    for (const draft of persisted.drafts ?? []) {
-      const rec = draft.path ? this.buffers.openFile(draft.path, draft.text) : this.buffers.openScratch();
-      rec.buffer.setText(draft.text); this.buffers.markDirty(rec.id, true);
-    }
-    if (persisted.drafts?.length) this.pushMessage('system', `Recovered ${persisted.drafts.length} unsaved buffer(s). Review and save your edits.`);
-
-    // Persist on every state change (debounced).
-    const schedule = () => {
-      if (this.persistTimer) clearTimeout(this.persistTimer);
-      this.persistTimer = setTimeout(() => this.persist(), 500);
+  /** Ctrl+G, `/goto N[:C]`: put the cursor on a line of the active buffer. */
+  private goToLine(target: string): void {
+    const active = this.buffers.active();
+    if (!active) { this.modeBar.setNotice('No buffer open to go to a line in.'); this.tui.requestRender(); return; }
+    const go = (input: string): string | null => {
+      const parsed = parseLineTarget(input, active.buffer.lineCount());
+      if ('error' in parsed) return parsed.error;
+      active.buffer.setCursor(parsed);
+      this.layout.focus('editor');
+      this.refocus();
+      this.tui.requestRender();
+      return null;
     };
-    this.buffers.subscribe(schedule);
-    this.layout.subscribe(schedule);
-  }
-
-  private persist(): void {
-    const layout = this.layout.get();
-    const buffers = this.buffers.get();
-    const cursorByPath: Record<string, { line: number; col: number }> = {};
-    for (const b of buffers.buffers) {
-      if (!b.path) continue;
-      const c = b.buffer.getCursor();
-      cursorByPath[b.path] = { line: c.line, col: c.col };
-    }
-    const saved = savePersistedState({
-      version: 1,
-      openPaths: buffers.buffers.filter((b) => b.path).map((b) => b.path as string),
-      activePath: buffers.buffers.find((b) => b.id === buffers.activeId)?.path ?? null,
-      treeVisible: layout.treeVisible,
-      chatVisible: layout.chatVisible,
-      theme: 'dark',
-      editorMode: layout.editorMode,
-      cursorByPath,
-      drafts: buffers.buffers.filter(b => b.dirty).map(b => ({ path: b.path, text: b.buffer.text(), label: b.label })),
-    }, pathForProject(this.projectPath));
-    if (this.modeBar.setRecoveryFailed(!saved)) this.tui.requestRender();
-  }
-
-  // ── Files ──────────────────────────────────────────────────────
-
-  private openFile(absolutePath: string, options: { activate?: boolean } = {}): void {
-    const text = readFileForBuffer(absolutePath);
-    if (text === null) { this.pushMessage('system', `Error: Cannot open ${absolutePath}: missing, unreadable, binary, or over 5 MB.`); return; }
-    const record = this.buffers.openFile(absolutePath, text);
-    if (options.activate !== false) this.buffers.setActive(record.id);
-    // Seed the tree-sitter parse for this language. Fire-and-forget;
-    // the highlighter uses the regex fallback until the parse is
-    // ready, and silently no-ops for languages without a grammar.
-    void treeSitterSetSource(detectLanguage(absolutePath), text);
-  }
-
-  private saveBuffer(record: { id: string; path: string | null; buffer: { text(): string } }): boolean {
-    if (!record.path) { this.modeBar.setNotice('Scratch buffer needs a path before saving.'); this.pushMessage('system', 'Error: Scratch buffer needs a file path before saving.'); return false; }
-    if (!writeFileForBuffer(record.path, record.buffer.text())) {
-      this.modeBar.setNotice(`Save failed: ${record.path}. Edits retained.`);
-      this.pushMessage('system', `Error: Could not save ${record.path}. Your edits are still in memory.`); return false;
-    }
-    this.modeBar.setNotice(null);
-    this.buffers.markDirty(record.id, false);
-    this.pushMessage('system', `Saved ${record.path}.`);
-    return true;
-  }
-
-  private confirmUnsaved(ids: string[], proceed: () => void): void {
-    if (this.unsavedHandle) return;
-    const dirty = this.buffers.get().buffers.filter(b => ids.includes(b.id) && b.dirty);
-    if (!dirty.length) { proceed(); return; }
-    const prompt = new UnsavedPrompt(dirty.map(b => b.label), choice => {
-      if (choice === 'save') {
-        for (const id of ids) {
-          const current = this.buffers.get().buffers.find(b => b.id === id);
-          if (current?.dirty && !this.saveBuffer(current)) {
-            prompt.setError('Save failed. Edits retained; cancel to continue editing.'); this.tui.requestRender(); return;
-          }
-        }
-      }
-      if (choice === 'discard') for (const id of ids) this.buffers.markDirty(id, false);
-      this.unsavedHandle?.hide(); this.unsavedHandle = null;
-      if (choice !== 'cancel') proceed();
-      if (!this.tui.hasOverlay()) this.refocus();
+    if (target) { const error = go(target); if (error) this.pushMessage('system', `Error: ${error}`); return; }
+    if (this.slots.isOpen('prompt')) return;
+    this.slots.hideAll(APP_OVERLAYS);
+    const prompt = new InputPrompt({
+      title: `Go to line in ${active.label} (1–${active.buffer.lineCount()})`,
+      label: 'line: ',
+      hint: 'A line, or line:column · Enter go · Esc cancel',
+      onCancel: () => this.slots.close('prompt'),
+      onSubmit: (value) => {
+        const error = go(value);
+        if (error) { prompt.setError(error); this.tui.requestRender(); return; }
+        this.slots.close('prompt');
+      },
     });
-    this.unsavedHandle = this.overlays.showModal(prompt);
+    this.slots.show('prompt', prompt, PROMPT_OVERLAY);
+  }
+
+  /** Switch vim mode on or off (Alt+M, `/vim`). */
+  private setVimMode(on: boolean): void {
+    if (on === (this.layout.get().editorMode === 'vim')) return;
+    this.editor.resetVim();
+    this.layout.setEditorMode(on ? 'vim' : 'modeless');
+    const key = getKeybindings().getKeys('app.vim.toggle')[0] ?? '/vim';
+    this.modeBar.setNotice(on ? `Vim mode on: Esc NORMAL · i INSERT · :w save · :q close · ${key} off` : `Vim mode off · ${key} on`, 'info');
+    this.tui.requestRender();
   }
 
   // ── Gateway events ─────────────────────────────────────────────
@@ -346,7 +440,8 @@ export class OctipusEditorApp {
       case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
       case 'permission': this.decisions.push(event); return;
       case 'approval': this.decisions.push(event); return;
-      case 'agent.write': this.handleAgentWrite(event.path, event.newText); return;
+      case 'agent.write': this.review.handleWrite(event.path, event.newText); return;
+      case 'agent.edit': this.review.handleEdit(event.path, event.oldText, event.newText); return;
       case 'login_required':
         // The editor has no login prompt of its own; the chat TUI stores the
         // login both of them use.
@@ -365,319 +460,31 @@ export class OctipusEditorApp {
     }
   }
 
-  private handleAgentWrite(path: string, newText: string): void {
-    const record = this.buffers.findByPath(path);
-    if (!record) {
-      // Buffer isn't open — silently allow the write. Phase 7 may
-      // open the file automatically and re-emit; for now skip.
-      return;
-    }
-    if (record.lockMode === 'merge') {
-      this.buffers.applyAgentEdit(record.id, newText);
-      this.chat.messages.push({
-        role: 'system',
-        content: `Merged agent edit into ${record.label}.`,
-        timestamp: new Date(),
-      });
-      this.tui.requestRender();
-      return;
-    }
-    // Lock mode: take the lock, open the diff overlay.
-    this.buffers.applyAgentEdit(record.id, newText);
-    this.openDiffOverlay(record.id, record.label, record.buffer.text(), newText);
-  }
+  // ── Submit / hotkeys ───────────────────────────────────────────
 
-  private openDiffOverlay(bufferId: string, label: string, before: string, after: string): void {
-    if (this.diffHandle) { this.diffQueue.push({ bufferId, label, before, after }); return; }
-    this.buffers.setAgentLocked(bufferId, true);
-    const overlay = new DiffOverlay({
-      bufferLabel: label,
-      before,
-      after,
-      onAccept: () => {
-        const record = this.buffers.get().buffers.find((b) => b.id === bufferId);
-        if (record) {
-          record.buffer.setText(after);
-          this.buffers.markDirty(bufferId, true);
-        }
-        this.buffers.setAgentLocked(bufferId, false);
-        this.chat.messages.push({ role: 'system', content: `Accepted agent edit to ${label}.`, timestamp: new Date() });
-        this.closeDiffOverlay();
-        this.tui.requestRender();
-      },
-      onReject: () => {
-        this.buffers.setAgentLocked(bufferId, false);
-        this.chat.messages.push({ role: 'system', content: `Rejected agent edit to ${label}.`, timestamp: new Date() });
-        this.closeDiffOverlay();
-        this.tui.requestRender();
-      },
-    });
-    this.diffHandle = this.overlays.showModal(overlay);
-  }
+  private handleChatSubmit(rawText: string): void { handleChatSubmit(this.commands, rawText); }
 
-  private closeDiffOverlay(): void {
-    if (!this.diffHandle) return;
-    this.diffHandle.hide();
-    this.diffHandle = null;
-    const next = this.diffQueue.shift();
-    if (next) this.openDiffOverlay(next.bufferId, next.label, this.buffers.get().buffers.find(b => b.id === next.bufferId)?.buffer.text() ?? next.before, next.after);
-    else if (!this.tui.hasOverlay()) this.refocus();
-  }
-
-  // ── Submit / commands ──────────────────────────────────────────
-
-  private handleChatSubmit(rawText: string): void {
-    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.chat.messages, text => this.pushMessage('system', text))) return;
-    const text = rawText.trim();
-    if (!text) return;
-    this.chat.messages.push({ role: 'user', content: text, timestamp: new Date() });
-    this.tui.requestRender();
-
-    if (text.startsWith('/')) {
-      const parts = text.slice(1).split(/\s+/);
-      const name = parts[0];
-      const value = parts.slice(1).join(' ').trim();
-      // TUI-local commands intercepted before going to the gateway.
-      if (name === 'plan-hide') { this.status.setPlanDetails(null); this.tui.requestRender(); return; }
-      if (name === 'quit' || name === 'exit' || name === 'q') {
-        void this.shutdownAndExit();
-        return;
-      }
-      if (name === 'keys' || name === 'hotkeys' || name === 'help-keys') {
-        this.openHotkeys();
-        return;
-      }
-      if (name === 'palette') {
-        this.openCommandPalette();
-        return;
-      }
-      if (name === 'reload' || name === 'reload-keybindings') {
-        installOctipusKeybindings();
-        this.chat.messages.push({ role: 'system', content: 'Reloaded keybindings from ~/.octipus/keybindings.json.', timestamp: new Date() });
-        this.tui.requestRender();
-        return;
-      }
-      this.adapter.sendCommand(name, value ? { value } : undefined);
-      return;
-    }
-    this.adapter.sendChat(this.sessionId, text, this.projectPath);
-  }
-
-  // ── Hotkeys ────────────────────────────────────────────────────
-
-  private handleGlobalKey(data: string): { consume: true } | undefined {
-    const kb = getKeybindings();
-    if (this.tui.hasOverlay()) return undefined;
-    if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.chat.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
-    if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.chat.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
-    if (kb.matches(data, 'app.subagents.toggle')) { this.chat.subagents.toggle(); this.tui.requestRender(); return { consume: true }; }
-    if (this.layout.get().focused === 'chat') {
-      if (this.chat.messages.handleScrollInput(data)) { this.tui.requestRender(); return { consume: true }; }
-    }
-    if (kb.matches(data, 'app.tree.toggle'))   { this.layout.toggleTree(); return { consume: true }; }
-    if (kb.matches(data, 'app.chat.toggle'))   { this.layout.toggleChat(); return { consume: true }; }
-    if (kb.matches(data, 'app.pane.cycle'))    { this.layout.cycleFocus(1); this.refocus(); return { consume: true }; }
-    if (kb.matches(data, 'app.buffer.next'))   { this.buffers.cycle(1); return { consume: true }; }
-    if (kb.matches(data, 'app.buffer.prev'))   { this.buffers.cycle(-1); return { consume: true }; }
-    if (kb.matches(data, 'app.buffer.close'))  {
-      const a = this.buffers.active(); if (a) this.confirmUnsaved([a.id], () => this.buffers.close(a.id)); return { consume: true };
-    }
-    if (kb.matches(data, 'app.file.open'))     { this.openFilePicker(); return { consume: true }; }
-    if (kb.matches(data, 'app.find.open'))     { this.openFind(); return { consume: true }; }
-    if (kb.matches(data, 'app.replace.open'))  { this.openReplace(); return { consume: true }; }
-    if (kb.matches(data, 'app.workspace.switch')) { void this.openWorkspacePicker(); return { consume: true }; }
-    if (kb.matches(data, 'app.mcp.list'))      { void this.openMCPServerList(); return { consume: true }; }
-    if (kb.matches(data, 'app.palette.open'))  { this.openCommandPalette(); return { consume: true }; }
-    if (kb.matches(data, 'app.help.open'))     { this.openHotkeys(); return { consume: true }; }
-    if (matchesKey(data, 'ctrl+c')) { this.requestQuit(); return { consume: true }; }
-    if (kb.matches(data, 'app.quit'))          { void this.shutdownAndExit(); return { consume: true }; }
-    return undefined;
-  }
+  private handleGlobalKey(data: string): { consume: true } | undefined { return handleGlobalKey(this.commands, data); }
 
   requestQuit(): void {
-    this.confirmUnsaved(this.buffers.get().buffers.map(b => b.id), () => { void this.stop().then(() => this.exit(0)); });
+    this.files.confirmUnsaved(this.buffers.get().buffers.map(b => b.id), () => { void this.stop().then(() => this.exit(0)); });
   }
-
-  private async shutdownAndExit(): Promise<void> { this.requestQuit(); }
 
   async stop(): Promise<void> {
     if (this.exiting) return;
     this.exiting = true;
-    if (this.persistTimer) clearTimeout(this.persistTimer);
     if (this.mcpPoll) clearInterval(this.mcpPoll);
-    this.persist();
+    this.watcher.stop();
+    this.persistence.flush();
+    for (const dispose of this.disposers.splice(0)) dispose();
+    this.parses.dispose();
     this.decisions.dispose(); this.session.dispose(); this.adapter.disconnect();
-    try { if (this.onShutdown) await this.onShutdown(); } catch { /* terminal cleanup is best effort */ }
-  }
-
-  private openCommandPalette(): void {
-    if (this.paletteHandle) return;
-    // Stack discipline: only one app-level overlay open at a time. pi-tui's
-    // overlay stack restores focus to whatever's underneath when an overlay
-    // hides, but our `refocus()` jumps straight back to the layout pane —
-    // a stranded overlay underneath would lose its focus and never recover.
-    this.closeAllOverlays();
-    this.paletteHandle = this.overlays.showCommandPalette({
-      onCommand: (commandName) => {
-        this.closeCommandPalette();
-        // Route through the chat-submit pipeline so /quit, /reload, etc.
-        // behave the same way as if the user had typed them in the composer.
-        this.handleChatSubmit(`/${commandName}`);
-      },
-      onCancel: () => this.closeCommandPalette(),
-    });
-  }
-
-  private closeCommandPalette(): void {
-    if (!this.paletteHandle) return;
-    this.paletteHandle.hide();
-    this.paletteHandle = null;
-    this.refocus();
-  }
-
-  private openHotkeys(): void {
-    if (this.hotkeysHandle) return;
-    this.closeAllOverlays();
-    const overlay = new HotkeysOverlay({ onClose: () => this.closeHotkeys() });
-    this.hotkeysHandle = this.overlays.showModal(overlay);
-  }
-
-  private closeAllOverlays(): void {
-    const handles: Array<{ handle: OverlayHandle | null; clear: () => void }> = [
-      { handle: this.paletteHandle,      clear: () => { this.paletteHandle = null; } },
-      { handle: this.hotkeysHandle,      clear: () => { this.hotkeysHandle = null; } },
-      { handle: this.filePickerHandle,   clear: () => { this.filePickerHandle = null; } },
-      { handle: this.findHandle,         clear: () => { this.findHandle = null; } },
-      { handle: this.replaceHandle,      clear: () => { this.replaceHandle = null; } },
-      { handle: this.workspaceHandle,    clear: () => { this.workspaceHandle = null; } },
-      { handle: this.mcpHandle,          clear: () => { this.mcpHandle = null; } },
-    ];
-    for (const { handle, clear } of handles) {
-      if (handle) { handle.hide(); clear(); }
+    try {
+      if (this.onShutdown) await this.onShutdown();
+    } catch (error) {
+      // The terminal may not be restored: say so where it can still be read.
+      process.stderr.write(`Octipus editor: restoring the terminal failed: ${error instanceof Error ? error.message : String(error)}\n`);
     }
-  }
-
-  private closeHotkeys(): void {
-    if (!this.hotkeysHandle) return;
-    this.hotkeysHandle.hide();
-    this.hotkeysHandle = null;
-    this.refocus();
-  }
-
-  private async openMCPServerList(): Promise<void> {
-    if (this.mcpHandle) return;
-    // Lazy import keeps the bridge out of tui-editor module init for tests.
-    const { getMCPBridge } = await import('@/mcp/bridge');
-    const provider = bridgeProvider(getMCPBridge() as unknown as Parameters<typeof bridgeProvider>[0]);
-    const overlay = new MCPServerList({
-      provider,
-      onClose: () => this.closeMCPServerList(),
-    });
-    this.mcpHandle = this.overlays.showModal(overlay);
-  }
-
-  private closeMCPServerList(): void {
-    if (!this.mcpHandle) return;
-    this.mcpHandle.hide();
-    this.mcpHandle = null;
-    this.refocus();
-  }
-
-  private async openWorkspacePicker(): Promise<void> {
-    if (this.workspaceHandle) return;
-    // Refresh available workspaces in the background; picker re-reads the store on render.
-    await this.refreshWorkspaces();
-    const overlay = new WorkspacePicker({
-      workspaces: this.workspace,
-      onPick: (slug) => {
-        this.workspace.setActive(slug);
-        this.adapter.disconnect();
-        void this.adapter.connect();
-        this.chat.messages.push({
-          role: 'system',
-          content: slug ? `Switched workspace to ${slug}.` : 'Reset to default workspace.',
-          timestamp: new Date(),
-        });
-        this.closeWorkspacePicker();
-      },
-      onCancel: () => this.closeWorkspacePicker(),
-    });
-    this.workspaceHandle = this.overlays.showModal(overlay);
-  }
-
-  private closeWorkspacePicker(): void {
-    if (!this.workspaceHandle) return;
-    this.workspaceHandle.hide();
-    this.workspaceHandle = null;
-    this.refocus();
-  }
-
-  private async refreshWorkspaces(): Promise<void> {
-    const data = await this.apiClient.getJson<{ workspaces?: WorkspaceMeta[] } | WorkspaceMeta[]>('/me/workspaces');
-    if (!data) return;
-    const list = Array.isArray(data) ? data : data.workspaces ?? [];
-    this.workspace.setAvailable(list);
-  }
-
-  private openFind(): void {
-    if (this.findHandle) return;
-    const overlay = new FindOverlay({
-      buffers: this.buffers,
-      onClose: () => this.closeFind(),
-    });
-    this.findHandle = this.overlays.showModal(overlay);
-  }
-
-  private closeFind(): void {
-    if (!this.findHandle) return;
-    this.findHandle.hide();
-    this.findHandle = null;
-    this.refocus();
-  }
-
-  private openReplace(): void {
-    if (this.replaceHandle) return;
-    const overlay = new ReplaceOverlay({
-      buffers: this.buffers,
-      onCommit: (count) => {
-        this.chat.messages.push({
-          role: 'system',
-          content: `Replaced ${count} occurrence${count === 1 ? '' : 's'}.`,
-          timestamp: new Date(),
-        });
-        this.closeReplace();
-        this.tui.requestRender();
-      },
-      onClose: () => this.closeReplace(),
-    });
-    this.replaceHandle = this.overlays.showModal(overlay);
-  }
-
-  private closeReplace(): void {
-    if (!this.replaceHandle) return;
-    this.replaceHandle.hide();
-    this.replaceHandle = null;
-    this.refocus();
-  }
-
-  private openFilePicker(): void {
-    if (this.filePickerHandle) return;
-    const picker = new FilePicker({
-      root: this.projectPath,
-      onPick: (path) => {
-        this.closeFilePicker();
-        this.openFile(path);
-      },
-      onCancel: () => this.closeFilePicker(),
-    });
-    this.filePickerHandle = this.overlays.showModal(picker);
-  }
-
-  private closeFilePicker(): void {
-    if (!this.filePickerHandle) return;
-    this.filePickerHandle.hide();
-    this.filePickerHandle = null;
-    this.refocus();
   }
 
   private refocus(): void {
@@ -687,20 +494,6 @@ export class OctipusEditorApp {
                  :                       this.editor;
     this.tui.setFocus(target);
   }
-
-  // ── Overlays (port of chat-shell logic) ────────────────────────
-
-
-
-
-}
-
-function buildEditorPane(tabs: TabStrip, editor: TextEditor): Container {
-  const c = new Container();
-  c.addChild(tabs);
-  c.addChild(new Spacer(0));
-  c.addChild(editor);
-  return c;
 }
 
 function basenameOf(path: string): string {
@@ -715,14 +508,13 @@ function basenameOf(path: string): string {
  */
 function deriveApiBase(gatewayUrl: string | undefined): string {
   if (!gatewayUrl) return 'http://localhost:3005/api';
+  let u: URL;
   try {
-    const u = new URL(gatewayUrl);
-    const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-    return `${protocol}//${u.host}/api`;
-  } catch {
-    return 'http://localhost:3005/api';
+    u = new URL(gatewayUrl);
+  } catch (error) {
+    // Not a URL: the gateway connection would fail too. Say which, rather than talk to localhost instead.
+    throw new Error(`The gateway URL ${JSON.stringify(gatewayUrl)} is not a URL: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  return `${protocol}//${u.host}/api`;
 }
-
-// Quiet down lint about unused chalk import that pulls the theme defaults eagerly.
-void chalk;

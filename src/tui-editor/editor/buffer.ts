@@ -3,15 +3,22 @@
  *
  * Stores text as a flat array of lines (no rope or piece-table —
  * we're optimizing for terminals where files rarely exceed a few
- * thousand lines). Provides cursor + selection + undo/redo via a
- * snapshot stack.
+ * thousand lines). Provides cursor + selection + grouped undo/redo.
  *
- * Coordinates: 0-indexed `(line, col)`. Columns are character
- * counts within the line (no tab expansion at this layer; the
- * renderer handles tab → spaces).
+ * Coordinates: 0-indexed `(line, col)`. A column is a UTF-16 offset into
+ * the line, and the cursor only stands on a grapheme boundary (`columns.ts`):
+ * moving and deleting step over a whole user-perceived character. Lines never
+ * contain `\n`; line endings are the file bridge's business.
  *
- * Pure logic: no I/O, no React. Tests live in `buffer.test.ts`.
+ * Undo records what each edit removed and inserted, not a copy of the
+ * buffer. One undo step is one user action: a typing burst, a paste, a
+ * replace-all, an agent edit (`transact`). An edit that changes nothing — a
+ * Backspace at the start of the file — records nothing and keeps redo.
+ *
+ * Pure logic: no I/O. Tests live in `buffer.test.ts`.
  */
+import { cellOf, colAtCell, nextBoundary, prevBoundary, snapToBoundary } from './columns';
+
 export interface Position {
   line: number;
   col: number;
@@ -22,22 +29,57 @@ export interface Selection {
   head: Position;
 }
 
-interface Snapshot {
-  lines: string[];
-  cursor: Position;
-  selection: Selection | null;
+/** One replacement: `removed` was at `start`, `inserted` is there now. */
+interface Edit {
+  start: Position;
+  removed: string;
+  inserted: string;
+}
+
+/** Typing and deleting coalesce into one undo step while they continue where the last one ended. */
+type Burst = 'type' | 'delete-back' | 'delete-fwd';
+
+interface UndoStep {
+  edits: Edit[];
+  cursorBefore: Position;
+  selectionBefore: Selection | null;
+  cursorAfter: Position;
+  burst: Burst | null;
+  at: number;
 }
 
 const MAX_UNDO = 200;
+/**
+ * The most text (UTF-16 units, removed plus inserted) the undo history
+ * keeps; older steps go first. With the step cap alone, 200 reloads of a
+ * large file kept 200 copies of it.
+ */
+export const MAX_UNDO_CHARS = 8 * 1024 * 1024;
+/** A pause this long ends a typing burst. */
+const BURST_GAP_MS = 1000;
 
 export class Buffer {
   private lines: string[];
   private cursor: Position = { line: 0, col: 0 };
   private selection: Selection | null = null;
-  private undoStack: Snapshot[] = [];
-  private redoStack: Snapshot[] = [];
-  /** Increments on every mutation; the renderer uses this to memoize. */
+  private undoStack: UndoStep[] = [];
+  private redoStack: UndoStep[] = [];
+  /** The text the undo stack holds (`MAX_UNDO_CHARS`). */
+  private undoChars = 0;
+  /** The column Up/Down aim for (in cells), valid while the cursor is still where the last vertical move left it. */
+  private goal: { cell: number; at: Position } | null = null;
+  /** Edits of the action in progress; `depth` counts nested `transact` calls. */
+  private pending: Edit[] = [];
+  private depth = 0;
+  private pendingBefore: { cursor: Position; selection: Selection | null } | null = null;
+  /** Set when the cursor moved since the last edit: the next keystroke starts a new undo step. */
+  private burstBroken = true;
+  /** Increments on every mutation and cursor move; the renderer uses this to memoize. */
   public version = 0;
+  /** Increments only when the text changes. */
+  public textVersion = 0;
+  /** Called after every change to the text (not cursor moves). */
+  onChange: (() => void) | null = null;
 
   constructor(initialText: string) {
     this.lines = initialText.length === 0 ? [''] : initialText.split('\n');
@@ -64,6 +106,18 @@ export class Buffer {
     return positionLte(anchor, head) ? [anchor, head] : [head, anchor];
   }
 
+  /** The text between two positions. */
+  textInRange(start: Position, end: Position): string {
+    const [a, b] = positionLte(start, end) ? [start, end] : [end, start];
+    if (a.line === b.line) return this.lines[a.line].slice(a.col, b.col);
+    return [this.lines[a.line].slice(a.col), ...this.lines.slice(a.line + 1, b.line), this.lines[b.line].slice(0, b.col)].join('\n');
+  }
+
+  canUndo(): boolean { return this.undoStack.length > 0; }
+  /** How much text (UTF-16 units) the undo history holds. */
+  undoSize(): number { return this.undoChars; }
+  canRedo(): boolean { return this.redoStack.length > 0; }
+
   // ── Cursor + selection ──────────────────────────────────────────
 
   setCursor(p: Position, extendSelection = false): void {
@@ -75,6 +129,15 @@ export class Buffer {
       this.selection = null;
     }
     this.cursor = safe;
+    this.burstBroken = true;
+    this.version++;
+  }
+
+  /** Select from `anchor` to `head`; the cursor goes to `head`. */
+  select(anchor: Position, head: Position): void {
+    this.cursor = this.clampPosition(head);
+    this.selection = { anchor: this.clampPosition(anchor), head: { ...this.cursor } };
+    this.burstBroken = true;
     this.version++;
   }
 
@@ -84,31 +147,32 @@ export class Buffer {
   }
 
   /**
-   * Move the cursor by a delta (lines, cols). Coalesces with the
-   * existing line bound — moving past EOL clamps to EOL.
+   * Move the cursor by a delta. A horizontal step is one grapheme; moving
+   * past the end of a line continues on the next. A vertical move keeps the
+   * cell the cursor is drawn at, so it lines up across tabs and wide text.
    */
   moveCursor(dLine: number, dCol: number, extendSelection = false): void {
-    const next = { line: this.cursor.line + dLine, col: this.cursor.col + dCol };
-    if (next.line < 0) next.line = 0;
-    if (next.line >= this.lines.length) next.line = this.lines.length - 1;
-    const lineLen = this.lines[next.line].length;
-    if (next.col < 0) {
-      // Wrap to previous line's end.
-      if (next.line > 0) {
-        next.line -= 1;
-        next.col = this.lines[next.line].length;
-      } else {
-        next.col = 0;
-      }
-    } else if (next.col > lineLen) {
-      if (next.line < this.lines.length - 1) {
-        next.line += 1;
-        next.col = 0;
-      } else {
-        next.col = lineLen;
-      }
+    if (dLine !== 0 && dCol === 0) {
+      const line = Math.max(0, Math.min(this.lines.length - 1, this.cursor.line + dLine));
+      // A shorter line clamps to its end, and the column comes back on the next line long enough to hold it.
+      const cell = this.goal && positionEq(this.goal.at, this.cursor) ? this.goal.cell : cellOf(this.lines[this.cursor.line], this.cursor.col);
+      this.setCursor({ line, col: colAtCell(this.lines[line], cell) }, extendSelection);
+      this.goal = { cell, at: { ...this.cursor } };
+      return;
     }
-    this.setCursor(next, extendSelection);
+    let { line, col } = this.cursor;
+    line = Math.max(0, Math.min(this.lines.length - 1, line + dLine));
+    col = Math.min(col, this.lines[line].length);
+    // Steps stop at a line boundary: running past the end lands on the next line's start, not further.
+    for (let i = 0; i < Math.abs(dCol); i++) {
+      const text = this.lines[line];
+      if (dCol < 0) {
+        if (col > 0) col = prevBoundary(text, col);
+        else { if (line > 0) { line -= 1; col = this.lines[line].length; } break; }
+      } else if (col < text.length) col = nextBoundary(text, col);
+      else { if (line < this.lines.length - 1) { line += 1; col = 0; } break; }
+    }
+    this.setCursor({ line, col }, extendSelection);
   }
 
   moveLineStart(extend = false): void { this.setCursor({ line: this.cursor.line, col: 0 }, extend); }
@@ -154,202 +218,220 @@ export class Buffer {
 
   // ── Mutations ───────────────────────────────────────────────────
 
-  /** Insert text at the cursor (or replace the selection). */
+  /**
+   * Run `fn` as one undo step: everything it changes is undone together.
+   * Nested calls join the outermost one.
+   */
+  transact(fn: () => void): void {
+    this.begin();
+    try { fn(); } finally { this.end(null); }
+  }
+
+  /** Insert text at the cursor (or replace the selection). One undo step. */
   insert(text: string): void {
-    this.pushUndo();
-    if (this.selection) this.deleteSelectionInternal();
-    const { line, col } = this.cursor;
-    const before = this.lines[line].slice(0, col);
-    const after = this.lines[line].slice(col);
-    const inserted = text.split('\n');
-    if (inserted.length === 1) {
-      this.lines[line] = before + inserted[0] + after;
-      this.cursor = { line, col: col + inserted[0].length };
-    } else {
-      const newLines = [
-        before + inserted[0],
-        ...inserted.slice(1, -1),
-        inserted[inserted.length - 1] + after,
-      ];
-      this.lines.splice(line, 1, ...newLines);
-      this.cursor = {
-        line: line + inserted.length - 1,
-        col: inserted[inserted.length - 1].length,
-      };
-    }
-    this.selection = null;
-    this.version++;
+    this.begin();
+    try { this.insertInternal(text); } finally { this.end(null); }
   }
 
-  /** Delete count chars left of the cursor (Backspace). */
-  deleteBackward(count = 1): void {
-    if (this.selection) { this.pushUndo(); this.deleteSelectionInternal(); this.version++; return; }
-    if (count <= 0) return;
-    this.pushUndo();
-    let remaining = count;
-    while (remaining > 0) {
-      const { line, col } = this.cursor;
-      if (col > 0) {
-        const take = Math.min(col, remaining);
-        this.lines[line] = this.lines[line].slice(0, col - take) + this.lines[line].slice(col);
-        this.cursor = { line, col: col - take };
-        remaining -= take;
-      } else if (line > 0) {
-        // Merge current line into previous.
-        const prev = this.lines[line - 1];
-        const cur = this.lines[line];
-        this.lines.splice(line - 1, 2, prev + cur);
-        this.cursor = { line: line - 1, col: prev.length };
-        remaining -= 1;
-      } else {
-        break;
+  /**
+   * Text typed at the keyboard: consecutive keystrokes that continue where
+   * the last one ended are one undo step, until a newline, a cursor move or
+   * a pause.
+   */
+  type(text: string): void {
+    this.begin();
+    try { this.insertInternal(text); } finally { this.end(text.includes('\n') ? null : 'type'); }
+  }
+
+  /** Delete `count` graphemes left of the cursor, or the selection (Backspace). */
+  deleteBackward(count = 1, burst = false): void {
+    this.begin();
+    try {
+      if (this.selection) { this.deleteSelectionInternal(); return; }
+      let { line, col } = this.cursor;
+      for (let i = 0; i < count; i++) {
+        if (col > 0) col = prevBoundary(this.lines[line], col);
+        else if (line > 0) { line -= 1; col = this.lines[line].length; }
+        else break;
       }
-    }
-    this.version++;
+      this.replaceInternal({ line, col }, this.cursor, '');
+    } finally { this.end(burst ? 'delete-back' : null); }
   }
 
-  /** Delete count chars right of the cursor (Delete). */
-  deleteForward(count = 1): void {
-    if (this.selection) { this.pushUndo(); this.deleteSelectionInternal(); this.version++; return; }
-    if (count <= 0) return;
-    this.pushUndo();
-    let remaining = count;
-    while (remaining > 0) {
-      const { line, col } = this.cursor;
-      const lineText = this.lines[line];
-      if (col < lineText.length) {
-        const take = Math.min(lineText.length - col, remaining);
-        this.lines[line] = lineText.slice(0, col) + lineText.slice(col + take);
-        remaining -= take;
-      } else if (line < this.lines.length - 1) {
-        // Merge next line into current.
-        const next = this.lines[line + 1];
-        this.lines.splice(line, 2, lineText + next);
-        remaining -= 1;
-      } else {
-        break;
+  /** Delete `count` graphemes right of the cursor, or the selection (Delete). */
+  deleteForward(count = 1, burst = false): void {
+    this.begin();
+    try {
+      if (this.selection) { this.deleteSelectionInternal(); return; }
+      let { line, col } = this.cursor;
+      for (let i = 0; i < count; i++) {
+        if (col < this.lines[line].length) col = nextBoundary(this.lines[line], col);
+        else if (line < this.lines.length - 1) { line += 1; col = 0; }
+        else break;
       }
-    }
-    this.version++;
+      const at = { ...this.cursor };
+      this.replaceInternal(at, { line, col }, '');
+      this.cursor = at;
+    } finally { this.end(burst ? 'delete-fwd' : null); }
   }
 
-  /** Delete the line the cursor is on (Ctrl+K full-line variant). */
+  /** Delete the line the cursor is on. */
   deleteLine(): void {
-    this.pushUndo();
-    const { line } = this.cursor;
-    if (this.lines.length === 1) {
-      this.lines[0] = '';
-    } else {
-      this.lines.splice(line, 1);
-    }
-    const newLine = Math.min(line, this.lines.length - 1);
-    this.cursor = { line: newLine, col: Math.min(this.cursor.col, this.lines[newLine].length) };
-    this.selection = null;
-    this.version++;
+    this.begin();
+    try {
+      const { line, col } = this.cursor;
+      if (this.lines.length === 1) {
+        this.replaceInternal({ line: 0, col: 0 }, { line: 0, col: this.lines[0].length }, '');
+      } else if (line < this.lines.length - 1) {
+        this.replaceInternal({ line, col: 0 }, { line: line + 1, col: 0 }, '');
+      } else {
+        this.replaceInternal({ line: line - 1, col: this.lines[line - 1].length }, { line, col: this.lines[line].length }, '');
+      }
+      const newLine = Math.min(line, this.lines.length - 1);
+      this.cursor = { line: newLine, col: snapToBoundary(this.lines[newLine], Math.min(col, this.lines[newLine].length)) };
+      this.selection = null;
+    } finally { this.end(null); }
   }
 
-  /** Replace the entire buffer text (used by file open, agent edits). */
+  /**
+   * Replace the entire buffer text (file reload, agent edits). One undo
+   * step, which records only what changed: the common start and end of the
+   * old and new text are left in place, so reloading a log file that grew
+   * by a line stores that line, not two copies of the file.
+   */
   setText(text: string): void {
-    this.pushUndo();
-    this.lines = text.length === 0 ? [''] : text.split('\n');
-    if (this.cursor.line >= this.lines.length) {
-      this.cursor = { line: this.lines.length - 1, col: 0 };
-    } else {
-      this.cursor = {
-        line: this.cursor.line,
-        col: Math.min(this.cursor.col, this.lines[this.cursor.line].length),
-      };
-    }
-    this.selection = null;
-    this.version++;
+    this.begin();
+    try {
+      const cursor = { ...this.cursor };
+      const old = this.text();
+      const limit = Math.min(old.length, text.length);
+      let prefix = 0;
+      while (prefix < limit && old.charCodeAt(prefix) === text.charCodeAt(prefix)) prefix++;
+      // Never split a surrogate pair between the kept and the replaced part.
+      if (prefix > 0 && prefix < limit && isHighSurrogate(old.charCodeAt(prefix - 1))) prefix--;
+      let suffix = 0;
+      while (suffix < limit - prefix && old.charCodeAt(old.length - 1 - suffix) === text.charCodeAt(text.length - 1 - suffix)) suffix++;
+      if (suffix > 0 && isLowSurrogate(old.charCodeAt(old.length - suffix))) suffix--;
+      this.replaceInternal(positionAt(old, prefix), positionAt(old, old.length - suffix), text.slice(prefix, text.length - suffix));
+      this.cursor = this.clampPosition(cursor);
+      this.selection = null;
+    } finally { this.end(null); }
   }
 
-  /** Replace a range of text (used by agent diff apply + find/replace). */
+  /** Replace a range of text (agent diff apply, find/replace). */
   replaceRange(start: Position, end: Position, text: string): void {
-    this.pushUndo();
-    const [a, b] = positionLte(start, end) ? [start, end] : [end, start];
-    const before = this.lines[a.line].slice(0, a.col);
-    const after = this.lines[b.line].slice(b.col);
-    const inserted = text.split('\n');
-    if (inserted.length === 1) {
-      this.lines.splice(a.line, b.line - a.line + 1, before + inserted[0] + after);
-      this.cursor = { line: a.line, col: before.length + inserted[0].length };
-    } else {
-      const newLines = [
-        before + inserted[0],
-        ...inserted.slice(1, -1),
-        inserted[inserted.length - 1] + after,
-      ];
-      this.lines.splice(a.line, b.line - a.line + 1, ...newLines);
-      this.cursor = {
-        line: a.line + inserted.length - 1,
-        col: inserted[inserted.length - 1].length,
-      };
-    }
-    this.selection = null;
-    this.version++;
+    this.begin();
+    try { this.replaceInternal(start, end, text); this.selection = null; } finally { this.end(null); }
   }
 
   // ── Undo / redo ─────────────────────────────────────────────────
 
   undo(): boolean {
-    const snap = this.undoStack.pop();
-    if (!snap) return false;
-    this.redoStack.push(this.snapshot());
-    this.restore(snap);
+    const step = this.undoStack.pop();
+    if (!step) return false;
+    this.undoChars -= sizeOf(step.edits);
+    for (let i = step.edits.length - 1; i >= 0; i--) {
+      const e = step.edits[i];
+      this.splice(e.start, endOf(e.start, e.inserted), e.removed);
+    }
+    this.cursor = this.clampPosition(step.cursorBefore);
+    this.selection = step.selectionBefore ? { anchor: { ...step.selectionBefore.anchor }, head: { ...step.selectionBefore.head } } : null;
+    this.redoStack.push(step);
+    this.changed();
     return true;
   }
 
   redo(): boolean {
-    const snap = this.redoStack.pop();
-    if (!snap) return false;
-    this.undoStack.push(this.snapshot());
-    this.restore(snap);
+    const step = this.redoStack.pop();
+    if (!step) return false;
+    for (const e of step.edits) this.splice(e.start, endOf(e.start, e.removed), e.inserted);
+    this.cursor = this.clampPosition(step.cursorAfter);
+    this.selection = null;
+    this.undoStack.push(step);
+    this.undoChars += sizeOf(step.edits);
+    this.changed();
     return true;
   }
 
   // ── Internal ────────────────────────────────────────────────────
 
-  private snapshot(): Snapshot {
-    return {
-      lines: [...this.lines],
-      cursor: { ...this.cursor },
-      selection: this.selection
-        ? { anchor: { ...this.selection.anchor }, head: { ...this.selection.head } }
-        : null,
-    };
+  private begin(): void {
+    if (this.depth++ === 0) {
+      this.pending = [];
+      this.pendingBefore = { cursor: { ...this.cursor }, selection: this.getSelection() };
+    }
   }
 
-  private restore(s: Snapshot): void {
-    this.lines = [...s.lines];
-    this.cursor = { ...s.cursor };
-    this.selection = s.selection
-      ? { anchor: { ...s.selection.anchor }, head: { ...s.selection.head } }
-      : null;
-    this.version++;
-  }
-
-  private pushUndo(): void {
-    this.undoStack.push(this.snapshot());
-    if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+  private end(burst: Burst | null): void {
+    if (--this.depth > 0) return;
+    const edits = this.pending;
+    const before = this.pendingBefore;
+    this.pending = [];
+    this.pendingBefore = null;
+    if (edits.length === 0 || !before) { this.version++; return; }
+    const now = Date.now();
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (burst && top && top.burst === burst && !this.burstBroken && now - top.at < BURST_GAP_MS) {
+      top.edits.push(...edits);
+      top.cursorAfter = { ...this.cursor };
+      top.at = now;
+    } else {
+      this.undoStack.push({ edits, cursorBefore: before.cursor, selectionBefore: before.selection, cursorAfter: { ...this.cursor }, burst, at: now });
+    }
+    this.undoChars += sizeOf(edits);
+    // The newest step always stays, however large.
+    while (this.undoStack.length > 1 && (this.undoStack.length > MAX_UNDO || this.undoChars > MAX_UNDO_CHARS)) {
+      const dropped = this.undoStack.shift();
+      if (dropped) this.undoChars -= sizeOf(dropped.edits);
+    }
     this.redoStack = [];
+    this.burstBroken = burst === null;
+    this.changed();
   }
 
-  private clampPosition(p: Position): Position {
+  private changed(): void {
+    this.version++;
+    this.textVersion++;
+    this.goal = null;
+    this.onChange?.();
+  }
+
+  private insertInternal(text: string): void {
+    if (this.selection) this.deleteSelectionInternal();
+    this.replaceInternal(this.cursor, this.cursor, text);
+    this.selection = null;
+  }
+
+  /** Replace [start, end) with `text`, record it, and leave the cursor after the inserted text. */
+  private replaceInternal(start: Position, end: Position, text: string): void {
+    const [a, b] = positionLte(start, end) ? [this.clampPosition(start, false), this.clampPosition(end, false)] : [this.clampPosition(end, false), this.clampPosition(start, false)];
+    const removed = this.textInRange(a, b);
+    this.cursor = endOf(a, text);
+    if (removed === text) return;
+    this.splice(a, b, text);
+    this.pending.push({ start: { ...a }, removed, inserted: text });
+  }
+
+  /** Replace [a, b) with `text` without recording it. */
+  private splice(a: Position, b: Position, text: string): void {
+    const before = this.lines[a.line].slice(0, a.col);
+    const after = this.lines[b.line].slice(b.col);
+    const inserted = text.split('\n');
+    inserted[0] = before + inserted[0];
+    inserted[inserted.length - 1] += after;
+    this.lines.splice(a.line, b.line - a.line + 1, ...inserted);
+  }
+
+  private clampPosition(p: Position, snap = true): Position {
     const line = Math.max(0, Math.min(p.line, this.lines.length - 1));
     const col = Math.max(0, Math.min(p.col, this.lines[line].length));
-    return { line, col };
+    return { line, col: snap ? snapToBoundary(this.lines[line], col) : col };
   }
 
   private deleteSelectionInternal(): void {
-    if (!this.selection) return;
     const range = this.selectionRange();
     if (!range) return;
-    const [a, b] = range;
-    const before = this.lines[a.line].slice(0, a.col);
-    const after = this.lines[b.line].slice(b.col);
-    this.lines.splice(a.line, b.line - a.line + 1, before + after);
-    this.cursor = { ...a };
+    this.replaceInternal(range[0], range[1], '');
     this.selection = null;
   }
 }
@@ -363,6 +445,31 @@ export function positionEq(a: Position, b: Position): boolean {
 export function positionLte(a: Position, b: Position): boolean {
   return a.line < b.line || (a.line === b.line && a.col <= b.col);
 }
+
+/** Where text inserted at `start` ends. */
+function endOf(start: Position, text: string): Position {
+  const parts = text.split('\n');
+  if (parts.length === 1) return { line: start.line, col: start.col + text.length };
+  return { line: start.line + parts.length - 1, col: parts[parts.length - 1].length };
+}
+
+/** The text an undo step holds. */
+function sizeOf(edits: readonly Edit[]): number {
+  let n = 0;
+  for (const e of edits) n += e.removed.length + e.inserted.length;
+  return n;
+}
+
+/** The position of UTF-16 offset `offset` in `text`. */
+function positionAt(text: string, offset: number): Position {
+  let line = 0;
+  let start = 0;
+  for (let nl = text.indexOf('\n'); nl !== -1 && nl < offset; nl = text.indexOf('\n', nl + 1)) { line++; start = nl + 1; }
+  return { line, col: offset - start };
+}
+
+function isHighSurrogate(code: number): boolean { return code >= 0xd800 && code <= 0xdbff; }
+function isLowSurrogate(code: number): boolean { return code >= 0xdc00 && code <= 0xdfff; }
 
 function isWordChar(ch: string): boolean {
   return /[A-Za-z0-9_]/.test(ch);

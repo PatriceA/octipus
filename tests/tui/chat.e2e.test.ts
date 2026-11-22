@@ -26,10 +26,13 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     tui.event('chat.response', { response: Array.from({ length: 50 }, (_, n) => `Answer row ${n}`).join('\n') });
     await tui.waitFor('Answer row 49');
     tui.send(KEY.PageUp); await tui.waitFor('End: latest');
-    const before = (await tui.text()).split('\n').filter(l => l.includes('Answer row'));
+    // The rows read, not the scrollbar beside them: its thumb moves as the reply grows.
+    const harness = tui;
+    const reading = async () => (await harness.text()).split('\n').flatMap(l => l.match(/Answer row \d+/) ?? []);
+    const before = await reading();
     tui.event('chat.delta', { delta: 'Fresh streaming content', iteration: 1 });
     await new Promise(resolve => setTimeout(resolve, 100));
-    expect((await tui.text()).split('\n').filter(l => l.includes('Answer row'))).toEqual(before);
+    expect(await reading()).toEqual(before);
     tui.send(KEY.End); await tui.waitFor('Fresh streaming content');
     for (const [requestId, question] of [['a', 'First decision?'], ['b', 'Second decision?']]) {
       tui.event('agent.approval_required', { requestId, question, options: ['Continue', 'Revise'] });
@@ -41,13 +44,12 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'b', approved: false }));
   });
 
-  test('always-on wheel and resize reach old history while composer and status stay fixed', async () => {
+  test('the wheel and resize reach old history while composer and status stay fixed', async () => {
     tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
     await tui.waitFor('connected');
     tui.event('chat.response', { response: Array.from({ length: 100 }, (_, n) => `History line ${n}`).join('\n') });
     await tui.waitFor('History line 99');
-    await tui.waitFor('wheel: history');
-    expect(tui.screen.modes.mouseTrackingMode).toBe('vt200');
+    expect(tui.screen.modes.mouseTrackingMode).toBe('any');
     tui.send('unsent composer text');
     await tui.waitFor('unsent composer text');
     const footer = (await tui.text()).split('\n').slice(-6);
@@ -63,8 +65,24 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     await tui.waitFor('History line 99');
     expect((await tui.text()).split('\n').at(-1)).toContain('Octipus');
     await tui.waitFor('connected');
-    expect(tui.screen.modes.mouseTrackingMode).toBe('vt200');
+    expect(tui.screen.modes.mouseTrackingMode).toBe('any');
     expect(await tui.text()).toContain('unsent composer text');
     expect(tui.commands.some(command => command.type === 'chat.send')).toBe(false);
+  });
+
+  test('/clear on the alternate screen keeps the composer and the status rows drawn', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
+    await tui.waitFor('connected');
+    tui.event('chat.response', { response: Array.from({ length: 40 }, (_, n) => `Old line ${n}`).join('\n') });
+    await tui.waitFor('Old line 39');
+    tui.send('/clear\r');
+    await tui.waitFor('Chat cleared.');
+    await tui.waitFor('Old line 39', true);
+    tui.send('still here');
+    await tui.waitFor('still here');
+    const rows = (await tui.text()).split('\n');
+    // The status row (unchanged by /clear) is still on the screen, at the bottom.
+    expect(rows.at(-1)).toContain('● Octipus');
+    expect(rows.at(-1)).toContain('connected');
   });
 });

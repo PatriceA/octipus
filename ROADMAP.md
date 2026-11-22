@@ -308,10 +308,11 @@ All three landed. What each actually became:
   install through the build environment's package proxy. Pick up when
   the dependency constraint lifts. The wave-2 dashboard deliberately
   does not depend on this.
-- **TUI — remaining items.**
-  - Mouse wheel scrolling once pi-tui exposes mouse APIs upstream.
-    The messages pane already exposes `scrollUp/scrollDown`;
-    wiring is a one-line change.
+- **TUI — modernization.** Wheel scrolling shipped; the open work is the
+  screen model (alternate screen, pinned composer, drag-to-select), the move
+  off the deprecated `@mariozechner/pi-tui` package, the chat experience and
+  editor correctness. Findings, the pi-tui decision and the phases are in
+  [`docs/plans/tui-modernization.md`](docs/plans/tui-modernization.md).
 - **Compaction — branch summarization.** The structured summary format
   (cumulative file-op tracker, iterative summary chaining via
   `firstKeptEntryId` walk-back, `/compact <instructions>` pass-through) shipped

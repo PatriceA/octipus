@@ -5,7 +5,7 @@ import type { GatewayAdapter } from './gateway-adapter';
 test('queues, deduplicates and answers every decision on its own channel', () => {
   const shown: any[] = []; const hide = vi.fn();
   const overlays = { showApprovalPrompt: (o: unknown) => { shown.push(o); return { hide }; }, showPermissionPrompt: (o: unknown) => { shown.push(o); return { hide }; } } as unknown as OverlayController;
-  const adapter = { respondApproval: vi.fn(), respondPermission: vi.fn() } as unknown as GatewayAdapter;
+  const adapter = { respondApproval: vi.fn((..._args: unknown[]) => true), respondPermission: vi.fn((..._args: unknown[]) => true) } as unknown as GatewayAdapter;
   const queue = new DecisionQueue(overlays, adapter, vi.fn(), vi.fn());
   const a = { kind: 'approval' as const, requestId: 'a', summary: '', question: 'Choose?', options: ['A'] };
   queue.push(a); queue.push(a); queue.push({ kind: 'permission', requestId: 'b', toolName: 'write', detail: 'file' });
@@ -21,7 +21,7 @@ test('an external permission decision closes only that prompt without sending an
   const overlays = { showPermissionPrompt: (options: Parameters<OverlayController['showPermissionPrompt']>[0]) => {
     shown.push(options); return { hide };
   } } as unknown as OverlayController;
-  const adapter = { respondPermission: vi.fn(), respondApproval: vi.fn() } as unknown as GatewayAdapter;
+  const adapter = { respondPermission: vi.fn((..._args: unknown[]) => true), respondApproval: vi.fn((..._args: unknown[]) => true) } as unknown as GatewayAdapter;
   const queue = new DecisionQueue(overlays, adapter, vi.fn(), restore);
   queue.push({ kind: 'permission', requestId: 'first', toolName: 'write', detail: '' });
   queue.push({ kind: 'permission', requestId: 'next', toolName: 'send', detail: '' });
@@ -39,7 +39,7 @@ test('an external permission decision closes only that prompt without sending an
 test('an externally resolved queued request is removed and late request replay is ignored', () => {
   const show = vi.fn(() => ({ hide: vi.fn() }));
   const overlays = { showPermissionPrompt: show } as unknown as OverlayController;
-  const adapter = { respondPermission: vi.fn() } as unknown as GatewayAdapter;
+  const adapter = { respondPermission: vi.fn((..._args: unknown[]) => true) } as unknown as GatewayAdapter;
   const queue = new DecisionQueue(overlays, adapter, vi.fn(), vi.fn());
   queue.push({ kind: 'permission', requestId: 'active', toolName: 'write', detail: '' });
   queue.push({ kind: 'permission', requestId: 'queued', toolName: 'send', detail: '' });

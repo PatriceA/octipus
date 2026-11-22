@@ -10,6 +10,7 @@
 import { resolve } from 'node:path';
 import { OctipusEditorApp } from './app';
 import { createRuntime } from '@/tui-pi/runtime';
+import { terminalProblem } from '@/tui-kit/terminal-check';
 
 export interface LaunchEditorOptions {
   gatewayUrl?: string;
@@ -20,6 +21,8 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
   const runtime = createRuntime({
     gatewayUrl: options.gatewayUrl,
     title: 'Octipus Editor',
+    // The editor lays out its own panes; PageUp, Ctrl+Home… belong to them, not to a screen viewport.
+    ownsScrolling: true,
   });
   const app = new OctipusEditorApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
@@ -34,6 +37,11 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
 }
 
 if (import.meta.main) {
+  const problem = terminalProblem('octi edit');
+  if (problem) {
+    process.stderr.write(`${problem}\n`);
+    process.exit(2);
+  }
   const args = process.argv.slice(2);
   let projectPath: string | undefined;
   for (let i = 0; i < args.length; i++) {
@@ -42,5 +50,9 @@ if (import.meta.main) {
       i++;
     }
   }
-  void launchOctipusEditor({ projectPath });
+  launchOctipusEditor({ projectPath }).catch((error: unknown) => {
+    // `start()` has already put the terminal back; the error lands on a working shell.
+    process.stderr.write(`\nThe editor could not start: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
 }

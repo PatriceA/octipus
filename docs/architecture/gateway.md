@@ -95,7 +95,7 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | Message Type | Description |
 |---|---|
 | `auth` | Authentication handshake (must be first message) |
-| `chat.send` | Send a chat message to the root agent; optional `mode` (see [Send modes](#send-modes)) |
+| `chat.send` | Send a chat message to the root agent; optional `mode` (see [Send modes](#send-modes)) and `turnId`, a client id echoed on the turn's `chat.response` / `chat.error` payloads, its `chat.delivery` and the `error` frames answering the send (with `sessionId`) |
 | `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
 | `chat.steer` | Inject a message into the running root agent turn to change course mid-flight; a text-only `chat.send` with the same `mode` |
 | `command` | Execute a gateway command (e.g., `/persona`, `/status`) |
@@ -103,7 +103,8 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
 | `approval.respond` | Approve/deny a pipeline approval (the requester only) |
-| `agent.stop` | Stop one of your own running agents; stopping the session's running root also drops your messages queued behind it (`agent.stopped` carries `droppedQueued`) |
+| `agent.stop` | Stop one of your own running agents; stopping the session's running root also drops your messages queued behind it (`agent.stopped` carries `droppedQueued`; its envelope names the session, its payload says `root`) |
+| `session.stop` | `{ sessionId }` — stop your turn in one of your sessions: your messages queued in it are dropped, then your running agents in it are stopped; nothing in your other sessions (that is `/abort`). Answered with a `session.stopped` event `{ stopped, droppedQueued, rootAgentId? }` (both 0: nothing had started) |
 | `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. `on:false` counts only for the session this connection turned on; the session leaves voice mode when no connection of the user holds it there any more (also on close) |
 | `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`; without `afterEventId` the answer is `gap: true` with no events) |
 | `ping` | Heartbeat |
