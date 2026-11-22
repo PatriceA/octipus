@@ -18,7 +18,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/plan [on|off]` | Toggle plan-first mode: explore and propose before implementation |
 | `/capture <text>` | Append a timestamped line to today's daily note; `[[wikilinks]]` and `#tags` in the text are wired into the [knowledge graph](KNOWLEDGE-GRAPH.md) immediately |
 | `/cost` | Show token usage and cost for the session |
-| `/sessions` | List your recent sessions (the TUI's `/resume <n|id>` reopens one) |
+| `/sessions` | List your recent sessions (in the TUI, `/sessions` alone opens a picker; `/sessions list` prints the list and `/resume <n|id>` reopens one) |
 | `/history` | Replay the current session's last 50 user/assistant messages |
 | `/cancel` | Abort an active multi-step command |
 | `/eval` | Run evaluation scenarios or compare models |
@@ -79,6 +79,20 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 | `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `~/.octipus/extensions/` (admins only) |
 | `/persona` | — | Configure the root agent persona — name, tone, narration, free-form facts |
 | `/version` | `/v` | Show Octipus version and build info |
+
+### Terminal chat only
+
+Handled by `octi tui` itself ([guide](guides/tui.md#chat-shortcuts-and-commands)):
+
+| Command | Description |
+|---------|-------------|
+| `/resume [n\|id]` | Alone: a session picker. With a number or id: reopen that session |
+| `/skills` (alone) | A skill picker, then how the skill is used (Automatic, Always, This session); with arguments it is the gateway command above |
+| `/theme [auto\|dark\|light\|high-contrast]` | Switch the theme and save it in `~/.octipus/tui.json`; alone, a picker |
+| `/search` | Search the transcript (also `Ctrl+F`) |
+| `/copy [last\|transcript\|code]`, `/export [path]`, `/scrollback` | Take the conversation out (`code`: the latest reply's last code block, also `Alt+C`) |
+
+`Esc` stops the running turn; messages typed while a turn runs wait above the composer and are sent when it ends.
 
 ### Channel-Specific
 
