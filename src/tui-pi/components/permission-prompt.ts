@@ -8,9 +8,8 @@
  * The overlay anchors `bottom-center` and uses pi-tui's focus stack
  * so the composer doesn't see y/n/Esc while the prompt is up.
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth, displayLine } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
-import { displayLine } from '../terminal-text';
 
 export interface PermissionPromptOptions {
   toolName: string;

@@ -12,7 +12,7 @@ import { SubagentPanel } from '@/tui-pi/components/subagent-panel';
  * The pane only handles input when the layout focuses it; the
  * SplitPane's input router enforces that.
  */
-import { type Component, Container, type TUI } from '@mariozechner/pi-tui';
+import { type Component, Container, type TUI } from '@/tui-kit';
 import { ActivityLine } from '@/tui-pi/components/activity-line';
 import { Composer } from '@/tui-pi/components/composer';
 import { MessagesPane } from '@/tui-pi/components/messages-pane';

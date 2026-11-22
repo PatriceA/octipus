@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import type { Container, TUI } from '@mariozechner/pi-tui';
+import type { Container, TUI } from '@/tui-kit';
 import { OctipusTuiApp } from './app';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';

@@ -1,7 +1,6 @@
 import { fitStatusRows } from './status-bar';
-import { CURSOR_MARKER, type Component, truncateToWidth } from '@mariozechner/pi-tui';
+import { CURSOR_MARKER, type Component, truncateToWidth, frameRow } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
-import { frameRow } from '../terminal-text';
 
 export function cropComposer(lines: string[], rows: number): string[] {
   if (rows <= 0) return [];

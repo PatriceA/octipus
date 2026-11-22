@@ -11,7 +11,7 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { findAll, replaceAll, type SearchOptions } from '../editor/search';
 import type { BufferStore } from '../stores/buffer-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';

@@ -1,6 +1,4 @@
-// ponytail: not on pi-tui's public entry (no exports map, so the dist path
-// resolves); if an upgrade breaks it, copy the ~40-line ANSI-aware slicer.
-import { sliceByColumn } from '@mariozechner/pi-tui/dist/utils.js';
+import { sliceByColumn, type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@/tui-kit';
 /**
  * pi-tui Component wrapping `editor/buffer.ts`.
  *
@@ -14,7 +12,6 @@ import { sliceByColumn } from '@mariozechner/pi-tui/dist/utils.js';
  * CURSOR_MARKER mechanism so IME candidate windows land in the right
  * spot for CJK input methods.
  */
-import { type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
 import { highlight, type TokenKind } from '../editor/highlight';
 import { hintLineIndex } from '../editor/highlight-tree-sitter';
 import type { BufferRecord, BufferStore } from '../stores/buffer-store';

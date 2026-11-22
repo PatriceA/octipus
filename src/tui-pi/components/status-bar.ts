@@ -4,11 +4,10 @@
  * to several rows (`setMaxRows` caps them); the chat frame puts them at
  * the bottom of the screen, the editor at the top.
  */
-import { type Component, truncateToWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth, wrapTextWithAnsi, displayLine, displayText } from '@/tui-kit';
 import type { ConnectionStatus } from '@/core/gateway/client';
 import { chalk, getPalette } from '../theme/defaults';
 import { getGlyphs } from '../theme/glyphs';
-import { displayLine, displayText } from '../terminal-text';
 
 export interface CumulativeStats { tokens: number; cost: number; turns: number }
 

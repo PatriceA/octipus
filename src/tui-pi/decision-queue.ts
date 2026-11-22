@@ -1,5 +1,5 @@
 /** Never replace an unanswered agent question with a newer one. */
-import type { OverlayHandle } from '@mariozechner/pi-tui';
+import type { OverlayHandle } from '@/tui-kit';
 import type { AgentSessionEvent, GatewayAdapter } from './gateway-adapter';
 import type { OverlayController } from './overlays/registry';
 type Decision = Extract<AgentSessionEvent, { kind: 'permission' | 'approval' }>;

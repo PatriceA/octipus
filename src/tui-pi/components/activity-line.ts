@@ -12,10 +12,9 @@
  * Replaces the chat-line tool noise from Phase 1: tool state is
  * ephemeral by design (it shouldn't pollute the assistant transcript).
  */
-import { type Component, truncateToWidth, type TUI } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth, type TUI, displayLine } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
 import type { ToolEventState, ToolState } from '../gateway-adapter';
-import { displayLine } from '../terminal-text';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;

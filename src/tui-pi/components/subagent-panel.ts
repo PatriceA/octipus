@@ -10,10 +10,9 @@
  * Deliberately timer-free: it re-renders on the events it is fed and on the
  * activity line's spinner ticks, so there is no second animation loop to stop.
  */
-import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth, displayLine } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
 import type { ToolEventState } from '../gateway-adapter';
-import { displayLine } from '../terminal-text';
 
 /**
  * How long a *running* row may go without any event before it is dropped as

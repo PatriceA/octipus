@@ -10,7 +10,7 @@
  * registry, so a command added on either side without the other fails CI.
  * Extension-registered commands still only appear in `/help`.
  */
-import type { SlashCommand } from '@mariozechner/pi-tui';
+import type { SlashCommand } from '@/tui-kit';
 
 /** Where the command runs — drives Phase 4 styling and tests. */
 export type SlashCommandSource = 'tui' | 'gateway';

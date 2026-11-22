@@ -3,7 +3,7 @@
  * position, dirty/lock indicators, focused pane, and (when vim is
  * active) the current vim sub-mode.
  */
-import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth } from '@/tui-kit';
 import type { BufferStore } from '../stores/buffer-store';
 import type { LayoutStore } from '../stores/layout-store';
 import type { VimMode } from '../editor/vim';

@@ -18,7 +18,7 @@ import {
   SelectList,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { chalk, getPalette, getSelectListTheme } from '@/tui-pi/theme/defaults';

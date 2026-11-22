@@ -17,9 +17,8 @@
  * rather than cancelling silently: the agent is BLOCKED, and a dismissed
  * overlay that answers nothing puts the run back where it started.
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth, displayLine, displayText } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
-import { displayLine, displayText } from '../terminal-text';
 
 export interface ApprovalPromptOptions {
   summary: string;

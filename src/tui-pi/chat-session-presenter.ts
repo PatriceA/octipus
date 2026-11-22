@@ -1,5 +1,5 @@
 /** Session presentation shared by both terminal surfaces. */
-import type { TUI } from '@mariozechner/pi-tui';
+import type { TUI } from '@/tui-kit';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import type { AgentSessionEvent, GatewayAdapter } from './gateway-adapter';
 import type { MessagesPane } from './components/messages-pane';

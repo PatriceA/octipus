@@ -8,7 +8,7 @@
  * if already collapsed) and Right expands it (or descends if already
  * expanded).
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, type Focusable, matchesKey, truncateToWidth } from '@/tui-kit';
 import { readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';

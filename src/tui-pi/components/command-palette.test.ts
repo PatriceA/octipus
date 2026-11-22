@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { SelectItem } from '@mariozechner/pi-tui';
+import type { SelectItem } from '@/tui-kit';
 import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
 import { CommandPalette } from './command-palette';
 

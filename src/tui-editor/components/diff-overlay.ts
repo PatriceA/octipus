@@ -18,7 +18,7 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { diffLines, diffStats, type Hunk } from '../editor/diff';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 

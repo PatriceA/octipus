@@ -75,7 +75,7 @@ describe('TextEditor', () => {
 });
 
 test('long lines scroll horizontally and keep the cursor marker in bounds', async () => {
-  const { CURSOR_MARKER, visibleWidth } = await import('@mariozechner/pi-tui');
+  const { CURSOR_MARKER, visibleWidth } = await import('@/tui-kit');
   const { editor, rec } = setup('a'.repeat(80) + 'END');
   rec.buffer.moveLineEnd();
   const line = editor.render(20)[0];
@@ -85,7 +85,7 @@ test('long lines scroll horizontally and keep the cursor marker in bounds', asyn
 });
 
 test('cursor after tab and wide glyph uses terminal cells', async () => {
-  const { CURSOR_MARKER, visibleWidth } = await import('@mariozechner/pi-tui');
+  const { CURSOR_MARKER, visibleWidth } = await import('@/tui-kit');
   const { editor, rec } = setup('\t界x');
   rec.buffer.setCursor({ line: 0, col: 2 });
   const line = editor.render(40)[0];

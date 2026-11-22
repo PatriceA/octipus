@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { Markdown, visibleWidth } from '@mariozechner/pi-tui';
+import { Markdown, visibleWidth } from '@/tui-kit';
 import { MessagesPane } from './messages-pane';
 const strip = (lines: string[]) => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ''));
 const push = (pane: MessagesPane, content: string, role: 'user' | 'assistant' | 'system' = 'system') => pane.push({ role, content, timestamp: new Date() });

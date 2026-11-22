@@ -1,4 +1,4 @@
-import { type Component, matchesKey, wrapTextWithAnsi, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, matchesKey, wrapTextWithAnsi, truncateToWidth } from '@/tui-kit';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export class UnsavedPrompt implements Component {

@@ -1,7 +1,7 @@
 /** Node terminal bootstrap: pi-tui, keybindings, connection defaults and shutdown. */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { type KeybindingsManager, ProcessTerminal, TUI } from '@mariozechner/pi-tui';
+import { type KeybindingsManager, ProcessTerminal, TUI } from '@/tui-kit';
 import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings } from './keybindings';
 

@@ -6,7 +6,7 @@
  * keymap (Ctrl+Tab cycles, Ctrl+W closes). Mouse support could come
  * later but pi-tui doesn't expose it yet.
  */
-import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth } from '@/tui-kit';
 import type { BufferStore } from '../stores/buffer-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 

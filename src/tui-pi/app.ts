@@ -17,7 +17,7 @@ import { DecisionQueue } from '@/tui-pi/decision-queue';
  */
 import { ChatSessionPresenter } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
-import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@/tui-kit';
 import { loginWithPassword } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { formatChangesMessage } from './changes-render';

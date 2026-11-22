@@ -21,7 +21,7 @@ import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
  */
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@/tui-kit';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';

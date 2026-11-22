@@ -66,7 +66,7 @@ import {
   Spacer,
   Text,
   TUI,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { httpReachable, probeAllServices } from '@/setup/probes';
 import { PROVIDERS, getProvider, type ProviderId } from '@/setup/providers';
 import {

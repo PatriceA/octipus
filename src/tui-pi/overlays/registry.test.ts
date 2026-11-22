@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { type Component, CURSOR_MARKER, type Focusable, type TUI, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, CURSOR_MARKER, type Focusable, type TUI, visibleWidth } from '@/tui-kit';
 import { createOverlayController, FramedOverlay, overlayRows } from './registry';
 
 function fakeTui() {

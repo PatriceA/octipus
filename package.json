@@ -33,7 +33,7 @@
     "local-engine:fetch": "tsx --import ./scripts/md-loader.mjs scripts/fetch-local-engine.ts",
     "backup": "tsx --import ./scripts/md-loader.mjs scripts/backup.ts",
     "test": "vitest run",
-    "test:tui": "vitest run src/tui-pi src/tui-editor tests/tui",
+    "test:tui": "vitest run src/tui-kit src/tui-pi src/tui-editor tests/tui",
     "test:web": "playwright test tests/web",
     "test:web:ui": "playwright test tests/web --ui",
     "test:web:headed": "playwright test tests/web --headed",

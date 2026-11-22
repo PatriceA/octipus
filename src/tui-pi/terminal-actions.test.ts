@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import type { TUI } from '@mariozechner/pi-tui';
+import type { TUI } from '@/tui-kit';
 import { handleTerminalCommand, mouseReportFilter, parseMouseReport, setMouseCapture, wheelDirection } from './terminal-actions';
 import { MessagesPane } from './components/messages-pane';
 import { StatusBar } from './components/status-bar';

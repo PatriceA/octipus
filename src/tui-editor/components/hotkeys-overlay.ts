@@ -16,7 +16,7 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { listAllKeybindings } from '@/tui-pi/keybindings';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 

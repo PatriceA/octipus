@@ -17,7 +17,7 @@ import {
   SelectList,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import type { WorkspaceMeta, WorkspaceStore } from '../stores/workspace-store';
 import { chalk, getPalette, getSelectListTheme } from '@/tui-pi/theme/defaults';
 

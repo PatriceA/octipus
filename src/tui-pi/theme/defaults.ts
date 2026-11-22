@@ -9,7 +9,7 @@
  * ~/.octipus/themes/. For Phase 1 the bundled defaults are enough.
  */
 import { Chalk } from 'chalk';
-import type { EditorTheme, MarkdownTheme, SelectListTheme } from '@mariozechner/pi-tui';
+import type { EditorTheme, MarkdownTheme, SelectListTheme } from '@/tui-kit';
 
 const chalk = new Chalk({ level: 3 });
 

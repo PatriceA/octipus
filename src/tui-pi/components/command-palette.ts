@@ -20,7 +20,7 @@ import {
   SelectList,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { chalk, getPalette, getSelectListTheme } from '../theme/defaults';
 import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
 

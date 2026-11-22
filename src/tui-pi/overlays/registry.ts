@@ -10,8 +10,7 @@
  * non-capturing widget channel (status badges, voice meter, MCP
  * indicator).
  */
-import { type Component, type Focusable, isFocusable, type OverlayHandle, type OverlayOptions, type TUI, truncateToWidth } from '@mariozechner/pi-tui';
-import { frameRow } from '../terminal-text';
+import { type Component, type Focusable, isFocusable, type OverlayHandle, type OverlayOptions, type TUI, truncateToWidth, frameRow } from '@/tui-kit';
 import { ApprovalPrompt, type ApprovalPromptOptions } from '../components/approval-prompt';
 import { CommandPalette, type CommandPaletteOptions } from '../components/command-palette';
 import { LoginPrompt, type LoginPromptOptions } from '../components/login-prompt';

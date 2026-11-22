@@ -1,5 +1,5 @@
 /** Local terminal selection and explicit clipboard requests; no gateway calls. */
-import type { Terminal, TUI } from '@mariozechner/pi-tui';
+import type { Terminal, TUI } from '@/tui-kit';
 import type { MessagesPane } from './components/messages-pane';
 
 /** An SGR mouse report: `ESC [ < button ; x ; y M` for a press, `… m` for a release. */

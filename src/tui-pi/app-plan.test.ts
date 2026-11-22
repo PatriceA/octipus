@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Container, TUI } from '@mariozechner/pi-tui';
+import type { Container, TUI } from '@/tui-kit';
 import { OctipusTuiApp } from './app';
 import { StatusBar } from './components/status-bar';
 import type { AgentSessionEvent } from './gateway-adapter';

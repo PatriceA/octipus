@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { visibleWidth } from '@mariozechner/pi-tui';
+import { visibleWidth } from '@/tui-kit';
 import { StatusBar } from './status-bar';
 
 function strip(line: string): string { return line.replace(/\x1b\[[0-9;]*m/g, ''); }

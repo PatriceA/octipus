@@ -26,9 +26,9 @@ import {
   KeybindingsManager,
   TUI_KEYBINDINGS,
   setKeybindings as setGlobalKeybindings,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 
-declare module '@mariozechner/pi-tui' {
+declare module '@/tui-kit' {
   interface Keybindings {
     // Editor surface
     'app.tree.toggle': true;

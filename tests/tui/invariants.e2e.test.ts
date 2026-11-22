@@ -44,7 +44,7 @@ function random(seed: number): () => number {
 }
 
 // Spacing marks of Devanagari-like scripts are a known width disagreement
-// (src/tui-pi/terminal-text.width.test.ts) and are left out on purpose.
+// (src/tui-kit/terminal-text.width.test.ts) and are left out on purpose.
 const FRAGMENTS = [
   'plain words', 'x', 'path/to/file.ts:42', '世界', '한국어', 'Ａｂ', '🐙', '✅', '⚠\ufe0f', '👨\u200d👩\u200d👧', '👍\u{1f3fd}', '🇫🇷', '🏳\ufe0f\u200d🌈',
   'e\u0301', 'a\u0301\u0302', 'กำ', '± ① ─ ● …', 'α ж', '\u200b', '\u00ad', '\u202e', '\ufe0f',

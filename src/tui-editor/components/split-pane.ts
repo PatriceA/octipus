@@ -12,7 +12,7 @@
  * keystrokes whenever a modal is open, so this routing only fires
  * for the regular composer/editor/tree input loop.
  */
-import { Container, type Component, getKeybindings, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
+import { Container, type Component, getKeybindings, truncateToWidth, visibleWidth } from '@/tui-kit';
 import type { LayoutStore, PaneId } from '../stores/layout-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 

@@ -1,6 +1,6 @@
 # Terminal UI architecture
 
-Octipus's chat shell (`src/tui-pi/`) and editor (`src/tui-editor/`) use `@mariozechner/pi-tui` for differential terminal rendering, the chat composer and overlays. The file editor uses Octipus's own `Buffer` and `TextEditor` components.
+Octipus's chat shell (`src/tui-pi/`) and editor (`src/tui-editor/`) use `@mariozechner/pi-tui` for differential terminal rendering, the chat composer and overlays. They reach it only through `src/tui-kit/`, which re-exports by name what the code uses and also holds `terminal-text.ts`, the boundary that reduces outside text to what a terminal draws predictably; `src/tui-kit/seam.test.ts` fails when another file imports pi-tui. The file editor uses Octipus's own `Buffer` and `TextEditor` components.
 
 ## Shared conversation presentation
 

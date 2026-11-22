@@ -1,8 +1,7 @@
 /** Shared, row-scrolled transcript for the chat shell and editor. */
-import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
+import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayText } from '@/tui-kit';
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
-import { displayText } from '../terminal-text';
 import { wheelDirection } from '../terminal-actions';
 
 export interface ChatMessage {

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CURSOR_MARKER, visibleWidth } from '@mariozechner/pi-tui';
+import { CURSOR_MARKER, visibleWidth } from '@/tui-kit';
 import { renderChatFrame } from './chat-frame';
 import { MessagesPane } from './messages-pane';
 const fixed = (lines: string[]) => ({ render: () => lines, invalidate() {} });

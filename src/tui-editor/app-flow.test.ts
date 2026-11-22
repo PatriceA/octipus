@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import type { Component, Container, TUI } from '@mariozechner/pi-tui';
+import type { Component, Container, TUI } from '@/tui-kit';
 import { OctipusEditorApp } from './app';
 import { DEFAULT_PERSISTED_STATE } from './persist';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';

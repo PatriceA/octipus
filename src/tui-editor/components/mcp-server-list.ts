@@ -15,7 +15,7 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@/tui-kit';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export type MCPConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
