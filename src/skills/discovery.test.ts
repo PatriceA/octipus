@@ -520,3 +520,17 @@ test('a skill assigned under the lane name is discovered for a role of that lane
     await db.delete(skills).where(eq(skills.id, 'lane-assigned'));
   }
 });
+
+// decideTaskSkills judges discovery's first few as a ranking; the ids came
+// back sorted by name, so a strong vector hit named "z…" lost its place to
+// any stale or always-inject skill named "a…".
+test('the result is ranked: trigger hits, vector hits by similarity, then always-inject and stale rows', async () => {
+  await seedSkill({ id: 'a-always', alwaysInject: true, embedding: VEC_C });
+  await seedSkill({ id: 'b-stale', embedding: null });
+  await seedSkill({ id: 'y-vector', embedding: VEC_A });
+  await seedSkill({ id: 'z-trigger', triggers: ['ranking'], embedding: VEC_C });
+  currentEmbedding = VEC_A;
+  const { discoverSkillIds } = await import('./discovery');
+  expect(await discoverSkillIds({ topic: TEST_TOPIC, message: 'check the ranking', minSimilarity: 0.5 }))
+    .toEqual(['z-trigger', 'y-vector', 'a-always', 'b-stale']);
+});

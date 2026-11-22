@@ -158,13 +158,13 @@ async function fetchTriggerMatchIds(topic: string, message: string): Promise<str
   return matched;
 }
 
-/** Vector similarity set. Returns [] if embedding service unavailable. */
-async function fetchVectorMatchIds(
+/** Vector similarity set, nearest first. Returns [] if embedding service unavailable. */
+async function fetchVectorMatches(
   topic: string,
   message: string,
   maxByVector: number,
   minSimilarity: number,
-): Promise<string[]> {
+): Promise<Array<{ id: string; similarity: number }>> {
   // No embedding model: triggers, always_inject and the stale fallback still apply.
   if (!isCapabilityOn('embedding')) return [];
   let embedding: number[];
@@ -207,8 +207,8 @@ async function fetchVectorMatchIds(
     .limit(maxByVector);
 
   return rows
-    .filter(r => (Number(r.similarity) || 0) >= minSimilarity)
-    .map(r => r.id);
+    .map(r => ({ id: r.id, similarity: Number(r.similarity) || 0 }))
+    .filter(r => r.similarity >= minSimilarity);
 }
 
 /** Stale fallback — rows with NULL embedding (cron hasn't refilled yet). */
@@ -230,8 +230,8 @@ async function fetchStaleFallbackIds(topic: string): Promise<string[]> {
 }
 
 /**
- * Discover the union of skill ids relevant to `opts.message` within
- * `opts.topic`. Never throws — returns [] on any unrecoverable failure.
+ * Discover the skill ids relevant to `opts.message` within `opts.topic`,
+ * best first. Never throws — returns [] on any unrecoverable failure.
  */
 export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]> {
   const mode = resolveMode();
@@ -270,19 +270,29 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
     safe(() => fetchTriggerMatchIds(opts.topic, opts.message), 'triggers'),
     // Vector path has its own loud-fail handling internally; safe() guards
     // against pure DB faults outside the embedding call.
-    safe(() => fetchVectorMatchIds(opts.topic, opts.message, maxByVector, minSimilarity), 'vector'),
+    safe(() => fetchVectorMatches(opts.topic, opts.message, maxByVector, minSimilarity), 'vector'),
     safe(() => fetchStaleFallbackIds(opts.topic), 'stale_fallback'),
     safe(() => fetchActiveSkillIdsForTopic(opts.topic), 'mounted_assignments'),
   ]);
 
-  const union = new Set<string>();
-  for (const id of assigned.filter(isExternalSkillId)) union.add(id);
-  for (const id of alwaysInject) union.add(id);
-  for (const id of triggerMatches) union.add(id);
-  for (const id of vectorMatches) union.add(id);
-  for (const id of staleFallback) union.add(id);
-
-  return [...union].sort();
+  // Best first: `decideTaskSkills` judges the first few. Trigger hits (by
+  // similarity where the vector set found them too), then vector hits by
+  // similarity, then the standing sets. An id in several sets takes its best
+  // place. Prompt text built from the ids is ordered by id on its own
+  // (skillRepository.findByIds), so the order does not move a cached prefix.
+  const similarity = new Map(vectorMatches.map(m => [m.id, m.similarity]));
+  const ranked = new Map<string, { tier: number; similarity: number; position: number }>();
+  const add = (id: string, tier: number) => {
+    if (!ranked.has(id)) ranked.set(id, { tier, similarity: similarity.get(id) ?? Number.NEGATIVE_INFINITY, position: ranked.size });
+  };
+  for (const id of triggerMatches) add(id, 0);
+  for (const { id } of vectorMatches) add(id, 1);
+  for (const id of alwaysInject) add(id, 2);
+  for (const id of assigned.filter(isExternalSkillId)) add(id, 2);
+  for (const id of staleFallback) add(id, 3);
+  return [...ranked]
+    .sort(([, a], [, b]) => a.tier - b.tier || b.similarity - a.similarity || a.position - b.position)
+    .map(([id]) => id);
 }
 
 /**
