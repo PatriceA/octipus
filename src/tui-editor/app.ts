@@ -20,13 +20,17 @@ import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
  * this scaffold proves out.
  */
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
-import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@/tui-kit';
-import { installOctipusKeybindings } from '@/tui-pi/keybindings';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { Container, getKeybindings, matchesKey, type OverlayHandle, type OverlayOptions, Spacer, type TUI } from '@/tui-kit';
+import { loadOctipusKeybindings } from '@/tui-pi/keybindings';
+import { installEditorKeybindings } from './keybindings';
+import { ExternalChangePrompt } from './components/external-change-prompt';
+import { SaveAsPrompt } from './components/save-as-prompt';
+import type { VimCommand } from './editor/vim';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
-import { detectLanguage } from './editor/lang';
-import { installTreeSitterHighlighter, setSource as treeSitterSetSource } from './editor/highlight-tree-sitter';
+import { dropSource, installTreeSitterHighlighter, setSource as treeSitterSetSource } from './editor/highlight-tree-sitter';
 import { DiffOverlay } from './components/diff-overlay';
 import { FilePicker } from './components/file-picker';
 import { FileTree } from './components/file-tree';
@@ -40,11 +44,11 @@ import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
 import { WorkspacePicker } from './components/workspace-picker';
 import { loadPersistedState, pathForProject, savePersistedState } from './persist';
-import { BufferStore } from './stores/buffer-store';
+import { type BufferRecord, BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
 import { bindStore } from './stores/use-store';
 import { WorkspaceStore, type WorkspaceMeta } from './stores/workspace-store';
-import { readFileForBuffer, writeFileForBuffer } from './workspace-fs-bridge';
+import { checkDisk, readFileForBuffer, writeFileForBuffer } from './workspace-fs-bridge';
 import { StatusBar } from '@/tui-pi/components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from '@/tui-pi/gateway-adapter';
 import { createOverlayController, type OverlayController } from '@/tui-pi/overlays/registry';
@@ -101,10 +105,20 @@ export class OctipusEditorApp {
   private mcpPoll: ReturnType<typeof setInterval> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly onShutdown?: () => Promise<void>;
+  /** Overlays whose content is still being fetched: a second key press must not open a second one. */
+  private loading = new Set<'workspace' | 'mcp'>();
+  private externalHandle: OverlayHandle | null = null;
+  private saveAsHandle: OverlayHandle | null = null;
+  /** Debounced re-parse per buffer, and the text version each last parsed. */
+  private parseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private parsedVersion = new Map<string, number>();
+  /** Everything to release on shutdown: store subscriptions, input listeners, the adapter listener. */
+  private readonly disposers: Array<() => void> = [];
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
     this.exit = options.exit ?? (code => process.exit(code));
+    installEditorKeybindings();
     this.adapter = new GatewayAdapter({
       url: options.gatewayUrl,
       getWorkspace: () => this.workspace.get().activeSlug,
@@ -123,11 +137,14 @@ export class OctipusEditorApp {
 
     this.tabs = new TabStrip(this.buffers);
     this.editor = new TextEditor(this.buffers, {
-      onSave: (record) => this.saveBuffer(record),
+      onSave: (record) => { this.saveBuffer(record.id); },
+      onVimCommand: (command, record) => this.runVimCommand(command, record.id),
+      onNotice: (text) => { this.modeBar.setNotice(text); this.tui.requestRender(); },
       layout: this.layout,
     });
     this.modeBar = new ModeBar(this.layout, this.buffers, {
       getVimMode: () => this.editor.getVimState().mode,
+      getVimCommandLine: () => this.editor.getVimState().commandLine,
     });
     this.tree = new FileTree({
       root: this.projectPath,
@@ -171,22 +188,25 @@ export class OctipusEditorApp {
     tui.setFocus(this.editor);
 
     // Re-render whenever any store updates so dirty markers, tabs, mode bar etc. stay current.
-    bindStore(this.buffers, this.tabs,    tui);
-    bindStore(this.buffers, this.modeBar, tui);
-    bindStore(this.layout,  this.modeBar, tui);
-    bindStore(this.layout,  this.split,   tui);
-
-    // Global hotkeys (Phase 6 will move these into keybindings.json).
-    tui.addInputListener((data) => this.handleGlobalKey(data));
+    this.disposers.push(
+      bindStore(this.buffers, this.tabs,    tui),
+      bindStore(this.buffers, this.modeBar, tui),
+      bindStore(this.layout,  this.modeBar, tui),
+      bindStore(this.layout,  this.split,   tui),
+      // Global hotkeys (Phase 6 will move these into keybindings.json).
+      tui.addInputListener((data) => this.handleGlobalKey(data)),
+      // Re-parse highlighting after edits; forget the parse of a closed buffer.
+      this.buffers.subscribe((state) => this.scheduleParses(state.buffers)),
+    );
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
     this.layout.setSize(tui.terminal.columns, tui.terminal.rows);
-    this.layout.subscribe(() => { if (!this.tui.hasOverlay()) this.refocus(); });
+    this.disposers.push(this.layout.subscribe(() => { if (!this.tui.hasOverlay()) this.refocus(); }));
 
     // Restore persisted state — failures are non-fatal (defaults applied).
     this.hydrate();
 
-    this.adapter.on((event) => this.handleEvent(event));
+    this.disposers.push(this.adapter.on((event) => this.handleEvent(event)));
 
     // Poll MCP bridge for status — the bridge emits events but the
     // surface area is small enough that a 10s poll keeps the wiring
@@ -218,7 +238,13 @@ export class OctipusEditorApp {
     // failure, so this never blocks startup.
     installTreeSitterHighlighter();
     this.tui.start();
-    await this.adapter.connect();
+    try {
+      await this.adapter.connect();
+    } catch (error) {
+      // Put the terminal back before the error is reported, not after.
+      await this.stop();
+      throw error;
+    }
   }
 
   // ── Persistence ────────────────────────────────────────────────
@@ -242,8 +268,14 @@ export class OctipusEditorApp {
     }
 
     for (const draft of persisted.drafts ?? []) {
-      const rec = draft.path ? this.buffers.openFile(draft.path, draft.text) : this.buffers.openScratch();
-      rec.buffer.setText(draft.text); this.buffers.markDirty(rec.id, true);
+      // The draft goes over what is on disk now, so the buffer shows as unsaved against the file as it is.
+      let rec = draft.path ? this.buffers.findByPath(draft.path) : null;
+      if (draft.path && !rec) {
+        const read = readFileForBuffer(draft.path);
+        rec = this.buffers.openFile(draft.path, read.ok ? read.text : '', { disk: read.ok ? read.disk : null });
+      }
+      rec ??= this.buffers.openScratch();
+      rec.buffer.setText(draft.text);
     }
     if (persisted.drafts?.length) this.pushMessage('system', `Recovered ${persisted.drafts.length} unsaved buffer(s). Review and save your edits.`);
 
@@ -252,8 +284,7 @@ export class OctipusEditorApp {
       if (this.persistTimer) clearTimeout(this.persistTimer);
       this.persistTimer = setTimeout(() => this.persist(), 500);
     };
-    this.buffers.subscribe(schedule);
-    this.layout.subscribe(schedule);
+    this.disposers.push(this.buffers.subscribe(schedule), this.layout.subscribe(schedule));
   }
 
   private persist(): void {
@@ -281,26 +312,210 @@ export class OctipusEditorApp {
   // ── Files ──────────────────────────────────────────────────────
 
   private openFile(absolutePath: string, options: { activate?: boolean } = {}): void {
-    const text = readFileForBuffer(absolutePath);
-    if (text === null) { this.pushMessage('system', `Error: Cannot open ${absolutePath}: missing, unreadable, binary, or over 5 MB.`); return; }
-    const record = this.buffers.openFile(absolutePath, text);
+    const open = this.buffers.findByPath(absolutePath);
+    if (open) { if (options.activate !== false) this.buffers.setActive(open.id); return; }
+    const read = readFileForBuffer(absolutePath);
+    if (!read.ok) { this.modeBar.setNotice(read.error); this.pushMessage('system', `Error: ${read.error}`); return; }
+    const record = this.buffers.openFile(absolutePath, read.text, { disk: read.disk });
     if (options.activate !== false) this.buffers.setActive(record.id);
-    // Seed the tree-sitter parse for this language. Fire-and-forget;
-    // the highlighter uses the regex fallback until the parse is
-    // ready, and silently no-ops for languages without a grammar.
-    void treeSitterSetSource(detectLanguage(absolutePath), text);
+    if (read.mixedEol) {
+      this.pushMessage('system', `${record.label} mixes CRLF and LF line endings; saving writes ${read.disk.eol === '\r\n' ? 'CRLF' : 'LF'} throughout.`);
+    }
   }
 
-  private saveBuffer(record: { id: string; path: string | null; buffer: { text(): string } }): boolean {
-    if (!record.path) { this.modeBar.setNotice('Scratch buffer needs a path before saving.'); this.pushMessage('system', 'Error: Scratch buffer needs a file path before saving.'); return false; }
-    if (!writeFileForBuffer(record.path, record.buffer.text())) {
-      this.modeBar.setNotice(`Save failed: ${record.path}. Edits retained.`);
-      this.pushMessage('system', `Error: Could not save ${record.path}. Your edits are still in memory.`); return false;
+  /**
+   * Debounced re-parse for highlighting: a buffer whose text changed is
+   * parsed again 150 ms after the last edit; one that closed is forgotten.
+   * Every buffer has its own parse, so two files of a language do not evict
+   * each other.
+   */
+  private scheduleParses(buffers: readonly BufferRecord[]): void {
+    const open = new Set(buffers.map((b) => b.id));
+    for (const id of [...this.parsedVersion.keys()]) {
+      if (open.has(id)) continue;
+      this.parsedVersion.delete(id);
+      const timer = this.parseTimers.get(id);
+      if (timer) clearTimeout(timer);
+      this.parseTimers.delete(id);
+      dropSource(id);
     }
-    this.modeBar.setNotice(null);
-    this.buffers.markDirty(record.id, false);
-    this.pushMessage('system', `Saved ${record.path}.`);
-    return true;
+    for (const rec of buffers) {
+      if (this.parsedVersion.get(rec.id) === rec.buffer.textVersion) continue;
+      const first = !this.parsedVersion.has(rec.id);
+      this.parsedVersion.set(rec.id, rec.buffer.textVersion);
+      const existing = this.parseTimers.get(rec.id);
+      if (existing) clearTimeout(existing);
+      const parse = () => {
+        this.parseTimers.delete(rec.id);
+        const current = this.buffers.byId(rec.id);
+        if (current) void treeSitterSetSource(current.id, current.language, current.buffer.text()).then(() => this.tui.requestRender());
+      };
+      // A newly opened buffer is parsed at once; edits wait for a pause.
+      if (first) parse();
+      else {
+        const timer = setTimeout(parse, 150);
+        timer.unref?.();
+        this.parseTimers.set(rec.id, timer);
+      }
+    }
+  }
+
+  /**
+   * Write a buffer to its file, unless the file changed on disk since it was
+   * read or saved (`overwrite` skips that check). Never asks anything; the
+   * outcome says what is needed.
+   */
+  private writeBuffer(id: string, overwrite = false): { ok: true } | { ok: false; needs: 'path' | 'confirm'; deleted?: boolean } | { ok: false; error: string } {
+    const record = this.buffers.byId(id);
+    if (!record) return { ok: false, error: 'The buffer is no longer open.' };
+    if (!record.path) return { ok: false, needs: 'path' };
+    if (!overwrite) {
+      if (record.disk) {
+        let check: ReturnType<typeof checkDisk>;
+        try {
+          check = checkDisk(record.path, record.disk, record.savedText);
+        } catch (error) {
+          return { ok: false, error: `Cannot check ${record.path} before saving: ${error instanceof Error ? error.message : String(error)}` };
+        }
+        if (check.changed) return { ok: false, needs: 'confirm', deleted: check.deleted };
+        if (check.disk !== record.disk) this.buffers.markSaved(id, record.savedText, check.disk);
+      } else if (existsSync(record.path)) {
+        // Never read from this path (a recovered draft, a path chosen elsewhere): writing would replace a file the buffer never saw.
+        return { ok: false, needs: 'confirm', deleted: false };
+      }
+    }
+    const text = record.buffer.text();
+    const result = writeFileForBuffer(record.path, text, record.disk);
+    if (!result.ok) return { ok: false, error: result.error };
+    this.buffers.markSaved(id, text, result.disk);
+    return { ok: true };
+  }
+
+  /** Ctrl+S, `:w`: save, asking for a path (scratch) or a decision (changed on disk) when needed. */
+  private saveBuffer(id: string, overwrite = false): boolean {
+    const outcome = this.writeBuffer(id, overwrite);
+    const record = this.buffers.byId(id);
+    if (outcome.ok) {
+      this.modeBar.setNotice(`Saved ${record?.label ?? ''}.`, 'info');
+      this.pushMessage('system', `Saved ${record?.path ?? ''}.`);
+      return true;
+    }
+    if ('error' in outcome) {
+      this.modeBar.setNotice(`Save failed: ${outcome.error} Edits retained.`);
+      this.pushMessage('system', `Error: ${outcome.error} Your edits are still in memory.`);
+      return false;
+    }
+    if (outcome.needs === 'path') this.openSaveAs(id);
+    else this.promptExternalChange(id, outcome.deleted === true);
+    return false;
+  }
+
+  /** Saving would overwrite a file that changed on disk: reload, overwrite or cancel. */
+  private promptExternalChange(id: string, deleted: boolean): void {
+    const record = this.buffers.byId(id);
+    if (!record?.path || this.externalHandle) return;
+    const prompt = new ExternalChangePrompt(record.label, deleted, (choice) => {
+      this.externalHandle?.hide(); this.externalHandle = null;
+      if (choice === 'overwrite') this.saveBuffer(id, true);
+      if (choice === 'reload') this.reloadFromDisk(id);
+      if (!this.tui.hasOverlay()) this.refocus();
+      this.tui.requestRender();
+    });
+    this.externalHandle = this.overlays.showModal(prompt, PROMPT_OVERLAY);
+  }
+
+  /** Replace the buffer with the file on disk, as one undoable step. */
+  private reloadFromDisk(id: string): void {
+    const record = this.buffers.byId(id);
+    if (!record?.path) return;
+    const read = readFileForBuffer(record.path);
+    if (!read.ok) { this.modeBar.setNotice(read.error); this.pushMessage('system', `Error: ${read.error}`); return; }
+    record.buffer.setText(read.text);
+    this.buffers.markSaved(id, read.text, read.disk);
+    this.modeBar.setNotice(`Reloaded ${record.label} from disk (Ctrl+Z brings your version back).`, 'info');
+  }
+
+  /** Save As, for scratch buffers and for saving a file under a new name. */
+  private openSaveAs(id: string): void {
+    const record = this.buffers.byId(id);
+    if (!record || this.saveAsHandle) return;
+    const initial = record.path ? relative(this.projectPath, record.path) : '';
+    let confirmOverwrite: string | null = null;
+    const prompt = new SaveAsPrompt({
+      label: record.label,
+      initial,
+      onCancel: () => this.closeSaveAs(),
+      onSubmit: (input) => {
+        const result = this.saveAs(id, input, confirmOverwrite);
+        if (result === 'saved') { this.closeSaveAs(); return; }
+        if (result.confirm) confirmOverwrite = result.confirm;
+        prompt.setError(result.error);
+        this.tui.requestRender();
+      },
+    });
+    this.saveAsHandle = this.overlays.showModal(prompt, PROMPT_OVERLAY);
+  }
+
+  private closeSaveAs(): void {
+    if (!this.saveAsHandle) return;
+    this.saveAsHandle.hide();
+    this.saveAsHandle = null;
+    this.refocus();
+    this.tui.requestRender();
+  }
+
+  /**
+   * Write buffer `id` to `input` (relative to the project, or absolute) and
+   * make that its file. An existing file is only replaced when the same path
+   * was already confirmed (`confirmed`).
+   */
+  private saveAs(id: string, input: string, confirmed: string | null): 'saved' | { error: string; confirm?: string } {
+    const record = this.buffers.byId(id);
+    if (!record) return { error: 'The buffer is no longer open.' };
+    if (!input) return { error: 'Type a path for the file.' };
+    const target = resolve(this.projectPath, input);
+    const other = this.buffers.findByPath(target);
+    if (other && other.id !== id) return { error: `${input} is open in another tab; close it first.` };
+    if (!existsSync(dirname(target))) return { error: `The folder ${relative(this.projectPath, dirname(target)) || dirname(target)} does not exist.` };
+    if (existsSync(target)) {
+      if (statSync(target).isDirectory()) return { error: `${input} is a folder.` };
+      if (target !== record.path && confirmed !== target) return { error: `${input} already exists. Press Enter again to replace it.`, confirm: target };
+    }
+    const existing = target === record.path ? record.disk : null;
+    const text = record.buffer.text();
+    const result = writeFileForBuffer(target, text, existing);
+    if (!result.ok) return { error: result.error };
+    this.buffers.rebind(id, target, text, result.disk);
+    this.parsedVersion.delete(id);
+    this.scheduleParses(this.buffers.get().buffers);
+    this.modeBar.setNotice(`Saved as ${relative(this.projectPath, target) || target}.`, 'info');
+    this.pushMessage('system', `Saved ${target}.`);
+    return 'saved';
+  }
+
+  private runVimCommand(command: VimCommand, id: string): void {
+    switch (command) {
+      case 'write': this.saveBuffer(id); break;
+      case 'quit': this.confirmUnsaved([id], () => this.buffers.close(id)); break;
+      case 'quit!': this.buffers.revert(id); this.buffers.close(id); break;
+      case 'write-quit': if (this.saveBuffer(id)) this.buffers.close(id); break;
+      case 'quit-all': this.requestQuit(); break;
+      case 'quit-all!':
+        for (const b of this.buffers.get().buffers) this.buffers.revert(b.id);
+        void this.stop().then(() => this.exit(0));
+        break;
+    }
+    this.tui.requestRender();
+  }
+
+  /** Switch vim mode on or off (Alt+M, `/vim`). */
+  private setVimMode(on: boolean): void {
+    if (on === (this.layout.get().editorMode === 'vim')) return;
+    this.editor.resetVim();
+    this.layout.setEditorMode(on ? 'vim' : 'modeless');
+    const key = getKeybindings().getKeys('app.vim.toggle')[0] ?? '/vim';
+    this.modeBar.setNotice(on ? `Vim mode on: Esc NORMAL · i INSERT · :w save · :q close · ${key} off` : `Vim mode off · ${key} on`, 'info');
+    this.tui.requestRender();
   }
 
   private confirmUnsaved(ids: string[], proceed: () => void): void {
@@ -310,13 +525,17 @@ export class OctipusEditorApp {
     const prompt = new UnsavedPrompt(dirty.map(b => b.label), choice => {
       if (choice === 'save') {
         for (const id of ids) {
-          const current = this.buffers.get().buffers.find(b => b.id === id);
-          if (current?.dirty && !this.saveBuffer(current)) {
-            prompt.setError('Save failed. Edits retained; cancel to continue editing.'); this.tui.requestRender(); return;
-          }
+          const current = this.buffers.byId(id);
+          if (!current?.dirty) continue;
+          const outcome = this.writeBuffer(id);
+          if (outcome.ok) continue;
+          const why = 'error' in outcome ? `Save failed: ${outcome.error}`
+            : outcome.needs === 'path' ? `${current.label} has no file yet: cancel, then Save As (${getKeybindings().getKeys('app.file.saveAs')[0] ?? '/save-as'}).`
+            : `${current.label} changed on disk since you opened it: cancel, then Ctrl+S to reload or overwrite.`;
+          prompt.setError(`${why} Edits retained.`); this.tui.requestRender(); return;
         }
       }
-      if (choice === 'discard') for (const id of ids) this.buffers.markDirty(id, false);
+      if (choice === 'discard') for (const id of ids) this.buffers.revert(id);
       this.unsavedHandle?.hide(); this.unsavedHandle = null;
       if (choice !== 'cancel') proceed();
       if (!this.tui.hasOverlay()) this.refocus();
@@ -359,7 +578,8 @@ export class OctipusEditorApp {
   }
 
   private handleAgentWrite(path: string, newText: string): void {
-    const record = this.buffers.findByPath(path);
+    // The agent may name a file relative to the project it was given.
+    const record = this.buffers.findByPath(isAbsolute(path) ? resolve(path) : resolve(this.projectPath, path));
     if (!record) {
       // Buffer isn't open — silently allow the write. Phase 7 may
       // open the file automatically and re-emit; for now skip.
@@ -378,24 +598,52 @@ export class OctipusEditorApp {
       before,
       after,
       onAccept: () => {
-        const record = this.buffers.get().buffers.find((b) => b.id === bufferId);
-        if (record) {
-          record.buffer.setText(after);
-          this.buffers.markDirty(bufferId, true);
-        }
+        const record = this.buffers.byId(bufferId);
+        if (record) record.buffer.setText(after);
         this.buffers.setAgentLocked(bufferId, false);
+        this.syncWithDisk(bufferId);
         this.chat.messages.push({ role: 'system', content: `Accepted agent edit to ${label}.`, timestamp: new Date() });
         this.closeDiffOverlay();
         this.tui.requestRender();
       },
       onReject: () => {
         this.buffers.setAgentLocked(bufferId, false);
-        this.chat.messages.push({ role: 'system', content: `Rejected agent edit to ${label}.`, timestamp: new Date() });
+        const diskHasEdit = this.syncWithDisk(bufferId);
+        this.chat.messages.push({
+          role: 'system',
+          content: diskHasEdit
+            ? `Rejected agent edit to ${label}. The agent already wrote it to disk: the buffer keeps your text, unsaved — Ctrl+S writes it back over the agent's version.`
+            : `Rejected agent edit to ${label}.`,
+          timestamp: new Date(),
+        });
         this.closeDiffOverlay();
         this.tui.requestRender();
       },
     });
     this.diffHandle = this.overlays.showModal(overlay);
+  }
+
+  /**
+   * After an agent edit is resolved, take the file's current content as the
+   * buffer's saved text if the agent has already written it, so `dirty`
+   * says whether the buffer matches the disk: clean after Accept, unsaved
+   * after Reject. Returns whether the disk changed.
+   */
+  private syncWithDisk(bufferId: string): boolean {
+    const record = this.buffers.byId(bufferId);
+    if (!record?.path || !record.disk) return false;
+    let check: ReturnType<typeof checkDisk>;
+    try {
+      check = checkDisk(record.path, record.disk, record.savedText);
+    } catch (error) {
+      this.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+    if (!check.changed || check.deleted) return false;
+    const read = readFileForBuffer(record.path);
+    if (!read.ok) return false;
+    this.buffers.markSaved(bufferId, read.text, read.disk);
+    return true;
   }
 
   private closeDiffOverlay(): void {
@@ -422,6 +670,19 @@ export class OctipusEditorApp {
       const value = parts.slice(1).join(' ').trim();
       // TUI-local commands intercepted before going to the gateway.
       if (name === 'plan-hide') { this.status.setPlanDetails(null); this.tui.requestRender(); return; }
+      if (name === 'vim') {
+        this.setVimMode(value === 'on' ? true : value === 'off' ? false : this.layout.get().editorMode !== 'vim');
+        return;
+      }
+      if (name === 'new') { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); return; }
+      if (name === 'save-as') {
+        const active = this.buffers.active();
+        if (!active) { this.pushMessage('system', 'Error: No buffer to save.'); return; }
+        if (!value) { this.openSaveAs(active.id); return; }
+        const result = this.saveAs(active.id, value, value);
+        if (result !== 'saved') this.pushMessage('system', `Error: ${result.error}`);
+        return;
+      }
       if (name === 'quit' || name === 'exit' || name === 'q') {
         void this.shutdownAndExit();
         return;
@@ -435,7 +696,7 @@ export class OctipusEditorApp {
         return;
       }
       if (name === 'reload' || name === 'reload-keybindings') {
-        installOctipusKeybindings();
+        installEditorKeybindings(loadOctipusKeybindings());
         this.chat.messages.push({ role: 'system', content: 'Reloaded keybindings from ~/.octipus/keybindings.json.', timestamp: new Date() });
         this.tui.requestRender();
         return;
@@ -450,6 +711,7 @@ export class OctipusEditorApp {
 
   private handleGlobalKey(data: string): { consume: true } | undefined {
     const kb = getKeybindings();
+    if (this.modeBar.clearInfo()) this.tui.requestRender();
     if (this.tui.hasOverlay()) return undefined;
     if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.chat.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
     if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.chat.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
@@ -468,6 +730,8 @@ export class OctipusEditorApp {
       const a = this.buffers.active(); if (a) this.confirmUnsaved([a.id], () => this.buffers.close(a.id)); return { consume: true };
     }
     if (kb.matches(data, 'app.file.open'))     { this.openFilePicker(); return { consume: true }; }
+    if (kb.matches(data, 'app.file.saveAs'))   { const a = this.buffers.active(); if (a) this.openSaveAs(a.id); return { consume: true }; }
+    if (kb.matches(data, 'app.vim.toggle'))    { this.setVimMode(this.layout.get().editorMode !== 'vim'); return { consume: true }; }
     if (kb.matches(data, 'app.find.open'))     { this.openFind(); return { consume: true }; }
     if (kb.matches(data, 'app.replace.open'))  { this.openReplace(); return { consume: true }; }
     if (kb.matches(data, 'app.workspace.switch')) { void this.openWorkspacePicker(); return { consume: true }; }
@@ -491,6 +755,11 @@ export class OctipusEditorApp {
     if (this.persistTimer) clearTimeout(this.persistTimer);
     if (this.mcpPoll) clearInterval(this.mcpPoll);
     this.persist();
+    for (const dispose of this.disposers.splice(0)) dispose();
+    for (const timer of this.parseTimers.values()) clearTimeout(timer);
+    this.parseTimers.clear();
+    for (const id of this.parsedVersion.keys()) dropSource(id);
+    this.parsedVersion.clear();
     this.decisions.dispose(); this.session.dispose(); this.adapter.disconnect();
     try { if (this.onShutdown) await this.onShutdown(); } catch { /* terminal cleanup is best effort */ }
   }
@@ -536,6 +805,7 @@ export class OctipusEditorApp {
       { handle: this.replaceHandle,      clear: () => { this.replaceHandle = null; } },
       { handle: this.workspaceHandle,    clear: () => { this.workspaceHandle = null; } },
       { handle: this.mcpHandle,          clear: () => { this.mcpHandle = null; } },
+      { handle: this.saveAsHandle,       clear: () => { this.saveAsHandle = null; } },
     ];
     for (const { handle, clear } of handles) {
       if (handle) { handle.hide(); clear(); }
@@ -550,9 +820,18 @@ export class OctipusEditorApp {
   }
 
   private async openMCPServerList(): Promise<void> {
-    if (this.mcpHandle) return;
-    // Lazy import keeps the bridge out of tui-editor module init for tests.
-    const { getMCPBridge } = await import('@/mcp/bridge');
+    // A second press while the bridge loads must not open a second list and lose the handle to the first.
+    if (this.mcpHandle || this.loading.has('mcp')) return;
+    this.loading.add('mcp');
+    let bridge: typeof import('@/mcp/bridge');
+    try {
+      // Lazy import keeps the bridge out of tui-editor module init for tests.
+      bridge = await import('@/mcp/bridge');
+    } finally {
+      this.loading.delete('mcp');
+    }
+    if (this.exiting || this.mcpHandle) return;
+    const { getMCPBridge } = bridge;
     const provider = bridgeProvider(getMCPBridge() as unknown as Parameters<typeof bridgeProvider>[0]);
     const overlay = new MCPServerList({
       provider,
@@ -569,11 +848,19 @@ export class OctipusEditorApp {
   }
 
   private async openWorkspacePicker(): Promise<void> {
-    if (this.workspaceHandle) return;
-    // Refresh available workspaces in the background; picker re-reads the store on render.
-    await this.refreshWorkspaces();
+    // A second press while the list loads must not open a second picker and lose the handle to the first.
+    if (this.workspaceHandle || this.loading.has('workspace')) return;
+    this.loading.add('workspace');
+    let error: string | undefined;
+    try {
+      error = await this.refreshWorkspaces();
+    } finally {
+      this.loading.delete('workspace');
+    }
+    if (this.exiting || this.workspaceHandle) return;
     const overlay = new WorkspacePicker({
       workspaces: this.workspace,
+      error,
       onPick: (slug) => {
         this.workspace.setActive(slug);
         this.adapter.disconnect();
@@ -597,11 +884,13 @@ export class OctipusEditorApp {
     this.refocus();
   }
 
-  private async refreshWorkspaces(): Promise<void> {
-    const data = await this.apiClient.getJson<{ workspaces?: WorkspaceMeta[] } | WorkspaceMeta[]>('/me/workspaces');
-    if (!data) return;
-    const list = Array.isArray(data) ? data : data.workspaces ?? [];
+  /** Reload the workspace list; returns why it failed, if it did (the previous list stays). */
+  private async refreshWorkspaces(): Promise<string | undefined> {
+    const result = await this.apiClient.getJson<{ workspaces?: WorkspaceMeta[] } | WorkspaceMeta[]>('/me/workspaces');
+    if (!result.ok) return result.error;
+    const list = Array.isArray(result.data) ? result.data : result.data.workspaces ?? [];
     this.workspace.setAvailable(list);
+    return undefined;
   }
 
   private openFind(): void {
@@ -609,8 +898,9 @@ export class OctipusEditorApp {
     const overlay = new FindOverlay({
       buffers: this.buffers,
       onClose: () => this.closeFind(),
+      onMatches: (bufferId, matches, current) => { this.editor.setSearchHighlights(bufferId, matches, current); this.tui.requestRender(); },
     });
-    this.findHandle = this.overlays.showModal(overlay);
+    this.findHandle = this.overlays.showModal(overlay, SEARCH_OVERLAY);
   }
 
   private closeFind(): void {
@@ -635,7 +925,7 @@ export class OctipusEditorApp {
       },
       onClose: () => this.closeReplace(),
     });
-    this.replaceHandle = this.overlays.showModal(overlay);
+    this.replaceHandle = this.overlays.showModal(overlay, SEARCH_OVERLAY);
   }
 
   private closeReplace(): void {
@@ -654,6 +944,7 @@ export class OctipusEditorApp {
         this.openFile(path);
       },
       onCancel: () => this.closeFilePicker(),
+      onUpdate: () => this.tui.requestRender(),
     });
     this.filePickerHandle = this.overlays.showModal(picker);
   }
@@ -673,6 +964,12 @@ export class OctipusEditorApp {
     this.tui.setFocus(target);
   }
 }
+
+/** Find and replace sit in the top-right corner, so the matches they draw in the buffer stay visible. */
+const SEARCH_OVERLAY: OverlayOptions = { anchor: 'top-right', width: 64, maxHeight: '85%', margin: { top: 2, right: 1 } };
+
+/** Small questions (Save As, file changed on disk) sit low, like the other prompts. */
+const PROMPT_OVERLAY: OverlayOptions = { anchor: 'bottom-center', width: '60%', minWidth: 40, margin: { bottom: 2, left: 2, right: 2 } };
 
 function buildEditorPane(tabs: TabStrip, editor: TextEditor): Container {
   const c = new Container();

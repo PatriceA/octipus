@@ -11,6 +11,7 @@
  */
 import {
   type Component,
+  displayLine,
   type Focusable,
   matchesKey,
   type SelectItem,
@@ -25,6 +26,8 @@ export interface WorkspacePickerOptions {
   workspaces: WorkspaceStore;
   onPick: (slug: string | null) => void;
   onCancel: () => void;
+  /** Why the list could not be refreshed; shown above the list (or instead of it). */
+  error?: string;
 }
 
 export class WorkspacePicker implements Component, Focusable {
@@ -58,9 +61,10 @@ export class WorkspacePicker implements Component, Focusable {
     const header = accent('Switch workspace');
     const help = dim('Enter switch · Esc cancel');
 
-    const bodyLines = this.list
+    const error = this.options.error ? [chalk.hex(palette.error)(`Could not load workspaces: ${displayLine(this.options.error)}`)] : [];
+    const bodyLines = [...error, ...(this.list
       ? this.list.render(width - 4)
-      : [dim('No workspaces loaded — single-tenant install or workspace fetch pending.')];
+      : [dim(this.options.error ? 'No workspaces to choose from.' : 'No workspaces loaded — single-tenant install.')])];
 
     const innerWidth = Math.max(visibleWidth(header), visibleWidth(help), ...bodyLines.map(visibleWidth));
     const boxWidth = Math.min(width, innerWidth + 4);

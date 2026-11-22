@@ -42,5 +42,9 @@ if (import.meta.main) {
       i++;
     }
   }
-  void launchOctipusEditor({ projectPath });
+  launchOctipusEditor({ projectPath }).catch((error: unknown) => {
+    // `start()` has already put the terminal back; the error lands on a working shell.
+    process.stderr.write(`\nThe editor could not start: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
 }

@@ -1,4 +1,5 @@
 import { sliceByColumn, type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@/tui-kit';
+import { decodeKittyPrintable } from '@/tui-kit/editing';
 /**
  * pi-tui Component wrapping `editor/buffer.ts`.
  *
@@ -12,12 +13,14 @@ import { sliceByColumn, type Component, CURSOR_MARKER, type Focusable, matchesKe
  * CURSOR_MARKER mechanism so IME candidate windows land in the right
  * spot for CJK input methods.
  */
-import { cellOf, cellWidth, displayText, nextBoundary, visibleControls } from '../editor/columns';
+import { cellOf, cellWidth, displayText, graphemes, nextBoundary } from '../editor/columns';
 import { highlight, type TokenKind } from '../editor/highlight';
-import { hintLineIndex } from '../editor/highlight-tree-sitter';
+import { indentAt } from '../editor/indent';
+import { hintLine } from '../editor/highlight-tree-sitter';
+import type { Match } from '../editor/search';
 import type { BufferRecord, BufferStore } from '../stores/buffer-store';
 import type { LayoutStore } from '../stores/layout-store';
-import { newVimState, step as vimStep, type VimKey, type VimState } from '../editor/vim';
+import { newVimState, step as vimStep, type VimCommand, type VimKey, type VimState } from '../editor/vim';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export interface TextEditorOptions {
@@ -31,6 +34,10 @@ export interface TextEditorOptions {
    * through to the modeless handler so typing still works.
    */
   layout?: LayoutStore;
+  /** A vim `:` command was entered (`:w`, `:q`, `:wq`, …). */
+  onVimCommand?: (command: VimCommand, buffer: BufferRecord) => void;
+  /** Something to tell the user in the mode bar. */
+  onNotice?: (text: string) => void;
 }
 
 
@@ -41,6 +48,7 @@ export class TextEditor implements Component, Focusable {
   private scrollLeft = 0;
   private paste: string | null = null;
   private vim: VimState = newVimState();
+  private highlights: { bufferId: string; byLine: Map<number, Match[]>; current: Match | null } | null = null;
 
   constructor(private readonly buffers: BufferStore, private readonly options: TextEditorOptions = {}) {
     this.height = options.height ?? 20;
@@ -52,6 +60,23 @@ export class TextEditor implements Component, Focusable {
 
   /** Expose vim state for the mode bar. */
   getVimState(): VimState { return this.vim; }
+
+  /** Back to NORMAL with nothing pending: vim mode was just switched on. */
+  resetVim(): void { this.vim = newVimState(); }
+
+  /**
+   * Draw find matches in buffer `bufferId`; `current` is the one the cursor
+   * is on. `null` clears them.
+   */
+  setSearchHighlights(bufferId: string | null, matches: readonly Match[] = [], current: Match | null = null): void {
+    if (!bufferId) { this.highlights = null; return; }
+    const byLine = new Map<number, Match[]>();
+    for (const m of matches) {
+      const list = byLine.get(m.line);
+      if (list) list.push(m); else byLine.set(m.line, [m]);
+    }
+    this.highlights = { bufferId, byLine, current };
+  }
 
   invalidate(): void { /* re-render is driven by store subscribers */ }
 
@@ -66,10 +91,7 @@ export class TextEditor implements Component, Focusable {
       this.paste = (this.paste ?? '') + data.replace('\x1b[200~', '');
       const end = this.paste.indexOf('\x1b[201~');
       if (end >= 0) {
-        if (!active.agentLocked) {
-          active.buffer.insert(this.paste.slice(0, end).replace(/\r\n?/g, '\n'));
-          this.buffers.markDirty(active.id, true);
-        }
+        if (!active.agentLocked) active.buffer.insert(this.paste.slice(0, end).replace(/\r\n?/g, '\n'));
         const rest = this.paste.slice(end + '\x1b[201~'.length);
         this.paste = null;
         // Keystrokes that arrived in the same chunk as the paste terminator.
@@ -78,12 +100,19 @@ export class TextEditor implements Component, Focusable {
       return;
     }
     if (active.agentLocked) return; // diff overlay owns the buffer
+    // Saving works in every mode, NORMAL included.
+    if (matchesKey(data, 'ctrl+s')) { this.options.onSave?.(active); return; }
     if (this.isVimActive()) {
-      const before = active.buffer.text();
+      // Keys typed faster than they are read arrive as one chunk (`:w`, `dd`); vim reads them one at a time.
+      if (data.length > 1 && !data.startsWith('\x1b') && !/[\x00-\x1f\x7f]/.test(data) && this.vim.mode !== 'INSERT') {
+        for (const { segment } of graphemes(data)) this.handleInput(segment);
+        return;
+      }
       const result = vimStep(active.buffer, toVimKey(data), this.vim);
       this.vim = result.state;
+      if (result.command) this.options.onVimCommand?.(result.command, active);
+      if (result.unknownCommand) this.options.onNotice?.(`Not an editor command: :${result.unknownCommand} (try :w, :q, :wq, :qa)`);
       if (result.consumed) {
-        if (active.buffer.text() !== before) this.buffers.markDirty(active.id, true);
         this.scrollIntoView(active);
         return;
       }
@@ -95,7 +124,7 @@ export class TextEditor implements Component, Focusable {
 
   private modeless(active: BufferRecord, data: string): void {
     const buf = active.buffer;
-    let mutated = false;
+    const printable = decodeKittyPrintable(data);
 
     if (matchesKey(data, 'left'))           { buf.moveCursor(0, -1); }
     else if (matchesKey(data, 'right'))     { buf.moveCursor(0,  1); }
@@ -105,18 +134,17 @@ export class TextEditor implements Component, Focusable {
     else if (matchesKey(data, 'end')  || matchesKey(data, 'ctrl+e'))      { buf.moveLineEnd(); }
     else if (matchesKey(data, 'ctrl+left')  || matchesKey(data, 'alt+left'))  { buf.moveWordLeft(); }
     else if (matchesKey(data, 'ctrl+right') || matchesKey(data, 'alt+right')) { buf.moveWordRight(); }
-    else if (matchesKey(data, 'backspace')) { buf.deleteBackward(1, true); mutated = true; }
-    else if (matchesKey(data, 'delete'))    { buf.deleteForward(1, true);  mutated = true; }
-    else if (matchesKey(data, 'enter'))     { buf.type('\n');     mutated = true; }
-    else if (matchesKey(data, 'tab'))       { buf.insert('  ');     mutated = true; }
-    else if (matchesKey(data, 'ctrl+z'))    { mutated = buf.undo(); }
-    else if (matchesKey(data, 'ctrl+y'))    { mutated = buf.redo(); }
-    else if (matchesKey(data, 'ctrl+s'))    { this.options.onSave?.(active); return; }
-    else if (data.length === 1 && data >= ' ' && data !== '\x7f')          { buf.type(data); mutated = true; }
-    else if (data.length > 1 && !data.startsWith('\x1b'))                  { buf.type(data); mutated = true; }
+    else if (matchesKey(data, 'backspace')) { buf.deleteBackward(1, true); }
+    else if (matchesKey(data, 'delete'))    { buf.deleteForward(1, true); }
+    else if (matchesKey(data, 'enter'))     { buf.type('\n'); }
+    else if (matchesKey(data, 'tab'))       { const c = buf.getCursor(); buf.type(indentAt(active.indent, cellOf(buf.getLine(c.line), c.col))); }
+    else if (matchesKey(data, 'ctrl+z'))    { buf.undo(); }
+    else if (matchesKey(data, 'ctrl+y'))    { buf.redo(); }
+    else if (printable !== undefined)       { buf.type(printable); }
+    else if (data.length === 1 && data >= ' ' && data !== '\x7f')          { buf.type(data); }
+    else if (data.length > 1 && !data.startsWith('\x1b'))                  { buf.type(data); }
     else { return; }
 
-    if (mutated) this.buffers.markDirty(active.id, true);
     this.scrollIntoView(active);
   }
 
@@ -145,21 +173,29 @@ export class TextEditor implements Component, Focusable {
     const cursorWidth = Math.min(innerW, Math.max(1, cellWidth(atCursor, cursorCell)));
     if (cursorCell < this.scrollLeft) this.scrollLeft = cursorCell;
     if (cursorCell + cursorWidth > this.scrollLeft + innerW) this.scrollLeft = cursorCell + cursorWidth - innerW;
+    const selection = buf.selectionRange();
     const lines: string[] = [];
     const end = Math.min(totalLines, this.scrollTop + this.height);
     for (let i = this.scrollTop; i < end; i++) {
-      const lineText = displayText(buf.getLine(i));
+      const raw = buf.getLine(i);
+      const lineText = displayText(raw);
       const isCursorLine = i === cursor.line;
       const gutter = formatGutter(i + 1, gutterW, palette, isCursorLine);
-      // Tell the tree-sitter highlighter which row we're about to paint so
-      // its per-line cache lookup hits. Without this, every line falls
-      // through to the regex fallback — for grammars like TypeScript that
-      // emit lots of styled tokens, the regex output produces ANSI escapes
-      // that interact badly with truncateToWidth's mid-sequence clipping
-      // and the resulting broken codes bleed across the split-pane
-      // boundary, corrupting the tree and chat panels.
-      hintLineIndex(i);
-      const styled = renderLineTokens(lineText, active.language, palette);
+      // Tell the tree-sitter highlighter which buffer and row we're about to
+      // paint so its per-buffer cache lookup hits. Without this every line
+      // falls through to the regex fallback.
+      hintLine(active.id, i);
+      const marks: Mark[] = [];
+      const highlights = this.highlights?.bufferId === active.id ? this.highlights.byLine.get(i) : undefined;
+      for (const m of highlights ?? []) marks.push({ start: m.col, end: m.col + m.length, kind: m === this.highlights?.current ? 'current' : 'match' });
+      let selectedEol = false;
+      if (selection && i >= selection[0].line && i <= selection[1].line) {
+        marks.push({ start: i === selection[0].line ? selection[0].col : 0, end: i === selection[1].line ? selection[1].col : raw.length, kind: 'selection' });
+        // A selection that runs on past this line takes its line break: shown as one selected cell.
+        selectedEol = i < selection[1].line;
+      }
+      let styled = renderLineTokens(raw, active.language, palette, marks);
+      if (selectedEol) styled += chalk.bgHex(palette.selection)(' ');
       let body = sliceByColumn(styled, this.scrollLeft, innerW, true);
       if (this.focused && isCursorLine) {
         const cursorX = cursorCell - this.scrollLeft;
@@ -207,43 +243,73 @@ const TOKEN_COLORS: Record<TokenKind, keyof ReturnType<typeof getPalette> | null
   punctuation: 'statusFg',
 };
 
-function renderLineTokens(line: string, language: string, palette: ReturnType<typeof getPalette>): string {
+/** A range of a line drawn with a background: the selection, a find match, the current match. */
+interface Mark { start: number; end: number; kind: 'selection' | 'match' | 'current' }
+
+function renderLineTokens(line: string, language: string, palette: ReturnType<typeof getPalette>, marks: readonly Mark[]): string {
   if (line.length === 0) return '';
   // Route through the pluggable `highlight()` API rather than calling the
-  // regex highlighter directly. This is the surface that
-  // `installTreeSitterHighlighter()` swaps — calling `highlightLine`
-  // directly bypassed tree-sitter entirely and forced the regex fallback
-  // on every render. The regex fallback paints many tiny ANSI-wrapped
-  // tokens; when `truncateToWidth` clips a wide line mid-escape, the
-  // dangling sequence bleeds into the next split-pane pane and corrupts
-  // the tree/chat panels — which is what the user saw opening
-  // `.ts` and `.gradle.kts` files.
+  // regex highlighter directly: it is the surface that
+  // `installTreeSitterHighlighter()` swaps. Tokens are of the line as
+  // stored; tabs and control pictures are applied per piece below, so the
+  // tree-sitter cache (which validates against the stored text) hits for
+  // lines with tabs too.
   const tokens = highlight(line, language as never);
+  const cuts = new Set<number>();
+  for (const m of marks) { cuts.add(m.start); cuts.add(m.end); }
   let out = '';
+  let col = 0;
+  let cell = 0;
   for (const tok of tokens) {
     const colorKey = TOKEN_COLORS[tok.kind];
-    // The tree-sitter cache hands back its own copy of the source text.
-    const text = visibleControls(tok.text);
-    out += colorKey ? chalk.hex(palette[colorKey])(text) : text;
+    const tokEnd = col + tok.text.length;
+    let from = col;
+    while (from < tokEnd) {
+      let to = tokEnd;
+      for (const c of cuts) if (c > from && c < to) to = c;
+      const piece = tok.text.slice(from - col, to - col);
+      const shown = displayText(piece, cell);
+      cell += visibleWidth(shown);
+      const mark = strongest(marks, from);
+      let style = colorKey ? chalk.hex(palette[colorKey]) : chalk;
+      if (mark === 'selection') style = style.bgHex(palette.selection);
+      else if (mark === 'current') style = chalk.bgHex(palette.warn).hex(palette.cursorFg);
+      else if (mark === 'match') style = style.underline.bgHex(palette.selection);
+      out += colorKey || mark ? style(shown) : shown;
+      from = to;
+    }
+    col = tokEnd;
   }
   return out;
 }
 
-/**
- * Convert raw terminal input into the small `VimKey` shape the vim
- * handler expects. Only NORMAL/VISUAL keys need decoding; printable
- * characters land as `char`. Esc and Ctrl+R (redo) get explicit flags.
- */
-function toVimKey(data: string): VimKey {
-  if (data === '\x1b') return { char: '', escape: true };
-  if (data === '\x12') return { char: 'r', ctrl: true };
-  if (data.length === 1 && data >= ' ' && data !== '\x7f') {
-    return { char: data, shift: data >= 'A' && data <= 'Z' };
+/** The mark drawn at `col`: the current find match over the selection over other matches. */
+function strongest(marks: readonly Mark[], col: number): Mark['kind'] | null {
+  const rank = { current: 3, selection: 2, match: 1 } as const;
+  let best: Mark['kind'] | null = null;
+  for (const m of marks) {
+    if (col < m.start || col >= m.end) continue;
+    if (best === null || rank[m.kind] > rank[best]) best = m.kind;
   }
-  // Arrow keys + special keys map to motions where vim has equivalents.
-  if (data === '\x1b[A') return { char: 'k' };
-  if (data === '\x1b[B') return { char: 'j' };
-  if (data === '\x1b[C') return { char: 'l' };
-  if (data === '\x1b[D') return { char: 'h' };
-  return { char: '' };
+  return best;
+}
+
+/**
+ * Convert terminal input into the small `VimKey` shape the vim handler
+ * expects, through the key layer: Escape arrives as a lone ESC, or as
+ * `ESC[27u` under the kitty keyboard protocol, and printable keys can arrive
+ * CSI-u encoded too.
+ */
+export function toVimKey(data: string): VimKey {
+  if (matchesKey(data, 'escape')) return { char: '', escape: true };
+  if (matchesKey(data, 'ctrl+r')) return { char: 'r', ctrl: true };
+  if (matchesKey(data, 'enter')) return { char: '', enter: true };
+  if (matchesKey(data, 'backspace')) return { char: '', backspace: true };
+  // Arrow keys map to the motions vim has for them.
+  if (matchesKey(data, 'up')) return { char: 'k' };
+  if (matchesKey(data, 'down')) return { char: 'j' };
+  if (matchesKey(data, 'right')) return { char: 'l' };
+  if (matchesKey(data, 'left')) return { char: 'h' };
+  const char = decodeKittyPrintable(data) ?? (data.length > 0 && !data.startsWith('\x1b') && !/[\x00-\x1f\x7f]/.test(data) ? data : '');
+  return { char, shift: char.length === 1 && char >= 'A' && char <= 'Z' };
 }

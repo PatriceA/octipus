@@ -50,12 +50,66 @@ describe('BufferStore', () => {
     s.cycle(-1); expect(s.get().activeId).toBe(c.id);
   });
 
-  test('markDirty updates flag', () => {
+  test('dirty compares the text with what was saved: undoing back to it is clean (docs/plans/tui-modernization.md §5.2)', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'saved');
+    expect(a.dirty).toBe(false);
+    a.buffer.moveLineEnd();
+    a.buffer.type('!');
+    expect(s.active()?.dirty).toBe(true);
+    a.buffer.undo();
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('an edit that changes nothing does not dirty the buffer', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'text');
+    a.buffer.deleteBackward(); // at 0,0
+    a.buffer.setText('text');
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('markSaved moves the baseline; revert goes back to it', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'one');
+    a.buffer.setText('two');
+    s.markSaved(a.id, 'two', null);
+    expect(s.active()?.dirty).toBe(false);
+    a.buffer.setText('three');
+    s.revert(a.id);
+    expect(a.buffer.text()).toBe('two');
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('rebind gives a scratch buffer a file and keeps its id', () => {
+    const s = new BufferStore();
+    const a = s.openScratch();
+    a.buffer.insert('notes');
+    expect(s.active()?.dirty).toBe(true);
+    s.rebind(a.id, '/p/notes.md', 'notes', { mtimeMs: 1, size: 5, eol: '\n', bom: false, mode: 0o644 });
+    const r = s.active();
+    expect(r?.id).toBe(a.id);
+    expect(r?.path).toBe('/p/notes.md');
+    expect(r?.label).toBe('notes.md');
+    expect(r?.language).toBe('markdown');
+    expect(r?.dirty).toBe(false);
+  });
+
+  test('the Tab indent follows the file', () => {
+    const s = new BufferStore();
+    expect(s.openFile('/t.go', 'func f() {\n\treturn\n}').indent).toBe('\t');
+    expect(s.openFile('/f.py', 'def f():\n    if x:\n        pass').indent).toBe('    ');
+    expect(s.openFile('/n.txt', 'no indentation').indent).toBe('  ');
+  });
+
+  test('a closed buffer stops notifying', () => {
     const s = new BufferStore();
     const a = s.openFile('/a', '');
-    expect(a.dirty).toBe(false);
-    s.markDirty(a.id, true);
-    expect(s.active()?.dirty).toBe(true);
+    s.close(a.id);
+    let fires = 0;
+    s.subscribe(() => { fires++; });
+    a.buffer.insert('late');
+    expect(fires).toBe(0);
   });
 
   test('subscribe fires on change', () => {
