@@ -36,7 +36,7 @@ import { stripMutatingTools } from './agent/plan-mode';
 import { isSmallModel } from './agent/small-model';
 import { getMCPBridge } from '@/mcp/bridge';
 import { modelCandidates } from './agent/model-selector';
-import { localRowInstead, PSEUDONYMIZED } from './protection/routing';
+import { localOnlyLevel, localRowInstead, PSEUDONYMIZED, runsLocally } from './protection/routing';
 import { isReadOnlyTurn } from '@/security/read-only-turn';
 
 /**
@@ -616,6 +616,25 @@ export class AgentManager {
   /**
    * Get an agent by ID
    */
+  /**
+   * Whether `agent` may still run in its session at the session's protection
+   * level now. `spawn` puts a level 3-4 session on a local model, but only
+   * at the level it sees: one raised after the spawn (a start's context
+   * hooks, run in the session's turn) is not. False: spawn it again, which
+   * applies the rule at the level the session holds now.
+   */
+  async modelMayServe(agent: AnyAgentWorker): Promise<boolean> {
+    const context = agent.getContext();
+    const registry = getModelRegistry();
+    const row = context.modelName
+      ? await registry.getModel(context.modelName)
+      : await registry.getModelByModelId(context.model, { userId: context.userId });
+    // A CLI agent brings its own harness: nothing it sends is pseudonymized.
+    const cli = row ? row.provider === 'cli' : Boolean(getCLIToolConfig(context.model));
+    if (await localOnlyLevel(context.sessionId, cli ? {} : PSEUDONYMIZED) === undefined) return true;
+    return runsLocally(row);
+  }
+
   get(agentId: string): AnyAgentWorker | undefined {
     return this.agents.get(agentId);
   }

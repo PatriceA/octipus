@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { contentWords, fenceSafe, fitTokens, parseKindConfig } from './kinds';
-import { citedItems } from './run';
+import { SOFT_MAX_CHARS } from '@/core/rag/markdown-chunker';
+import { estimateTokens } from '@/utils/token-count';
+import { contentWords, fenceSafe, fitTokens, KIND_CONFIG, parseKindConfig, RECALL_HEAD, RECALL_TAIL } from './kinds';
+import { excerptWindow, queryTerms } from './recall';
 import { agentUsageKey, noteToolUse, resetToolUse, toolUseSnapshot } from './tool-usage';
 
 describe('fenceSafe', () => {
@@ -44,21 +46,29 @@ describe('parseKindConfig', () => {
   });
 });
 
-describe('citedItems', () => {
-  const items = [
-    { id: '11111111-1111-1111-1111-111111111111', sourceId: 'note:a', title: 'Pricing 2026', score: 0.7 },
-    { id: '22222222-2222-2222-2222-222222222222', sourceId: 'file:b', title: 'contract.pdf', score: 0.6 },
-    { id: '33333333-3333-3333-3333-333333333333', sourceId: 'note:c', title: 'AI', score: 0.6 },
-  ];
+describe('recall defaults fit each other', () => {
+  // Ordinary business prose, as a note or a document chunk reads.
+  const prose = 'The studio quotes a fixed price for a five page website: design, build, testing and one round of changes are included, while hosting and the domain are billed apart each month. Larger projects are split into phases with a deposit of thirty percent on signing, the rest on delivery, and every change after sign-off is billed by the hour at the day rate agreed in the contract. Clients get a written estimate before any work starts, and the estimate holds for sixty days. Rush jobs that must ship within a week cost a quarter more, weekend work is billed double, and travel outside the city is charged at cost. Payment is due within thirty days of the invoice; late payments carry the legal interest rate and a fixed fee.';
 
-  test('an answer names a source by its title, a file by its name without the extension', () => {
-    expect(citedItems('From the note "pricing 2026": €900.', items)).toBe(1);
-    expect(citedItems('See the Contract for the terms; also Pricing 2026.', items)).toBe(2);
+  test('the default passages, at their default length, fit the default budget, and with the notes index and a context note the install budget', () => {
+    const recall = KIND_CONFIG.recall.parse({});
+    const excerpt = `${prose} ${prose}`.slice(0, recall.excerptChars);
+    expect(excerpt.length).toBe(recall.excerptChars);
+    const passage = (i: number) => `Document "Pricing and payment terms ${i}.pdf" › Rates › Exceptions (5 months old)\n${excerpt} …\n`;
+    const block = RECALL_HEAD + Array.from({ length: recall.limit }, (_, i) => passage(i)).join('') + RECALL_TAIL;
+    expect(estimateTokens(block)).toBeLessThanOrEqual(recall.tokenBudget);
+    const index = KIND_CONFIG.notes_index.parse({}).tokenBudget;
+    const note = KIND_CONFIG.note.parse({ slug: 'about-me' }).tokenBudget;
+    expect(recall.tokenBudget + index + note).toBeLessThanOrEqual(2000);
   });
 
-  test('titles under four characters do not count as named by chance', () => {
-    expect(citedItems('AI is mentioned here.', items)).toBe(0);
-    expect(citedItems('', items)).toBe(0);
+  test('a chunk of the indexers\' largest size is shown whole: its bytes do not depend on the question', () => {
+    const recall = KIND_CONFIG.recall.parse({});
+    expect(recall.excerptChars).toBeGreaterThanOrEqual(SOFT_MAX_CHARS);
+    const chunk = `${prose} ${prose}`.slice(0, SOFT_MAX_CHARS);
+    expect(excerptWindow(chunk, queryTerms('late payment interest'), recall.excerptChars))
+      .toBe(excerptWindow(chunk, queryTerms('five page website'), recall.excerptChars));
+    expect(excerptWindow(chunk, ['late'], recall.excerptChars)).toBe(chunk.replace(/\s+/g, ' ').trim());
   });
 });
 

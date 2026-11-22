@@ -1,14 +1,14 @@
-import { withFilteredVectorScan } from '@/db/vector-indexes';
+import { setLocalStatementTimeout, withFilteredVectorScan } from '@/db/vector-indexes';
 import { createHash } from 'crypto';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
+import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import { getDb, storageMode } from '@/db/postgres';
 import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { ageInDaysSql, cosineSimilarity, type EmbeddingMetadata, embeddings, freshnessFactorSql } from '@/db/schema/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
 import { requireCapability } from '@/core/capabilities/gates';
 import { type KnowledgeOwner, type KnowledgeScope, ownerPredicate, PRODUCT_DOCS_SOURCE, scopePredicate } from './knowledge-scope';
-import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
+import { chunkMarkdown, looksLikeMarkdown, SOFT_MAX_CHARS, splitParagraphs, type StructuralChunk } from './markdown-chunker';
 import { type CleanupOptions, type CleanupResult, runCleanup } from './retention-service';
 
 /**
@@ -103,7 +103,59 @@ export interface SearchResult {
   ageDays?: number;
 }
 
-const MAX_CHUNK_SIZE = 1000; // chars per chunk
+/** A candidate of `hybridSearchAnyTerm`, with the evidence to qualify it on. */
+export interface AnyTermCandidate extends SearchResult {
+  /** Raw cosine similarity to the query; null when the query could not be embedded. `similarity` is this, or 0. */
+  cosine: number | null;
+  /** The query's lexemes this chunk contains (English configuration, as `content_tsv`). */
+  matchedLexemes: string[];
+}
+
+export interface AnyTermSearch {
+  candidates: AnyTermCandidate[];
+  /** Every lexeme of the query, in `content_tsv`'s terms. */
+  queryLexemes: string[];
+  /** The lexemes the keyword leg searched for (`keywordLegLexemes`): at most MAX_KEYWORD_LEXEMES of `queryLexemes`. */
+  keywordLexemes: string[];
+  /** Why the query has no embedding (the keyword leg ran alone), or null. */
+  embeddingError: string | null;
+}
+
+/** Characters per chunk, at most: the flat chunker's and the structural one's (`SOFT_MAX_CHARS`). */
+export const MAX_CHUNK_SIZE = SOFT_MAX_CHARS;
+
+/**
+ * The most query lexemes the any-term keyword leg ORs together. Its cost
+ * grows with the rows matching any of them and with the terms ranked per
+ * row: on Postgres 16, 40k chunks of 150 words, a 2000-character paste (250
+ * lexemes) took 47 s under `ts_rank_cd`. Sixteen is more than a question
+ * holds (a typical one has 3 to 10 distinctive lexemes, so a question is
+ * searched whole) and few enough that a paste stays well inside recall's
+ * deadline (`keywordLegLexemes` says which sixteen).
+ */
+export const MAX_KEYWORD_LEXEMES = 16;
+/** Rows each leg of the any-term search hands to the fusion. */
+const ANY_TERM_LEG_ROWS = 50;
+/** With a per-source cap, the nearest rows the vector leg reads before capping each source. */
+const ANY_TERM_VECTOR_SCAN_ROWS = 200;
+
+/**
+ * The lexemes the any-term keyword leg searches for: at most
+ * MAX_KEYWORD_LEXEMES of `lexemes`, the most distinctive first. Without
+ * corpus statistics (reading them per query would cost what the cap saves),
+ * shape stands in for rarity: a lexeme holding a digit (an invoice number,
+ * a version, a code) is first, being the likeliest to name one thing; then
+ * longer before shorter, since longer words are rarer in any language
+ * (`websit` before `cost`), so their union matches fewer rows and the rows
+ * it matches are the specific ones. Ties go alphabetically, so the same
+ * message always searches the same lexemes.
+ */
+export function keywordLegLexemes(lexemes: readonly string[]): string[] {
+  const digit = /\p{N}/u;
+  return [...new Set(lexemes)]
+    .sort((a, b) => Number(digit.test(b)) - Number(digit.test(a)) || [...b].length - [...a].length || (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, MAX_KEYWORD_LEXEMES);
+}
 /**
  * Chunks embedded per provider call. `client.embed` already takes an array and
  * returns one vector per input — indexing used to spend one HTTP round-trip per
@@ -139,9 +191,9 @@ export interface SearchScope {
   allowedRepoIds?: string[];
   /**
    * Do not count the returned rows as accessed. For callers that fetch more
-   * than they use (the recall context hook over-fetches and filters): they
-   * call `recordAccess` with the rows they did use, so LFU retention keeps
-   * counting what was actually read.
+   * than they use: they call `recordAccess` with the rows they did use, so
+   * LFU retention keeps counting what was actually read. (`hybridSearchAnyTerm`,
+   * recall's search, never counts: recall counts the passages it shows.)
    */
   skipAccess?: boolean;
 }
@@ -875,6 +927,220 @@ export class EmbeddingService {
   }
 
   /**
+   * Hybrid search in its "any term" keyword mode: the candidates of the
+   * keyword leg share at least one lexeme with the query (`hybridSearch`
+   * needs all of them, which a sentence never meets), fused with the vector
+   * leg by RRF as in `hybridSearch`.
+   *
+   * Matching one term is no evidence of relevance, so nothing is dropped
+   * here for a similarity bar and nothing passes one for a keyword hit: each
+   * candidate carries its evidence — the raw cosine (null without a query
+   * embedding) and the query lexemes it contains — and the caller qualifies
+   * it (context-hooks `qualifyHit`). Access is never counted here: the caller
+   * counts what it uses.
+   *
+   * The keyword leg's work is bounded, because it runs before an agent
+   * starts and an embedded install has one connection that every other query
+   * waits on: it ORs at most MAX_KEYWORD_LEXEMES of the query's lexemes
+   * (`keywordLegLexemes`) and ranks with `ts_rank` (`ts_rank_cd`'s cover
+   * density grows with the number of query terms: a pasted paragraph took
+   * tens of seconds). `matchedLexemes` and `queryLexemes` still hold every
+   * lexeme of the query, so a caller's coverage is against the whole message.
+   * `timeoutMs` cancels the statement on Postgres; PGlite cannot cancel one
+   * (`setLocalStatementTimeout`), where the bound is what keeps it short.
+   *
+   * `purposes`, `excludeProductDocs` and `perSource` filter in SQL, in both
+   * legs, so the candidate window holds only rows the caller can use: a large
+   * document's chunks or the product manual cannot crowd out the one note
+   * that answers.
+   *
+   * When the query cannot be embedded, the keyword leg runs alone and
+   * `embeddingError` says why: a caller that needs the vector leg has to know
+   * it is missing, not get keyword hits passed off as the usual result.
+   */
+  async hybridSearchAnyTerm(
+    knowledge: KnowledgeScope,
+    query: string,
+    limit = 5,
+    options: {
+      purposes?: readonly EmbeddingPurpose[];
+      /** Leave out the product documentation corpus (`metadata.source = 'octipus-docs'`). */
+      excludeProductDocs?: boolean;
+      /** At most this many chunks of one `source_id` in each leg and in the result. */
+      perSource?: number;
+      alpha?: number;
+      scope?: Omit<SearchScope, 'skipAccess'>;
+      /** Cancel the search statement after this long (Postgres only). */
+      timeoutMs?: number;
+      /**
+       * Aborted: the search statement is not started. The embedding request
+       * itself cannot be cancelled (the provider clients take no signal).
+       */
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<AnyTermSearch> {
+    const { purposes, excludeProductDocs = false, perSource, alpha = 0.6, scope, timeoutMs, signal } = options;
+    const started = Date.now();
+    const [embedded, queryLexemes] = await Promise.all([
+      this.generateEmbedding(query, 'query').then(
+        (vector) => ({ vector, error: null }),
+        (err: unknown) => {
+          coreLogger.warn({ err, queryLength: query.length }, 'Hybrid search (any term): embedding failed, keyword leg only — the caller is told');
+          return { vector: null, error: err instanceof Error ? err.message : String(err) };
+        },
+      ),
+      this.queryLexemes(query),
+    ]);
+    signal?.throwIfAborted();
+    const keywordLexemes = keywordLegLexemes(queryLexemes);
+    const remaining = timeoutMs === undefined ? undefined : Math.max(1, timeoutMs - (Date.now() - started));
+
+    const purposeFilter = purposes?.length ? sql`AND purpose IN (${sql.join(purposes.map((p) => sql`${p}`), sql`, `)})` : sql``;
+    const productDocsFilter = excludeProductDocs ? sql`AND metadata->>'source' IS DISTINCT FROM ${DOCS_SOURCE}` : sql``;
+    const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
+    const scopeFilter = globalDocsScopeSql(scope);
+    const repoFilter = repoScopeSql(scope);
+    const filters = sql`${purposeFilter} ${productDocsFilter} ${userFilter} ${scopeFilter} ${repoFilter}`;
+    const k = 60;
+    const perSourceCap = perSource === undefined ? null : Math.max(1, Math.floor(perSource));
+    // The capped lexemes OR-ed into a tsquery, in its input syntax (each
+    // lexeme quoted, quotes and backslashes escaped) so a lexeme is matched as
+    // it is: going through to_tsquery would parse and stem it again.
+    const tsquery = keywordLexemes.map((l) => `'${l.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`).join(' | ');
+    const allLexemes = sql`ARRAY[${sql.join(queryLexemes.map((l) => sql`${l}`), sql`, `)}]::text[]`;
+    const keywordMatch = keywordLexemes.length ? sql`content_tsv @@ ${tsquery}::tsquery` : sql`FALSE`;
+    const keywordRank = keywordLexemes.length ? sql`ts_rank(content_tsv, ${tsquery}::tsquery)` : sql`0::real`;
+    // Per leg: the best LEG_ROWS rows, at most `perSource` of each source.
+    const fts = perSourceCap === null
+      ? sql`fts AS (
+          SELECT id, row_number() OVER (ORDER BY ${keywordRank} DESC) AS rank_fts
+          FROM embeddings WHERE ${keywordMatch} ${filters}
+          ORDER BY ${keywordRank} DESC
+          LIMIT ${ANY_TERM_LEG_ROWS}
+        )`
+      : sql`fts_ranked AS (
+          SELECT id, ${keywordRank} AS r, row_number() OVER (PARTITION BY source_id ORDER BY ${keywordRank} DESC) AS in_source
+          FROM embeddings WHERE ${keywordMatch} ${filters}
+        ),
+        fts AS (
+          SELECT id, row_number() OVER (ORDER BY r DESC) AS rank_fts
+          FROM fts_ranked WHERE in_source <= ${perSourceCap}
+          ORDER BY r DESC
+          LIMIT ${ANY_TERM_LEG_ROWS}
+        )`;
+    const columns = sql`e.id, e.content, e.abstract, e.purpose, e.source_id, e.metadata,
+             e.section_path, e.heading_level, e.repo_id, e.last_verified_at,
+             ${ageInDaysSql('e')} AS age_days,
+             ARRAY(SELECT unnest(${allLexemes}) INTERSECT SELECT unnest(tsvector_to_array(e.content_tsv))) AS matched_lexemes`;
+    // The result, at most `perSource` rows of a source, best first.
+    const capResult = (scored: SQL) => perSourceCap === null
+      ? sql`SELECT * FROM (${scored}) s ORDER BY score DESC LIMIT ${limit}`
+      : sql`SELECT * FROM (
+          SELECT s.*, row_number() OVER (PARTITION BY s.source_id ORDER BY s.score DESC) AS in_source FROM (${scored}) s
+        ) t WHERE in_source <= ${perSourceCap} ORDER BY score DESC LIMIT ${limit}`;
+
+    let results: unknown;
+    if (embedded.vector) {
+      const vecLiteral = `[${embedded.vector.join(',')}]`;
+      // Nearest first by the index, then at most `perSource` of a source.
+      const vec = perSourceCap === null
+        ? sql`vec AS (
+            SELECT id, row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec
+            FROM embeddings WHERE 1=1 ${filters}
+            ORDER BY embedding <=> ${vecLiteral}::vector
+            LIMIT ${ANY_TERM_LEG_ROWS}
+          )`
+        : sql`vec_near AS (
+            SELECT id, source_id, embedding <=> ${vecLiteral}::vector AS d
+            FROM embeddings WHERE 1=1 ${filters}
+            ORDER BY embedding <=> ${vecLiteral}::vector
+            LIMIT ${ANY_TERM_VECTOR_SCAN_ROWS}
+          ),
+          vec AS (
+            SELECT id, row_number() OVER (ORDER BY d) AS rank_vec FROM (
+              SELECT id, d, row_number() OVER (PARTITION BY source_id ORDER BY d) AS in_source FROM vec_near
+            ) n WHERE in_source <= ${perSourceCap}
+            ORDER BY d
+            LIMIT ${ANY_TERM_LEG_ROWS}
+          )`;
+      results = await withFilteredVectorScan('embeddings', (q) => q.execute(sql`
+        WITH ${fts}, ${vec},
+        combined AS (
+          SELECT COALESCE(f.id, v.id) AS id,
+                 COALESCE(1.0 / (${k} + f.rank_fts), 0) * ${1 - alpha} +
+                 COALESCE(1.0 / (${k} + v.rank_vec), 0) * ${alpha} AS rrf_score
+          FROM fts f
+          FULL OUTER JOIN vec v ON f.id = v.id
+        )
+        ${capResult(sql`
+          -- The cosine of every returned row, not only of the vector leg's top
+          -- rows: a keyword candidate is qualified on it too.
+          SELECT 1 - (e.embedding <=> ${vecLiteral}::vector) AS cosine, c.rrf_score * ${freshnessFactorSql('e')} AS score, ${columns}
+          FROM combined c
+          JOIN embeddings e ON e.id = c.id
+        `)}
+      `), { statementTimeoutMs: remaining });
+    } else {
+      const run = async (q: Pick<ReturnType<typeof getDb>, 'execute'>) => q.execute(sql`
+        WITH ${fts}
+        ${capResult(sql`
+          SELECT NULL::float8 AS cosine, (1.0 / (${k} + f.rank_fts)) * ${freshnessFactorSql('e')} AS score, ${columns}
+          FROM fts f
+          JOIN embeddings e ON e.id = f.id
+        `)}
+      `);
+      results = remaining === undefined || storageMode() !== 'external'
+        ? await run(getDb())
+        : await getDb().transaction(async (tx) => {
+          await setLocalStatementTimeout(tx, remaining);
+          return run(tx);
+        });
+    }
+
+    const list = rows<{
+      cosine: number | string | null;
+      id: string;
+      content: string;
+      abstract: string | null;
+      purpose: string;
+      source_id: string;
+      metadata: unknown;
+      section_path: string[] | null;
+      heading_level: number | null;
+      repo_id: string | null;
+      last_verified_at: Date | null;
+      age_days: number | string;
+      matched_lexemes: string[] | null;
+    }>(results);
+    const candidates: AnyTermCandidate[] = list.map((r) => {
+      const cosine = r.cosine === null || r.cosine === undefined ? null : Number(r.cosine);
+      return {
+        id: r.id,
+        content: r.content,
+        abstract: r.abstract,
+        purpose: r.purpose as EmbeddingPurpose,
+        sourceId: r.source_id,
+        similarity: cosine ?? 0,
+        cosine: cosine !== null && Number.isFinite(cosine) ? cosine : null,
+        matchedLexemes: r.matched_lexemes ?? [],
+        metadata: (r.metadata || {}) as EmbeddingMetadata,
+        sectionPath: r.section_path,
+        headingLevel: r.heading_level,
+        repoId: r.repo_id,
+        lastVerifiedAt: r.last_verified_at,
+        ageDays: Math.round(Number(r.age_days) || 0),
+      };
+    });
+    return { candidates, queryLexemes, keywordLexemes, embeddingError: embedded.error };
+  }
+
+  /** The lexemes `content_tsv` would hold for `text` (English configuration). */
+  async queryLexemes(text: string): Promise<string[]> {
+    const result = await getDb().execute(sql`SELECT tsvector_to_array(to_tsvector('english', ${text})) AS lx`);
+    return rows<{ lx: string[] | null }>(result)[0]?.lx ?? [];
+  }
+
+  /**
    * Hybrid search hard-scoped to the GLOBAL product-docs corpus
    * (`user_id IS NULL AND metadata->>'source' = 'octipus-docs'`). Backs the
    * `/docs` command.
@@ -911,6 +1177,24 @@ export class EmbeddingService {
       .catch((err) => {
         coreLogger.warn({ err, count: ids.length }, 'embeddings.recordAccess failed (non-fatal)');
       });
+  }
+
+  /**
+   * Whether `knowledge` holds any row it may read of one of `purposes`
+   * (the product docs only unless excluded): one indexed lookup, no content
+   * returned. The Recall page's calibration asks it before saying that
+   * nothing clears a recall hook's bar.
+   */
+  async hasReadableRows(knowledge: KnowledgeScope, options: { purposes: readonly EmbeddingPurpose[]; excludeProductDocs: boolean }): Promise<boolean> {
+    if (!options.purposes.length) return false;
+    const productDocsFilter = options.excludeProductDocs ? sql`AND metadata->>'source' IS DISTINCT FROM ${DOCS_SOURCE}` : sql``;
+    const result = await getDb().execute(sql`
+      SELECT 1 AS found FROM embeddings
+      WHERE ${scopePredicate(knowledge, 'read')}
+        AND purpose IN (${sql.join(options.purposes.map((p) => sql`${p}`), sql`, `)}) ${productDocsFilter}
+      LIMIT 1
+    `);
+    return rows(result).length > 0;
   }
 
   /**
@@ -1306,22 +1590,7 @@ export class EmbeddingService {
 
   chunkText(text: string, maxSize = MAX_CHUNK_SIZE): string[] {
     if (text.length <= maxSize) return [text];
-
-    const chunks: string[] = [];
-    const paragraphs = text.split(/\n\n+/);
-    let current = '';
-
-    for (const para of paragraphs) {
-      if (current.length + para.length + 2 > maxSize && current.length > 0) {
-        chunks.push(current.trim());
-        current = para;
-      } else {
-        current += (current ? '\n\n' : '') + para;
-      }
-    }
-
-    if (current.trim()) chunks.push(current.trim());
-    return chunks;
+    return splitParagraphs(text, maxSize);
   }
 }
 

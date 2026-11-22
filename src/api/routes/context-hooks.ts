@@ -9,11 +9,27 @@ import {
   deleteContextHook,
   evaluateRecall,
   listContextHooks,
+  MAX_SWEEP_THRESHOLDS,
+  sweepRecall,
   updateContextHook,
 } from '@/core/context-hooks';
 import { getConfig } from '@/config';
+import type { ContextHooksResponse } from '@/shared/context-hooks';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
+
+const evalCases = t.Array(t.Object({
+  question: t.String({ minLength: 1, maxLength: 2000 }),
+  expect: t.Optional(t.Array(t.String({ maxLength: 300 }), { maxItems: 10 })),
+}), { minItems: 1, maxItems: 100 });
+
+const asCases = (cases: Array<{ question: string; expect?: string[] }>) => cases.map((c) => ({ question: c.question, expect: c.expect ?? [] }));
+
+/** The personal knowledge base of the caller's workspace; a space's is not evaluated here. */
+const evalWorkspace = (principal: { workspaceKind?: string; workspaceId?: string | null }) =>
+  principal.workspaceKind === 'shared' ? null : principal.workspaceId ?? null;
+
+const EVAL_FAILED = 'The knowledge base could not be searched. Check that an embedding model is set up (Settings → Models).';
 
 const hookBody = t.Object({
   name: t.Optional(t.String({ maxLength: 120 })),
@@ -40,11 +56,12 @@ export const contextHookRoutes = new Elysia({ prefix: '/context-hooks' })
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const descriptions = Object.fromEntries(BUILTIN_HOOKS.map((b) => [`builtin:${b.builtin}`, b.description]));
     const settings = getConfig().contextHooks;
-    return {
+    const response: ContextHooksResponse = {
       enabled: settings.enabled,
       maxTokens: settings.maxTokens,
       hooks: (await listContextHooks(user.id)).map((h) => ({ ...h, description: descriptions[h.id] ?? null })),
     };
+    return response;
   }, { detail: { tags: ['context-hooks'] } })
 
   .post('/', async ({ user, principal, body, set }) => {
@@ -79,27 +96,47 @@ export const contextHookRoutes = new Elysia({ prefix: '/context-hooks' })
   // question, against the caller's own knowledge base and notes.
   .post('/eval', async ({ user, principal, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-    // The personal knowledge base of the caller's workspace; a space's is not evaluated here.
-    const workspaceId = principal.workspaceKind === 'shared' ? null : principal.workspaceId ?? null;
     const notConfigured = capabilityRefused(set, 'embedding');
     if (notConfigured) return notConfigured;
     try {
-      return await evaluateRecall(user.id, workspaceId, (body.cases as Array<{ question: string; expect?: string[] }>).map((c) => ({ question: c.question, expect: c.expect ?? [] })), {
+      return await evaluateRecall(user.id, evalWorkspace(principal), asCases(body.cases), {
         ...(body.minSimilarity !== undefined ? { minSimilarity: body.minSimilarity } : {}),
         ...(body.limit !== undefined ? { limit: body.limit } : {}),
       });
     } catch (err) {
       apiLogger.warn({ err, userId: user.id }, 'context hooks: recall eval failed');
       set.status = 503;
-      return { error: 'The knowledge base could not be searched. Check that an embedding model is set up (Settings → Models).' };
+      return { error: EVAL_FAILED };
     }
   }, {
     body: t.Object({
-      cases: t.Array(t.Object({
-        question: t.String({ minLength: 1, maxLength: 2000 }),
-        expect: t.Optional(t.Array(t.String({ maxLength: 300 }), { maxItems: 10 })),
-      }), { minItems: 1, maxItems: 100 }),
+      cases: evalCases,
       minSimilarity: t.Optional(t.Number({ minimum: 0, maximum: 1 })),
+      limit: t.Optional(t.Integer({ minimum: 1, maximum: 10 })),
+    }),
+    detail: { tags: ['context-hooks'] },
+  })
+
+  // The same cases at a range of minSimilarity values (each question searched
+  // once), with the value the sweep recommends for the Knowledge recall hook.
+  .post('/eval/sweep', async ({ user, principal, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
+    try {
+      return await sweepRecall(user.id, evalWorkspace(principal), asCases(body.cases), {
+        ...(body.thresholds ? { thresholds: body.thresholds } : {}),
+        ...(body.limit !== undefined ? { limit: body.limit } : {}),
+      });
+    } catch (err) {
+      apiLogger.warn({ err, userId: user.id }, 'context hooks: recall sweep failed');
+      set.status = 503;
+      return { error: EVAL_FAILED };
+    }
+  }, {
+    body: t.Object({
+      cases: evalCases,
+      thresholds: t.Optional(t.Array(t.Number({ minimum: 0, maximum: 1 }), { minItems: 1, maxItems: MAX_SWEEP_THRESHOLDS })),
       limit: t.Optional(t.Integer({ minimum: 1, maximum: 10 })),
     }),
     detail: { tags: ['context-hooks'] },

@@ -739,7 +739,7 @@ export class AgentWorker extends BaseAgentWorker {
   async addUserMessage(content: string): Promise<void> {
     // A retrieved block an earlier turn still in view carries is not sent again
     // (`repeated-context.ts`); the stored row records what was actually sent.
-    const { text: promptContext, omitted } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
+    const { text: promptContext, omitted, fences, leftOut, noteAt, shortened } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
     // Images this turn shows the model itself (root-runner → `userMedia`):
     // references on the message, bytes only in each request (hydrateMedia).
@@ -748,8 +748,9 @@ export class AgentWorker extends BaseAgentWorker {
       role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date(),
       ...(userMedia.length ? { media: userMedia } : {}),
     };
-    this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
-    const composition = this.measurePromptComposition(content, omitted);
+    // The context opens the message, so the note sits where it sits in `promptContext`.
+    this.omittedContext = omitted.length ? { content: message.content as string, omitted, ...(fences.length ? { fences } : {}), noteAt } : undefined;
+    const composition = this.measurePromptComposition(content, leftOut, shortened);
     this.messages.push(message);
 
     // Only persist for the root agent — and never in a room, where the
@@ -797,7 +798,7 @@ export class AgentWorker extends BaseAgentWorker {
    * (`addUserMessage`); a worker or child has no history, and its sizes go on
    * its agent row. Measured once per run: a mid-run injection is not a turn.
    */
-  private measurePromptComposition(userText: string, omitted: readonly string[] = []) {
+  private measurePromptComposition(userText: string, omitted: readonly string[] = [], shortened: Parameters<typeof measureRootRequest>[0]['shortened'] = []) {
     const staged = takeStagedRootPrompt(this.context.id);
     if (!staged) return undefined;
     const tools = this.toolExecutor.toolsDisabled ? [] : this.getAdvertisedToolHandlers();
@@ -815,6 +816,7 @@ export class AgentWorker extends BaseAgentWorker {
       history: this.messages,
       userText,
       omitted,
+      shortened,
     });
     recordLatestComposition(this.context.sessionId, { agentId: this.context.id, composition });
     recordContextFill(this.context.sessionId, { promptTokens: composition.totals.tokens, contextWindow: composition.contextWindow });

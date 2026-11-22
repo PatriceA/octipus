@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-770 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -184,6 +184,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/context-hooks/:id` | `src/api/routes/context-hooks.ts` |
 | PATCH | `/api/context-hooks/:id` | `src/api/routes/context-hooks.ts` |
 | POST | `/api/context-hooks/eval` | `src/api/routes/context-hooks.ts` |
+| POST | `/api/context-hooks/eval/sweep` | `src/api/routes/context-hooks.ts` |
 | GET | `/api/context-hooks/stats` | `src/api/routes/context-hooks.ts` |
 | GET | `/api/devices` | `src/api/routes/devices.ts` |
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
@@ -807,7 +808,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 250 |
+| `api` | `core` | 252 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -845,21 +846,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 75 |
+| `core` | `config` | 76 |
 | `core` | `db` | 542 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
-| `core` | `models` | 150 |
+| `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 249 |
+| `core` | `security` | 250 |
 | `core` | `services` | 4 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 86 |
+| `core` | `shared` | 87 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 259 |
+| `core` | `utils` | 264 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -884,7 +885,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 5 |
 | `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 40 |
+| `hooks` | `core` | 41 |
 | `hooks` | `db` | 24 |
 | `hooks` | `security` | 9 |
 | `hooks` | `shared` | 1 |

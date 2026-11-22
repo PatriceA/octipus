@@ -1,3 +1,4 @@
+import type { ContextTurnHandle } from '@/core/context-hooks';
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
 import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
@@ -163,6 +164,17 @@ function clipAncestryEntry(entry: string): string {
 function readTaskAncestry(metadata: Record<string, unknown> | undefined): string[] {
   const raw = metadata?.taskAncestry;
   return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
+}
+
+/**
+ * A child's context-hook record (`contextForAgentStart`), one per child
+ * whatever its attempts: every attempt spreads the same `opts`, which copies
+ * this reference.
+ */
+interface ChildContextHooks {
+  turn: ContextTurnHandle | null;
+  /** A fork's hooks, run once when an attempt runs as the ordinary child (`forkOrOrdinary`); the block. */
+  forOrdinary?: () => Promise<string>;
 }
 
 /** Options accepted by spawnChild internally — extends the tool params. */
@@ -930,6 +942,44 @@ export class SwarmSpawner {
       .filter(Boolean)
       .join('\n\n');
 
+    // ── Context hooks (docs/CONTEXT-HOOKS.md) ───────────────────────
+    // Against the child's own brief, under the turn's audience rule
+    // (`contextForAgentStart`), after the refusals above. The spawn can still
+    // refuse after them (the concurrency limit, a quota or spend budget, the
+    // space recheck), and by then showing the block has raised the session's
+    // protection level: it has to be raised before the child's model is
+    // chosen, and raising it for a passage no model saw is the safe
+    // direction. The passages count as read only once a child starts
+    // (`accessOnStart`, counted by `bindTurnToAgent`). The block is per
+    // task, so it goes in the child's first message — never in its system
+    // prompt, the tier cached and shared by every child of the role. Every
+    // retry reruns that message (block included). A fork carries its parent's conversation, which already has
+    // the parent's blocks: it gets none of its own, unless an attempt runs as
+    // the ordinary child instead (`forkOrOrdinary`). Not for a maintenance
+    // review, which reviews a proposal with two tools and no user task.
+    const childContext: ChildContextHooks = { turn: null };
+    let childMessageWithContext = finalChildMessage;
+    if (!maintenanceReview) {
+      const runHooks = async () => {
+        const { contextForAgentStart } = await import('@/core/context-hooks');
+        const hooks = await contextForAgentStart({
+          event: 'worker_start', userId: parentContext.userId, workspaceId: parentContext.workspaceId ?? null,
+          sessionId: parent.rootSessionId, space: parentContext.space, query: params.taskBrief, role: childRole,
+          session: maintenanceSession, accessOnStart: true,
+        });
+        childContext.turn = hooks.turn;
+        return hooks.text.trim();
+      };
+      if (!fork) {
+        const block = await runHooks();
+        if (block) childMessageWithContext = `${finalChildMessage}\n\n${block}`;
+      } else {
+        let once: Promise<string> | undefined;
+        childContext.forOrdinary = () => (once ??= runHooks());
+      }
+    }
+    const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
+
     // ── Attempt child spawn + run, with bounded retry per §Failure Modes ──
     // The fan-out slot is held while the child runs and freed when it ends, so
     // the cap bounds children running at once (as the delegation prompt says),
@@ -966,7 +1016,7 @@ export class SwarmSpawner {
       briefHash,
       childMessage: fork
         ? [forkTaskMessage(params.taskBrief, params.expectedOutput), guarded.action === 'warn' ? securityReminder : ''].filter(Boolean).join('\n\n')
-        : finalChildMessage,
+        : childMessageWithContext,
       // What an attempt on another model runs instead: a fork seed belongs
       // to the parent's model, and a vendor CLI cannot be seeded at all.
       ...(fork ? { fork, ordinary: { childTools, childToolAdvertisement, systemPrompt: childSystemPrompt, childMessage: finalChildMessage } } : {}),
@@ -975,12 +1025,29 @@ export class SwarmSpawner {
       scorers: params.scorers,
       childIsSmall: isSmall,
       resumeKey,
-      onWorkerStarted: internal.onWorkerStarted,
+      // Every attempt reports its worker: the hooks' record counts the tool
+      // calls of the attempt that is running, not its root's or siblings'.
+      onWorkerStarted: (agentId: string) => {
+        bindTurnToAgent(childContext.turn, agentId);
+        internal.onWorkerStarted?.(agentId);
+      },
+      childContext,
       dispatchId,
       allowBackup,
       requestedModel: routed.modelId,
       attempts,
-    })).finally(() => {
+    })).then(
+      (done) => {
+        // Closed on every way the child ends: answered, failed, cancelled or never started.
+        const response = done.output == null ? '' : typeof done.output === 'string' ? done.output : JSON.stringify(done.output);
+        void finishContextTurn(childContext.turn, { ...(done.nodeId ? { agentId: done.nodeId } : {}), response, outcome: done.status === 'ok' ? 'success' : done.status });
+        return done;
+      },
+      (err: unknown) => {
+        void finishContextTurn(childContext.turn, { outcome: 'error' });
+        throw err;
+      },
+    ).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
 
@@ -1065,6 +1132,8 @@ export class SwarmSpawner {
     fork?: ForkSeed;
     /** The ordinary child a fork falls back to on another model (`singleSpawnAndRun`). */
     ordinary?: { childTools: ToolHandler[]; childToolAdvertisement?: ToolAdvertisement; systemPrompt?: string; childMessage: string };
+    /** The child's context hooks, shared by every attempt (`ChildContextHooks`). */
+    childContext?: ChildContextHooks;
     expertId?: string;
     budget: NodeBudget;
     topicPath: string;
@@ -1562,6 +1631,9 @@ export class SwarmSpawner {
             },
           },
           childMessage: `${feedback}\n\n${opts.childMessage}`,
+          // A fork's attempt on another model runs the ordinary child's
+          // message instead (`forkOrOrdinary`): it needs the feedback too.
+          ...(opts.ordinary ? { ordinary: { ...opts.ordinary, childMessage: `${feedback}\n\n${opts.ordinary.childMessage}` } } : {}),
           reason: 'retry',
         },
         true,
@@ -1627,12 +1699,10 @@ export class SwarmSpawner {
     opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
     isCrashRetry: boolean,
   ): Promise<ChildResult> {
-    // A retry on a backup model is not a fork any more: the seed is bound to
-    // the parent's model (and a vendor CLI cannot be seeded). Run the ordinary
-    // child that the fork replaced, with its own role prompt and tools.
-    if (opts.fork && opts.childModel !== opts.fork.model && opts.ordinary) {
-      opts = { ...opts, ...opts.ordinary, fork: undefined, ordinary: undefined };
-    }
+    const attempt = forkOrOrdinary(opts);
+    // Run as the ordinary child, a fork gets the block an ordinary child has.
+    const block = attempt !== opts && opts.childContext?.forOrdinary ? await opts.childContext.forOrdinary() : '';
+    opts = block ? { ...attempt, childMessage: `${attempt.childMessage}\n\n${block}` } : attempt;
     opts.dispatchId ??= randomUUID();
     opts.requestedModel ??= opts.childModel;
     opts.attempts ??= [];
@@ -3098,6 +3168,19 @@ export {
 };
 
 let instance: SwarmSpawner | null = null;
+/**
+ * What one attempt of a child runs. A retry on a backup model is not a fork
+ * any more: the seed is bound to the parent's model (and a vendor CLI cannot
+ * be seeded). It runs the ordinary child that the fork replaced, with its own
+ * role prompt, tools and message.
+ */
+export function forkOrOrdinary<T extends { fork?: ForkSeed; childModel: string; ordinary?: object }>(opts: T): T {
+  if (opts.fork && opts.childModel !== opts.fork.model && opts.ordinary) {
+    return { ...opts, ...opts.ordinary, fork: undefined, ordinary: undefined };
+  }
+  return opts;
+}
+
 export function getSwarmSpawner(): SwarmSpawner {
   if (!instance) instance = new SwarmSpawner();
   return instance;

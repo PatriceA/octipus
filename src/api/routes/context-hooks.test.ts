@@ -3,15 +3,19 @@
  * own), what a run injects from the knowledge base and notes, the turn
  * record it leaves, the numbers on it, and the recall eval.
  *
- * No embedding model is set up here, so recall searches by keyword (the
- * hybrid search's fallback): passages are matched on every word of the query.
+ * No embedding model is set up here, so the query cannot be embedded and
+ * recall runs on its keyword rules alone (recorded as `embedding_failed`): a
+ * passage qualifies by covering the query's distinctive words or naming one
+ * of its identifiers. src/core/context-hooks/recall.db.test.ts covers the
+ * vector leg with an embedding stand-in.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Elysia } from '@/api/http';
+import { fakeEmbedder, vectorLiteral } from '@/test-helpers/fake-embedding';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -185,10 +189,11 @@ describe('a run', () => {
     await note(userId, 'Pricing archive', 'Old website pricing from 2019: 600 euro.');
     expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { limit: 1 } })).status).toBe(200);
     await run('website pricing');
-    // recordAccess is fire-and-forget.
-    await new Promise((r) => setTimeout(r, 200));
-    const { rows } = await queryRaw(`SELECT access_count FROM embeddings ORDER BY access_count DESC`);
-    expect(rows.map((r) => Number(r.access_count))).toEqual([1, 0]);
+    // recordAccess is fire-and-forget: one UPDATE for every passage shown, polled for until it lands.
+    await vi.waitFor(async () => {
+      const { rows } = await queryRaw(`SELECT access_count FROM embeddings ORDER BY access_count DESC`);
+      expect(rows.map((r) => Number(r.access_count))).toEqual([1, 0]);
+    }, { timeout: 5_000, interval: 20 });
   });
 
   test('injects nothing from recall when nothing matches, and skips a bare acknowledgement', async () => {
@@ -198,11 +203,13 @@ describe('a run', () => {
     const short = await run('thanks');
     expect(short.text).not.toContain('<recalled-knowledge>');
     const { rows } = await queryRaw(`SELECT hooks FROM context_turns ORDER BY created_at`);
-    const statuses = rows.map((r) => (r.hooks as Array<{ hook: string; status: string; reason?: string }>)[0]);
+    const statuses = rows.map((r) => (r.hooks as Array<{ hook: string; status: string; reason?: string; bar?: unknown }>)[0]);
     expect(statuses).toEqual([
-      expect.objectContaining({ status: 'abstained', reason: 'nothing_relevant' }),
+      // Searched: the bar it was decided at is recorded, here not cleared (calibration's sample).
+      expect.objectContaining({ status: 'abstained', reason: 'nothing_relevant', bar: { minSimilarity: 0.45, cleared: false } }),
       expect.objectContaining({ status: 'skipped', reason: 'short_message' }),
     ]);
+    expect(statuses[1].bar).toBeUndefined();
   });
 
   test('a worker gets recall but not the index; a context note is shown every turn', async () => {
@@ -227,18 +234,19 @@ describe('a run', () => {
     settings.enabled = false;
     try {
       const off = await run('website pricing');
-      expect(off).toEqual({ text: '', blocks: [], labelledBlocks: [], turn: null });
+      expect(off).toEqual({ text: '', blocks: [], labelledBlocks: [], repeatable: [], turn: null });
     } finally {
       settings.enabled = true;
     }
   });
 
   test('finishing a turn records what the agent looked up and which source it named; the stats count it', async () => {
-    await note(userId, 'Pricing', 'Website pricing: 900 euro.');
+    // A title the query does not already hold: naming "Pricing" for "website pricing" would only repeat the question (measure.test.ts).
+    await note(userId, 'Rates 2026', 'Website pricing: 900 euro.');
     const { finishContextTurn, noteToolUse } = await import('@/core/context-hooks');
     const first = await run('website pricing');
     noteToolUse('sess-1', 'knowledge', 'search_knowledge', 'root-1');
-    await finishContextTurn(first.turn, { response: 'From the note Pricing: 900 euro.', outcome: 'success' });
+    await finishContextTurn(first.turn, { response: 'From the note Rates 2026: 900 euro.', outcome: 'success' });
     const second = await run('quarterly tax deadline');
     noteToolUse('sess-1', 'notes', 'search_notes', 'root-1');
     noteToolUse('sess-1', 'notes', 'read_note', 'root-1');
@@ -266,6 +274,220 @@ describe('a run', () => {
   });
 });
 
+describe('"named" counts recall passages only', () => {
+  test('a context note named is not a source named, and a turn with only the note is not in the denominator', async () => {
+    await note(userId, 'Pricing', 'Website pricing: a five page website costs 900 euro.');
+    await note(userId, 'About me', 'I run a two-person design studio in Ghent.', { slug: 'about-me' });
+    await send(userApp, 'POST', '/api/context-hooks', { name: 'About me', kind: 'note', config: { slug: 'about-me' } });
+    await send(userApp, 'PATCH', '/api/context-hooks/builtin:notes-index', { enabled: false });
+    const { finishContextTurn, runContextHooks } = await import('@/core/context-hooks');
+    const run = (query: string) => runContextHooks({ event: 'turn_start', userId, workspaceId: null, sessionId: 'sess-named', query, role: 'general', channel: 'web' });
+    // Recall shows Pricing; the answer names only the note.
+    const first = await run('website pricing');
+    expect(first.text).toContain('Note "Pricing"');
+    await finishContextTurn(first.turn, { response: 'As your note About me says, you are in Ghent.', outcome: 'success' });
+    // Recall finds nothing; only the note is shown, and named.
+    const second = await run('quarterly tax deadline');
+    expect(second.text).not.toContain('<recalled-knowledge>');
+    await finishContextTurn(second.turn, { response: 'About me: you run a studio.', outcome: 'success' });
+
+    const { rows } = await queryRaw('SELECT cited_items, injected_items FROM context_turns ORDER BY created_at');
+    expect(rows).toEqual([{ cited_items: 0, injected_items: 2 }, { cited_items: 0, injected_items: 1 }]);
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.cited).toEqual({ n: 0, of: 1 });
+    expect(stats.byModel[0].cited).toEqual({ n: 0, of: 1 });
+    expect(stats.byModel[0].injected).toEqual({ n: 1, of: 2 });
+  });
+});
+
+describe('the stats', () => {
+  type Item = { id: string; sourceId: string; title: string; score: number; qualifiedBy?: string[] };
+  const item = (title: string, score: number, qualifiedBy?: string[]): Item => ({ id: randomUUID(), sourceId: `note:${randomUUID()}`, title, score, ...(qualifiedBy ? { qualifiedBy } : {}) });
+  type Bar = { minSimilarity: number; cleared: boolean };
+  const recall = (status: string, extra: { reason?: string; degraded?: string; items?: Item[]; bar?: Bar; id?: string; hook?: string } = {}) =>
+    ({ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', kind: 'recall', status, items: [], tokens: status === 'injected' ? 300 : 0, latencyMs: 20, ...extra });
+  /** The bar at the default minSimilarity, cleared or not. */
+  const at = (cleared: boolean, minSimilarity = 0.45): Bar => ({ minSimilarity, cleared });
+  async function turn(
+    owner: string,
+    hooks: unknown[],
+    opts: { event?: string; finished?: boolean; cited?: number; used?: number | null; model?: string | null; outcome?: string | null } = {},
+  ) {
+    await queryRaw(
+      `INSERT INTO context_turns (user_id, session_id, event, role, model, cli, hooks, injected_items, cited_items, used_items, outcome, finished_at)
+       VALUES ($1, 's', $2, 'general', $3, false, $4, 0, $5, $6, $7, $8)`,
+      [
+        owner, opts.event ?? 'turn_start', opts.model === undefined ? 'm1' : opts.model, JSON.stringify(hooks), opts.cited ?? 0,
+        opts.used === undefined ? null : opts.used, opts.outcome === undefined ? null : opts.outcome,
+        opts.finished === false ? null : new Date().toISOString(),
+      ],
+    );
+  }
+  /** A knowledge-base row of the user's, so "almost never" can be about the bar. */
+  const someKnowledge = () => queryRaw(
+    `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+     VALUES ($1, 'x', 'm', '[0.1,0.2,0.3]', 'note', $2, 'm/3', $3, '{}')`,
+    [`note:${randomUUID()}`, randomUUID(), userId],
+  );
+
+  test('named and used beside each other, with their denominators, per model and per event; reasons and qualification per hook', async () => {
+    // A root turn: shown on similarity and by identifier, named and used.
+    await turn(userId, [recall('injected', { items: [item('Pricing', 0.71, ['similarity']), item('Invoices', 0.2, ['identifier'])] })], { cited: 1, used: 1 });
+    // A root turn: a keyword-only passage (score 0) on a degraded run, neither named nor used.
+    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])] })], { used: 0 });
+    // A swarm child: shown on similarity, used but not named.
+    await turn(userId, [recall('injected', { items: [item('Contract', 0.55, ['similarity', 'coverage'])] })], { event: 'worker_start', used: 1 });
+    // An older row: no qualifiedBy, no used_items. Named counts it; used does not.
+    await turn(userId, [{ hook: 'Knowledge recall', kind: 'recall', status: 'injected', items: [item('Old note', 0.6)], tokens: 200, latencyMs: 10 }], { cited: 1, used: null, model: 'm2' });
+    // Recall found nothing; a context note was shown and named: not in either denominator.
+    await turn(userId, [recall('abstained', { reason: 'nothing_relevant' }), { id: 'n1', hook: 'About me', kind: 'note', status: 'injected', items: [item('About me', 1)], tokens: 50, latencyMs: 5 }], { cited: 0 });
+    // Dropped for the budget, and a failed commit: no passages shown.
+    await turn(userId, [recall('skipped', { reason: 'budget_spent' })]);
+    await turn(userId, [recall('error', { reason: 'commit_failed' })]);
+    // Not finished: in the hook counts, not in the turn rates.
+    await turn(userId, [recall('injected', { items: [item('Pricing', 0.9, ['similarity'])] })], { finished: false });
+    // Another user's row is theirs.
+    await turn(otherId, [recall('injected', { items: [item('Theirs', 0.9, ['similarity'])] })], { cited: 1, used: 1 });
+
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.turns).toBe(8);
+    expect(stats.cited).toEqual({ n: 2, of: 4 });
+    expect(stats.used).toEqual({ n: 2, of: 3 });
+    const recallHook = stats.byHook.find((h: { id: string }) => h.id === 'builtin:knowledge-recall');
+    expect(recallHook).toMatchObject({
+      runs: 7, injected: 4, abstained: 1, skipped: 1, errors: 1, degraded: 1, budgetSpent: 1, commitFailed: 1,
+      qualified: { similarity: 3, coverage: 2, identifier: 1 },
+    });
+    // Over passages qualified on similarity only: 0.71, 0.55, 0.9; the keyword-only 0 does not drag it down.
+    expect(recallHook.avgTopScore).toBeCloseTo((0.71 + 0.55 + 0.9) / 3, 3);
+    // The older row (by name) keeps its own entry and its score.
+    expect(stats.byHook.find((h: { id: string }) => h.id === 'name:Knowledge recall')).toMatchObject({ runs: 1, avgTopScore: 0.6 });
+    expect(stats.byModel.find((m: { model: string }) => m.model === 'm1')).toMatchObject({ turns: 6, injected: { n: 3, of: 6 }, cited: { n: 1, of: 3 }, used: { n: 2, of: 3 } });
+    expect(stats.byModel.find((m: { model: string }) => m.model === 'm2')).toMatchObject({ turns: 1, cited: { n: 1, of: 1 }, used: { n: 0, of: 0 } });
+    expect(stats.byEvent).toEqual([
+      expect.objectContaining({ event: 'turn_start', turns: 6, injected: { n: 3, of: 6 }, cited: { n: 2, of: 3 }, used: { n: 1, of: 2 } }),
+      expect.objectContaining({ event: 'worker_start', turns: 1, injected: { n: 1, of: 1 }, cited: { n: 0, of: 1 }, used: { n: 1, of: 1 } }),
+    ]);
+    expect(stats.calibration).toEqual([]);
+    expect(stats.recent.find((r: { hooks: Array<{ degraded?: string }> }) => r.hooks[0]?.degraded === 'embedding_failed')).toBeDefined();
+    expect((await send(otherApp, 'GET', '/api/context-hooks/stats')).body.used).toEqual({ n: 1, of: 1 });
+    expect((await send(anonApp, 'GET', '/api/context-hooks/stats')).status).toBe(401);
+  });
+
+  test('when the memory status cannot be read, the rest is shown and the failure is logged', async () => {
+    const { coreLogger } = await import('@/utils/logger');
+    const warn = vi.spyOn(coreLogger, 'warn');
+    await executeRaw('ALTER VIEW memories_active RENAME TO memories_active_hidden');
+    try {
+      const { status, body } = await send(userApp, 'GET', '/api/context-hooks/stats');
+      expect(status).toBe(200);
+      expect(body.memory).toEqual({ facts: 0, missing: [] });
+      expect(warn.mock.calls.some(([, msg]) => typeof msg === 'string' && /memory status could not be read/.test(msg))).toBe(true);
+    } finally {
+      await executeRaw('ALTER VIEW memories_active_hidden RENAME TO memories_active');
+      warn.mockRestore();
+    }
+  });
+
+  test('a calibration warning over a meaningful sample of searched runs, none on a small one', async () => {
+    await someKnowledge();
+    // 29 searched runs, every one clearing the bar: too few to say.
+    for (let i = 0; i < 29; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])], bar: at(true) })]);
+    // Skipped and degraded runs are not searched on the bar.
+    for (let i = 0; i < 5; i++) await turn(userId, [recall('skipped', { reason: 'short_message' })]);
+    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])], bar: at(false) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    // The thirtieth searched run (a block found, then dropped for the budget) makes it a sample.
+    await turn(userId, [recall('skipped', { reason: 'budget_spent', bar: at(true) })]);
+    const { calibration } = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(calibration).toEqual([expect.objectContaining({ id: 'builtin:knowledge-recall', verdict: 'injects_nearly_always', found: { n: 30, of: 30 }, builtin: true })]);
+    expect(calibration[0].message).toMatch(/threshold sweep.*apply the value/s);
+
+    await executeRaw('DELETE FROM context_turns;');
+    for (let i = 0; i < 40; i++) await turn(userId, [recall(i === 0 ? 'injected' : 'abstained', { reason: i === 0 ? undefined : 'nothing_relevant', bar: at(i === 0) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([
+      expect.objectContaining({ verdict: 'injects_almost_never', found: { n: 1, of: 40 } }),
+    ]);
+  });
+
+  test('calibration counts only runs recorded with their bar: rows decided by the earlier rules are not samples', async () => {
+    await someKnowledge();
+    // 40 runs from before the bar was recorded, shown on any rule: no sample, whatever their status.
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.2)] })]);
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('abstained', { reason: 'nothing_relevant' })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+  });
+
+  test('a run that showed passages on keywords or an identifier alone did not clear the bar', async () => {
+    await someKnowledge();
+    // Shown every time, but never on similarity: the warning is that the bar is almost never cleared, not that it is too low.
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { items: [item('Invoices', 0.2, ['identifier'])], bar: at(false) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([
+      expect.objectContaining({ verdict: 'injects_almost_never', found: { n: 0, of: 30 } }),
+    ]);
+  });
+
+  test('no "almost never" when the user has no knowledge-base rows the hook would search', async () => {
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('abstained', { reason: 'nothing_relevant', bar: at(false) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    // Rows of a purpose the hook does not search do not count either.
+    await queryRaw(
+      `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+       VALUES ('msg:1', 'x', 'm', '[0.1,0.2,0.3]', 'message', $1, 'm/3', $2, '{}')`,
+      [randomUUID(), userId],
+    );
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    await someKnowledge();
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([expect.objectContaining({ verdict: 'injects_almost_never' })]);
+  });
+
+  test('a changed minSimilarity starts a new sample: the runs at the old bar are not counted', async () => {
+    await someKnowledge();
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])], bar: at(true) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toHaveLength(1);
+    // What the sweep's button does.
+    expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { minSimilarity: 0.6 } })).status).toBe(200);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+  });
+
+  test('a recall hook of the user\'s own is told to set its own minSimilarity: the sweep\'s button sets the built-in', async () => {
+    await someKnowledge();
+    const created = await send(userApp, 'POST', '/api/context-hooks', { name: 'Contracts', kind: 'recall', config: { minSimilarity: 0.3 } });
+    expect(created.status).toBe(201);
+    const id: string = created.body.id;
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { id, hook: 'Contracts', items: [item('Contract', 0.8, ['similarity'])], bar: at(true, 0.3) })]);
+    const { calibration } = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(calibration).toEqual([expect.objectContaining({ id, hook: 'Contracts', builtin: false })]);
+    expect(calibration[0].message).toMatch(/as Contracts's minSimilarity/);
+    expect(calibration[0].message).not.toMatch(/apply the value/);
+  });
+
+  test('named and used count only turns that ended with an answer; the others are counted apart, and not per model', async () => {
+    const shown = () => [recall('injected', { items: [item('Pricing', 0.7, ['similarity'])], bar: at(true) })];
+    await turn(userId, shown(), { used: 1, cited: 1, outcome: 'success' });
+    // An older row without an outcome: answered.
+    await turn(userId, shown(), { used: 0, outcome: null });
+    // Failed, cancelled and cleared root turns, closed with no answer and (failed) no model.
+    await turn(userId, shown(), { used: 0, outcome: 'failed', model: null });
+    await turn(userId, shown(), { used: 0, outcome: 'cancelled', model: null });
+    await turn(userId, shown(), { used: 0, outcome: 'cleared' });
+    // A worker that threw, and swarm children that did not complete or did not run.
+    for (const outcome of ['error', 'concurrency_limit', 'timeout', 'cache_hit']) await turn(userId, shown(), { event: 'worker_start', used: 0, outcome, model: null });
+    await turn(userId, shown(), { event: 'worker_start', used: 1, outcome: 'success', model: 'm1' });
+
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.used).toEqual({ n: 2, of: 3 });
+    expect(stats.cited).toEqual({ n: 1, of: 3 });
+    expect(stats.unanswered).toBe(7);
+    expect(stats.byEvent).toEqual([
+      expect.objectContaining({ event: 'turn_start', turns: 2, unanswered: 3, used: { n: 1, of: 2 } }),
+      expect.objectContaining({ event: 'worker_start', turns: 1, unanswered: 4, used: { n: 1, of: 1 } }),
+    ]);
+    // No "unknown" row at 0% made of failed starts.
+    expect(stats.byModel).toEqual([expect.objectContaining({ model: 'm1', turns: 3, unanswered: 0, used: { n: 2, of: 3 } })]);
+  });
+});
+
 describe('the recall eval', () => {
   test('scores found sources, their rank, and questions that should find nothing', async () => {
     await note(userId, 'Pricing', 'Website pricing: a five page website costs 900 euro.');
@@ -290,5 +512,78 @@ describe('the recall eval', () => {
     await note(otherId, 'Pricing', 'Website pricing: 900 euro.');
     const { body } = await send(userApp, 'POST', '/api/context-hooks/eval', { cases: [{ question: 'website pricing', expect: ['Pricing'] }] });
     expect(body.cases[0].hits).toEqual([]);
+  });
+});
+
+describe('the threshold sweep', () => {
+  // The vector leg through the deterministic stand-in: these words mean the same.
+  const embed = fakeEmbedder({ aliases: { charge: 'price', costs: 'price', pricing: 'price' } });
+  async function chunk(owner: string, title: string, content: string) {
+    await queryRaw(
+      `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+       VALUES ($1, $2, 'fake', $3, 'note', $4, 'fake/512', $5, $6)`,
+      [`note:${randomUUID()}`, content, vectorLiteral(embed(content)), randomUUID(), owner, JSON.stringify({ title })],
+    );
+  }
+  const cases = [
+    // Cosine about 0.71 with Pricing.
+    { question: 'What do we charge for a website?', expect: ['Pricing'] },
+    // About 0.26 with Holidays: found only under a low bar.
+    { question: 'When is the studio shut over winter?', expect: ['Holidays'] },
+    // Nothing in common with either.
+    { question: 'Who painted the Mona Lisa?', expect: [] },
+    // About 0.26 with Holidays too: shown under a low bar, which it should not be.
+    { question: 'Which studio microphone should I buy?' },
+  ];
+
+  test('runs the cases at every threshold, each question embedded once, and recommends one', async () => {
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    const embedding = vi.spyOn(getEmbeddingService(), 'generateEmbedding').mockImplementation(async (text: string) => embed(text));
+    try {
+      await chunk(userId, 'Pricing', 'Pricing: a website costs 2400 euro.');
+      await chunk(userId, 'Holidays', 'The studio closes from 24 December to 2 January for the holidays.');
+      // Another user's passage that would answer the microphone question.
+      await chunk(otherId, 'Microphones', 'Which studio microphone to buy: the one we use is on the shelf.');
+      await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { limit: 3, maxGap: 0.5 } });
+
+      const { status, body } = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+      expect(status).toBe(200);
+      expect(embedding).toHaveBeenCalledTimes(cases.length);
+      expect(body.config).toEqual({ limit: 3, keywordCoverage: 0.6, maxGap: 0.5, minSimilarity: 0.45 });
+      expect(body.degraded).toBe(0);
+      const at = (t: number) => body.rows.find((r: { minSimilarity: number }) => r.minSimilarity === t);
+      expect(body.rows.map((r: { minSimilarity: number }) => r.minSimilarity)).toEqual([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]);
+      expect(at(0.25)).toMatchObject({ found: { n: 2, of: 2 }, abstained: { n: 1, of: 2 }, mrr: 1 });
+      expect(at(0.45)).toMatchObject({ found: { n: 1, of: 2 }, abstained: { n: 2, of: 2 }, mrr: 0.5 });
+      expect(at(0.8)).toMatchObject({ found: { n: 0, of: 2 }, abstained: { n: 2, of: 2 } });
+      // 0.20 to 0.70 all score 1.5; the tie goes to the highest.
+      expect(body.recommended).toBe(0.7);
+
+      // Thresholds of one's own; a single run's response is unchanged beside it.
+      const own = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases, thresholds: [0.5, 0.2] });
+      expect(own.body.rows.map((r: { minSimilarity: number }) => r.minSimilarity)).toEqual([0.2, 0.5]);
+      expect((await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases, thresholds: [1.5] })).status).toBe(422);
+      const single = await send(userApp, 'POST', '/api/context-hooks/eval', { cases: cases.slice(0, 1) });
+      expect(Object.keys(single.body).sort()).toEqual(['abstained', 'cases', 'config', 'found', 'mrr']);
+
+      // Only answerable questions: no recommendation, and why.
+      const oneKind = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases: cases.slice(0, 2) });
+      expect(oneKind.body).toMatchObject({ recommended: null, reason: 'needs_both_kinds' });
+
+      // Another user's sweep searches their own knowledge only, at their own settings.
+      const theirs = await send(otherApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+      expect(theirs.body.config.limit).toBe(4);
+      expect(theirs.body.rows.every((r: { found: { n: number } }) => r.found.n === 0)).toBe(true);
+      expect((await send(anonApp, 'POST', '/api/context-hooks/eval/sweep', { cases })).status).toBe(401);
+    } finally {
+      embedding.mockRestore();
+    }
+  });
+
+  test('a question that cannot be embedded: the rows are shown, no value is recommended', async () => {
+    await chunk(userId, 'Pricing', 'Pricing: a website costs 2400 euro.');
+    const { body } = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+    expect(body).toMatchObject({ recommended: null, reason: 'embedding_failed', degraded: 4 });
+    expect(body.rows).toHaveLength(13);
   });
 });

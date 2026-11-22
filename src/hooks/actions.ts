@@ -628,21 +628,23 @@ async function executeSpawnAgent(
   const scope = await resolveAgentScope({ session, userId, trigger: 'schedule' });
   const sessionContext = session?.context;
 
+  // Spawned when the hook fires, and again if its context hooks raise the session's level (below).
+  const spawnHookAgent = () => agentManager.spawn({
+    sessionId,
+    userId,
+    ...scope,
+    contextMetadata: {
+      ...(sessionContext?.executionEnvironmentId ? { executionEnvironmentId: sessionContext.executionEnvironmentId } : {}),
+      ...(sessionContext?.projectPath ? { projectPath: sessionContext.projectPath } : {}),
+    },
+    topic: config.agentTopic,
+    model: config.agentModel,
+    systemPrompt: prompt,
+    timeout: hookTimeout,
+  });
   let agent: Awaited<ReturnType<typeof agentManager.spawn>>;
   try {
-    agent = await agentManager.spawn({
-      sessionId,
-      userId,
-      ...scope,
-      contextMetadata: {
-        ...(sessionContext?.executionEnvironmentId ? { executionEnvironmentId: sessionContext.executionEnvironmentId } : {}),
-        ...(sessionContext?.projectPath ? { projectPath: sessionContext.projectPath } : {}),
-      },
-      topic: config.agentTopic,
-      model: config.agentModel,
-      systemPrompt: prompt,
-      timeout: hookTimeout,
-    });
+    agent = await spawnHookAgent();
   } catch (err) {
     if (isCapacityRefusal(err)) {
       // No agent exists, so nothing of this event was handled: report it as
@@ -665,7 +667,47 @@ async function executeSpawnAgent(
   // queued worker does not count as running until its turn starts.
   if (message) {
     const { withSessionTurn } = await import('@/core/session-turn-lock');
-    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message)), { owner: userId }).then(async (result) => {
+    // The hook runs its owner's task for its owner: the context hooks run
+    // against it as for any agent start (`contextForAgentStart`: the turn's
+    // audience rule, nothing for a hook with no user behind it), inside the
+    // session's turn so a queued run does not search before it starts. The
+    // block goes before the message, as a root turn's context does.
+    //
+    // The agent was spawned before the hooks ran (above: a capacity refusal
+    // must fail this action at once), so its model was chosen at the level
+    // the session held then. A passage the hooks show can raise it to 3-4:
+    // the agent is then spawned again, which puts it on a local model or
+    // refuses with the reason, instead of running a model the session's
+    // content may not reach (`modelMayServe`).
+    const runWithContext = async (): Promise<string> => {
+      const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+      const hooks = await contextForAgentStart({
+        event: 'worker_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+        query: message, role: agent.getContext().role, channel: hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook', session,
+      });
+      try {
+        if (!(await agentManager.modelMayServe(agent))) {
+          const replaced = agent.getContext().id;
+          agentManager.stop(replaced);
+          agent = await spawnHookAgent();
+          coreLogger.info({ hookId: hook?.id, sessionId, replaced, agentId: agent.getContext().id }, 'Hook agent respawned: the context shown raised the session to a local-only level');
+        }
+      } catch (err) {
+        void finishContextTurn(hooks.turn, { outcome: 'error' });
+        throw err;
+      }
+      const agentId = agent.getContext().id;
+      bindTurnToAgent(hooks.turn, agentId);
+      try {
+        const out = await withAgentUsage(userId, scope, () => agent.run(hooks.text ? `${hooks.text.trim()}\n\n${message}` : message));
+        void finishContextTurn(hooks.turn, { agentId, response: out, outcome: 'success' });
+        return out;
+      } catch (err) {
+        void finishContextTurn(hooks.turn, { agentId, outcome: 'error' });
+        throw err;
+      }
+    };
+    withSessionTurn(sessionId, runWithContext, { owner: userId }).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result, sessionId);

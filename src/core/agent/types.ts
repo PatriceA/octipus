@@ -220,6 +220,12 @@ export interface ResponseMetadata {
    * clients that render it (the web chat's budget card).
    */
   limit?: LimitRefusal;
+  /**
+   * A direct reply that is not an answer: the conversation was cleared while
+   * it ran (`cleared`), or the model call failed or was refused and the reply
+   * says so (`failed`). Absent: answered.
+   */
+  ended?: 'cleared' | 'failed';
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { chunkMarkdown, looksLikeMarkdown } from './markdown-chunker';
+import { chunkMarkdown, looksLikeMarkdown, SOFT_MAX_CHARS, splitParagraphs } from './markdown-chunker';
 
 describe('chunkMarkdown', () => {
   test('glues each heading onto its own body, threads parent links', () => {
@@ -67,6 +67,18 @@ describe('chunkMarkdown', () => {
     expect(fenceChunk!.content).toContain('const y = 2;');
   });
 
+  test('no chunk is longer than SOFT_MAX_CHARS, heading line included, even for one long paragraph', () => {
+    const sentence = 'The invoice covers three hours of logo design at the agreed day rate. ';
+    const md = `# ${'Pricing and payment terms '.repeat(4)}\n\n${sentence.repeat(60)}\n\nA short closing paragraph.`;
+    const chunks = chunkMarkdown(md);
+    expect(chunks.length).toBeGreaterThan(4);
+    for (const c of chunks) expect(c.content.length).toBeLessThanOrEqual(SOFT_MAX_CHARS);
+    expect(chunks[0].content.startsWith('# Pricing')).toBe(true);
+    // Cut at sentence ends, nothing lost.
+    expect(chunks.slice(0, -1).every((c) => c.content.endsWith('.'))).toBe(true);
+    expect(chunks.map((c) => c.content).join(' ').replace(/\s+/g, ' ')).toContain(sentence.repeat(3).trim());
+  });
+
   test('empty document returns []', () => {
     expect(chunkMarkdown('')).toEqual([]);
     expect(chunkMarkdown('   \n\n\n')).toEqual([]);
@@ -99,5 +111,18 @@ describe('looksLikeMarkdown', () => {
     expect(looksLikeMarkdown('look at #tag in this line')).toBe(false);
     expect(looksLikeMarkdown('#')).toBe(false);
     expect(looksLikeMarkdown('##')).toBe(false);
+  });
+});
+
+describe('splitParagraphs', () => {
+  test('paragraphs that fit stay together; a long one is cut at sentences, then words, then anywhere', () => {
+    expect(splitParagraphs('a\n\nb', 10)).toEqual(['a\n\nb']);
+    const words = Array.from({ length: 100 }, (_, i) => `word${i}`).join(' ');
+    const pieces = splitParagraphs(words, 100);
+    expect(pieces.every((p) => p.length <= 100)).toBe(true);
+    expect(pieces.join(' ')).toBe(words);
+    const run = 'x'.repeat(250);
+    expect(splitParagraphs(run, 100)).toEqual(['x'.repeat(100), 'x'.repeat(100), 'x'.repeat(50)]);
+    expect(splitParagraphs(`short\n\n${run}`, 100, 60)[0]).toBe('short');
   });
 });

@@ -287,6 +287,13 @@ describe('lite role prompts (Phase C)', () => {
     expect(cfg.liteSystemPromptTemplate!.length).toBeLessThan(cfg.systemPromptTemplate.length);
   });
 
+  test('the general role, full and lite, tells a recall block left out as a repeat from one never shown', () => {
+    // Left out as still in view, the block is replaced by REPEATED_CONTEXT_NOTE: not a reason to search again.
+    for (const prompt of [ROLE_CONFIGS.general.systemPromptTemplate, ROLE_CONFIGS.general.liteSystemPromptTemplate ?? '']) {
+      expect(prompt).toMatch(/no note that earlier context is still above/);
+    }
+  });
+
   test('no lite prompt embeds its own SECURITY_PREAMBLE (would double it)', () => {
     for (const r of Object.keys(ROLE_CONFIGS) as AgentRole[]) {
       const lite = ROLE_CONFIGS[r].liteSystemPromptTemplate;

@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { RecallBar, RecallQualifiedBy } from '@/shared/context-hooks';
 import { users } from './users';
 
 /**
@@ -35,7 +36,21 @@ export interface ContextHookRunRecord {
   kind: string;
   status: 'injected' | 'abstained' | 'skipped' | 'error';
   reason?: string;
-  items: Array<{ id: string; sourceId: string; title: string; score: number }>;
+  /**
+   * Set when the hook ran in a reduced mode: `embedding_failed` — recall
+   * could not embed the query and matched by its keyword rules alone.
+   */
+  degraded?: 'embedding_failed';
+  /**
+   * Recall: the `minSimilarity` the search was decided at, and whether a
+   * passage it found qualified on similarity (cleared it), whether or not it
+   * was then shown. Written on every recall run that searched, from the
+   * qualification rules of the recall hardening on
+   * (docs/plans/recall-hardening.md); absent on a run that did not search and
+   * on rows decided by the earlier rules, which calibration does not count.
+   */
+  bar?: RecallBar;
+  items: Array<{ id: string; sourceId: string; title: string; score: number; qualifiedBy?: RecallQualifiedBy[] }>;
   tokens: number;
   latencyMs: number;
 }
@@ -67,8 +82,18 @@ export const contextTurns = pgTable('context_turns', {
   knowledgeToolCalls: integer('knowledge_tool_calls'),
   /** Note reads (search_notes, read_note, …) while the turn ran. */
   notesToolCalls: integer('notes_tool_calls'),
-  /** Injected sources the answer named. */
+  /**
+   * Recall passages the answer named by title or id (`citedItems`). Rows
+   * written before it was limited to recall passages may also count a
+   * context note named.
+   */
   citedItems: integer('cited_items'),
+  /**
+   * Recall passages the answer used: it repeats distinctive content of the
+   * passage's excerpt not already in the query (`passageUsed`). Null when no
+   * recall passage was shown, and on rows written before it was measured.
+   */
+  usedItems: integer('used_items'),
   outcome: text('outcome'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),

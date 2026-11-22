@@ -1,15 +1,12 @@
 import type { ContextHookRunRecord } from '@/db/schema/context-hooks';
+import type { RepeatableGroup } from '@/core/agent/repeated-context';
 import type { AgentContext } from '@/core/types';
 
-/**
- * When a hook runs. `turn_start`: before the root agent answers a message
- * (chat, a channel, a heartbeat or scheduled turn). `worker_start`: before a
- * specialist or role agent starts on its brief.
- */
-export type ContextHookEvent = 'turn_start' | 'worker_start';
+import type { ContextHookEvent, ContextHookKind, RecallQualifiedBy } from '@/shared/context-hooks';
+
+export type { ContextHookEvent, ContextHookKind } from '@/shared/context-hooks';
 export const CONTEXT_HOOK_EVENTS: readonly ContextHookEvent[] = ['turn_start', 'worker_start'];
 
-export type ContextHookKind = 'recall' | 'note' | 'notes_index';
 export const CONTEXT_HOOK_KINDS: readonly ContextHookKind[] = ['recall', 'note', 'notes_index'];
 
 export interface ContextHookDefinition {
@@ -33,15 +30,32 @@ export interface ContextHookInput {
   space?: AgentContext['space'];
   /** The message (root turn) or the brief (worker). */
   query: string;
+  /**
+   * The previous message the user typed in this session, if any. Recall
+   * searches a short message together with it (`buildRecallQuery`), so a
+   * follow-up ("and for enterprise?") keeps its subject. Absent: the message
+   * alone is searched.
+   */
+  previousMessage?: string;
   /** What is left of the turn's token budget. */
   tokenBudget: number;
+  /**
+   * When the hook has to be done (epoch ms; `runContextHooks`). Recall's
+   * search statement is cancelled at it on Postgres.
+   */
+  deadlineAt?: number;
+  /** Aborted when the hook's deadline passes: a hook stops its work then (recall does not search after it). */
+  signal?: AbortSignal;
 }
 
 export interface ContextHookItem {
   id: string;
   sourceId: string;
   title: string;
+  /** Recall: the passage's cosine similarity to the query (0 when the query had no embedding). */
   score: number;
+  /** Recall: the rules the passage qualified under (`qualifyHit`). */
+  qualifiedBy?: RecallQualifiedBy[];
 }
 
 export interface ContextHookResult {
@@ -51,4 +65,34 @@ export interface ContextHookResult {
   text: string;
   items: ContextHookItem[];
   tokens: number;
+  /** Why the hook ran in a reduced mode (recall: `embedding_failed`, keyword rules only); recorded on the run. */
+  degraded?: ContextHookRunRecord['degraded'];
+  /** Recall: the bar its search was decided at and whether a passage found cleared it; recorded on the run (`ContextHookRunRecord.bar`). */
+  bar?: ContextHookRunRecord['bar'];
+  /**
+   * `text` as a fenced group of parts that repeat separately across turns
+   * (recall: one part per passage). Absent: the block repeats as a whole.
+   */
+  repeatable?: RepeatableGroup;
+  /**
+   * Recall: what each passage showed (its excerpt, in the order of `items`)
+   * and the query it was searched with. Kept only on the in-memory turn
+   * handle, to tell whether the answer used a passage (`passageUsed`); never
+   * stored.
+   */
+  shown?: { query: string; excerpts: string[] };
+  /**
+   * The side effects of showing this block (recall: the session's protection
+   * level, the passages' access counts). `runContextHooks` runs it only for a
+   * block that is injected, within the deadline and the shared budget, and
+   * waits for it; a block it fails for is left out.
+   */
+  commit?: () => Promise<void>;
+  /**
+   * Recall: the passages to count as read once the block is shown
+   * (`recordAccess`). Counted by `runContextHooks`, or, for a start that can
+   * still be refused after its hooks (`accessOnStart`), by `bindTurnToAgent`
+   * once the agent exists.
+   */
+  access?: string[];
 }

@@ -375,6 +375,21 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       const agentManager = getAgentManager();
 
+      // The caller's own task in their own session: the context hooks run
+      // against it as for any agent start (`contextForAgentStart`, the turn's
+      // audience rule), before the spawn: a passage they show can raise the
+      // session's protection level, and the spawn chooses the model at the
+      // level it sees (a level 3-4 session runs on a local model or is
+      // refused). The block goes before the message, as a root turn's
+      // context does. A spawn refused after the hooks ran closes their record.
+      const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+      const hooks = message
+        ? await contextForAgentStart({
+          event: 'worker_start', userId: user.id, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+          query: message, role: 'general', channel: 'api', session,
+        })
+        : null;
+
       try {
         const agent = await agentManager.spawn({
           sessionId,
@@ -386,13 +401,25 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           systemPrompt,
           // REST has no approval relay (`channelCanPrompt('api')`).
           attended: false,
+        }).catch((error: unknown) => {
+          void finishContextTurn(hooks?.turn ?? null, { outcome: 'error' });
+          throw error;
         });
 
-        // Start the agent with initial message if provided
-        if (message) {
-          withAgentUsage(user.id, scope, () => agent.run(message)).catch((error) => {
-            apiLogger.error({ error, agentId: agent.getContext().id }, 'Agent run failed');
-          });
+        // Start the agent with the initial message, after the response is sent.
+        if (message && hooks) {
+          const userId = user.id;
+          const agentId = agent.getContext().id;
+          bindTurnToAgent(hooks.turn, agentId);
+          void (async () => {
+            try {
+              const out = await withAgentUsage(userId, scope, () => agent.run(hooks.text ? `${hooks.text.trim()}\n\n${message}` : message));
+              void finishContextTurn(hooks.turn, { agentId, response: out, outcome: 'success' });
+            } catch (error) {
+              void finishContextTurn(hooks.turn, { agentId, outcome: 'error' });
+              apiLogger.error({ error, agentId }, 'Agent run failed');
+            }
+          })();
         }
 
         const context = agent.getContext();
@@ -451,10 +478,45 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         return { error: 'Agent is busy' };
       }
 
+      // A new task for the agent: its context hooks run against it as for any
+      // agent start (`contextForAgentStart`), for the agent's owner in the
+      // agent's session (its audience rule, its space), and only when the
+      // owner sends it: an admin may reach another user's agent here, and the
+      // owner's knowledge is not pushed into a reply someone else reads. They
+      // run before the answer, because what they show can raise the session
+      // to a level the agent's model may not serve: the run is then refused
+      // with the reason instead of failing at its first call.
+      const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+      const hooks = user.id === context.userId
+        ? await contextForAgentStart({
+          event: 'worker_start', userId: context.userId, workspaceId: context.workspaceId ?? null, sessionId: context.sessionId,
+          space: runScope.space, query: body.message, role: context.role, channel: 'api',
+          session: await sessionRepository.findById(context.sessionId),
+        })
+        : null;
+      if (hooks?.text && !(await agentManager.modelMayServe(agent))) {
+        void finishContextTurn(hooks.turn, { agentId: context.id, outcome: 'error' });
+        set.status = 409;
+        return {
+          error: 'The knowledge recalled for this message is confidential content that stays on local models, and this agent does not run on one. '
+            + 'Start a new agent in this session (it is placed on a local model), or bind a local model.',
+        };
+      }
+      // The hooks took time: another message may have started the agent meanwhile.
+      if (agent.getStatus() !== 'idle' && agent.getStatus() !== 'completed') {
+        void finishContextTurn(hooks?.turn ?? null, { agentId: context.id, outcome: 'error' });
+        return { error: 'Agent is busy' };
+      }
+      bindTurnToAgent(hooks?.turn ?? null, context.id);
+      const task = hooks?.text ? `${hooks.text.trim()}\n\n${body.message}` : body.message;
+
       // Run agent with message, inside its usage context and, when it is
       // sponsored, its sponsor's (§9.1): the sponsor models' keys are
       // released only there, as for the turn that spawned it.
-      withAgentUsage(context.userId, runScope, () => agent.run(body.message)).catch((error) => {
+      withAgentUsage(context.userId, runScope, () => agent.run(task)).then((out) => {
+        void finishContextTurn(hooks?.turn ?? null, { agentId: context.id, response: out, outcome: 'success' });
+      }, (error) => {
+        void finishContextTurn(hooks?.turn ?? null, { agentId: context.id, outcome: 'error' });
         apiLogger.error({ error, agentId: params.id }, 'Agent run failed');
       });
 

@@ -42,7 +42,7 @@ import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE } from './plan-mode';
 import { FILE_CHANGE_TOOLS, FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason, REPO_WRITER_TOOL_IDS } from '@/core/tool-executor';
-import { REPEATABLE_CONTEXT_KEY } from './repeated-context';
+import { REPEATABLE_CONTEXT_KEY, type RepeatableBlock } from './repeated-context';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector, warmConversationOf } from './model-selector';
@@ -233,11 +233,12 @@ export interface RootRunExtras {
   signal?: AbortSignal;
   /**
    * The retrieved blocks inside this turn's context (the memory block, each
-   * context hook's block), verbatim. The worker leaves out any that an earlier
-   * turn still in the conversation already carries (`REPEATABLE_CONTEXT_KEY`).
-   * Directives are never listed: an instruction is repeated on purpose.
+   * context hook's block; the recall block as a group of passages), verbatim.
+   * The worker leaves out any that an earlier turn still in the conversation
+   * already carries (`REPEATABLE_CONTEXT_KEY`). Directives are never listed:
+   * an instruction is repeated on purpose.
    */
-  repeatableContext?: string[];
+  repeatableContext?: RepeatableBlock[];
   /**
    * `extraSystemContext` as labelled pieces (memory, each context hook, space
    * and group context), for the Context inspector. Ignored unless they add up

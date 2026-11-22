@@ -182,7 +182,7 @@ async function directResponseInternal(
       // The space turn context is this turn's only, never stored (§6.5, §6.7).
       const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
         metadata: { promptContext: omitSpaceTurnContext(promptContext).trim() } }, history.generation);
-      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
+      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, ended: 'cleared' } };
       await sessionRepository.incrementMessageCount(sessionId);
       requestAt = userRow.createdAt;
     }
@@ -224,7 +224,7 @@ async function directResponseInternal(
     const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
     const finalContent = showSources ? appendSources(result.content, sources) : result.content;
 
-    if (!await persistAnswer(finalContent)) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, tokens } };
+    if (!await persistAnswer(finalContent)) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, tokens, ended: 'cleared' } };
 
     await cache.set(sessionId, message, recentContext, {
       response: finalContent,
@@ -255,11 +255,16 @@ async function directResponseInternal(
       { err, message, stack, name, model: modelName },
       'Direct response failed',
     );
-    const errorMsg = `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
+    // A call refused because the session's content may not leave the house
+    // is not a provider outage: its message says why and what to do.
+    const { ProtectionRoutingError } = await import('@/core/protection/routing');
+    const errorMsg = err instanceof ProtectionRoutingError
+      ? err.message
+      : `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
     await persistAnswer(errorMsg);
     return {
       response: errorMsg,
-      metadata: { model: modelName, latencyMs: Date.now() - startTime },
+      metadata: { model: modelName, latencyMs: Date.now() - startTime, ended: 'failed' },
     };
   }
 }

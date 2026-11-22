@@ -278,15 +278,31 @@ export function measureRootRequest(input: {
    * replaced them is.
    */
   omitted?: readonly string[];
+  /**
+   * Retrieved blocks this turn sent only in part (some passages of the
+   * recall block were left out as still in view), as `withoutRepeatedContext`
+   * reports them: counted at what was sent.
+   */
+  shortened?: ReadonlyArray<{ from: string; to: string; omittedParts: number; parts: number }>;
   measuredAt?: Date;
 }): MeasuredComposition {
   const omitted = new Set(input.omitted ?? []);
+  const shortened = new Map((input.shortened ?? []).map((s) => [s.from, s]));
   const left = input.staged.parts.filter((p) => p.tier === 'volatile' && omitted.has(p.text.trim()));
-  const staged: StagedRootPrompt = left.length === 0 ? input.staged : {
+  let cut = false;
+  const parts = input.staged.parts.filter((p) => !left.includes(p)).map((p) => {
+    const part = p.tier === 'volatile' ? shortened.get(p.text.trim()) : undefined;
+    if (!part) return p;
+    cut = true;
+    const note = `${part.omittedParts} of ${part.parts} not repeated (already in the conversation)`;
+    return { ...p, text: part.to, note: p.note ? `${p.note}; ${note}` : note };
+  });
+  // The note that replaced what went is sent whenever anything went.
+  const staged: StagedRootPrompt = left.length === 0 && !cut ? input.staged : {
     ...input.staged,
     parts: [
-      ...input.staged.parts.filter((p) => !left.includes(p)),
-      promptPart('volatile', 'turn', 'Not repeated (already in the conversation)', REPEATED_CONTEXT_NOTE, { note: left.map((p) => p.label).join(', ') }),
+      ...parts,
+      promptPart('volatile', 'turn', 'Not repeated (already in the conversation)', REPEATED_CONTEXT_NOTE, left.length ? { note: left.map((p) => p.label).join(', ') } : {}),
     ],
   };
   // Staged parts largest first; tools and history keep the order their

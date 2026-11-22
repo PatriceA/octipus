@@ -10,7 +10,7 @@ import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from
 import { isTypedOwnerRow } from '@/core/memory/owner-messages';
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
-import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
+import { type ContextTurnHandle, contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
 import { runPluginContexts } from '@/plugins/packages/contributions/context';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
@@ -676,6 +676,14 @@ export class AgentService {
     // path saves it before running; a room post always is), so the refusal
     // path does not save it twice.
     let userMessageSaved = isRoom;
+    // The context-hook record of this turn (`finishContextTurn`), closed once
+    // on whichever way the turn ends: answered, cleared or failed.
+    let contextTurn: ContextTurnHandle | null = null;
+    const closeContextTurn = (done: Parameters<typeof finishContextTurn>[1]) => {
+      const turn = contextTurn;
+      contextTurn = null;
+      void finishContextTurn(turn, done);
+    };
     try {
       const resolvedSessionId = sessionId;
       const companion = isRoom && trigger !== 'remote'
@@ -908,6 +916,13 @@ export class AgentService {
 
         const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
         const classification = classifyMessage(planMessage);
+        // Context hooks against the brief, as for any turn (same audience
+        // rule); run while memory is retrieved. The brief is long and
+        // self-contained: no previous message.
+        const planHooksRun = contextForAgentStart({
+          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+          space: scope.space, query: planState.brief, role: 'general', channel, audience,
+        });
 
         // Memory-redesign Phase D — also fire on plan execution. The
         // plan often references the user's preferences ("use my usual
@@ -929,15 +944,28 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
+        const planHooks = await planHooksRun;
+        contextTurn = planHooks.turn;
+
         // The brief is stored as the root's user row; mark it as composed, not
         // typed, so memory never cites it as the owner's words.
         const planRun = { ...(getRunContext() ?? { runId: generateRunId() }), syntheticUserMessage: 'plan' as const };
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await runWithContext(planRun, () => this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
-          planMemoryBlock + spaceContext + groupContextBlock,
+          planMemoryBlock + planHooks.text + spaceContext + groupContextBlock,
           scope,
           undefined,
-          { takenTasks: takenTasks.tasks, ...(attachedFiles.length ? { attachedFiles } : {}) },
+          {
+            takenTasks: takenTasks.tasks, ...(attachedFiles.length ? { attachedFiles } : {}),
+            // As on the main path: a retrieved block still in view is not sent again.
+            ...(planMemoryBlock || planHooks.repeatable.length ? { repeatableContext: [planMemoryBlock, ...planHooks.repeatable].filter(Boolean) } : {}),
+            turnContextParts: [
+              { label: 'Long-term memory', text: planMemoryBlock },
+              ...planHooks.labelledBlocks,
+              { label: 'Shared space context', text: spaceContext },
+              { label: 'Group conversation', text: groupContextBlock },
+            ],
+          },
         ));
         void _planSources;
         const outputCheck = guardOutput(await inlineUiGuardText(response, resolvedSessionId), inputGuard.flags);
@@ -951,6 +979,7 @@ export class AgentService {
           ...(planLimit && { metadata: { limit: planLimit } }),
         });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
+        closeContextTurn({ agentId, response: finalResponse, outcome });
 
         // No memory extraction here. The brief is written by the planning
         // model, not the owner, so it is not evidence (memory learns only from
@@ -1031,14 +1060,15 @@ export class AgentService {
       // nearest this message, put in front of the agent instead of waiting
       // for it to call search_knowledge, which CLI agents rarely do on their
       // own. Not where other people read the reply (a group thread, a room)
-      // nor where the session's text may not be copied anywhere. Started
-      // here so it runs while memory is retrieved; it never throws.
-      const contextHooksRun = sharedAudience || audience.contentStorageOff
-        ? Promise.resolve({ text: '', blocks: [], labelledBlocks: [], turn: null })
-        : runContextHooks({
-          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
-          space: scope.space, query: message, role: 'general', channel,
-        });
+      // nor where the session's text may not be copied anywhere (the rule is
+      // `contextForAgentStart`'s). Started here so it runs while memory is
+      // retrieved; it never throws. A message the user typed is a possible
+      // follow-up: a short one is searched with their previous message.
+      const contextHooksRun = contextForAgentStart({
+        event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+        space: scope.space, query: message, role: 'general', channel, audience,
+        ...(scope.trigger === 'user' ? { followUp: true } : {}),
+      });
       // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
       // same audience rule, never in a space; it never throws either.
       const pluginContextRun = sharedAudience || audience.contentStorageOff
@@ -1078,6 +1108,7 @@ export class AgentService {
       }
 
       const contextHooks = await contextHooksRun;
+      contextTurn = contextHooks.turn;
       const pluginContext = await pluginContextRun;
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
@@ -1153,7 +1184,7 @@ export class AgentService {
           ...(attachedFiles.length ? { attachedFiles } : {}),
           // What a later turn may leave out when an earlier one in the window
           // already carries it: retrieved blocks only, never a directive.
-          ...(memoryBlock || contextHooks.blocks.length ? { repeatableContext: [memoryBlock, ...contextHooks.blocks].filter(Boolean) } : {}),
+          ...(memoryBlock || contextHooks.repeatable.length ? { repeatableContext: [memoryBlock, ...contextHooks.repeatable].filter(Boolean) } : {}),
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
           ...(signal ? { signal } : {}),
           ...(spokenTurn ? { spoken: true } : {}),
@@ -1184,6 +1215,7 @@ export class AgentService {
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
       if (sessionGeneration(activeSession?.context) !== turnGeneration) {
+        closeContextTurn({ agentId, outcome: 'cleared' });
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
@@ -1231,6 +1263,7 @@ export class AgentService {
         },
       }, turnGeneration);
       if (!persistedAnswer) {
+        closeContextTurn({ agentId, outcome: 'cleared' });
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
@@ -1259,7 +1292,7 @@ export class AgentService {
       // Memory learns from the owner's own messages only: Companion handoffs,
       // monitors and schedules are not the owner speaking.
       if(!syntheticCoordination&&scope.trigger==='user')fireMemoryUpdate();
-      void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
+      closeContextTurn({ agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
       if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination && !session.context?.oneShot) {
@@ -1279,6 +1312,7 @@ export class AgentService {
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
+      closeContextTurn({ outcome: signal?.aborted ? 'cancelled' : 'failed' });
       // A stopped or dropped room turn ends here; the queue announces it.
       if (isRoom && (signal?.aborted || (error as Error)?.name === 'RoomTurnDropped')) throw error;
       return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom, requesterId: userId });

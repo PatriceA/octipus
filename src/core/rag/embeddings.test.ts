@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService, sha256Hex } from './embeddings';
+import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService, keywordLegLexemes, MAX_CHUNK_SIZE, MAX_KEYWORD_LEXEMES, sha256Hex } from './embeddings';
 
 /**
  * Unit tests for the loudest new fail-loud path: when the embedding provider
@@ -313,5 +313,35 @@ describe('embedBatch — batching and per-chunk failure accounting', () => {
     }
 
     expect(seen).toEqual(['search_query: a', 'search_query: b']);
+  });
+});
+
+describe('keywordLegLexemes — which lexemes the any-term keyword leg ORs', () => {
+  test('a question is searched whole', () => {
+    expect(keywordLegLexemes(['charg', 'websit', 'cost'])).toEqual(['websit', 'charg', 'cost']);
+  });
+
+  test('a long paste keeps MAX_KEYWORD_LEXEMES: digit-bearing first, then the longest, ties alphabetically', () => {
+    const lexemes = [...Array.from({ length: 300 }, (_, i) => `w${'x'.repeat(i % 7)}${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`.replace(/\d/g, '')), '-2024', '-118', 'inv', 'a'];
+    const out = keywordLegLexemes(lexemes);
+    expect(out).toHaveLength(MAX_KEYWORD_LEXEMES);
+    expect(out.slice(0, 2)).toEqual(['-2024', '-118']);
+    const lengths = out.slice(2).map((l) => l.length);
+    expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
+    expect(out).not.toContain('inv');
+    expect(keywordLegLexemes([...lexemes].reverse())).toEqual(out);
+  });
+
+  test('duplicates count once', () => {
+    expect(keywordLegLexemes(['websit', 'websit', 'cost'])).toEqual(['websit', 'cost']);
+  });
+});
+
+describe('chunkText', () => {
+  test('a paragraph longer than a chunk is split; no chunk exceeds MAX_CHUNK_SIZE', () => {
+    const text = 'Extracted PDF text without blank lines runs on. '.repeat(120);
+    const chunks = new EmbeddingService('some-embedding-model').chunkText(text);
+    expect(chunks.length).toBeGreaterThan(5);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(MAX_CHUNK_SIZE);
   });
 });

@@ -639,6 +639,72 @@ function allowInterject(sessionId: string): boolean {
 }
 
 /**
+ * The reply to a side question (`chat.interject`), prefixed with the
+ * persona's name. Answered by `directResponse` with the context hooks'
+ * blocks for the question as its per-turn context (stored with the
+ * question's row as `metadata.promptContext`), under the same audience rule
+ * as a turn: none in a room or group thread (`contextForAgentStart`). The
+ * hooks' record is closed with the reply.
+ */
+export async function answerSideQuestion(sessionId: string, userId: string, content: string, channel?: string): Promise<string> {
+  const { directResponse } = await import('@/core/agent/direct-response');
+  const { ModelSelector } = await import('@/core/agent/model-selector');
+  const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+  const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+
+  const persona = await resolvePersonaForUser(userId).catch(() => null);
+  const personaName = persona?.name || 'Octipus';
+  const selector = new ModelSelector();
+
+  let turn: import('@/core/context-hooks').ContextTurnHandle | null = null;
+  try {
+    // A side question in a space session follows the space's model rules
+    // (§5.6); resolving the scope also refuses a role that may not run the agent.
+    const { resolveAgentScope } = await import('@/core/agent/context');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await sessionRepository.findById(sessionId);
+    const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
+    // Typed by the user, so possibly a follow-up of what they typed before.
+    const hooks = await contextForAgentStart({
+      event: 'turn_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+      query: content, role: 'general', ...(channel ? { channel } : {}), session, followUp: true,
+    });
+    turn = hooks.turn;
+    // The side question makes no tool calls: its record counts none, not the
+    // calls of the root turn running in the same session meanwhile.
+    bindTurnToAgent(turn, `side-question:${turn?.id ?? ''}`);
+    // The model is chosen after the hooks, as a root turn's is: a passage
+    // they showed can raise the session to a level whose content stays on
+    // local models. The reply then runs on a local model, or the refusal
+    // (no local model bound) is the answer, rather than a call to a remote
+    // model that is refused on its way out and reported as a broken provider.
+    const requester = { userId, inSpace: !!scope.space, spaceRole: scope.space?.role, sponsor: scope.sponsor };
+    const chosen = await selector.selectByComplexity('simple', requester);
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const chosenRow = await getModelRegistry().getModel(chosen.name);
+    const { localRowInstead, PSEUDONYMIZED } = await import('@/core/protection/routing');
+    const { modelCandidates } = await import('@/core/agent/model-selector');
+    const row = await localRowInstead(chosenRow, sessionId, 'text', () => modelCandidates(requester), PSEUDONYMIZED);
+    const model = row && row !== chosenRow ? { modelId: row.modelId, name: row.name } : chosen;
+    const result = await directResponse(
+      content,
+      sessionId,
+      userId,
+      selector,
+      'simple',
+      [], hooks.text, model, scope.space, scope.sponsor,
+    );
+    // A reply that is not an answer (the conversation was cleared, the call failed) is not a success.
+    const outcome = result.metadata.ended ?? 'success';
+    void finishContextTurn(turn, { ...(outcome === 'success' ? { response: result.response } : {}), outcome });
+    return `${personaName} — side question: ${result.response}`;
+  } catch (err) {
+    void finishContextTurn(turn, { outcome: 'failed' });
+    return `${personaName} — side question: ${(err as Error).message}`;
+  }
+}
+
+/**
  * Side-channel chat message — does NOT go through the root agent
  * queue. Routes directly through the persona-aware direct-response
  * path so the user can ask a quick question while a swarm is
@@ -668,35 +734,7 @@ async function handleChatInterject(
     }
     const userId = context.userId;
     context.sessionId = message.sessionId;
-
-    const { directResponse } = await import('@/core/agent/direct-response');
-    const { ModelSelector } = await import('@/core/agent/model-selector');
-    const { resolvePersonaForUser } = await import('@/core/personas/resolver');
-
-    const persona = await resolvePersonaForUser(userId).catch(() => null);
-    const personaName = persona?.name || 'Octipus';
-    const selector = new ModelSelector();
-
-    let reply: string;
-    try {
-      // A side question in a space session follows the space's model rules
-      // (§5.6); resolving the scope also refuses a role that may not run the agent.
-      const { resolveAgentScope } = await import('@/core/agent/context');
-      const { sessionRepository } = await import('@/db/repositories/session-repository');
-      const session = await sessionRepository.findById(message.sessionId);
-      const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
-      const result = await directResponse(
-        message.content,
-        message.sessionId,
-        userId,
-        selector,
-        'simple',
-        [], '', undefined, scope.space, scope.sponsor,
-      );
-      reply = `${personaName} — side question: ${result.response}`;
-    } catch (err) {
-      reply = `${personaName} — side question: ${(err as Error).message}`;
-    }
+    const reply = await answerSideQuestion(message.sessionId, userId, message.content, context.clientType);
 
     hub.publishEvent({
       type: 'chat.message',
