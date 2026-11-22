@@ -310,6 +310,8 @@ The diff is split into **hunks** — runs of changed lines — marked with the c
 | `a` / `r` or Escape | Accept / reject every hunk and apply |
 | Up/Down, PageUp/PageDown, Home/End | Scroll |
 
+If the tab has unsaved edits, only the agent's changes are hunks — the agent wrote against the file, not against your unsaved text — and accepting them keeps your edits; the tab stays unsaved while it differs from the file. A change of the agent's that overlaps or touches lines you changed is a **conflict**, marked `!`: it starts rejected (Enter keeps your lines), and accepting it replaces your lines in that block with the agent's.
+
 Within a changed line and its replacement, the words that changed are drawn inverted. The result — the accepted hunks from the agent, the rest as they were — replaces the buffer as one undo step. The agent's text is compared without the CRs of a CRLF file, so only the lines that really changed show, and the file is saved CRLF again. A change too large to compare line by line (a file rewritten throughout) is shown as one replacement, and the box says so.
 
 The review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after accepting everything it is clean (buffer and disk agree), after rejecting or a partial accept it shows as unsaved, and Ctrl+S writes your version back over the agent's. If the file changed on disk by something other than the agent while you reviewed, the transcript says so and Ctrl+S asks before overwriting it.

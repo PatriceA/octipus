@@ -462,3 +462,21 @@ test('an agent.edit to a file that is not open reads it from disk; one after a w
   key('\x1by'); modalKey('a');
   expect(rec?.buffer.text()).toBe('ALPHA\nBETA\n');
 });
+
+// The agent's file is based on the disk, not on the unsaved buffer: a two-way diff showed the user's edits as hunks to revert.
+test('accepting an agent edit keeps the unsaved edits; a change over them is a conflict that starts rejected; the buffer stays unsaved', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/m.ts', 'a\nb\nc\nd\ne\nf\ng', { disk: DISK });
+  rec.buffer.setText('MINE\nb\nc\nd\nmine too\nf\ng');
+  f.listener({ kind: 'agent.write', path: '/tmp/m.ts', newText: 'a\nb\nc\nd\nAGENT\nf\nG' });
+  key('\x1by');
+  expect(modalText()).toContain('1 conflict with your unsaved edits');
+  expect(modalText()).not.toContain('- MINE');
+  modalKey('\r');
+  expect(rec.buffer.text()).toBe('MINE\nb\nc\nd\nmine too\nf\nG');
+  expect(app.buffers.byId(rec.id)?.dirty).toBe(true);
+  f.listener({ kind: 'agent.write', path: '/tmp/m.ts', newText: 'a\nb\nc\nd\nAGENT\nf\ng' });
+  key('\x1by'); modalKey('a');
+  expect(rec.buffer.text()).toBe('MINE\nb\nc\nd\nAGENT\nf\nG');
+  expect(app.buffers.byId(rec.id)?.dirty).toBe(true);
+});

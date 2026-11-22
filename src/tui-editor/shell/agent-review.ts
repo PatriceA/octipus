@@ -10,8 +10,11 @@
  * tab — compared with the file as it is on disk — rather than going by
  * unseen. While a review waits the file watcher leaves the buffer alone.
  *
- * The review is a diff of the buffer, as it is when the review opens,
- * against the agent's text; the buffer is locked while it is open. Applying
+ * The review is three-way (`editor/merge.ts`): the agent's text is based on
+ * the file (the buffer's saved text), so only the agent's changes are hunks,
+ * placed in the buffer as it is when the review opens, and the user's
+ * unsaved edits are kept; a change overlapping them is a conflict that
+ * starts rejected. The buffer is locked while the review is open. Applying
  * it puts the result (the accepted hunks, the rest as they were) in the
  * buffer as one undo step and releases the lock.
  *
@@ -137,6 +140,8 @@ export class AgentReview {
       bufferLabel: record.label,
       before: record.buffer.text(),
       after: edit.after,
+      // The agent wrote against the file, not the unsaved buffer: only its changes are hunks, the user's edits stay.
+      base: record.savedText,
       onApply: (result) => this.resolve(edit, record.label, result),
     }));
   }

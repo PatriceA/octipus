@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: accepting an agent edit no longer reverts your unsaved
+  changes.** The review compared the buffer with the agent's whole file, which
+  was written against the file on disk, so your unsaved edits showed as hunks
+  and accepting everything undid them. The review is now three-way: only the
+  agent's changes are hunks, your edits are kept, a change over lines you
+  edited is marked as a conflict (`!`) and starts rejected, and the tab stays
+  unsaved while it differs from the file.
 - **Terminal editor: fragment edits by the agent are reviewed.** A
   `str_replace_editor` `str_replace`, or an `edit` with `old_string`, reached
   the editor as an edit of one fragment and was dropped. It is now applied to
