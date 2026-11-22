@@ -637,6 +637,13 @@ labels reflect blast radius, not contract guarantees.
   out on reconnect; a command, a decision's answer or a stop that cannot be
   sent says so. `GatewayClient`'s send methods return whether the frame went
   out.
+- **Security — terminal chat: a clicked file link is no longer opened.** A
+  `path:line` or `file:` link in a reply was handed to the desktop opener on
+  click, so a model-written `notes.command:1` ran on macOS, and
+  `file://host/share` (any host was accepted) made Windows send the user's
+  NTLM credentials to that host. `file:` links are now kept only for this
+  machine (no host, `localhost` or its own name), and a click on one copies
+  its path and says so; `http`/`https` links still open in the browser.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

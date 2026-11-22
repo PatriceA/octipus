@@ -3,7 +3,10 @@
  *
  * Outside text never carries its own sequences to the screen
  * (`displayText` removes them); the links here are added by the app, after
- * that, and only for `http`, `https` and `file` URLs. pi-tui's Markdown also
+ * that, and only for `http`, `https` and `file` URLs — a `file` URL only for
+ * this machine (no host, `localhost` or its own name: `file://attacker/share`
+ * is a UNC path, and opening one hands Windows' NTLM credentials to that
+ * host). pi-tui's Markdown also
  * links `[text](href)` with whatever href the reply wrote, so
  * `sanitizeHyperlinks` runs over rendered rows and drops any link whose URL
  * is not one of those schemes, or that holds a control character or a
@@ -21,12 +24,22 @@ import { pathToFileURL } from 'node:url';
 
 const SAFE_SCHEMES = new Set(['http:', 'https:', 'file:']);
 
-/** The URL as a link may carry it, or null: an allowed scheme, nothing that could end or extend the sequence. */
+/** Whether a `file:` URL's host is this machine: none, `localhost`, or its own name (what `fileUrlFor` writes). */
+export function isLocalFileHost(host: string, self: string = hostname()): boolean {
+  const name = host.toLowerCase();
+  return name === '' || name === 'localhost' || name === self.toLowerCase();
+}
+
+/**
+ * The URL as a link may carry it, or null: an allowed scheme, nothing that
+ * could end or extend the sequence, and for `file:` a file of this machine.
+ */
 export function safeUrl(url: string): string | null {
   if (!url || /[\x00-\x20\x7f-\x9f]/.test(url)) return null;
   let parsed: URL;
-  try { parsed = new URL(url); } catch { return null; }
+  try { parsed = new URL(url); } catch { return null; } // not a URL: no link, the text stays
   if (!SAFE_SCHEMES.has(parsed.protocol)) return null;
+  if (parsed.protocol === 'file:' && !isLocalFileHost(parsed.hostname)) return null;
   return parsed.href;
 }
 

@@ -11,7 +11,7 @@ import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
 import { type MouseMode, readNotifySetting, readThemeSetting, resolveTerminalSettings, type ScreenMode } from './settings';
 import { setPalette } from './theme/defaults';
-import { openUrl } from './links';
+import { openerFor, openUrl } from './links';
 import { Attention, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON, type NotifyMethod } from './attention';
 
 export interface RuntimeOptions {
@@ -179,8 +179,8 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
     }(terminal, options.showHardwareCursor ?? false, undefined, {
       mouse: mouse === 'app',
       scrollToEndIndicator: () => ' ↓ End: latest ',
-      // The app gets the click, not the terminal: open the link here (http, https, file only).
-      openUrl: url => openUrl(url, message => alt.flash(message)),
+      // The app gets the click, not the terminal: open a web link here; a local file's path is copied, never opened.
+      openUrl: url => openUrl(url, message => alt.flash(message), openerFor(), copy),
       copySelection: async text => {
         const result = await copy(selectionText(text));
         if (!result.ok) return result.message;
