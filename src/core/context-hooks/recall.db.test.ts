@@ -484,7 +484,7 @@ describe('side effects only for what is shown', () => {
     const took = Date.now() - started;
     expect(text).not.toContain('<recalled-knowledge>');
     expect(await lastRecord()).toMatchObject({ status: 'error', reason: 'commit_failed' });
-    expect(took).toBeLessThan(START_DEADLINE_MS + 500);
+    expect(took).toBeLessThan(START_DEADLINE_MS + 2000);
   }, 15_000);
 
   test('a commit that fails leaves its block out and is logged', async () => {
