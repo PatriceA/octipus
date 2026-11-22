@@ -898,7 +898,7 @@ export class OctipusTuiApp {
       prepared = await this.adapter.uploadAttachments(from, images.map(image => image.attachment), text);
     } catch (error) {
       this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
-      this.endTurn();
+      this.endTurn('error');
       return;
     }
     if (this.sessionId !== from) return; // switched sessions while uploading

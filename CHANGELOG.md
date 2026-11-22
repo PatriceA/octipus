@@ -658,6 +658,8 @@ labels reflect blast radius, not contract guarantees.
   still takes exactly the rows of the last streamed frame.
 - **Terminal chat and editor: the window title is restored on exit.** It kept
   the app's last title; the terminal's title stack now saves and restores it.
+- **Terminal chat: a failed image upload notifies a failure.** It used to send
+  "The reply is ready" for a message that was never sent.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

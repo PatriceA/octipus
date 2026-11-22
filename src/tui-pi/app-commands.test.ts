@@ -4,6 +4,7 @@ import { OctipusTuiApp } from './app';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
 import { MessagesPane } from './components/messages-pane';
+import type { Attention } from './attention';
 import type { AgentSessionEvent } from './gateway-adapter';
 import { installOctipusKeybindings } from './keybindings';
 
@@ -219,12 +220,16 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
 test('a failed image upload says so and sends nothing', async () => {
   image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
   gateway.uploadAttachments.mockRejectedValue(new Error('Each attachment must contain data and be no larger than 10 MiB.'));
-  const t = mount();
+  const attention = { notify: vi.fn(), setState: vi.fn() };
+  const t = mount({ attention: attention as unknown as Attention });
   t.submit('/attach');
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
   t.submit('Look at [image1]');
   await vi.waitFor(() => expect(t.text()).toContain('Message not sent: the image upload failed'));
   expect(gateway.sendChat).not.toHaveBeenCalled();
+  // A failure, not "the reply is ready".
+  expect(attention.notify).toHaveBeenCalledWith('The turn failed');
+  expect(attention.notify).not.toHaveBeenCalledWith('The reply is ready');
   await t.app.stop();
 });
 
