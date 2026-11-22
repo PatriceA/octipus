@@ -11,6 +11,8 @@ export interface NoteRow {
   pinned: boolean;
   updatedAt: string;
   noteDate?: string | null;
+  /** The note's properties; `GET /notes` returns them, a remote space's list does not. */
+  frontmatter?: Record<string, unknown>;
 }
 
 export interface NoteIndexEntry {
