@@ -52,9 +52,11 @@ Every path that starts an agent on a user's message or brief goes through one
 function, `contextForAgentStart` (`src/core/context-hooks/agent-start.ts`),
 which also applies the audience rule below. A test
 (`spawn-sites.test.ts`) reads every `agentManager.spawn(` and
-`directResponse(` call in `src/` and fails when one is neither hooked nor
-listed as exempt with its reason, so a new start path cannot be added
-without deciding.
+`directResponse(` call in `src/`, and every `.run(` on an agent taken from
+the manager (`agentManager.get(…)`), and fails when one is neither hooked
+nor listed as exempt with its reason, so a new start path cannot be added
+without deciding. An admin who messages another user's live agent gets no
+hooks: the owner's knowledge is not pushed into a reply someone else reads.
 
 | Start | Event | Searched with | Where the block goes |
 |---|---|---|---|
@@ -64,6 +66,7 @@ without deciding.
 | A specialist (`spawnWorker`, pipeline stages included) | `worker_start` | task and input | the volatile part of its system prompt |
 | A swarm child (`spawn_child`) | `worker_start` | its brief | its first message; every retry reruns that message |
 | A hook's spawned agent, `POST /api/agents` with a message | `worker_start` | the message | before the message |
+| A new task for a live agent (`POST /api/agents/:id/message`), sent by its owner | `worker_start` | the message | before the message |
 
 The model is chosen after the hooks ran, so a passage at protection level 3-4
 puts the agent on a local model, or refuses the start with the reason when

@@ -3,8 +3,10 @@
  * (docs/plans/recall-hardening.md §1).
  *
  * This suite reads every non-test source file under `src/`, finds each
- * `agentManager.spawn(` / `getAgentManager().spawn(` call and each
- * `directResponse(` call, and fails unless the site is in `SITES` below:
+ * `agentManager.spawn(` / `getAgentManager().spawn(` call, each
+ * `directResponse(` call, and each `.run(` on an agent taken from the
+ * manager (`const agent = agentManager.get(id)` … `agent.run(`: a new task
+ * for an agent that already exists), and fails unless the site is in `SITES` below:
  * either hooked (the function named there calls `contextForAgentStart`) or
  * exempt with its reason. A site is named by its file and the function it
  * sits in, never by its line, so moving code does not break the suite; a new
@@ -15,7 +17,7 @@ import { globSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-type Call = 'spawn' | 'directResponse';
+type Call = 'spawn' | 'directResponse' | 'run';
 
 interface Site {
   file: string;
@@ -64,6 +66,10 @@ const SITES: readonly Site[] = [
   {
     file: 'src/api/routes/agents.ts', within: '(module)', call: 'spawn',
     hooked: { how: 'POST /api/agents with a message: worker_start against it before the spawn, the block before the message' },
+  },
+  {
+    file: 'src/api/routes/agents.ts', within: '(module)', call: 'run',
+    hooked: { how: 'POST /api/agents/:id/message: worker_start against the new message, for the agent\'s owner when the owner sends it (an admin reaching another user\'s agent gets none: the reply is read by someone else)' },
   },
   {
     file: 'src/core/agent/service.ts', within: 'runTurn', call: 'directResponse',
@@ -244,17 +250,36 @@ const CALLS: Array<{ call: Call; pattern: RegExp }> = [
 
 interface FoundSite { file: string; within: string; call: Call; line: number }
 
+const MANAGER_GET = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]*)?=\s*(?:await\s+)?(?:\bagentManager|\bgetAgentManager\(\s*\))\s*\.\s*get\s*\(/g;
+const MANAGER_GET_RUN = /(?:\bagentManager|\bgetAgentManager\(\s*\))\s*\.\s*get\s*\([^()]*\)\s*\??\.\s*run\s*\(/g;
+
+/**
+ * The `.run(` calls on an agent taken from the manager: on a name bound to
+ * `agentManager.get(…)` in the block that binds it (after the binding), or
+ * chained onto the `get` itself.
+ */
+function managerRuns(code: string, blocks: ReturnType<typeof braceBlocks>): number[] {
+  const at: number[] = [];
+  for (const m of code.matchAll(MANAGER_GET)) {
+    const bound = m.index ?? 0;
+    const scope = blocks.filter((b) => b.open < bound && bound < b.close).sort((a, b) => b.open - a.open)[0] ?? { open: 0, close: code.length };
+    const name = m[1].replace(/\$/g, '\\$');
+    for (const run of code.slice(bound, scope.close).matchAll(new RegExp(`(?<![\\w$.])${name}\\s*\\??\\.\\s*run\\s*\\(`, 'g'))) at.push(bound + (run.index ?? 0));
+  }
+  for (const m of code.matchAll(MANAGER_GET_RUN)) at.push(m.index ?? 0);
+  return at;
+}
+
 function findSites(files: ReadonlyMap<string, string>): FoundSite[] {
   const found: FoundSite[] = [];
   for (const [file, src] of files) {
     const code = blankNonCode(src);
     const blocks = braceBlocks(code);
+    const site = (call: Call, at: number) => found.push({ file, call, within: enclosingFunction(code, blocks, at), line: code.slice(0, at).split('\n').length });
     for (const { call, pattern } of CALLS) {
-      for (const m of code.matchAll(pattern)) {
-        const at = m.index ?? 0;
-        found.push({ file, call, within: enclosingFunction(code, blocks, at), line: code.slice(0, at).split('\n').length });
-      }
+      for (const m of code.matchAll(pattern)) site(call, m.index ?? 0);
     }
+    for (const at of managerRuns(code, blocks)) site('run', at);
   }
   return found;
 }
@@ -334,6 +359,27 @@ describe('the checker', () => {
     expect(problems[0]).toContain('src/core/new-start.ts › startReport › spawn (src/core/new-start.ts:2)');
     expect(problems[0]).toContain('contextForAgentStart');
     expect(problems[0]).toContain('exempt');
+  });
+
+  test('a new task run on an agent taken from the manager is a site; a spawned agent\'s run is the spawn\'s', () => {
+    const files = new Map([[file, [
+      'export const routes = app',
+      '  .post("/:id/message", async ({ params, body }) => {',
+      '    const agent = agentManager.get(params.id);',
+      '    if (!agent) return { error: "gone" };',
+      '    void agent.run(body.message);',
+      '  })',
+      '  .post("/", async ({ body }) => {',
+      '    const agent = await agentManager.spawn(body);',
+      '    void agent.run(body.message);',
+      '  });',
+      'export function poke(id: string) { return getAgentManager().get(id)?.run("again"); }',
+    ].join('\n')]]);
+    expect(findSites(files).map((f) => [f.within, f.call, f.line])).toEqual([
+      ['(module)', 'spawn', 8], ['(module)', 'run', 5], ['poke', 'run', 11],
+    ]);
+    expect(checkSpawnSites(files, [{ file, within: '(module)', call: 'spawn', exempt: 'a reason long enough to check' }]))
+      .toEqual([expect.stringContaining('src/core/new-start.ts › (module) › run'), expect.stringContaining('src/core/new-start.ts › poke › run')]);
   });
 
   test('a second call in a listed function is a new site', () => {

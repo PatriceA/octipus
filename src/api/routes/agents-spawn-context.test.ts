@@ -17,10 +17,12 @@ const fx = vi.hoisted(() => ({
   turn: { id: 'turn-api', usageKey: 's', startUse: { knowledge: 0, notes: 0 }, citable: [] },
   hooksBeforeSpawn: [] as number[],
   spawnError: undefined as Error | undefined,
+  caller: { id: '55555555-5555-5555-5555-555555555555', isAdmin: false },
+  mayServe: true,
 }));
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
-  return { apiContext: new App().derive(() => ({ user: { id: USER, isAdmin: false }, principal: { kind: 'user', userId: USER } })) };
+  return { apiContext: new App().derive(() => ({ user: { id: fx.caller.id, isAdmin: fx.caller.isAdmin }, principal: { kind: 'user', userId: fx.caller.id } })) };
 });
 vi.mock('@/security/principal', async (original) => ({ ...await original<typeof import('@/security/principal')>(), isAuthenticated: (p: unknown) => !!p }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async (id: string) => ({ id, userId: USER, ...fx.session }) } }));
@@ -39,11 +41,13 @@ vi.mock('@/core/agent-manager', () => ({
       if (fx.spawnError) throw fx.spawnError;
       return spawned();
     },
+    get: (id: string) => (id === 'agent-api' ? spawned() : undefined),
+    modelMayServe: async () => fx.mayServe,
   }),
 }));
 const spawned = () => ({
   run: async (message: string) => { fx.runs.push(message); return 'done'; },
-  getContext: () => ({ id: 'agent-api', sessionId: 'sess-api', topic: 'general', model: 'm', role: 'general' }),
+  getContext: () => ({ id: 'agent-api', sessionId: 'sess-api', userId: USER, workspaceId: null, topic: 'general', model: 'm', role: 'general' }),
   getStatus: () => 'idle',
 });
 vi.mock('@/core/context-hooks/run', async (original) => ({
@@ -60,6 +64,8 @@ const spawn = (message: string) => app.handle(new Request('http://test/api/agent
 
 beforeEach(() => {
   fx.session = {};
+  fx.caller = { id: USER, isAdmin: false };
+  fx.mayServe = true;
   fx.hooksBeforeSpawn = [];
   fx.spawnError = undefined;
   fx.runs = [];
@@ -95,4 +101,33 @@ test('a spawn refused after the hooks ran closes their record', async () => {
   expect(await res.json()).toEqual({ error: fx.spawnError.message });
   await vi.waitFor(() => expect(fx.finish).toHaveBeenCalledWith(fx.turn, { outcome: 'error' }));
   expect(fx.runs).toEqual([]);
+});
+
+const message = (text: string) => app.handle(new Request('http://test/api/agents/agent-api/message', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: text }),
+}));
+
+test("a new task for the owner's live agent gets its hooks, for the owner in the agent's session", async () => {
+  expect(await (await message('and now the changelog')).json()).toEqual({ status: 'processing' });
+  await vi.waitFor(() => expect(fx.finish).toHaveBeenCalledTimes(1));
+  expect(fx.hooks.mock.calls[0][0]).toMatchObject({ event: 'worker_start', userId: USER, sessionId: 'sess-api', query: 'and now the changelog', channel: 'api' });
+  expect(fx.runs).toEqual([`${BLOCK.trim()}\n\nand now the changelog`]);
+  expect(fx.finish).toHaveBeenCalledWith(fx.turn, { agentId: 'agent-api', response: 'done', outcome: 'success' });
+});
+
+test("an admin reaching another user's agent runs it without the owner's knowledge", async () => {
+  fx.caller = { id: '66666666-6666-6666-6666-666666666666', isAdmin: true };
+  expect(await (await message('what is in there?')).json()).toEqual({ status: 'processing' });
+  await vi.waitFor(() => expect(fx.runs).toHaveLength(1));
+  expect(fx.hooks).not.toHaveBeenCalled();
+  expect(fx.runs).toEqual(['what is in there?']);
+});
+
+test('a block the agent\'s model may not receive refuses the run with the reason', async () => {
+  fx.mayServe = false;
+  const res = await message('summarise the contract');
+  expect(res.status).toBe(409);
+  expect((await res.json()).error).toMatch(/stays on local models/);
+  expect(fx.runs).toEqual([]);
+  expect(fx.finish).toHaveBeenCalledWith(fx.turn, { agentId: 'agent-api', outcome: 'error' });
 });
