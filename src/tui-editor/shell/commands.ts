@@ -19,6 +19,9 @@ export interface CommandHost {
   clearInfoNotice(): boolean;
   hidePlanDetails(): void;
   setVimMode(on: boolean): void;
+  setSoftWrap(on: boolean): void;
+  /** Copy the editor's selection, when the editor has the focus and something selected; returns whether it did. */
+  copySelection(): boolean;
   newScratch(): void;
   saveAsCommand(path: string): void;
   reloadKeybindings(): void;
@@ -46,6 +49,10 @@ export function handleChatSubmit(host: CommandHost, rawText: string): void {
     if (name === 'plan-hide') { host.hidePlanDetails(); return; }
     if (name === 'vim') {
       host.setVimMode(value === 'on' ? true : value === 'off' ? false : ctx.layout.get().editorMode !== 'vim');
+      return;
+    }
+    if (name === 'wrap') {
+      host.setSoftWrap(value === 'on' ? true : value === 'off' ? false : !ctx.layout.get().softWrap);
       return;
     }
     if (name === 'new') { host.newScratch(); return; }
@@ -82,13 +89,15 @@ export function handleGlobalKey(host: CommandHost, data: string): { consume: tru
   if (kb.matches(data, 'app.file.open'))     { overlays.openFilePicker(); return { consume: true }; }
   if (kb.matches(data, 'app.file.saveAs'))   { host.openSaveAsForActive(); return { consume: true }; }
   if (kb.matches(data, 'app.vim.toggle'))    { host.setVimMode(ctx.layout.get().editorMode !== 'vim'); return { consume: true }; }
+  if (kb.matches(data, 'app.view.wrap'))     { host.setSoftWrap(!ctx.layout.get().softWrap); return { consume: true }; }
   if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
   if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
   if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }
   if (kb.matches(data, 'app.mcp.list'))      { void overlays.openMCPServerList(); return { consume: true }; }
   if (kb.matches(data, 'app.palette.open'))  { overlays.openCommandPalette(); return { consume: true }; }
   if (kb.matches(data, 'app.help.open'))     { overlays.openHotkeys(); return { consume: true }; }
-  if (matchesKey(data, 'ctrl+c')) { host.requestQuit(); return { consume: true }; }
+  // Ctrl+C copies what is selected in the editor; with nothing selected it is the quit key, as everywhere.
+  if (matchesKey(data, 'ctrl+c')) { if (!host.copySelection()) host.requestQuit(); return { consume: true }; }
   if (kb.matches(data, 'app.quit'))          { host.shutdownAndExit(); return { consume: true }; }
   return undefined;
 }

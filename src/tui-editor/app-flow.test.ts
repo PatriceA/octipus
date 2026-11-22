@@ -280,6 +280,29 @@ test('start() that fails to connect restores the terminal before the error surfa
   expect(onShutdown).toHaveBeenCalledTimes(1);
 });
 
+test('Ctrl+C copies the editor selection; with nothing selected it still asks to quit', () => {
+  const app = mount(); const rec = edited(app, '/tmp/c.ts', 'copy me please');
+  rec.buffer.select({ line: 0, col: 0 }, { line: 0, col: 7 });
+  key('\x03');
+  expect(modals).toHaveLength(0);
+  expect((app as unknown as { lastCopy: string | null }).lastCopy).toBe('copy me');
+  rec.buffer.setCursor({ line: 0, col: 0 });
+  key('\x03');
+  expect(modalText()).toContain('Unsaved changes');
+});
+
+test('Alt+Z and /wrap switch soft wrap, remembered in the checkpoint', async () => {
+  const app = mount();
+  key('\x1bz');
+  expect(app.layout.get().softWrap).toBe(true);
+  expect((app as unknown as { editor: { isWrapping(): boolean } }).editor.isWrapping()).toBe(true);
+  (app as unknown as { handleChatSubmit(t: string): void }).handleChatSubmit('/wrap off');
+  expect(app.layout.get().softWrap).toBe(false);
+  key('\x1bz');
+  await app.stop();
+  expect(f.savedState.mock.lastCall?.[0].softWrap).toBe(true);
+});
+
 // docs/plans/tui-modernization.md §7, Phase 5 item 2: hunk-level review.
 test('an agent edit to a file that is not open opens it in a review tab instead of being dropped', () => {
   const app = mount();

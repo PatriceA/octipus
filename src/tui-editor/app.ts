@@ -22,6 +22,8 @@ import { DecisionQueue } from '@/tui-pi/decision-queue';
 import { type AgentSessionEvent, GatewayAdapter } from '@/tui-pi/gateway-adapter';
 import { loadOctipusKeybindings } from '@/tui-pi/keybindings';
 import { createOverlayController } from '@/tui-pi/overlays/registry';
+import { terminalClipboard } from '@/tui-pi/terminal-actions';
+import { readClipboard } from '@/tui-kit/clipboard-read';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
@@ -90,6 +92,8 @@ export class OctipusEditorApp {
   private readonly onShutdown?: () => Promise<void>;
   /** Everything to release on shutdown: store subscriptions, input listeners, the adapter listener. */
   private readonly disposers: Array<() => void> = [];
+  /** What the editor copied last: pasted when the system clipboard cannot be read. */
+  private lastCopy: string | null = null;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
@@ -128,12 +132,25 @@ export class OctipusEditorApp {
     this.review = new AgentReview(this.ctx, this.files);
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
+    const copy = terminalClipboard(tui);
     this.tabs = new TabStrip(this.buffers);
     this.editor = new TextEditor(this.buffers, {
       onSave: (record) => { this.files.saveBuffer(record.id); },
       onVimCommand: (command, record) => this.runVimCommand(command, record.id),
       onNotice: (text) => { this.modeBar.setNotice(text); this.tui.requestRender(); },
       layout: this.layout,
+      clipboard: {
+        copy: (text) => {
+          this.lastCopy = text;
+          void copy(text).then(
+            (result) => { this.modeBar.setNotice(result.message, result.ok ? 'info' : 'error'); this.tui.requestRender(); },
+            (error: unknown) => { this.modeBar.setNotice(`Not copied: ${error instanceof Error ? error.message : String(error)}`); this.tui.requestRender(); },
+          );
+        },
+        paste: async () => (await readClipboard()).text ?? this.lastCopy,
+      },
+      onFocus: () => { if (this.layout.get().focused !== 'editor') this.layout.focus('editor'); },
+      requestRender: () => this.tui.requestRender(),
     });
     this.modeBar = new ModeBar(this.layout, this.buffers, {
       getVimMode: () => this.editor.getVimState().mode,
@@ -211,7 +228,7 @@ export class OctipusEditorApp {
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
     this.layout.setSize(tui.terminal.columns, tui.terminal.rows);
-    this.disposers.push(this.layout.subscribe(() => { if (!this.tui.hasOverlay()) this.refocus(); }));
+    this.disposers.push(this.layout.subscribe((state) => { this.editor.setWrap(state.softWrap); if (!this.tui.hasOverlay()) this.refocus(); }));
 
     // Restore persisted state — failures are non-fatal (defaults applied).
     this.disposers.push(...this.persistence.hydrate());
@@ -235,6 +252,12 @@ export class OctipusEditorApp {
       clearInfoNotice: () => this.modeBar.clearInfo(),
       hidePlanDetails: () => { this.status.setPlanDetails(null); this.tui.requestRender(); },
       setVimMode: (on) => this.setVimMode(on),
+      setSoftWrap: (on) => {
+        this.layout.setSoftWrap(on);
+        this.modeBar.setNotice(on ? 'Soft wrap on: long lines break into rows.' : 'Soft wrap off: long lines scroll sideways.', 'info');
+        this.tui.requestRender();
+      },
+      copySelection: () => this.layout.get().focused === 'editor' && this.editor.copySelection(),
       newScratch: () => { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); },
       saveAsCommand: (value) => {
         const active = this.buffers.active();

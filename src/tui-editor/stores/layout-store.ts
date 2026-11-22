@@ -23,6 +23,8 @@ export interface LayoutState {
    * falls through to the modeless path so typing feels unchanged.
    */
   editorMode: EditorMode;
+  /** Long lines break into rows instead of scrolling sideways. */
+  softWrap: boolean;
 }
 
 export type LayoutListener = (s: LayoutState) => void;
@@ -35,6 +37,7 @@ export class LayoutStore {
     cols: 120,
     rows: 30,
     editorMode: 'modeless',
+    softWrap: false,
   };
   private listeners = new Set<LayoutListener>();
 
@@ -73,4 +76,6 @@ export class LayoutStore {
   setSize(cols: number, rows: number): void { this.set({ cols, rows }); }
 
   setEditorMode(mode: EditorMode): void { this.set({ editorMode: mode }); }
+
+  setSoftWrap(on: boolean): void { if (on !== this.state.softWrap) this.set({ softWrap: on }); }
 }

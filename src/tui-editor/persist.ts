@@ -42,6 +42,7 @@ export interface PersistedState {
   /** Cursor position per file, persisted so re-opens land where the user left off. */
   cursorByPath?: Record<string, PersistedCursor>;
   drafts?: Array<{ path: string | null; text: string; label: string }>;
+  softWrap?: boolean;
 }
 
 export const DEFAULT_PERSISTED_STATE: PersistedState = {
@@ -97,6 +98,7 @@ export function loadPersistedState(path: string = legacyDefaultPath()): Persiste
       chatVisible: typeof parsed.chatVisible === 'boolean' ? parsed.chatVisible : true,
       editorMode: parsed.editorMode === 'vim' ? 'vim' : 'modeless',
       cursorByPath: sanitizeCursors(parsed.cursorByPath),
+      ...(parsed.softWrap === true ? { softWrap: true } : {}),
       drafts: Array.isArray(parsed.drafts) ? parsed.drafts.filter(d => d && (d.path === null || typeof d.path === 'string') && typeof d.text === 'string' && typeof d.label === 'string') : [],
     };
   } catch {

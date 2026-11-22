@@ -25,6 +25,7 @@ export class EditorPersistence {
     if (persisted.treeVisible !== undefined && persisted.treeVisible !== layout.get().treeVisible) layout.toggleTree();
     if (persisted.chatVisible !== undefined && persisted.chatVisible !== layout.get().chatVisible) layout.toggleChat();
     if (persisted.editorMode) layout.setEditorMode(persisted.editorMode);
+    if (persisted.softWrap) layout.setSoftWrap(true);
     for (const path of persisted.openPaths ?? []) {
       this.files.openFile(path, { activate: false });
       const cursor = persisted.cursorByPath?.[path];
@@ -74,6 +75,7 @@ export class EditorPersistence {
       treeVisible: layout.treeVisible,
       chatVisible: layout.chatVisible,
       editorMode: layout.editorMode,
+      softWrap: layout.softWrap,
       cursorByPath,
       drafts: buffers.buffers.filter(b => b.dirty).map(b => ({ path: b.path, text: b.buffer.text(), label: b.label })),
     }, pathForProject(this.ctx.projectPath));
