@@ -25,7 +25,7 @@ import { getDb } from '@/db/postgres';
 import { isCapabilityOn } from '@/core/capabilities/gates';
 import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { notes } from '@/db/schema/notes';
-import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS } from '@/shared/context-hooks';
+import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS, RECALL_PURPOSES } from '@/shared/context-hooks';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import {
@@ -35,8 +35,6 @@ import {
 
 export { contentWords } from './recall';
 import type { ContextHookInput, ContextHookItem, ContextHookKind, ContextHookResult } from './types';
-
-const RECALL_PURPOSES = ['note', 'document', 'knowledge_artifact', 'image_description'] as const;
 
 export const KIND_CONFIG = {
   recall: z.object({

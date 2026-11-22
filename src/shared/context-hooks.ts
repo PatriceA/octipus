@@ -25,6 +25,9 @@ export const RECALL_DEFAULTS = {
   /** A chunk's maximum length (`MAX_CHUNK_SIZE`): a chunk is shown whole, so its bytes do not depend on the query. */
   excerptChars: 1000,
 } as const;
+/** The knowledge-base rows recall can search (`purposes`), all of them by default. */
+export const RECALL_PURPOSES = ['note', 'document', 'knowledge_artifact', 'image_description'] as const;
+export type RecallPurpose = (typeof RECALL_PURPOSES)[number];
 export const NOTE_DEFAULTS = { tokenBudget: 600 } as const;
 export const NOTES_INDEX_DEFAULTS = { limit: 15, tokenBudget: 150 } as const;
 

@@ -20,15 +20,23 @@ import {
   NOTES_INDEX_DEFAULTS,
   type Rate,
   RECALL_DEFAULTS,
+  RECALL_PURPOSES,
   type RecallEvalResult,
+  type RecallPurpose,
   type RecallSweepResult,
 } from '../../../src/shared/context-hooks';
 
-const EVENT_LABEL: Record<ContextHookEvent, string> = { turn_start: 'each message', worker_start: 'each specialist' };
+const EVENT_LABEL: Record<ContextHookEvent, string> = { turn_start: 'each message', worker_start: 'each agent started on a task' };
 /** Where a group of agent starts comes from, for the per-event table. */
 const EVENT_ROW_LABEL: Record<ContextHookEvent, string> = {
   turn_start: 'messages (root turns, plan runs, side questions)',
-  worker_start: 'specialists and swarm children',
+  worker_start: 'agents started on a task (specialists, swarm children, spawned and hook agents)',
+};
+const PURPOSE_LABEL: Record<RecallPurpose, string> = {
+  note: 'notes',
+  document: 'documents',
+  knowledge_artifact: 'saved knowledge',
+  image_description: 'image descriptions',
 };
 const KIND_LABEL: Record<ContextHookKind, string> = { recall: 'knowledge recall', note: 'context note', notes_index: 'notes index' };
 const EVAL_KEY = 'octipus.recall.eval';
@@ -49,7 +57,7 @@ const FIELDS: Record<ContextHookKind, Array<{ key: string; fallback: number; hin
     { key: 'keywordCoverage', fallback: RECALL_DEFAULTS.keywordCoverage, hint: 'Share of the message\'s distinctive words a passage must contain (and at least two) to be shown on keywords (0–1)' },
     { key: 'maxGap', fallback: RECALL_DEFAULTS.maxGap, hint: 'A passage shown on similarity alone is dropped this far below the best one (0–1)' },
     { key: 'limit', fallback: RECALL_DEFAULTS.limit, hint: 'Most passages shown (1–10)' },
-    { key: 'excerptChars', fallback: RECALL_DEFAULTS.excerptChars, hint: 'Characters of each passage: the part with the most words of the message (100–3000)' },
+    { key: 'excerptChars', fallback: RECALL_DEFAULTS.excerptChars, hint: 'Most characters of each passage: a chunk this long or shorter is shown whole; a longer one shows the part with the most words of the message (100–3000)' },
     { key: 'tokenBudget', fallback: RECALL_DEFAULTS.tokenBudget, hint: 'Most tokens of the whole block (50–4000)' },
   ],
   note: [{ key: 'tokenBudget', fallback: NOTE_DEFAULTS.tokenBudget, hint: 'Most tokens of the note shown (50–4000)' }],
@@ -132,6 +140,15 @@ function HookRow({ hook }: { hook: ContextHookView }) {
     save.mutate({ config });
   };
   const slug = draft.slug ?? (typeof hook.config.slug === 'string' ? hook.config.slug : '');
+  // Recall's rows to search and the product manual: saved on change, as the events are.
+  const purposes: RecallPurpose[] = Array.isArray(hook.config.purposes)
+    ? RECALL_PURPOSES.filter((p) => (hook.config.purposes as unknown[]).includes(p))
+    : [...RECALL_PURPOSES];
+  const togglePurpose = (p: RecallPurpose) => {
+    const next = purposes.includes(p) ? purposes.filter((x) => x !== p) : RECALL_PURPOSES.filter((x) => x === p || purposes.includes(x));
+    save.mutate({ config: { ...hook.config, purposes: next } });
+  };
+  const productDocs = hook.config.includeProductDocs === true;
 
   return (
     <li className={`border border-outline-variant/60 rounded-xs p-3 ${hook.enabled ? '' : 'opacity-60'}`}>
@@ -169,6 +186,27 @@ function HookRow({ hook }: { hook: ContextHookView }) {
           </label>
         ))}
       </div>
+      {hook.kind === 'recall' && (
+        <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
+          <span className="text-on-surface-variant" title="purposes: which knowledge-base rows recall searches (at least one)">searches</span>
+          {RECALL_PURPOSES.map((p) => (
+            <label key={p} className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={purposes.includes(p)}
+                // The last one stays: recall needs something to search.
+                disabled={purposes.length === 1 && purposes.includes(p)}
+                onChange={() => togglePurpose(p)}
+              />
+              {PURPOSE_LABEL[p]}
+            </label>
+          ))}
+          <label className="flex items-center gap-1 cursor-pointer" title="includeProductDocs: agents already search the manual for setup questions">
+            <input type="checkbox" checked={productDocs} onChange={(e) => save.mutate({ config: { ...hook.config, includeProductDocs: e.target.checked } })} />
+            Octipus manual
+          </label>
+        </div>
+      )}
       <div className="flex flex-wrap items-end gap-2 mt-2">
         {hook.kind === 'note' && (
           <label htmlFor={`note-${hook.id}`} className="text-xs text-on-surface-variant flex flex-col gap-0.5">

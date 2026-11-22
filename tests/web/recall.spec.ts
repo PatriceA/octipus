@@ -53,21 +53,51 @@ test.describe('recall page', () => {
     // Named beside used, the per-event rows, and why passages were shown.
     await expect(page.getByText('answers naming a recalled passage (1/2)')).toBeVisible();
     await expect(page.getByText('answers using a recalled passage (2/2)')).toBeVisible();
-    await expect(page.getByText('specialists and swarm children')).toBeVisible();
+    await expect(page.getByText('agents started on a task (specialists, swarm children, spawned and hook agents)')).toBeVisible();
     await expect(page.getByText('similarity 2 · coverage 1 · identifier 1')).toBeVisible();
     // Every recall setting is editable, blank ones showing their default.
     const recall = page.locator('li', { hasText: 'Knowledge recall' });
     await expect(recall.getByLabel('keywordCoverage')).toHaveAttribute('placeholder', '0.6 (default)');
     await expect(recall.getByLabel('maxGap')).toHaveAttribute('placeholder', '0.15 (default)');
-    await expect(recall.getByLabel('excerptChars')).toHaveAttribute('placeholder', '700 (default)');
-    await expect(recall.getByLabel('tokenBudget')).toHaveAttribute('placeholder', '1000 (default)');
+    await expect(recall.getByLabel('excerptChars')).toHaveAttribute('placeholder', '1000 (default)');
+    await expect(recall.getByLabel('tokenBudget')).toHaveAttribute('placeholder', '1200 (default)');
+    // What it searches, every purpose by default, and the manual off.
+    for (const name of ['notes', 'documents', 'saved knowledge', 'image descriptions']) await expect(recall.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    await expect(recall.getByRole('checkbox', { name: 'Octipus manual' })).not.toBeChecked();
     await expect(recall.getByLabel('limit')).toHaveValue('3');
 
     const notesIndex = page.locator('li', { hasText: 'Notes index' });
     // The stub keeps answering "on", so the box ticks back; the request is what counts.
-    await notesIndex.getByRole('checkbox', { name: 'on' }).click();
+    await notesIndex.getByRole('checkbox', { name: 'on', exact: true }).click();
     await expect.poll(() => patches.length).toBe(1);
     expect(patches[0]).toMatchObject({ url: expect.stringContaining('/api/context-hooks/builtin%3Anotes-index'), body: { enabled: false } });
+  });
+
+  test('what recall searches is set with its checkboxes, the other settings kept, and the last purpose cannot be unticked', async ({ authenticatedPage: page }) => {
+    await stubAllDefaults(page);
+    const patches: unknown[] = [];
+    const onlyNotes: ContextHooksResponse = { ...hooks, hooks: [{ ...hooks.hooks[0], config: { limit: 3, purposes: ['note'] } }, hooks.hooks[1]] };
+    let listed = hooks;
+    await page.route('**/api/context-hooks', (route) => json(route, 200, listed));
+    await page.route('**/api/context-hooks/stats*', (route) => json(route, 200, quiet));
+    await page.route('**/api/context-hooks/builtin*', async (route) => {
+      patches.push(route.request().postDataJSON());
+      await json(route, 200, hooks.hooks[0]);
+    });
+    await page.goto('/recall');
+    const recall = page.locator('li', { hasText: 'Knowledge recall' });
+    await recall.getByRole('checkbox', { name: 'documents', exact: true }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(patches[0]).toEqual({ config: { limit: 3, purposes: ['note', 'knowledge_artifact', 'image_description'] } });
+    await recall.getByRole('checkbox', { name: 'Octipus manual' }).click();
+    await expect.poll(() => patches.length).toBe(2);
+    expect(patches[1]).toEqual({ config: { limit: 3, includeProductDocs: true } });
+
+    listed = onlyNotes;
+    await page.reload();
+    await expect(recall.getByRole('checkbox', { name: 'notes', exact: true })).toBeChecked();
+    await expect(recall.getByRole('checkbox', { name: 'notes', exact: true })).toBeDisabled();
+    await expect(recall.getByRole('checkbox', { name: 'documents', exact: true })).not.toBeChecked();
   });
 
   test('a recall hook that injects on nearly every message gets the calibration warning', async ({ authenticatedPage: page }) => {
