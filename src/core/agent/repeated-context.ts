@@ -86,7 +86,7 @@ export function restoreOmittedContext(history: AgentMessage[], turn: OmittedCont
   if (!missing.length) return turn;
   const still = turn.omitted.filter((block) => !missing.includes(block));
   const replacement = [missing.join('\n\n'), still.length ? REPEATED_CONTEXT_NOTE : ''].filter(Boolean).join('\n\n');
-  message.content = turn.content.replace(REPEATED_CONTEXT_NOTE, replacement);
+  message.content = turn.content.replace(REPEATED_CONTEXT_NOTE, () => replacement);
   return still.length ? { content: message.content, omitted: still } : undefined;
 }
 

@@ -91,6 +91,16 @@ describe('an in-turn compaction that summarizes the earlier copy', () => {
     expect(next?.omitted).toEqual([note.trim()]);
   });
 
+  test('a restored block is put back as written, "$" sequences included', () => {
+    const dollars = '\n\n<context-note title="Rates">\nA note the user asked to show you on every turn: their own context and preferences.\nDay rate US$\'900, rush jobs $& weekends $` double.\n</context-note>\n';
+    const first = user(`${turn(date, dollars)}\n\nfirst question`);
+    const sent = withoutRepeatedContext(turn('\n\nCURRENT DATE & TIME: later', dollars), [dollars], [first]);
+    const message = user(`${sent.text}\n\nsecond question`);
+    const history = [{ ...message }];
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted })).toBeUndefined();
+    expect(history[0].content).toContain("Day rate US$'900, rush jobs $& weekends $` double.");
+  });
+
   test('a message that was itself compacted away ends the tracking', () => {
     const { state } = start();
     expect(restoreOmittedContext([user('summary only')], state)).toBeUndefined();
