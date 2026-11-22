@@ -628,7 +628,8 @@ async function executeSpawnAgent(
   const scope = await resolveAgentScope({ session, userId, trigger: 'schedule' });
   const sessionContext = session?.context;
 
-  const spawnOptions: Parameters<typeof agentManager.spawn>[0] = {
+  // Spawned when the hook fires, and again if its context hooks raise the session's level (below).
+  const spawnHookAgent = () => agentManager.spawn({
     sessionId,
     userId,
     ...scope,
@@ -640,10 +641,10 @@ async function executeSpawnAgent(
     model: config.agentModel,
     systemPrompt: prompt,
     timeout: hookTimeout,
-  };
+  });
   let agent: Awaited<ReturnType<typeof agentManager.spawn>>;
   try {
-    agent = await agentManager.spawn(spawnOptions);
+    agent = await spawnHookAgent();
   } catch (err) {
     if (isCapacityRefusal(err)) {
       // No agent exists, so nothing of this event was handled: report it as
@@ -688,7 +689,7 @@ async function executeSpawnAgent(
         if (!(await agentManager.modelMayServe(agent))) {
           const replaced = agent.getContext().id;
           agentManager.stop(replaced);
-          agent = await agentManager.spawn(spawnOptions);
+          agent = await spawnHookAgent();
           coreLogger.info({ hookId: hook?.id, sessionId, replaced, agentId: agent.getContext().id }, 'Hook agent respawned: the context shown raised the session to a local-only level');
         }
       } catch (err) {

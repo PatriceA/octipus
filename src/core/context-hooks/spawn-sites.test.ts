@@ -57,11 +57,7 @@ const SITES: readonly Site[] = [
   },
   {
     file: 'src/hooks/actions.ts', within: 'executeSpawnAgent', call: 'spawn',
-    hooked: { how: 'the non-orchestrated hook agent: worker_start against its message, before the message' },
-  },
-  {
-    file: 'src/hooks/actions.ts', within: 'runWithContext', call: 'spawn',
-    hooked: { how: 'the hook agent spawned again after its context hooks raised the session to a local-only level: same message, block already computed' },
+    hooked: { within: 'runWithContext', how: 'the non-orchestrated hook agent: worker_start against its message inside the session\'s turn, before the message; spawned again there when the hooks raised the session to a local-only level' },
   },
   {
     file: 'src/api/routes/agents.ts', within: '(module)', call: 'spawn',
