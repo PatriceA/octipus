@@ -273,10 +273,26 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
 
     const root = decodeGatewayEvent({
       type: 'agent.spawned',
-      payload: { agentId: 'root-1', role: 'general' },
+      payload: { agentId: 'root-1', role: 'general', root: true },
     }).find((e) => e.kind === 'agent.start');
     if (root?.kind !== 'agent.start') throw new Error('wrong kind');
     expect(root.subagent).toBeUndefined();
+    expect(root.root).toBe(true);
+  });
+
+  // The shapes root-runner.ts and worker-spawner.ts emit (`worker_spawned` /
+  // `worker_completed`): a worker is `workerId`, never `agentId`, and only the
+  // root says `root: true`.
+  test('a worker spawned and completed decodes with its workerId and as no root', () => {
+    const start = decodeGatewayEvent({ type: 'agent.spawned', payload: { workerId: 'w-1', role: 'research', model: 'm', parentAgentId: 'root-1' } })[0];
+    expect(start).toMatchObject({ kind: 'agent.start', nodeId: 'w-1', root: false, subagent: true });
+    const end = decodeGatewayEvent({ type: 'agent.completed', payload: { workerId: 'w-1', role: 'research', result: 'r', iterations: 3, durationMs: 4000, totalTokens: 1500 } })[0];
+    expect(end).toMatchObject({ kind: 'agent.end', nodeId: 'w-1', root: false, stats: { tokens: 1500, durationMs: 4000, iterations: 3 } });
+  });
+
+  test('the root completed decodes as the root, by the workerId it carries', () => {
+    const end = decodeGatewayEvent({ type: 'agent.completed', payload: { workerId: 'root-1', role: 'general', root: true, result: '', totalTokens: 900, iterations: 2 } })[0];
+    expect(end).toMatchObject({ kind: 'agent.end', nodeId: 'root-1', root: true, stats: { tokens: 900 } });
   });
 
   test.each(['root', 'rootAgent'])('does not announce a %s swarm node as a delegated agent', (kind) => {

@@ -112,10 +112,13 @@ export class ChatSessionPresenter {
         // the ROOT agent's, so a fan-out doesn't make the main indicator
         // flicker between children.
         if (event.subagent && event.nodeId) {
-          this.subagents.start(event.nodeId, event.role, event.model);
+          // A worker is announced twice (its `agent.spawned` and its swarm node): one row.
+          if (!this.subagents.has(event.nodeId)) this.subagents.start(event.nodeId, event.role, event.model);
           this.tui.requestRender();
           return true;
         }
+        // Not the root and nothing to show it under: its "Agent spawned" line is all there is.
+        if (!event.root) return true;
         // Start with iteration 0 so a long-running agent isn't silent
         // between spawn and its first iteration tick (the worker emits
         // iteration_update at the TOP of each loop iteration).
@@ -169,6 +172,14 @@ export class ChatSessionPresenter {
             cost: this.cumulative.cost + event.stats.cost,
             turns: this.cumulative.turns,
           };
+          this.status.setStats(this.cumulative);
+          this.tui.requestRender();
+          return true;
+        }
+        if (!event.root) {
+          // A worker the panel never saw finishing: count what it spent, leave
+          // the root's activity row and live reply alone.
+          this.cumulative = { ...this.cumulative, tokens: this.cumulative.tokens + event.stats.tokens, cost: this.cumulative.cost + event.stats.cost };
           this.status.setStats(this.cumulative);
           this.tui.requestRender();
           return true;

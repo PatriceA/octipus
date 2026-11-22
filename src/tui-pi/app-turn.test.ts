@@ -83,7 +83,7 @@ test('a queued message can be taken back to edit or remove it before it is sent'
 test('Esc stops the running turn by its root agent; queued messages come back to the composer', async () => {
   const t = mount();
   t.submit('long task');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
   gateway.listener({ kind: 'agent.start', role: 'research', model: 'm', nodeId: 'child-1', subagent: true });
   t.submit('follow-up');
   expect(t.key(ESC)).toEqual({ consume: true });
@@ -139,12 +139,12 @@ test('slash commands run during a turn instead of queueing', async () => {
 test('the turn a subagent finishing does not end; the root finishing does', async () => {
   const t = mount();
   t.submit('fan out');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
   gateway.listener({ kind: 'agent.start', role: 'research', model: 'm', nodeId: 'child-1', subagent: true });
   t.submit('later');
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'child-1', role: 'research' });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'child-1', role: 'research', root: false });
   expect(t.chats()).toEqual(['fan out']);
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general' });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general', root: true });
   expect(t.chats()).toEqual(['fan out', 'later']);
   await t.app.stop();
 });

@@ -62,8 +62,14 @@ export type AgentSessionEvent =
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'permission.resolved'; requestId: string; status: 'approved' | 'denied' | 'expired' }
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
-  | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
-  | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
+  /**
+   * An agent started. `root`: the turn's root agent (the server marks it
+   * `root: true`); `subagent`: anything else it spawned (a swarm node or a
+   * worker), which gets a row of its own.
+   */
+  | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean; root?: boolean }
+  /** An agent finished; `root` only for the turn's root (never inferred from a missing id). */
+  | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string; root?: boolean }
   /** An agent was stopped on request (`agent.stop`, Esc). */
   | { kind: 'agent.stopped';  agentId: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
@@ -312,9 +318,12 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model')
         ?? pickString(asRecord(payload.data), 'model')
         ?? '';
-      const nodeId = pickString(payload, 'agentId')
-        ?? pickString(asRecord(payload.data), 'agentId');
-      out.push({ kind: 'agent.start', role, model, nodeId });
+      // The root names itself `agentId` (root-runner.ts), a worker `workerId`
+      // (worker-spawner.ts); only the root says `root: true`.
+      const nodeId = pickString(payload, 'agentId') ?? pickString(payload, 'workerId')
+        ?? pickString(asRecord(payload.data), 'agentId') ?? pickString(asRecord(payload.data), 'workerId');
+      const root = payload.root === true || asRecord(payload.data)?.root === true;
+      out.push(root ? { kind: 'agent.start', role, model, nodeId, root } : { kind: 'agent.start', role, model, nodeId, root, subagent: nodeId !== undefined });
       out.push({
         kind: 'message', role: 'system',
         content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
@@ -347,14 +356,20 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     }
 
     case 'agent.completed': {
-      const stats = asRecord(payload.stats) ?? asRecord(payload.data) ?? {};
+      // `worker_completed` carries its counts at the top (`WorkerResult`).
+      const stats = asRecord(payload.stats) ?? asRecord(payload.data) ?? payload;
       const tokens = pickNumber(stats, 'totalTokens') ?? pickNumber(stats, 'total_tokens') ?? 0;
       const cost = pickNumber(stats, 'totalCostUsd') ?? pickNumber(stats, 'total_cost_usd') ?? 0;
       const durationMs = pickNumber(stats, 'durationMs') ?? pickNumber(stats, 'duration_ms');
       const iterations = pickNumber(stats, 'iterations') ?? pickNumber(asRecord(payload.data), 'iterations');
       const role = pickString(payload, 'role') ?? pickString(asRecord(payload.data), 'role');
-      const nodeId = pickString(payload, 'agentId') ?? pickString(asRecord(payload.data), 'agentId');
-      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs, iterations }, nodeId, role });
+      // `worker_completed` names every agent `workerId` — the root too, marked
+      // `root: true`. Reading only `agentId` left every id undefined, and the
+      // app took any worker finishing for the root ending the turn.
+      const nodeId = pickString(payload, 'workerId') ?? pickString(payload, 'agentId')
+        ?? pickString(asRecord(payload.data), 'workerId') ?? pickString(asRecord(payload.data), 'agentId');
+      const root = payload.root === true || asRecord(payload.data)?.root === true;
+      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs, iterations }, nodeId, role, root });
       // Show runtime + iteration count for parity with the web chat sidepanel.
       const parts: string[] = ['Agent completed'];
       if (role) parts.push(role);
@@ -392,7 +407,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
       const topicPath = pickString(payload, 'topicPath');
-      out.push({ kind: 'agent.start', role, model, nodeId, subagent: true });
+      out.push({ kind: 'agent.start', role, model, nodeId, subagent: true, root: false });
       const label = topicPath && topicPath !== 'root' ? `${role} → ${topicPath}` : role;
       out.push({
         kind: 'message', role: 'system',
@@ -409,7 +424,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const durationMs = pickNumber(payload, 'durationMs');
       const status = pickString(payload, 'status') ?? 'completed';
       const nodeId = pickString(payload, 'nodeId');
-      out.push({ kind: 'agent.end', stats: { tokens, cost: 0, durationMs }, nodeId, role });
+      out.push({ kind: 'agent.end', stats: { tokens, cost: 0, durationMs }, nodeId, role, root: false });
       const parts: string[] = [`Subagent ${status}`, role];
       if (durationMs != null) parts.push(formatDurationMs(durationMs));
       if (tokens > 0) parts.push(`${tokens} tok`);

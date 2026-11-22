@@ -421,7 +421,8 @@ export class OctipusTuiApp {
   private trackTurn(event: AgentSessionEvent): void {
     switch (event.kind) {
       case 'agent.start':
-        if (event.subagent) return;
+        // Only the root agent is the turn; a worker it spawned never takes its place as what Esc stops.
+        if (!event.root) return;
         if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
         else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
         this.showState();
@@ -430,7 +431,9 @@ export class OctipusTuiApp {
         if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
         return;
       case 'agent.end':
-        if (this.turn && (event.nodeId === undefined || event.nodeId === this.turn.rootAgentId) && !this.subagents.has(event.nodeId)) this.endTurn();
+        // A positive match only: an agent the server does not mark as the
+        // root (every worker) never ends the turn, whatever its id.
+        if (this.turn && event.root && (this.turn.rootAgentId === null || event.nodeId === this.turn.rootAgentId)) this.endTurn();
         return;
       case 'agent.stopped':
         if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn('stopped');

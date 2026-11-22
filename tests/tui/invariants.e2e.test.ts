@@ -151,8 +151,8 @@ function stepFrom(rand: () => number, pending: number, agents: string[], pickerO
     const id = pick(rand, agents);
     return { label: 'subagent completed', run: h => h.event('swarm.node_completed', { nodeId: id, role: 'worker', usedTokens: 1200, durationMs: 3400 }) };
   }
-  if (roll < 0.73) return { label: 'root agent spawned', run: h => h.event('agent.spawned', { agentId: 'root', role: 'general', model: text().slice(0, 40) }) };
-  if (roll < 0.76) return { label: 'root agent completed', run: h => h.event('agent.completed', { agentId: 'root', role: 'general', stats: { totalTokens: 900, durationMs: 1500, iterations: 2 } }) };
+  if (roll < 0.73) return { label: 'root agent spawned', run: h => h.event('agent.spawned', { agentId: 'root', role: 'general', root: true, model: text().slice(0, 40) }) };
+  if (roll < 0.76) return { label: 'root agent completed', run: h => h.event('agent.completed', { workerId: 'root', role: 'general', root: true, result: '', totalTokens: 900, durationMs: 1500, iterations: 2 }) };
   if (roll < 0.8) { const t = text(); return { label: 'narration', run: h => h.event('swarm.narration', { text: t }) }; }
   if (roll < 0.83) { const t = text(); return { label: 'blocked', run: h => h.event('agent.blocked', { reason: t, blockedForMs: 20_000 }) }; }
   if (roll < 0.86) return { label: 'session.stats', run: h => h.event('session.stats', { totalTokens: Math.floor(rand() * 2e6), totalCostUsd: rand() * 9, requestCount: 3, contextTokens: 5000, contextWindow: 8000 }) };

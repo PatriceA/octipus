@@ -139,18 +139,18 @@ test('Ctrl+Q quits and F5 prints the hotkeys', async () => {
 test('the thinking line shows model and elapsed seconds', async () => {
   vi.useFakeTimers();
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'ornith:35b' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'ornith:35b', root: true });
   vi.advanceTimersByTime(5000);
   gateway.listener({ kind: 'agent.iteration', agentId: 'root', iteration: 2 });
   expect(t.activity()).toMatch(/thinking · general · iter 2 · 5s · ornith:35b/);
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 } });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, root: true });
   expect(t.activity()).toBe('');
   await t.app.stop();
 });
 
 test('progress appears once without ending the turn or clearing a live answer', async () => {
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'cli/claude' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'cli/claude', root: true });
   gateway.listener({ kind: 'delta', delta: 'Answer in progress', iteration: 1 });
   const update = { kind: 'message', role: 'assistant', content: 'Found the cause.', messageId: 'p1', progress: true } as const;
   gateway.listener(update);
@@ -179,7 +179,7 @@ test('streamed deltas draw live, an iteration change keeps the earlier text, the
   expect(text).toContain('The answer is 42.');
   expect(text.match(/The answer/g)).toHaveLength(1);
   gateway.listener({ kind: 'delta', delta: 'x', iteration: 3 });
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 } });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, root: true });
   expect(t.text()).not.toMatch(/\n\s+x$/);
   await t.app.stop();
 });
@@ -189,7 +189,7 @@ test('partial text from a failed turn is dropped, not promoted into history by t
   gateway.listener({ kind: 'delta', delta: 'half an ans', iteration: 1 });
   gateway.listener({ kind: 'error', message: 'provider died' });
   expect(t.text()).not.toContain('half an ans');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', root: true });
   gateway.listener({ kind: 'delta', delta: 'fresh', iteration: 1 });
   expect(t.text()).not.toContain('half an ans');
   expect(t.text()).toContain('fresh');
@@ -239,7 +239,7 @@ test('removing the image marker removes it from the outgoing message', async () 
 
 test("a turn's tool calls are one collapsed group; Ctrl+O expands every call's arguments and output", async () => {
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root', root: true });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'shell', toolName: 'shell', callId: 'a', args: { command: 'ls -la' } } });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'read_file', toolName: 'read_file', callId: 'b', args: { path: 'a.ts' } } });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'completed', name: 'shell', toolName: 'shell', callId: 'a', output: 'total 0\nfile.ts', durationMs: 40 } });

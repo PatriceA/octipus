@@ -598,6 +598,12 @@ labels reflect blast radius, not contract guarantees.
   environment, phone calls use the bound engines instead of a fixed whisper
   and Voxtral voice (`voice.ttsVoice` picks the voice), the TUI transcribes and
   speaks through the server, and speech calls are recorded in usage/spend.
+- **Terminal chat: a worker finishing no longer ends the turn.** The chat
+  read `agentId` from `agent.completed`, which names every agent `workerId`, so
+  any worker finishing looked like the root ending: the next queued message
+  went out while the root still ran, and the root's live reply was wiped. The
+  turn now ends only on the agent the server marks `root: true`; workers get a
+  row in the subagent panel, and their token counts are read again.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

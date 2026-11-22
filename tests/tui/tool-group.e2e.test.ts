@@ -6,7 +6,7 @@ let tui: TuiHarness | undefined;
 afterEach(async () => { await tui?.stop(); tui = undefined; });
 
 function turn(h: TuiHarness): void {
-  h.event('agent.spawned', { agentId: 'root', role: 'general', model: 'fixture-model' });
+  h.event('agent.spawned', { agentId: 'root', role: 'general', root: true, model: 'fixture-model' });
   h.event('chat.delta', { delta: 'I will look at the file, then fix it.', iteration: 1 });
   h.event('agent.action', { agentId: 'root', data: { type: 'cli_tool_use', id: 'c1', toolName: 'Bash', args: { command: 'cat app.ts' } } });
   h.event('agent.action', { agentId: 'root', data: { type: 'cli_tool_use', id: 'c2', toolName: 'str_replace_editor', args: { command: 'str_replace', path: 'app.ts', old_str: 'const port = 80;', new_str: 'const port = 8080;' } } });
