@@ -916,6 +916,13 @@ export class AgentService {
 
         const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
         const classification = classifyMessage(planMessage);
+        // Context hooks against the brief, as for any turn (same audience
+        // rule); run while memory is retrieved. The brief is long and
+        // self-contained: no previous message.
+        const planHooksRun = contextForAgentStart({
+          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+          space: scope.space, query: planState.brief, role: 'general', channel, audience,
+        });
 
         // Memory-redesign Phase D — also fire on plan execution. The
         // plan often references the user's preferences ("use my usual
@@ -937,15 +944,28 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
+        const planHooks = await planHooksRun;
+        contextTurn = planHooks.turn;
+
         // The brief is stored as the root's user row; mark it as composed, not
         // typed, so memory never cites it as the owner's words.
         const planRun = { ...(getRunContext() ?? { runId: generateRunId() }), syntheticUserMessage: 'plan' as const };
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await runWithContext(planRun, () => this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
-          planMemoryBlock + spaceContext + groupContextBlock,
+          planMemoryBlock + planHooks.text + spaceContext + groupContextBlock,
           scope,
           undefined,
-          { takenTasks: takenTasks.tasks, ...(attachedFiles.length ? { attachedFiles } : {}) },
+          {
+            takenTasks: takenTasks.tasks, ...(attachedFiles.length ? { attachedFiles } : {}),
+            // As on the main path: a retrieved block still in view is not sent again.
+            ...(planMemoryBlock || planHooks.repeatable.length ? { repeatableContext: [planMemoryBlock, ...planHooks.repeatable].filter(Boolean) } : {}),
+            turnContextParts: [
+              { label: 'Long-term memory', text: planMemoryBlock },
+              ...planHooks.labelledBlocks,
+              { label: 'Shared space context', text: spaceContext },
+              { label: 'Group conversation', text: groupContextBlock },
+            ],
+          },
         ));
         void _planSources;
         const outputCheck = guardOutput(await inlineUiGuardText(response, resolvedSessionId), inputGuard.flags);
@@ -959,6 +979,7 @@ export class AgentService {
           ...(planLimit && { metadata: { limit: planLimit } }),
         });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
+        closeContextTurn({ agentId, response: finalResponse, outcome });
 
         // No memory extraction here. The brief is written by the planning
         // model, not the owner, so it is not evidence (memory learns only from

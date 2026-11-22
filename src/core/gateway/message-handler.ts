@@ -628,6 +628,54 @@ function allowInterject(sessionId: string): boolean {
 }
 
 /**
+ * The reply to a side question (`chat.interject`), prefixed with the
+ * persona's name. Answered by `directResponse` with the context hooks'
+ * blocks for the question as its per-turn context (stored with the
+ * question's row as `metadata.promptContext`), under the same audience rule
+ * as a turn: none in a room or group thread (`contextForAgentStart`). The
+ * hooks' record is closed with the reply.
+ */
+export async function answerSideQuestion(sessionId: string, userId: string, content: string, channel?: string): Promise<string> {
+  const { directResponse } = await import('@/core/agent/direct-response');
+  const { ModelSelector } = await import('@/core/agent/model-selector');
+  const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+  const { contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+
+  const persona = await resolvePersonaForUser(userId).catch(() => null);
+  const personaName = persona?.name || 'Octipus';
+  const selector = new ModelSelector();
+
+  let turn: import('@/core/context-hooks').ContextTurnHandle | null = null;
+  try {
+    // A side question in a space session follows the space's model rules
+    // (§5.6); resolving the scope also refuses a role that may not run the agent.
+    const { resolveAgentScope } = await import('@/core/agent/context');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await sessionRepository.findById(sessionId);
+    const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
+    // Typed by the user, so possibly a follow-up of what they typed before.
+    const hooks = await contextForAgentStart({
+      event: 'turn_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+      query: content, role: 'general', ...(channel ? { channel } : {}), session, followUp: true,
+    });
+    turn = hooks.turn;
+    const result = await directResponse(
+      content,
+      sessionId,
+      userId,
+      selector,
+      'simple',
+      [], hooks.text, undefined, scope.space, scope.sponsor,
+    );
+    void finishContextTurn(turn, { response: result.response, outcome: 'success' });
+    return `${personaName} — side question: ${result.response}`;
+  } catch (err) {
+    void finishContextTurn(turn, { outcome: 'failed' });
+    return `${personaName} — side question: ${(err as Error).message}`;
+  }
+}
+
+/**
  * Side-channel chat message — does NOT go through the root agent
  * queue. Routes directly through the persona-aware direct-response
  * path so the user can ask a quick question while a swarm is
@@ -657,35 +705,7 @@ async function handleChatInterject(
     }
     const userId = context.userId;
     context.sessionId = message.sessionId;
-
-    const { directResponse } = await import('@/core/agent/direct-response');
-    const { ModelSelector } = await import('@/core/agent/model-selector');
-    const { resolvePersonaForUser } = await import('@/core/personas/resolver');
-
-    const persona = await resolvePersonaForUser(userId).catch(() => null);
-    const personaName = persona?.name || 'Octipus';
-    const selector = new ModelSelector();
-
-    let reply: string;
-    try {
-      // A side question in a space session follows the space's model rules
-      // (§5.6); resolving the scope also refuses a role that may not run the agent.
-      const { resolveAgentScope } = await import('@/core/agent/context');
-      const { sessionRepository } = await import('@/db/repositories/session-repository');
-      const session = await sessionRepository.findById(message.sessionId);
-      const scope = await resolveAgentScope({ session, userId, trigger: session?.kind === 'room' ? 'room' : 'user' });
-      const result = await directResponse(
-        message.content,
-        message.sessionId,
-        userId,
-        selector,
-        'simple',
-        [], '', undefined, scope.space, scope.sponsor,
-      );
-      reply = `${personaName} — side question: ${result.response}`;
-    } catch (err) {
-      reply = `${personaName} — side question: ${(err as Error).message}`;
-    }
+    const reply = await answerSideQuestion(message.sessionId, userId, message.content, context.clientType);
 
     hub.publishEvent({
       type: 'chat.message',

@@ -130,3 +130,31 @@ describe('a root turn', () => {
     expect(fx.finish).toHaveBeenCalledWith(TURN, { agentId: 'root-agent', outcome: 'cleared' });
   });
 });
+
+describe('plan execution ("go")', () => {
+  const plan = { planningState: { brief: 'Move the enterprise hosting customers to the new price list', active: false, executed: false } };
+
+  test('the brief is searched; the block, its groups and inspector part reach the root agent; the record is finished', async () => {
+    fx.context = plan;
+    await new AgentService().handleMessage('sess-1', USER, 'go', 'webchat');
+    expect(fx.hooks).toHaveBeenCalledTimes(1);
+    expect(fx.hooks.mock.calls[0][0]).toMatchObject({ event: 'turn_start', query: plan.planningState.brief, role: 'general' });
+    // "go" is no follow-up: the brief carries its own subject.
+    expect(fx.hooks.mock.calls[0][0]).not.toHaveProperty('previousMessage');
+    const { message, context, extras } = rootCall();
+    expect(message).toContain(plan.planningState.brief);
+    expect(context).toContain(BLOCK);
+    expect(extras.repeatableContext).toEqual(outcome().repeatable);
+    expect(extras.turnContextParts).toContainEqual({ label: 'Context hook: Recall', text: BLOCK });
+    expect(fx.finish).toHaveBeenCalledWith(TURN, { agentId: 'root-agent', response: 'Enterprise hosting is 99 euro a month.', outcome: 'success' });
+  });
+
+  test('a plan run that fails closes its record', async () => {
+    fx.context = plan;
+    fx.root.mockRejectedValueOnce(new Error('boom'));
+    await new AgentService().handleMessage('sess-1', USER, 'go', 'webchat');
+    expect(fx.finish).toHaveBeenCalledTimes(1);
+    expect(fx.finish).toHaveBeenCalledWith(TURN, { outcome: 'failed' });
+  });
+});
+
