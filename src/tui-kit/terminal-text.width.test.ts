@@ -79,9 +79,9 @@ const CASES: Array<[label: string, input: string, known?: Known]> = [
   ['emoji cut in half by a length limit', `a${'🐙'.slice(0, 1)}b`],
   ['emoji cut at the end of a preview', `preview ${'👨\u200d👩'.slice(0, 1)}`],
   ['mathematical bold', '𝐀𝐁'],
-  ['Devanagari conjunct with a spacing vowel sign', 'क\u094dष\u093f', { wider: 'pi-tui gives a spacing mark (Mc) no cells; terminals draw it in its own cell. Not normalised: removing or replacing the mark corrupts the script' }],
-  ['Devanagari visarga', 'a\u0903b', { wider: 'spacing mark (Mc), as above' }],
-  ['Tibetan spacing mark', 'a\u0f7fb', { wider: 'spacing mark (Mc), as above' }],
+  ['Devanagari conjunct with a spacing vowel sign', 'क\u094dष\u093f'],
+  ['Devanagari visarga', 'a\u0903b'],
+  ['Tibetan spacing mark', 'a\u0f7fb'],
 ];
 
 describe('pi-tui measures what the terminal draws, after displayText', () => {

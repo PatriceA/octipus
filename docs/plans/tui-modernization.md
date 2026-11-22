@@ -497,6 +497,10 @@ one, so such a row can still wrap — the suite leaves them out of its input.
 suites cannot catch an emoji measured too narrow; only too wide. The editor
 surface is not under the invariant suite.
 
+Update after the move to `@earendil-works/pi-tui` 1.6.0 (Phase 2): the new
+package measures these spacing marks as the terminal draws them; the three
+pinned cases in `terminal-text.width.test.ts` now assert equality.
+
 ### Phase 2 — Foundation (M)
 
 1. Create `src/tui-kit/`; route every pi-tui import through it; delete the
