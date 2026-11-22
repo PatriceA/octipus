@@ -7,6 +7,20 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Provider failures are classified by what the provider said.**
+  - A 429's `Retry-After` now reaches the retry backoff for providers on the
+    OpenAI SDK (the proxy, custom OpenAI-compatible endpoints and others); it
+    was dropped, so retries came sooner than the provider asked.
+  - A reset connection, including one that drops mid-reply, is a network
+    failure: retried with backoff and counted by the circuit breaker, no
+    longer an unclassified abort.
+  - A LiteLLM proxy stream that fails after its first chunk raises a
+    classified error, and one the caller aborts ends as a cancellation
+    instead of passing its partial text off as a finished answer.
+  - Proxy embeddings are matched to their inputs by `index`, not list order.
+  - A custom-provider model whose API key resolves nowhere fails as an auth
+    failure, the same as the endpoint's 401 would.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).
