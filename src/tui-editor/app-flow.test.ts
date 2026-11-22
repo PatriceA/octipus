@@ -4,20 +4,27 @@ import { OctipusEditorApp } from './app';
 import { DEFAULT_PERSISTED_STATE } from './persist';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
 import type { AgentSessionEvent } from '@/tui-pi/gateway-adapter';
+import type { checkDisk, DiskInfo, ReadResult, WriteResult } from './workspace-fs-bridge';
 
 const f = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn(), getSessionId: (): string => '',
-  respondApproval: vi.fn(), respondPermission: vi.fn(), save: vi.fn(() => true), savedState: vi.fn(), state: {} as any,
+  respondApproval: vi.fn(), respondPermission: vi.fn(), savedState: vi.fn(), state: {} as any, listeners: 0,
+  save: vi.fn((_path: string, _text: string): WriteResult => ({ ok: true, disk: DISK })),
+  disk: vi.fn((): ReturnType<typeof checkDisk> => ({ changed: false, disk: DISK })),
+  read: vi.fn((): ReadResult => ({ ok: true, text: 'on disk', disk: DISK, mixedEol: false })),
+  parse: vi.fn(async (_key: string, _lang: string, _text: string) => {}), drop: vi.fn((_key: string) => {}),
+  connect: vi.fn(async () => {}),
 }));
+const DISK = vi.hoisted((): DiskInfo => ({ mtimeMs: 1, size: 7, eol: '\n', bom: false, mode: 0o644 }));
 vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
   constructor(options: { getSessionId: () => string }) { f.getSessionId = options.getSessionId; }
-  on(listener: typeof f.listener) { f.listener = listener; }
+  on(listener: typeof f.listener) { f.listener = listener; return () => { f.listeners -= 1; }; }
   sendCommand = f.sendCommand; respondApproval = f.respondApproval; respondPermission = f.respondPermission;
-  disconnect() {} sendChat() {}
+  disconnect() {} sendChat() {} connect = f.connect;
 } }));
-vi.mock('./workspace-fs-bridge', () => ({ readFileForBuffer: () => 'on disk', writeFileForBuffer: f.save }));
+vi.mock('./workspace-fs-bridge', () => ({ readFileForBuffer: f.read, writeFileForBuffer: f.save, checkDisk: f.disk }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => f.state, savePersistedState: f.savedState }));
-vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: () => {}, installTreeSitterHighlighter() {}, hintLineIndex() {} }));
+vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: f.parse, dropSource: f.drop, installTreeSitterHighlighter() {}, hintLine() {} }));
 vi.mock('@/mcp/bridge', () => ({ getMCPBridge: () => ({ getAllConnections: () => [] }) }));
 let app: OctipusEditorApp;
 let key: (data: string) => unknown;
@@ -27,17 +34,23 @@ let exit: ReturnType<typeof vi.fn<(code: number) => void>>;
 const text = () => root.render(120).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 const modalKey = (data: string) => modals.at(-1)?.handleInput?.(data);
 beforeEach(() => {
-  vi.clearAllMocks(); f.save.mockReturnValue(true); f.savedState.mockReturnValue(true); f.state = DEFAULT_PERSISTED_STATE;
+  vi.clearAllMocks(); f.save.mockReturnValue({ ok: true, disk: DISK }); f.savedState.mockReturnValue(true); f.state = DEFAULT_PERSISTED_STATE;
+  f.disk.mockReturnValue({ changed: false, disk: DISK }); f.read.mockReturnValue({ ok: true, text: 'on disk', disk: DISK, mixedEol: false });
   installOctipusKeybindings({}); modals = []; exit = vi.fn<(code: number) => void>();
 });
-function mount() {
+let tuiMock: { requestRender: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> };
+function mount(options: { onShutdown?: () => Promise<void> } = {}) {
   const tui = { terminal: { rows: 28, columns: 120 }, addChild: (c: Container) => { root = c; },
-    addInputListener: (listener: typeof key) => { key = listener; }, setFocus: vi.fn(), requestRender: vi.fn(),
+    addInputListener: (listener: typeof key) => { key = listener; return () => { key = () => undefined; }; }, setFocus: vi.fn(), requestRender: vi.fn(), start: vi.fn(),
     hasOverlay: () => modals.length > 0,
     showOverlay: (component: Component) => { modals.push(component); return { focus() {}, hide() { modals = modals.filter(c => c !== component); } }; },
   } as unknown as TUI;
-  return app = new OctipusEditorApp(tui, { exit });
+  tuiMock = tui as unknown as typeof tuiMock;
+  return app = new OctipusEditorApp(tui, { exit, ...options });
 }
+/** Keys the TUI would route to the focused editor pane. */
+const editorKey = (data: string) => (app as unknown as { editor: Component }).editor.handleInput?.(data);
+const modalText = () => (modals.at(-1)?.render(100) ?? []).join('\n').replace(/\x1b\[[0-9;]*m|\x1b_pi:c\x07/g, '');
 afterEach(async () => { await app?.stop(); });
 
 test('editor chat forwards skill selection to the shared gateway', () => {
@@ -46,23 +59,30 @@ test('editor chat forwards skill selection to the shared gateway', () => {
   expect(f.sendCommand).toHaveBeenCalledWith('skills', { value: 'Technical Writing session' });
 });
 
+/** An open file with an unsaved edit. */
+function edited(app: OctipusEditorApp, path = '/tmp/test.ts', text = 'draft') {
+  const rec = app.buffers.openFile(path, 'saved', { disk: DISK });
+  rec.buffer.setText(text);
+  return rec;
+}
+
 test('dirty close can cancel, save failure keeps edits, successful save closes', () => {
-  const app = mount(); const rec = app.buffers.openFile('/tmp/test.ts', 'draft'); app.buffers.markDirty(rec.id, true);
+  const app = mount(); edited(app);
   key('\x17'); expect(text()).toContain('test.ts'); modalKey('\x1b'); expect(app.buffers.active()?.dirty).toBe(true);
-  key('\x17'); f.save.mockReturnValue(false); modalKey('s'); expect(app.buffers.active()?.dirty).toBe(true);
+  key('\x17'); f.save.mockReturnValue({ ok: false, error: 'Cannot save /tmp/test.ts: permission denied.' }); modalKey('s'); expect(app.buffers.active()?.dirty).toBe(true);
   expect(modals.at(-1)?.render(80).join('')).toContain('Save failed');
-  f.save.mockReturnValue(true); modalKey('s'); expect(app.buffers.active()).toBeNull();
+  f.save.mockReturnValue({ ok: true, disk: DISK }); modalKey('s'); expect(app.buffers.active()).toBeNull();
 });
 
 test('quit defaults to cancel and explicit discard removes recovery drafts', async () => {
-  const app = mount(); const rec = app.buffers.openFile('/tmp/test.ts', 'draft'); app.buffers.markDirty(rec.id, true);
+  const app = mount(); edited(app);
   app.requestQuit(); modalKey('\r'); expect(exit).not.toHaveBeenCalled();
   app.requestQuit(); modalKey('d'); await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
   expect(f.savedState.mock.lastCall?.[0].drafts).toEqual([]);
 });
 
 test('shutdown checkpoints dirty drafts and restart restores them as unsaved', async () => {
-  const first = mount(); const rec = first.buffers.openFile('/tmp/test.ts', 'recovered content'); first.buffers.markDirty(rec.id, true);
+  const first = mount(); edited(first, '/tmp/test.ts', 'recovered content');
   await first.stop(); f.state = f.savedState.mock.lastCall?.[0];
   const second = mount(); expect(second.buffers.active()?.buffer.text()).toBe('recovered content'); expect(second.buffers.active()?.dirty).toBe(true);
 });
@@ -95,4 +115,165 @@ test('a wheel notch outside the chat pane is not passed to the editor or the tre
   expect(key('\x1b[<64;10;5M')).toEqual({ consume: true });
   expect(key('\x1b[<65;10;5M')).toEqual({ consume: true });
   expect(key('a')).toBeUndefined();
+});
+
+test('Alt+M and /vim switch vim mode, shown in the mode bar; :w saves from NORMAL (docs/plans/tui-modernization.md §5.2)', () => {
+  const app = mount(); edited(app);
+  key('\x1bm');
+  expect(app.layout.get().editorMode).toBe('vim');
+  key('x'); // any key clears the "Vim mode on" notice
+  expect(text()).toContain('VIM NORMAL');
+  for (const c of ':w') editorKey(c);
+  expect(text()).toContain(':w');
+  editorKey('\r');
+  expect(f.save).toHaveBeenCalledWith('/tmp/test.ts', 'draft', DISK);
+  expect(app.buffers.active()?.dirty).toBe(false);
+  (app as unknown as { handleChatSubmit(t: string): void }).handleChatSubmit('/vim off');
+  expect(app.layout.get().editorMode).toBe('modeless');
+});
+
+test('vim :q on a dirty buffer asks first; :q! closes discarding', () => {
+  const app = mount(); edited(app);
+  app.layout.setEditorMode('vim');
+  for (const c of ':q\r') editorKey(c);
+  expect(modalText()).toContain('Unsaved changes');
+  modalKey('\x1b');
+  for (const c of ':q!\r') editorKey(c);
+  expect(app.buffers.active()).toBeNull();
+});
+
+test('Ctrl+S on a scratch buffer opens Save As; the buffer then belongs to that file', () => {
+  const app = mount();
+  const scratch = app.buffers.openScratch();
+  scratch.buffer.insert('notes');
+  editorKey('\x13');
+  expect(modalText()).toContain('Save Scratch 1 as');
+  modalKey('\x1b[200~todo.md\x1b[201~'); modalKey('\r');
+  expect(f.save).toHaveBeenCalledWith(`${process.cwd()}/todo.md`, 'notes', null);
+  expect(modals).toHaveLength(0);
+  const rec = app.buffers.active();
+  expect(rec?.path).toBe(`${process.cwd()}/todo.md`);
+  expect(rec?.label).toBe('todo.md');
+  expect(rec?.dirty).toBe(false);
+});
+
+test('Save As refuses a missing folder and asks before replacing an existing file', () => {
+  const app = mount(); edited(app);
+  key('\x1b[24~'); // F12
+  modalKey('\x15'); // clear the field
+  modalKey('\x1b[200~no/such/folder/x.ts\x1b[201~'); modalKey('\r');
+  expect(modalText()).toContain('does not exist');
+  modalKey('\x15');
+  modalKey('\x1b[200~package.json\x1b[201~'); modalKey('\r');
+  expect(modalText()).toContain('already exists');
+  expect(f.save).not.toHaveBeenCalled();
+  modalKey('\r');
+  expect(f.save).toHaveBeenCalledWith(`${process.cwd()}/package.json`, 'draft', null);
+});
+
+test('saving over a file that changed on disk asks: overwrite writes, reload takes the disk version, cancel leaves both', () => {
+  const app = mount(); const rec = edited(app);
+  f.disk.mockReturnValue({ changed: true, deleted: false });
+  editorKey('\x13');
+  expect(modalText()).toContain('changed on disk');
+  expect(f.save).not.toHaveBeenCalled();
+  modalKey('\x1b');
+  expect(rec.buffer.text()).toBe('draft');
+  editorKey('\x13'); modalKey('o');
+  expect(f.save).toHaveBeenCalledWith('/tmp/test.ts', 'draft', DISK);
+  rec.buffer.setText('mine');
+  f.read.mockReturnValue({ ok: true, text: 'theirs', disk: { ...DISK, mtimeMs: 2 }, mixedEol: false });
+  editorKey('\x13'); modalKey('r');
+  expect(rec.buffer.text()).toBe('theirs');
+  expect(app.buffers.active()?.dirty).toBe(false);
+  rec.buffer.undo();
+  expect(rec.buffer.text()).toBe('mine'); // the reload is one undo step
+});
+
+test('an agent write to a path relative to the project reaches its open buffer', () => {
+  const app = mount();
+  app.buffers.openFile(`${process.cwd()}/src/x.ts`, 'old', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: 'src/x.ts', newText: 'new' });
+  expect(modals).toHaveLength(1);
+  expect(modalText()).toContain('Agent edit: x.ts');
+});
+
+test('rejecting an agent edit the agent already wrote leaves the buffer unsaved against the disk', () => {
+  const app = mount(); app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  f.disk.mockReturnValue({ changed: true, deleted: false });
+  f.read.mockReturnValue({ ok: true, text: 'agent', disk: { ...DISK, mtimeMs: 2 }, mixedEol: false });
+  modalKey('r');
+  const rec = app.buffers.active();
+  expect(rec?.buffer.text()).toBe('mine');
+  expect(rec?.dirty).toBe(true);
+  expect(text()).toContain('already wrote it to disk');
+});
+
+test('accepting an agent edit the agent already wrote leaves the buffer clean', () => {
+  const app = mount(); app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  f.disk.mockReturnValue({ changed: true, deleted: false });
+  f.read.mockReturnValue({ ok: true, text: 'agent', disk: { ...DISK, mtimeMs: 2 }, mixedEol: false });
+  modalKey('a');
+  expect(app.buffers.active()?.buffer.text()).toBe('agent');
+  expect(app.buffers.active()?.dirty).toBe(false);
+});
+
+test('pressing the workspace key twice while the list loads opens one picker, and a fetch failure is shown', async () => {
+  let answer: (r: Response) => void = () => {};
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+  try {
+    mount();
+    key('\x0b'); key('\x0b');
+    answer(new Response('down', { status: 503 }));
+    await vi.waitFor(() => expect(modals).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(modals).toHaveLength(1);
+    expect(modalText()).toContain('answered 503');
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test('pressing the MCP key twice while the bridge loads opens one list', async () => {
+  mount();
+  key('\x05'); key('\x05');
+  await vi.waitFor(() => expect(modals).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(modals).toHaveLength(1);
+});
+
+test('find draws its matches in the buffer and Esc returns the cursor', () => {
+  const app = mount(); const rec = app.buffers.openFile('/tmp/a.ts', 'one two one', { disk: DISK });
+  rec.buffer.setCursor({ line: 0, col: 2 });
+  key('\x06'); // Ctrl+F
+  modalKey('o'); modalKey('n'); modalKey('e');
+  expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 8 });
+  const raw = root.render(120).join('\n');
+  expect(raw).toMatch(/\x1b\[4m/); // other matches underlined
+  modalKey('\x1b');
+  expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 2 });
+  expect(root.render(120).join('\n')).not.toMatch(/\x1b\[4m/);
+});
+
+test('stop releases store subscriptions, the input listener and the adapter listener', async () => {
+  f.listeners = 1;
+  const app = mount();
+  await app.stop();
+  const renders = tuiMock.requestRender.mock.calls.length;
+  app.buffers.openScratch().buffer.insert('after shutdown');
+  app.layout.toggleTree();
+  expect(tuiMock.requestRender.mock.calls.length).toBe(renders);
+  expect(f.listeners).toBe(0);
+  expect(key('\x0f')).toBeUndefined();
+  expect(modals).toHaveLength(0);
+});
+
+test('start() that fails to connect restores the terminal before the error surfaces', async () => {
+  const onShutdown = vi.fn(async () => {});
+  const app = mount({ onShutdown });
+  f.connect.mockRejectedValueOnce(new Error('corrupt session file'));
+  await expect(app.start()).rejects.toThrow('corrupt session file');
+  expect(onShutdown).toHaveBeenCalledTimes(1);
 });

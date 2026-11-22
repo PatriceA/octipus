@@ -92,6 +92,86 @@ test('cursor after tab and wide glyph uses terminal cells', async () => {
   expect(visibleWidth(line.split(CURSOR_MARKER)[0])).toBe(8); // gutter 2 + tab 4 + CJK 2
 });
 
+test('Ctrl+Z undoes a typed word at once, and a paste as one step', () => {
+  const { editor, rec } = setup('');
+  for (const c of 'hello') editor.handleInput(c);
+  editor.handleInput('\x1b[200~ big\npaste\x1b[201~');
+  editor.handleInput('\x1a');
+  expect(rec.buffer.text()).toBe('hello');
+  editor.handleInput('\x1a');
+  expect(rec.buffer.text()).toBe('');
+});
+
+test('Backspace after an emoji leaves no half character on screen', () => {
+  const { editor, rec } = setup('ok👍🏽');
+  rec.buffer.moveLineEnd();
+  editor.handleInput('\x7f');
+  expect(rec.buffer.text()).toBe('ok');
+  expect(strip(editor.render(20)[0])).not.toContain('�');
+});
+
+/** The text of the cells drawn with background `hex` on a rendered row. */
+function cellsWithBackground(line: string, hex: string): string {
+  const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  const on = `\x1b[48;2;${r};${g};${b}m`;
+  let out = '';
+  let bg = false;
+  for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
+    if (part.startsWith('\x1b[')) { if (part === on) bg = true; else if (/\x1b\[(49|0)?m|\x1b\[48;/.test(part)) bg = false; continue; }
+    if (bg) out += part.replace(/\x1b_pi:c\x07/g, '');
+  }
+  return out;
+}
+
+test('the selection is drawn (docs/plans/tui-modernization.md §5.2)', async () => {
+  const { getPalette } = await import('@/tui-pi/theme/defaults');
+  const { editor, rec } = setup('hello world\nsecond line');
+  rec.buffer.select({ line: 0, col: 6 }, { line: 1, col: 6 });
+  editor.focused = false;
+  const lines = editor.render(40);
+  expect(cellsWithBackground(lines[0], getPalette().selection)).toBe('world ');
+  expect(cellsWithBackground(lines[1], getPalette().selection)).toBe('second');
+});
+
+test('find matches are drawn in the buffer, the current one distinct', async () => {
+  const { getPalette } = await import('@/tui-pi/theme/defaults');
+  const { editor, rec } = setup('ab xx ab');
+  editor.focused = false;
+  const matches = [{ line: 0, col: 0, length: 2 }, { line: 0, col: 6, length: 2 }];
+  editor.setSearchHighlights(rec.id, matches, matches[1]);
+  const line = editor.render(40)[0];
+  expect(cellsWithBackground(line, getPalette().warn)).toBe('ab');
+  expect(cellsWithBackground(line, getPalette().selection)).toBe('ab');
+  editor.setSearchHighlights(null);
+  expect(cellsWithBackground(editor.render(40)[0], getPalette().warn)).toBe('');
+});
+
+test('Tab inserts what the file indents with, to the next stop', () => {
+  const tabs = setup('func f() {\n\tx\n}');
+  tabs.editor.handleInput('\t');
+  expect(tabs.rec.buffer.getLine(0)).toBe('\tfunc f() {');
+  const spaces = setup('def f():\n    if x:\n        pass\n');
+  spaces.rec.buffer.setCursor({ line: 3, col: 0 });
+  spaces.editor.handleInput('a');
+  spaces.editor.handleInput('\t');
+  expect(spaces.rec.buffer.getLine(3)).toBe('a   ');
+});
+
+test('a tab is drawn to the next tab stop, where the cursor maths puts it', async () => {
+  const { CURSOR_MARKER, visibleWidth } = await import('@/tui-kit');
+  const { editor, rec } = setup('ab\tc');
+  rec.buffer.setCursor({ line: 0, col: 3 });
+  const line = editor.render(40)[0];
+  expect(strip(line).replace(/\x1b_pi:c\x07/, '')).toMatch(/^1 ab {2}c/);
+  expect(visibleWidth(line.split(CURSOR_MARKER)[0])).toBe(2 + 4);
+});
+
+test('a key sent as a kitty CSI-u sequence types its character', () => {
+  const { editor, rec } = setup('');
+  editor.handleInput('\x1b[97u');
+  expect(rec.buffer.text()).toBe('a');
+});
+
 test('bracketed multiline paste inserts content without escape sequences', () => {
   const { editor, rec } = setup('');
   editor.handleInput('\x1b[200~hello\r\n'); editor.handleInput('world\x1b[201~');

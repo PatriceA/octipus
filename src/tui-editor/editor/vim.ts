@@ -30,6 +30,14 @@
  *     yy                        — yank line into register
  *     p                         — paste register after cursor
  *
+ *   Commands (NORMAL, `:` then Enter; Esc cancels):
+ *     :w                        — save
+ *     :q / :q!                  — close the buffer (with / without the unsaved prompt)
+ *     :wq / :x                  — save, then close
+ *     :qa / :qa!                — quit the editor
+ *   The handler only parses them; the caller carries them out
+ *   (`VimResult.command`).
+ *
  *   In INSERT mode every keystroke flows back to the existing
  *   modeless handler — no special vim INSERT semantics; this
  *   keeps the implementation minimal and the user's typing
@@ -68,7 +76,18 @@ export interface VimState {
   register: string;
   /** Pending leader expiry — caller compares to `Date.now()`. */
   pendingUntil: number;
+  /** The `:` command being typed, without the colon; null when none. Shown in the mode bar. */
+  commandLine: string | null;
 }
+
+export type VimCommand = 'write' | 'quit' | 'quit!' | 'write-quit' | 'quit-all' | 'quit-all!';
+
+const COMMANDS: Record<string, VimCommand> = {
+  w: 'write', write: 'write',
+  q: 'quit', quit: 'quit', 'q!': 'quit!', 'quit!': 'quit!',
+  wq: 'write-quit', x: 'write-quit', xit: 'write-quit',
+  qa: 'quit-all', qall: 'quit-all', 'qa!': 'quit-all!', 'qall!': 'quit-all!',
+};
 
 export const PENDING_TIMEOUT_MS = 600;
 
@@ -82,6 +101,7 @@ export function newVimState(): VimState {
     activeRegister: DEFAULT_REGISTER,
     register: '',
     pendingUntil: 0,
+    commandLine: null,
   };
 }
 
@@ -106,6 +126,8 @@ export interface VimKey {
   ctrl?: boolean;
   shift?: boolean;
   escape?: boolean;
+  enter?: boolean;
+  backspace?: boolean;
   /**
    * True while an IME composition is in progress. Suppresses vim
    * leader matching so a multi-byte CJK / dead-key sequence doesn't
@@ -126,6 +148,10 @@ export interface VimResult {
   consumed: boolean;
   /** Set when the editor should switch to a different mode externally. */
   insert?: boolean;
+  /** A `:` command the caller should carry out. */
+  command?: VimCommand;
+  /** A `:` command that is not one of the above. */
+  unknownCommand?: string;
 }
 
 /**
@@ -136,6 +162,8 @@ export interface VimResult {
  * existing modeless handler types the character into the buffer.
  */
 export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
+  if (state.commandLine !== null) return commandLineStep(key, state);
+
   // Esc always returns to NORMAL and clears pending.
   if (key.escape) {
     if (state.mode !== 'NORMAL') {
@@ -237,6 +265,10 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
     }
   }
 
+  if (state.mode === 'NORMAL' && c === ':') {
+    return { state: { ...state, commandLine: '' }, consumed: true };
+  }
+
   // Multi-key leaders (NORMAL only). `"` opens register selection;
   // `g` / `d` / `y` open their respective two-char sequences.
   if (state.mode === 'NORMAL' && (c === 'g' || c === 'd' || c === 'y' || c === '"')) {
@@ -275,5 +307,24 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
   }
 
   // Unknown — consumed=true so we don't accidentally type characters in NORMAL.
+  return { state, consumed: true };
+}
+
+/** A key while the `:` command line is open. */
+function commandLineStep(key: VimKey, state: VimState): VimResult {
+  const line = state.commandLine ?? '';
+  if (key.escape) return { state: { ...state, commandLine: null }, consumed: true };
+  if (key.backspace) {
+    // Backspace on an empty command line closes it, as in vim.
+    return { state: { ...state, commandLine: line.length === 0 ? null : line.slice(0, -1) }, consumed: true };
+  }
+  if (key.enter) {
+    const name = line.trim();
+    const closed = { ...state, commandLine: null };
+    if (!name) return { state: closed, consumed: true };
+    const command = COMMANDS[name];
+    return command ? { state: closed, consumed: true, command } : { state: closed, consumed: true, unknownCommand: name };
+  }
+  if (key.char && !key.ctrl) return { state: { ...state, commandLine: line + key.char }, consumed: true };
   return { state, consumed: true };
 }

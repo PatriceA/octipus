@@ -33,7 +33,41 @@ labels reflect blast radius, not contract guarantees.
   and to enable VT input on Windows, and nothing on Linux or in the Docker
   image loads one. `chalk`, which the terminal theme always used but only got
   through the old package, is now a declared dependency.
-
+- **Terminal editor: saving is safe, and unsaved means unsaved.** Saving
+  writes a temporary file and renames it over the original, keeping its
+  permissions, its line endings (a CRLF file stays CRLF) and its byte-order
+  mark. If the file changed on disk since you opened it, Ctrl+S asks whether
+  to reload it, overwrite it or cancel instead of silently replacing the other
+  version. A file that is not UTF-8 is refused with the reason rather than
+  opened and rewritten. Scratch buffers can be saved: Ctrl+S asks for a path,
+  and F12 or `/save-as` saves any buffer under a new name; `/new` opens a
+  scratch buffer. The unsaved marker compares the buffer with what was saved,
+  so undoing back to it clears the marker.
+- **Terminal editor: emoji and accented letters edit as one character, and
+  undo undoes what you did.** Backspace after an emoji no longer leaves half of
+  it, and the arrow keys no longer stop inside a flag or a letter with its
+  accent. Ctrl+Z undoes a typed word, a paste or a replace-all in one step; a
+  replace-all with more than 200 matches used to be impossible to undo fully.
+- **Terminal editor: vim mode can be switched on, and you can see what you
+  select.** Alt+M or `/vim` switches vim mode; the bottom bar shows the mode
+  and the `:` command being typed, and `:w`, `:q`, `:wq` and `:qa` work. Ctrl+S
+  saves in NORMAL mode. Escape works with the kitty keyboard protocol. The
+  selection is drawn, so VISUAL mode is visible.
+- **Terminal editor: find shows its matches.** Matches are highlighted in the
+  file, the search starts at the cursor, and Esc puts the cursor back where it
+  was (Alt+Enter keeps it on the match). Find, replace and the file filter take
+  paste, emoji and input-method text. Regex replace understands `$1`. Tab
+  inserts what the file indents with.
+- **Terminal editor: the file picker finds every file.** It lists the project
+  with `git ls-files` (so `.gitignore` is respected) or a folder walk, in the
+  background, and ranks all files by fuzzy match; it used to stop at the first
+  1,000 names in alphabetical order.
+- **Terminal editor: smaller fixes.** An agent edit to a file named relative to
+  the project now reaches its open tab, and after rejecting an edit the agent
+  already wrote to disk the tab shows as unsaved. Syntax colours follow edits.
+  The diff box fits short terminals without skipping lines when paging. Opening
+  the workspace or MCP list twice quickly opens it once, and a server that does
+  not answer the workspace list times out after 5 seconds with the reason shown.
 - **Terminal chat and editor: the composer no longer vanishes during a turn.**
   A tool call whose preview spanned lines (a multi-line shell command, a
   carriage return or tab in a result, an escape sequence in tool output) was

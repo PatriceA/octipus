@@ -8,13 +8,11 @@
  * if already collapsed) and Right expands it (or descends if already
  * expanded).
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth } from '@/tui-kit';
-import { readdirSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { type Component, displayLine, type Focusable, matchesKey, truncateToWidth } from '@/tui-kit';
+import { basename } from 'node:path';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 import { getGlyphs } from '@/tui-pi/theme/glyphs';
-
-const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.octipus', '.next', '.cache']);
+import { listFolder } from '../project-files';
 const MAX_ENTRIES = 2000;
 
 interface Entry {
@@ -109,7 +107,7 @@ export class FileTree implements Component, Focusable {
       // Show ▾ for expanded dirs, ▸ for collapsed, file glyph for files.
       const dirMarker = entry.isDir ? (this.expanded.has(entry.path) ? '▾ ' : '▸ ') : '';
       const icon = entry.isDir ? glyphs.dir : glyphs.file;
-      const text = `${indent}${dirMarker}${icon}${entry.label}`;
+      const text = `${indent}${dirMarker}${icon}${displayLine(entry.label)}`;
       const styled = entry.isDir ? chalk.hex(palette.accent)(text) : chalk.hex(palette.fg)(text);
       const isSelected = this.focused && i === this.selected;
       const line = isSelected ? chalk.bgHex(palette.selection)(styled) : styled;
@@ -145,19 +143,10 @@ function walk(root: string, expanded: Set<string>): Entry[] {
 }
 
 function visit(dir: string, depth: number, out: Entry[], expanded: Set<string>): void {
-  if (out.length >= MAX_ENTRIES) return;
-  let names: string[];
-  try {
-    names = readdirSync(dir).sort();
-  } catch { return; }
-  for (const name of names) {
-    if (SKIP.has(name)) continue;
+  for (const entry of listFolder(dir)) {
     if (out.length >= MAX_ENTRIES) return;
-    const full = join(dir, name);
-    let isDir = false;
-    try { isDir = statSync(full).isDirectory(); } catch { continue; }
-    out.push({ path: full, label: basename(full), depth, isDir, parent: dir });
+    out.push({ path: entry.path, label: entry.name, depth, isDir: entry.isDir, parent: dir });
     // Lazy expansion — only descend into directories the user has opened.
-    if (isDir && expanded.has(full)) visit(full, depth + 1, out, expanded);
+    if (entry.isDir && expanded.has(entry.path)) visit(entry.path, depth + 1, out, expanded);
   }
 }

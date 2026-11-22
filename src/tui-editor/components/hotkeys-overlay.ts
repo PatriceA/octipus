@@ -17,7 +17,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@/tui-kit';
-import { listAllKeybindings } from '@/tui-pi/keybindings';
+import { listEditorKeybindings } from '../keybindings';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export interface HotkeysOverlayOptions {
@@ -27,10 +27,14 @@ export interface HotkeysOverlayOptions {
 export class HotkeysOverlay implements Component, Focusable {
   focused = false;
   private scroll = 0;
+  private maxRows = Number.POSITIVE_INFINITY;
 
   constructor(private readonly options: HotkeysOverlayOptions) {}
 
   invalidate(): void { /* static content */ }
+
+  /** The rows the overlay frame gives the box. */
+  setMaxRows(rows: number): void { this.maxRows = rows; }
 
   handleInput(data: string): void {
     if (matchesKey(data, 'escape') || matchesKey(data, 'q')) { this.options.onClose(); return; }
@@ -49,7 +53,7 @@ export class HotkeysOverlay implements Component, Focusable {
     const accent = (text: string) => chalk.hex(palette.accent)(text);
     const heading = (text: string) => chalk.bold.hex(palette.accent)(text);
 
-    const all = listAllKeybindings(getKeybindings());
+    const all = listEditorKeybindings(getKeybindings());
     const groups = groupBindings(all);
     const keyWidth = Math.max(8, ...all.flatMap((b) => b.keys.map((k) => k.length))) + 2;
 
@@ -62,21 +66,19 @@ export class HotkeysOverlay implements Component, Focusable {
         body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${entry.description || entry.id}`);
       }
     }
+    body.push('');
+    body.push(heading('VIM (when on)'));
+    for (const [keys, what] of VIM_KEYS) body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${what}`);
 
     const boxWidth = Math.max(20, width);
     const inner = boxWidth - 4;
     const help = dim('↑/↓/PgUp/PgDn scroll · Esc close');
 
-    // pi-tui's overlay system passes width into render() but not the
-    // available height, and clips overflow rows via maxHeight after the
-    // fact — meaning if we just slice from `scroll` the box itself shrinks
-    // instead of scrolling. So we read the terminal height directly
-    // (matching the 85% maxHeight in overlays/registry.ts), reserve rows
-    // for the box chrome, and produce a fixed-size viewport that always
-    // fills the same height regardless of scroll position.
-    const termRows = process.stdout.rows ?? Number(process.env.LINES ?? 24);
-    const overlayBudget = Math.max(8, Math.floor(termRows * 0.85));
-    const viewport = Math.max(3, overlayBudget - 4); // top + bottom + footer + margin
+    // A fixed-size viewport that fills the rows the overlay frame gives the
+    // box (`setMaxRows`), so the box scrolls instead of shrinking and its
+    // footer and bottom border stay on screen.
+    const budget = Number.isFinite(this.maxRows) ? this.maxRows : Math.max(8, Math.floor((process.stdout.rows ?? 24) * 0.85));
+    const viewport = Math.max(1, Math.min(body.length, budget - 3)); // top + footer + bottom
     const maxScroll = Math.max(0, body.length - viewport);
     if (this.scroll > maxScroll) this.scroll = maxScroll;
 
@@ -95,7 +97,18 @@ export class HotkeysOverlay implements Component, Focusable {
   }
 }
 
-function groupBindings(all: ReturnType<typeof listAllKeybindings>): Array<[title: string, entries: typeof all]> {
+/** Vim mode's own keys and commands; they are not rebindable. */
+const VIM_KEYS: ReadonlyArray<[keys: string, what: string]> = [
+  ['Esc', 'NORMAL mode'],
+  ['i / a / o', 'INSERT mode (at, after, on a new line)'],
+  ['v', 'VISUAL mode: motions select'],
+  [':w', 'Save'],
+  [':q / :q!', 'Close the buffer / close it discarding changes'],
+  [':wq / :x', 'Save and close the buffer'],
+  [':qa / :qa!', 'Quit the editor / quit discarding changes'],
+];
+
+function groupBindings(all: ReturnType<typeof listEditorKeybindings>): Array<[title: string, entries: typeof all]> {
   const buckets: Record<string, typeof all> = {};
   for (const b of all) {
     const namespace = b.id.split('.')[0];
