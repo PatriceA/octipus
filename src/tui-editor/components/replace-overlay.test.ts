@@ -67,6 +67,27 @@ describe('ReplaceOverlay', () => {
     expect(ctx.closed).toBe(false);
   });
 
+  test('regex replace with $1, through the overlay, and one Ctrl+Z undoes it all', () => {
+    const ctx = setup('a=1 b=2 c=3');
+    ctx.overlay.handleInput('\x1br');
+    ctx.overlay.handleInput('\x1b[200~(\\w)=(\\d)\x1b[201~');
+    ctx.overlay.handleInput('\t');
+    ctx.overlay.handleInput('\x1b[200~$2=$1\x1b[201~');
+    ctx.overlay.handleInput('\r');
+    expect(ctx.committed).toBe(3);
+    const buffer = ctx.buffers.active()?.buffer;
+    expect(buffer?.text()).toBe('1=a 2=b 3=c');
+    buffer?.undo();
+    expect(buffer?.text()).toBe('a=1 b=2 c=3');
+  });
+
+  test('fields take emoji and pasted text', () => {
+    const ctx = setup('hi');
+    ctx.overlay.handleInput('👋');
+    ctx.overlay.handleInput('\x1b[200~ there\x1b[201~');
+    expect(ctx.overlay.getFind()).toBe('👋 there');
+  });
+
   test('Alt+R toggles regex flag', () => {
     const ctx = setup('foo');
     expect(ctx.overlay.getFlags().regex).toBe(false);
