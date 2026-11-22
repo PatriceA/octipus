@@ -11,6 +11,7 @@
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import type { ToolManifest } from '@/core/types';
 import { inlineUiRepository } from '@/db/repositories/inline-ui-repository';
+import { viewToAuthored } from '@/shared/inline-ui';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -41,7 +42,7 @@ export class InlineUiTool extends BaseTool {
         { action: 'read', description: 'Read the source of an interactive answer in this conversation', defaultLevel: 'ALLOW' },
       ],
       tools: [
-        { name: 'source', description: 'Source of an earlier interactive answer in this conversation', parameters: {}, returns: '{ id, title, height, body }' },
+        { name: 'source', description: 'Source of an earlier interactive answer in this conversation', parameters: {}, returns: '{ id, title, kind, body } (an HTML block also has height)' },
       ],
     };
   }
@@ -49,7 +50,7 @@ export class InlineUiTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'source',
-      'Return the source of an earlier interactive answer of this conversation (shown in replies as [[octi-ui:<id>|<title>]]), ready to edit and write again as a new ```octi-ui block.',
+      'Return the source of an earlier interactive answer of this conversation (shown in replies as [[octi-ui:<id>|<title>]]), ready to edit and write again as a new ```octi-ui block: a view\'s JSON (kind "view") or an HTML block\'s markup (kind "html").',
       createParameterSchema({
         id: { type: 'string', description: 'The id from the [[octi-ui:<id>|…]] marker', required: true },
       }),
@@ -61,7 +62,9 @@ export class InlineUiTool extends BaseTool {
         if (!UUID_RE.test(id)) throw new ToolNotExecutedError(this.id, `"${args.id}" is not an interactive answer id (a UUID from a [[octi-ui:<id>|…]] marker).`);
         const block = await inlineUiRepository.getInSession(id, context.sessionId);
         if (!block) throw new ToolNotExecutedError(this.id, `No interactive answer ${id} in this conversation.`);
-        return { id: block.id, title: block.title, height: block.heightHint, body: inlineUiSourceBody(block) };
+        // A view comes back as the JSON the agent would write (nested, without generated ids).
+        if (block.kind === 'view' && block.view) return { id: block.id, title: block.title, kind: 'view', body: JSON.stringify(viewToAuthored(block.view)) };
+        return { id: block.id, title: block.title, kind: 'html', height: block.heightHint, body: inlineUiSourceBody(block) };
       },
       { permissionAction: 'read', readOnly: true, injectSecrets: false },
     );

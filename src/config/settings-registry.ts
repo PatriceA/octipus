@@ -421,6 +421,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     legacyEnvVars: ['ORCHESTRATOR_MODE'],
   },
   {
+    key: 'agent.interactiveAnswers',
+    category: 'agent',
+    valueType: 'string',
+    defaultValue: 'auto',
+    description:
+      'Interactive answers (forms, tables, charts, calculators inside a reply in the web app): auto (default) offers them where the reply is read in the web app; prefer also asks the agent to use one whenever an answer has structure; off never offers them.',
+    isSecret: false,
+    envVar: 'AGENT_INTERACTIVE_ANSWERS',
+  },
+  {
     key: 'agent.lazyToolDiscovery',
     category: 'agent',
     valueType: 'boolean',

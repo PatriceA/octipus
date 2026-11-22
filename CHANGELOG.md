@@ -7,6 +7,43 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Interactive answers as views: forms, tables and charts that answer back**
+  ([spec](docs/plans/inline-ui-views-spec.md), [reference](docs/INLINE-UI.md)).
+  - An interactive answer can now be a *view*: JSON naming ready-made
+    components (choices, text fields, sliders, sortable tables, charts,
+    stats, steps) that the web app draws itself. No generated code runs, so
+    it never waits for a click, and a button sends the user's answer back to
+    the agent as their message, with the values. The answer is kept on the
+    message (`metadata.inlineUiAction`) and on the block (`state`). HTML
+    blocks stay for free-form visuals.
+  - The root prompt's section is rewritten to say when to use one (a choice,
+    several items with several attributes, numbers over time, a result that
+    depends on inputs, a process) and is no longer filed under guardrails in
+    the Context inspector. The delegation guide and the output-formatting
+    rules no longer contradict it.
+  - **New setting** `agent.interactiveAnswers` (`AGENT_INTERACTIVE_ANSWERS`):
+    `auto` (default), `prefer`, `off`.
+  - Channel replies, monitors, the group bridge, hook notifications, room
+    notifications, `/api/chat` without `renders` and the OpenAI-compatible
+    API show a view as text instead of the one-line placeholder.
+  - **Wire and API:** `chat.send` / `room.post` take `inlineUi.action`
+    (`{ blockId, name, componentId, context, data? }`); an answer that fails a
+    check is refused (`INVALID_MESSAGE`; rooms `INVALID_INPUT` / 400); a
+    `data` over 16 000 characters is not a refusal (the view's own data is
+    stored). A room post that answers a view needs the `api:chat` token
+    scope, as an addressed post does.
+    `GET /api/sessions/:id/inline-ui/:blockId` adds `kind`, `view`, `state`;
+    promoting a view answers 409. `inline-ui__source` adds `kind`.
+  - **Migration** `0198_inline_ui_views` adds `kind` (default `html`), `view`
+    and `state` to `inline_ui_blocks`.
+  - **Logs:** one `Interactive answer offer` line per root turn that was
+    offered interactive answers (`used`, `kinds`, `refused`, `setting`).
+  - `eval/inline-ui.yaml` gains ten unprompted positives and four view
+    negatives (live-model suite; not yet run).
+- **Fix:** routes declaring a `format: 'uuid'` field (email unsnooze and
+  dismiss, note proposals filtered by note) refused every request with 422:
+  the format was never registered with the validator.
+
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
   - Skills → Proposals shows one proposal per topic: a new suggestion on the

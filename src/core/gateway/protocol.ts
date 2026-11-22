@@ -293,6 +293,21 @@ export const FileRefSchema = z.object({
 });
 
 /**
+ * An answer sent from a view's Button (docs/plans/inline-ui-views-spec.md §4).
+ * The shape only: names, ids, the context keys and the sizes are checked
+ * against the stored view by `validateViewAction` / `validateViewData`, which
+ * say what is wrong. Values are JSON: `context` the event's context resolved
+ * at the click, `data` the data model then (stored as the block's state).
+ */
+export const InlineUiActionSchema = z.object({
+  blockId: z.string().uuid(),
+  name: z.string().min(1).max(64),
+  componentId: z.string().min(1).max(64),
+  context: z.record(z.string(), z.unknown()),
+  data: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+/**
  * Client outcomes of interactive answers, sent with the user's next message
  * (spec §5.6): enums and numbers only — no text produced by generated code
  * ever reaches the model. Ids are checked against the session server-side.
@@ -306,6 +321,12 @@ export const InlineUiSendSchema = z.object({
   })).max(INLINE_UI_LIMITS.reportsPerMessage).optional(),
   /** The message was sent from an interactive answer's suggestion. */
   provenance: z.object({ inlineUiId: z.string().uuid() }).optional(),
+  /**
+   * The message answers a view (docs/plans/inline-ui-views-spec.md §4): a
+   * Button's event. Checked against the stored view server-side
+   * (`resolveInlineUiTurnNotes`); a send whose action fails a check is refused.
+   */
+  action: InlineUiActionSchema.optional(),
 });
 
 /**
@@ -493,7 +514,7 @@ export const RoomUnsubscribeSchema = z.object({
 
 /**
  * Post in a room. `addressed` (the "Ask Octipus" toggle, or `@octipus` in
- * the text) queues a turn for the poster. `clientId` is echoed on the
+ * the text, or an `inlineUi.action`) queues a turn for the poster. `clientId` is echoed on the
  * resulting `room.message` so the client reconciles its optimistic copy.
  */
 export const RoomPostSchema = z.object({
@@ -502,6 +523,12 @@ export const RoomPostSchema = z.object({
   content: z.string().min(1).max(CHAT_MESSAGE_MAX_CHARS),
   addressed: z.boolean().optional(),
   clientId: z.string().min(1).max(64).optional(),
+  /**
+   * The post answers a view of the room (docs/plans/inline-ui-views-spec.md
+   * §4): the member's own message, addressed to Octipus. Checked against the
+   * room's stored view; a post whose action fails a check is refused.
+   */
+  inlineUi: z.object({ action: InlineUiActionSchema }).strict().optional(),
 });
 
 export const RoomReadSchema = z.object({

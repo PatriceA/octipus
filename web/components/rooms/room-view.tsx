@@ -5,7 +5,8 @@ import { Bell, BellOff, Bot, Hash, Lock, MessageSquareLock, PanelRight, WifiOff,
 import { useRouter } from 'next/navigation';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MessageTimeline, { type ChatMessageData } from '@/components/chat/message-timeline';
-import { type InlineUiHost, InlineUiProvider } from '@/components/chat/inline-ui/context';
+import { type InlineUiHost, InlineUiProvider, refreshInlineUiBlock } from '@/components/chat/inline-ui/context';
+import type { InlineUiViewAction, JsonObject } from '../../../src/shared/inline-ui/view';
 import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
 import type { ResolvedPersona } from '../../../src/core/personas/types';
 import { api } from '@/lib/api';
@@ -125,6 +126,13 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   const readSentRef = useRef<string | undefined>(undefined);
   /** Interactive answers that arrived while the room was open. */
   const liveInlineUiRef = useRef(new Set<string>());
+  /** This tab's posts that answer a view, by clientId: told when the server refuses one. */
+  const actionPostsRef = useRef(new Map<string, (message: string) => void>());
+  /** Every post this tab made that answered a view: its echo is not news to the block. */
+  const ownActionPostsRef = useRef(new Set<string>());
+
+  /** Interactive answers are cached per room under this key. */
+  const inlineUiHostKey = `room:${remote ? 'remote:' : ''}${roomId}`;
 
   const notify = useCallback((text: string) => {
     setNotices((n) => [...n.slice(-4), { id: clientId(), text, at: new Date().toISOString() }]);
@@ -179,12 +187,22 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
 
   const handlePosted = useCallback((outcome: { messageId?: string; clientId?: string; notQueued?: string; commandResult?: string }) => {
     inflightRef.current = inflightRef.current.filter((x) => x !== outcome.clientId);
+    if (outcome.clientId) actionPostsRef.current.delete(outcome.clientId);
     if (outcome.commandResult !== undefined) {
       dropPending(outcome.clientId);
       notify(outcome.commandResult);
     }
     if (outcome.notQueued) notify(`Octipus was not asked: ${outcome.notQueued}`);
   }, [dropPending, notify]);
+
+  /** A member's post answered a view (another member, or my other tab): the block shows that answer. */
+  const answeredElsewhere = (row: RoomMessage, clientIdOf?: string) => {
+    const blockId = row.metadata?.inlineUiAction?.blockId;
+    if (!blockId) return;
+    const own = clientIdOf ?? row.metadata.clientId;
+    if (own && ownActionPostsRef.current.has(own)) return;
+    refreshInlineUiBlock(inlineUiHostKey, blockId);
+  };
 
   // The space's messages: this tab's own, or the host's unwrapped from `remote.event`.
   const handleMessage = (message: GatewayMessage) => {
@@ -193,6 +211,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       // A host's rows keep only UUID ids (they key and page the view).
       const caught = remote ? withUuidIds(message.messages as RoomMessage[]) : message.messages as RoomMessage[];
       setMessages((current) => merge(current, caught));
+      for (const row of caught) answeredElsewhere(row);
       const last = caught.at(-1)?.id;
       if (message.hasMore && last) void catchUpFrom(last).catch((err: Error) => notify(`Could not load the missed messages: ${err.message}`));
       return;
@@ -205,7 +224,15 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       if (Date.now() - lastFrameAtRef.current > FRAME_ERROR_WINDOW_MS) return;
       // Room frames of a connection are answered in order: the oldest post
       // still waiting is the one refused.
-      dropPending(inflightRef.current[0]);
+      const refused = inflightRef.current[0];
+      dropPending(refused);
+      // A view's answer that was refused: the block says why and opens again.
+      const onRefused = refused ? actionPostsRef.current.get(refused) : undefined;
+      if (onRefused && refused) {
+        actionPostsRef.current.delete(refused);
+        onRefused(message.message);
+        return;
+      }
       notify(message.message);
       return;
     }
@@ -229,6 +256,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
         // Interactive answers in a reply that arrives now (a room still waits for a click to run them).
         if (row.role === 'assistant' && typeof row.content === 'string') for (const id of inlineUiMarkerIds(row.content)) liveInlineUiRef.current.add(id);
         setMessages((current) => merge(current, [row]));
+        answeredElsewhere(row, payload.clientId);
+        if (payload.clientId ?? row.metadata?.clientId) actionPostsRef.current.delete(payload.clientId ?? row.metadata?.clientId);
         dropPending(payload.clientId ?? row.metadata?.clientId);
         if (row.role === 'assistant' && row.metadata.requesterId === myId && row.metadata.kind !== 'progress') setStreaming(null);
         if (row.authorUserId) {
@@ -301,17 +330,28 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       .catch((err: Error) => console.warn('Could not mark the room read', err));
   }, [gateway, newestId, qc, roomId, spaceId, source, remote]);
 
-  const post = (content: string, addressed: boolean) => {
+  /**
+   * Post as me. `answer`: the post answers a view (`inlineUi.action`); a
+   * refusal of it goes to the block, not the notices. Resolves once the post
+   * went out; rejects when the REST fallback refused an answer.
+   */
+  const post = (content: string, addressed: boolean, answer?: { action: InlineUiViewAction & { data?: JsonObject }; onRefused: (message: string) => void }): Promise<void> => {
     const id = clientId();
     const command = content.startsWith('/');
     if (!command) setPending((p) => [...p, { clientId: id, content, at: new Date().toISOString() }]);
     inflightRef.current.push(id);
-    if (gateway.send({ type: 'room.post', roomId, content, addressed, clientId: id })) {
+    const inlineUi = answer ? { action: answer.action } : undefined;
+    if (answer) {
+      ownActionPostsRef.current.add(id);
+      actionPostsRef.current.set(id, answer.onRefused);
+    }
+    if (gateway.send({ type: 'room.post', roomId, content, addressed, clientId: id, ...(inlineUi ? { inlineUi } : {}) })) {
       lastFrameAtRef.current = Date.now();
-      return;
+      return Promise.resolve();
     }
     // The socket is down: the REST fallback stores the same post.
-    source.post(roomId, { content, addressed, clientId: id })
+    actionPostsRef.current.delete(id);
+    return source.post(roomId, { content, addressed, clientId: id, ...(inlineUi ? { inlineUi } : {}) })
       .then((outcome) => {
         if (outcome.message) setMessages((current) => merge(current, [outcome.message!]));
         dropPending(id);
@@ -319,6 +359,8 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
       })
       .catch((err: Error) => {
         dropPending(id);
+        // An answer's refusal (400/403) is shown on its block.
+        if (answer) throw err;
         notify(err.message);
       });
   };
@@ -329,13 +371,18 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
   useEffect(() => { postRef.current = post; });
   const canPost = access.role !== 'viewer';
   const inlineUiHost = useMemo<InlineUiHost>(() => ({
-    key: `room:${remote ? 'remote:' : ''}${roomId}`,
+    key: inlineUiHostKey,
     fetchBlock: (id) => source.inlineUi(roomId, id),
     shared: true,
     isLive: (id) => liveInlineUiRef.current.has(id),
     impersonating: false,
-    sendSuggestion: canPost ? (text) => postRef.current(text, true) : undefined,
-  }), [roomId, remote, source, canPost]);
+    sendSuggestion: canPost ? (text) => { void postRef.current(text, true); } : undefined,
+    // A view's answer is my own post addressed to Octipus, carrying `inlineUi.action`.
+    sendAction: canPost ? (action, onRefused) => {
+      const { text, ...rest } = action;
+      return postRef.current(text, true, { action: rest, onRefused });
+    } : undefined,
+  }), [inlineUiHostKey, roomId, source, canPost]);
 
   const cancelQueued = (messageId: string) => {
     if (remote) {
@@ -415,6 +462,7 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
         content: m.content,
         timestamp: new Date(m.createdAt),
         author: { name: m.authorName ?? 'a former member', mine },
+        ...(m.metadata.inlineUiAction ? { fromInlineUi: true, inlineUiAction: m.metadata.inlineUiAction } : {}),
       };
     });
     const local: ChatMessageData[] = pending.map((p) => ({

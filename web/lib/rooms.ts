@@ -1,4 +1,5 @@
 import type { CompanionIdentity } from '../../src/shared/companion';
+import type { InlineUiViewAction } from '../../src/shared/inline-ui/view';
 /**
  * Rooms of a shared space (docs/SPACES.md → Rooms): the wire shapes of the
  * room routes (`src/api/routes/rooms.ts`) and gateway events
@@ -44,6 +45,8 @@ export interface RoomMessage {
     requesterId?: string;
     /** Posted by the agent unprompted (a listen room); members rate it. */
     unprompted?: boolean;
+    /** The post answers a view of the room: its bubble shows the values. */
+    inlineUiAction?: Pick<InlineUiViewAction, 'blockId' | 'name' | 'context'>;
   };
 }
 

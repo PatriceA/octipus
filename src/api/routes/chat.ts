@@ -13,7 +13,8 @@ import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { stripSpeechSources } from '@/voice/speech-sources';
-import { inlineUiFallbackText, inlineUiSpeechText } from '@/shared/inline-ui/fence';
+import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
+import { inlineUiSpeechText } from '@/shared/inline-ui/fence';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 
@@ -282,7 +283,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           // it renders them (MCP, scripts, the web's own REST fallback).
           response: channel === 'mobile-voice'
             ? stripSpeechSources(inlineUiSpeechText(result.response))
-            : renders?.length ? result.response : inlineUiFallbackText(result.response),
+            : renders?.length ? result.response : await inlineUiFallbackTextResolved(result.response, result.sessionId || sessionId),
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,

@@ -5,7 +5,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget, sendResolved } from '@/channels/ownership';
 import { coreLogger } from '@/utils/logger';
-import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
+import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
 
 export async function deliverMonitorResponse(row: Monitor, result: TurnResult): Promise<void> {
   const session = await sessionRepository.findById(row.sessionId);
@@ -25,7 +25,7 @@ export async function deliverMonitorResponse(row: Monitor, result: TurnResult): 
       }
       // Everyone there reads it: a refusal for the member's own limits goes
       // without its figures, as in the dispatcher.
-      let content = inlineUiFallbackText(result.response);
+      let content = await inlineUiFallbackTextResolved(result.response, row.sessionId);
       const limit = result.metadata?.limit;
       if (limit) {
         // Named neutrally: the Octipus account name is not what the channel knows them by.
@@ -53,7 +53,7 @@ export async function deliverMonitorResponse(row: Monitor, result: TurnResult): 
       throw new Error(resolved.error);
     }
     const sent = await sendResolved(resolved, {
-      content: inlineUiFallbackText(result.response), threadId: session.threadId ?? undefined,
+      content: await inlineUiFallbackTextResolved(result.response, row.sessionId), threadId: session.threadId ?? undefined,
       metadata: { monitorId: row.id, sessionId: row.sessionId },
     });
     if (!sent.ok) throw new Error(sent.error);

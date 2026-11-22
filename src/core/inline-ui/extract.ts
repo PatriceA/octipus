@@ -1,6 +1,9 @@
 /**
  * Interactive answers on the server: turn the `octi-ui` fences of a root
  * agent's reply into stored blocks and marker lines (docs/plans/inline-ui-spec.md).
+ * A fence whose body is JSON is a declarative view
+ * (docs/plans/inline-ui-views-spec.md), any other body an HTML block; both
+ * share the marker, the caps, the repair round and the notices.
  *
  * - `inlineUiRepairMessage` says what is wrong with the fences of a draft reply,
  *   for the worker's one repair round (G3: the model hears it in the same turn).
@@ -13,6 +16,7 @@
  */
 import { transform } from 'esbuild';
 import { inlineUiRepository } from '@/db/repositories/inline-ui-repository';
+import type { NewInlineUiBlock } from '@/db/schema/inline-ui-blocks';
 import {
   describeInlineUiIssues,
   findInlineUiFences,
@@ -23,7 +27,10 @@ import {
   inlineUiMarkerIds,
   type InlineUiFence,
   type InlineUiIssue,
+  type InlineUiView,
+  isInlineUiViewBody,
   lintInlineUi,
+  lintInlineUiView,
   replaceInlineUiFences,
   splitInlineUiBody,
 } from '@/shared/inline-ui';
@@ -45,25 +52,34 @@ export async function scriptSyntaxIssue(js: string): Promise<InlineUiIssue | nul
   }
 }
 
-export interface InlineUiFenceReport {
-  fence: InlineUiFence;
-  issues: InlineUiIssue[];
+export type InlineUiFenceReport =
+  | { kind: 'html'; fence: InlineUiFence; issues: InlineUiIssue[] }
+  /** `view` is the stored form, present when no issue is fatal. */
+  | { kind: 'view'; fence: InlineUiFence; issues: InlineUiIssue[]; view?: InlineUiView };
+
+async function lintFence(fence: InlineUiFence): Promise<InlineUiFenceReport> {
+  if (isInlineUiViewBody(fence.body)) {
+    const { view, issues } = lintInlineUiView(fence.body, { closed: fence.closed });
+    return { kind: 'view', fence, issues, ...(view ? { view } : {}) };
+  }
+  const parts = splitInlineUiBody(fence.body);
+  const issues = lintInlineUi(parts, { closed: fence.closed });
+  const syntax = parts.issues.includes('unclosed-script') ? null : await scriptSyntaxIssue(parts.js);
+  if (syntax) issues.push(syntax);
+  return { kind: 'html', fence, issues };
 }
 
-/** Lint every fence of a reply, script syntax included. */
+/** Lint every fence of a reply: a view's JSON, or an HTML block with its script syntax. */
 export async function lintInlineUiFences(text: string): Promise<InlineUiFenceReport[]> {
   if (!hasInlineUiFence(text)) return [];
   const reports: InlineUiFenceReport[] = [];
   const fences = findInlineUiFences(text);
   for (const [index, fence] of fences.entries()) {
-    const parts = splitInlineUiBody(fence.body);
-    const issues = lintInlineUi(parts, { closed: fence.closed });
-    const syntax = parts.issues.includes('unclosed-script') ? null : await scriptSyntaxIssue(parts.js);
-    if (syntax) issues.push(syntax);
+    const report = await lintFence(fence);
     if (index >= INLINE_UI_LIMITS.blocksPerReply) {
-      issues.push({ code: 'too-many', severity: 'fatal', message: `a reply may carry at most ${INLINE_UI_LIMITS.blocksPerReply} interactive answers` });
+      report.issues.push({ code: 'too-many', severity: 'fatal', message: `a reply may carry at most ${INLINE_UI_LIMITS.blocksPerReply} interactive answers` });
     }
-    reports.push({ fence, issues });
+    reports.push(report);
   }
   return reports;
 }
@@ -80,6 +96,35 @@ export async function inlineUiRepairMessage(text: string): Promise<string | null
     + 'Write your whole reply again with the corrected octi-ui block (keep the rest of the answer). If it cannot be fixed, answer without it.';
 }
 
+/**
+ * Measuring the offer (docs/plans/inline-ui-views-spec.md §8): what the blocks
+ * of an offered root turn came to. Root-runner opens a tally when it offers
+ * interactive answers; every store pass of that run (the worker's, a CLI
+ * root's, the service's) adds to it; the service logs it once, after its own
+ * pass, the last before the reply is saved. Bounded: a turn that fails before
+ * the log leaves its tally behind, and the oldest go first.
+ */
+interface OfferTally { setting: string; kinds: Array<'html' | 'view'>; refused: number }
+const offeredTurns = new Map<string, OfferTally>();
+const OFFER_TALLY_CAP = 1_000;
+
+/** This run's root was offered interactive answers under the setting `setting`. */
+export function noteInlineUiOffer(runId: string, setting: string): void {
+  if (offeredTurns.has(runId)) return;
+  if (offeredTurns.size >= OFFER_TALLY_CAP) offeredTurns.delete(offeredTurns.keys().next().value as string);
+  offeredTurns.set(runId, { setting, kinds: [], refused: 0 });
+}
+
+/** Log `Interactive answer offer` for an offered run, once; nothing for a run that was not offered. */
+export function logInlineUiOffer(runId: string | undefined, sessionId: string): void {
+  const tally = runId ? offeredTurns.get(runId) : undefined;
+  if (!runId || !tally) return;
+  offeredTurns.delete(runId);
+  coreLogger.info({
+    sessionId, runId, offered: true, used: tally.kinds.length, kinds: [...new Set(tally.kinds)], refused: tally.refused, setting: tally.setting,
+  }, 'Interactive answer offer');
+}
+
 export interface InlineUiStoreContext {
   sessionId: string;
   agentId?: string;
@@ -93,6 +138,34 @@ export interface InlineUiExtraction {
   text: string;
   stored: string[];
   refused: number;
+}
+
+type BlockContent = Pick<NewInlineUiBlock, 'kind' | 'view' | 'heightHint' | 'css' | 'html' | 'js' | 'scripts'>;
+
+/** What a fence without fatal issues stores, and its sizes for the log. */
+function blockContent(report: InlineUiFenceReport): { row: BlockContent; sizes: Record<string, number> } | null {
+  const { fence } = report;
+  if (report.kind === 'view') {
+    // The lint returns the stored form whenever nothing is fatal.
+    if (!report.view) return null;
+    // A view runs no generated code: nothing in css/html/js, never `scripts`.
+    return {
+      row: { kind: 'view', view: report.view, heightHint: INLINE_UI_LIMITS.defaultHeight, css: '', html: '', js: '', scripts: false },
+      sizes: { view: fence.body.length, components: report.view.components.length },
+    };
+  }
+  const parts = splitInlineUiBody(fence.body);
+  return {
+    row: {
+      kind: 'html',
+      heightHint: Math.max(INLINE_UI_LIMITS.minHeight, Math.min(fence.height ?? INLINE_UI_LIMITS.defaultHeight, INLINE_UI_LIMITS.maxHeight)),
+      css: parts.css,
+      html: parts.html,
+      js: parts.js,
+      scripts: parts.js.trim() !== '',
+    },
+    sizes: { html: parts.html.length, css: parts.css.length, js: parts.js.length },
+  };
 }
 
 function notice(title: string, issues: InlineUiIssue[]): string {
@@ -119,39 +192,39 @@ export async function storeInlineUiBlocks(text: string, ctx: InlineUiStoreContex
   const replacements: string[] = [];
   const stored: string[] = [];
   let refused = 0;
-  for (const { fence, issues } of reports) {
+  const tally = offeredTurns.get(runId);
+  for (const report of reports) {
+    const { fence, issues } = report;
     const fatal = issues.filter((i) => i.severity === 'fatal');
-    if (fatal.length > 0 || room <= 0) {
+    const content = fatal.length === 0 ? blockContent(report) : null;
+    if (!content || room <= 0) {
       const why = room <= 0
         ? [{ code: 'session-full', severity: 'fatal' as const, message: `this conversation already holds ${INLINE_UI_LIMITS.blocksPerSession} interactive answers` }]
         : fatal;
       replacements.push(notice(fence.title, why));
       refused++;
-      coreLogger.warn({ sessionId: ctx.sessionId, runId, title: fence.title, codes: why.map((i) => i.code) }, 'Interactive answer refused');
+      if (tally) tally.refused++;
+      coreLogger.warn({ sessionId: ctx.sessionId, runId, title: fence.title, kind: report.kind, codes: why.map((i) => i.code) }, 'Interactive answer refused');
       continue;
     }
-    const parts = splitInlineUiBody(fence.body);
     const row = await inlineUiRepository.create({
+      ...content.row,
       sessionId: ctx.sessionId,
       runId,
       agentId: ctx.agentId ?? null,
       requesterId: isRealUserId(ctx.requesterId) ? ctx.requesterId : null,
       title: fence.title,
-      heightHint: Math.max(INLINE_UI_LIMITS.minHeight, Math.min(fence.height ?? INLINE_UI_LIMITS.defaultHeight, INLINE_UI_LIMITS.maxHeight)),
-      css: parts.css,
-      html: parts.html,
-      js: parts.js,
-      scripts: parts.js.trim() !== '',
       tainted,
       risk,
       issues: issues.map((i) => i.code),
     });
     room--;
     stored.push(row.id);
+    tally?.kinds.push(report.kind);
     replacements.push(inlineUiMarker(row.id, fence.title));
     coreLogger.info({
-      sessionId: ctx.sessionId, runId, blockId: row.id, mode: row.scripts ? 'scripted' : 'static',
-      sizes: { html: parts.html.length, css: parts.css.length, js: parts.js.length }, tainted, risk, issues: row.issues,
+      sessionId: ctx.sessionId, runId, blockId: row.id, mode: report.kind === 'view' ? 'view' : row.scripts ? 'scripted' : 'static',
+      sizes: content.sizes, tainted, risk, issues: row.issues,
     }, 'Interactive answer stored');
   }
   return { text: replaceInlineUiFences(text, (_f, i) => replacements[i] ?? ''), stored, refused };
@@ -167,7 +240,7 @@ export async function inlineUiGuardText(text: string, sessionId: string): Promis
   const ids = inlineUiMarkerIds(text);
   if (ids.length === 0) return text;
   const blocks = await inlineUiRepository.getManyInSession(ids, sessionId);
-  return [text, ...blocks.map((b) => [b.title, b.css, b.html, b.js].join('\n'))].join('\n\n');
+  return [text, ...blocks.map((b) => (b.kind === 'view' ? [b.title, JSON.stringify(b.view)] : [b.title, b.css, b.html, b.js]).join('\n'))].join('\n\n');
 }
 
 /** Replace every fence with its plain line: a history copy that must not carry the source. */

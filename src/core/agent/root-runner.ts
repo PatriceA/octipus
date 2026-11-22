@@ -23,8 +23,9 @@ import { agentPrincipal } from '@/security/principal';
 import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getRunContext } from '@/core/run-context';
-import { INLINE_UI_PROMPT, inlineUiOffered } from '@/core/inline-ui/offer';
+import { getRunContext, getRunId } from '@/core/run-context';
+import { type InteractiveAnswersSetting, inlineUiOffered, inlineUiPrompt } from '@/core/inline-ui/offer';
+import { noteInlineUiOffer } from '@/core/inline-ui/extract';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -252,20 +253,22 @@ export interface RootRunExtras {
 /**
  * Whether this turn's root agent is offered interactive answers: the pure
  * rule (`inlineUiOffered`) fed with the session's audience, what the client
- * declared it renders (`RunContext.renders`), the model and the kill switch —
- * a stored DENY on tool `inline-ui`, action `render`.
+ * declared it renders (`RunContext.renders`), the model, the operator's
+ * `agent.interactiveAnswers` and the kill switch — a stored DENY on tool
+ * `inline-ui`, action `render`.
  */
 async function resolveInlineUiOffer(input: {
   userId: string;
   session: Awaited<ReturnType<typeof sessionRepository.findById>>;
   small: boolean;
+  setting: InteractiveAnswersSetting;
 }): Promise<boolean> {
   if (!input.session) return false;
   const [{ sessionAudience }, { getPermissionManager }] = await Promise.all([
     import('./audience'), import('@/security/permissions'),
   ]);
   const audience = (await sessionAudience(input.session)).kind;
-  const base = { root: true, audience, renders: getRunContext()?.renders, small: input.small };
+  const base = { root: true, audience, renders: getRunContext()?.renders, small: input.small, setting: input.setting };
   if (!inlineUiOffered({ ...base, denied: false })) return false;
   const check = await getPermissionManager().check(input.userId, 'inline-ui', 'render', undefined, undefined, { defaultLevel: 'ALLOW' });
   return inlineUiOffered({ ...base, denied: check.level === 'DENY' });
@@ -499,7 +502,12 @@ export async function runRootAgent(
   // only where they are read in the web app. The decision travels on the root
   // context (`inlineUiOffered`), which the `inline-ui` tool re-checks; a
   // customized role row that lists the tool does not get it otherwise.
-  const inlineUi = await resolveInlineUiOffer({ userId, session, small: rootIsSmall });
+  const inlineUiSetting = agentCfg.interactiveAnswers;
+  const inlineUi = await resolveInlineUiOffer({ userId, session, small: rootIsSmall, setting: inlineUiSetting });
+  // What the offered turn's blocks come to is logged once, after the last
+  // store pass (AgentService, `logInlineUiOffer`).
+  const offerRunId = getRunId();
+  if (inlineUi && offerRunId) noteInlineUiOffer(offerRunId, inlineUiSetting);
   rootTools = rootTools.filter((t) => t.toolId !== 'inline-ui');
   if (inlineUi) {
     const { getToolRegistry } = await import('@/tools/registry');
@@ -883,7 +891,7 @@ export async function runRootAgent(
 
   // Static, not volatile: the volatile part is stored with every user row, and
   // whether a session is offered interactive answers rarely changes.
-  if (inlineUi) prompt.add('session', 'inline-ui', INLINE_UI_PROMPT);
+  if (inlineUi) prompt.add('session', 'inline-ui', inlineUiPrompt(inlineUiSetting));
 
   let driftReplayed = false;
   // The drifting session blocks (workspace listing, repo suite, AGENTS.md

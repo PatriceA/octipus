@@ -5,7 +5,7 @@
  * repository only ever used `t.File()`, so `t` here is TypeBox's `Type` plus
  * that one addition rather than a reimplementation of Elysia's surface.
  */
-import { Kind, type TSchema, Type, TypeRegistry } from '@sinclair/typebox';
+import { FormatRegistry, Kind, type TSchema, Type, TypeRegistry } from '@sinclair/typebox';
 
 const FILE_KIND = 'OctipusFile';
 
@@ -19,6 +19,14 @@ if (!TypeRegistry.Has(FILE_KIND)) {
 }
 
 const File = () => Type.Unsafe<Blob>({ [Kind]: FILE_KIND });
+
+/**
+ * TypeBox ships no string formats: an unregistered `format` fails every
+ * value. Routes declare `format: 'uuid'` (email snoozes, note proposals), and
+ * those requests were all refused with 422 until it was registered here.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+if (!FormatRegistry.Has('uuid')) FormatRegistry.Set('uuid', (value) => UUID_RE.test(value));
 
 export const t = { ...Type, File } as typeof Type & { File: typeof File };
 export type { TSchema };
