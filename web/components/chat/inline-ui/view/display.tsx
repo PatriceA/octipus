@@ -99,14 +99,25 @@ export function KeyValue({ r }: NodeProps<'KeyValue'>) {
   );
 }
 
+/**
+ * The address a Link may open, or null: the parsed URL's own serialization,
+ * and only when its scheme is https. The value can come from what the user
+ * typed into the view, so the anchor never receives the raw text.
+ */
+function httpsHref(url: string): string | null {
+  if (!isSafeInlineUiLink(url)) return null;
+  const parsed = new URL(url);
+  return parsed.protocol === 'https:' ? parsed.href : null;
+}
+
 /** A link opens like a markdown link in a reply: a new tab, no opener or referrer, https only. */
 export function Link({ r }: NodeProps<'Link'>) {
   const rt = useViewRuntime();
   const text = valueToText(r.text, rt.format);
-  const url = valueToText(r.url, rt.format);
-  if (!isSafeInlineUiLink(url)) return <span className="text-on-surface-variant" title="Not an https: link, so it is not opened">{text}</span>;
+  const href = httpsHref(valueToText(r.url, rt.format));
+  if (!href) return <span className="text-on-surface-variant" title="Not an https: link, so it is not opened">{text}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="inline-flex items-center gap-1 text-primary underline hover:opacity-80 break-all">
+    <a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="inline-flex items-center gap-1 text-primary underline hover:opacity-80 break-all">
       {text}<ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
     </a>
   );

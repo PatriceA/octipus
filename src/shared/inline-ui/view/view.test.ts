@@ -389,6 +389,11 @@ describe('renderer helpers', () => {
 });
 
 describe('text rendering', () => {
+  it('escapes a backslash in a table cell, so one before a pipe cannot undo the pipe\'s escape', () => {
+    const v = view({ root: { component: 'Table', columns: [{ key: 'a', label: 'A' }], rows: [{ a: 'x\\|y' }] } });
+    expect(inlineUiViewText(v)).toContain('| x\\\\\\|y |');
+  });
+
   it('writes the plans view as markdown', () => {
     expect(inlineUiViewText(view(PLANS))).toBe([
       '### Pick a plan',

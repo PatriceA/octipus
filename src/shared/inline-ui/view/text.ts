@@ -43,7 +43,8 @@ function value(dyn: Dynamic | undefined, scope: ExprScope): JsonValue {
 
 const text = (dyn: Dynamic | undefined, scope: ExprScope): string => valueToText(value(dyn, scope), scope);
 const oneLine = (s: string): string => s.replace(/\s*\n\s*/g, ' ').trim();
-const cell = (s: string): string => oneLine(s).replace(/\|/g, '\\|');
+/** A table cell: a backslash is escaped first, or one before a pipe would undo the pipe's own escape. */
+const cell = (s: string): string => oneLine(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 const bound = (ref: PathRef, scope: ExprScope): JsonValue => getPointer(scope.data, resolvePath(ref['@path'], scope)) ?? null;
 const orNone = (s: string): string => s || INLINE_UI_NO_VALUE;
 
