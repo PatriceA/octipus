@@ -13,6 +13,7 @@ import { QueuedMessages } from './components/queued-messages';
 import { FuzzyList } from '@/tui-kit/fuzzy-list';
 import type { TranscriptSearch } from '@/tui-kit/transcript-search';
 import { getFuzzyListTheme } from './theme/defaults';
+import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
  *
@@ -77,11 +78,6 @@ function newSessionId(): string {
   return randomUUID();
 }
 
-interface SessionRow { id: string; title: string; updatedAt: string; messages: number }
-const isSessionRow = (v: unknown): v is SessionRow => {
-  const r = v as SessionRow | null;
-  return !!r && typeof r.id === 'string' && typeof r.title === 'string';
-};
 interface HistoryRow { role: 'user' | 'assistant'; content: string; at: string }
 const isHistoryRow = (v: unknown): v is HistoryRow => {
   const r = v as HistoryRow | null;
@@ -154,6 +150,8 @@ export class OctipusTuiApp {
   private inputHistory: string[] = [];
   /** The picker open now (history, sessions, models, skills), if any. */
   private pickerHandle: OverlayHandle | null = null;
+  /** The picker waiting for the gateway's list, if one is. */
+  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
   private readonly search?: TranscriptSearch;
   private imageBusy = false;
   private imageCounter = 0;
@@ -528,6 +526,10 @@ export class OctipusTuiApp {
           this.sessionId = fallback;
           return;
         }
+        if (this.loading && event.name === this.loading.command) {
+          this.fillPicker(event);
+          return;
+        }
         if (event.name === 'sessions' && Array.isArray(event.data)) {
           this.sessionList = event.data.filter(isSessionRow);
           if (this.sessionList.length) {
@@ -815,6 +817,7 @@ export class OctipusTuiApp {
     const close = () => {
       this.pickerHandle?.hide();
       this.pickerHandle = null;
+      this.loading = null;
       this.tui.setFocus(this.composer);
       this.tui.requestRender();
     };
@@ -826,6 +829,59 @@ export class OctipusTuiApp {
     });
     this.pickerHandle = this.overlays.showPicker(list);
     return list;
+  }
+
+  /** Re-point every later command and chat at another session and replay its transcript. */
+  private resumeSession(id: string): void {
+    this.sessionBeforeResume = this.sessionId;
+    this.pendingImages = [];
+    this.turn = null;
+    if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
+    this.sessionId = id;
+    this.sessionUsed = true;
+    this.session.reset();
+    this.adapter.sendCommand('history');
+  }
+
+  /** `/sessions` or `/resume` alone: pick a session to resume; it opens at once and fills when the list arrives. */
+  private openSessionPicker(): void {
+    const list = this.openPicker<SessionRow>('Sessions', [], row => {
+      if (row.id === this.sessionId) { this.pushMessage('system', 'That is this session.'); return; }
+      this.resumeSession(row.id);
+    }, sessionPreview, 'Loading sessions…');
+    if (!list) return;
+    this.loading = { command: 'sessions', list };
+    this.adapter.sendCommand('sessions');
+  }
+
+  /** `/skills` alone: pick a skill, then how it is used. */
+  private openSkillPicker(): void {
+    const list = this.openPicker<SkillRow>('Skills', [], skill => {
+      this.openPicker('How to use: ' + skill.name, SKILL_MODES.map(entry => ({ value: entry.mode, label: entry.label, description: entry.description })), mode => {
+        this.pushMessage('user', `/skills ${skillCommand(skill, mode)}`);
+        this.adapter.sendCommand('skills', { value: skillCommand(skill, mode) });
+      });
+    }, skill => `${skill.name}\nId: ${skill.id}\nNow: ${skill.mode}${skill.available ? '' : '\nNot available to you any more.'}\nEnter chooses Automatic, Always or This session.`, 'Loading skills…');
+    if (!list) return;
+    this.loading = { command: 'skills', list };
+    this.adapter.sendCommand('skills');
+  }
+
+  /** The list a picker was waiting for arrived (or failed). */
+  private fillPicker(event: Extract<AgentSessionEvent, { kind: 'command.result' }>): void {
+    const loading = this.loading;
+    this.loading = null;
+    if (!loading) return;
+    if (event.error) { loading.list.setItems([], `Could not load: ${event.error}`); this.tui.requestRender(); return; }
+    if (loading.command === 'sessions') {
+      this.sessionList = Array.isArray(event.data) ? event.data.filter(isSessionRow) : [];
+      loading.list.setItems(sessionItems(this.sessionList, this.sessionId), 'No sessions yet.');
+    } else {
+      const parsed = parseSkillList(typeof event.result === 'string' ? event.result : '');
+      if ('unreadable' in parsed) loading.list.setItems([], parsed.unreadable || 'The server sent no skill list.');
+      else loading.list.setItems(skillItems(parsed.rows), 'No skills available.');
+    }
+    this.tui.requestRender();
   }
 
   /** Ctrl+R: find something sent before and put it back in the composer. */
@@ -859,6 +915,11 @@ export class OctipusTuiApp {
     const value = parts.slice(1).join(' ').trim();
     const args: Record<string, string> | undefined = value ? { value } : undefined;
 
+    // Gateway commands that open a picker when given nothing; with an
+    // argument they go to the gateway as text (`/sessions list` lists).
+    if (name === 'sessions' && !value) { this.openSessionPicker(); return; }
+    if (name === 'skills' && !value) { this.openSkillPicker(); return; }
+
     // `/cost` is deliberately absent: it goes to the gateway, which reads the
     // cost log — the same totals the status bar shows, plus the input/output/
     // request split the old TUI-local counter never had.
@@ -885,23 +946,17 @@ export class OctipusTuiApp {
         if (!this.search.isOpen()) this.search.toggle();
         return;
       case 'resume': {
+        if (!value) { this.openSessionPicker(); return; }
         const n = Number(value);
         const row = Number.isInteger(n) && n >= 1
           ? this.sessionList[n - 1]
           : value ? this.sessionList.find((s) => s.id.startsWith(value)) : undefined;
         const id = row?.id ?? (/^[0-9a-f-]{36}$/i.test(value) ? value : undefined);
         if (!id) {
-          this.pushMessage('system', value ? `No session matches "${value}" — run /sessions first.` : 'Usage: /resume <n|id> (see /sessions).');
+          this.pushMessage('system', `No session matches "${value}" — run /sessions first.`);
           return;
         }
-        this.sessionBeforeResume = this.sessionId;
-        this.pendingImages = [];
-        this.turn = null;
-        if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
-        this.sessionId = id;
-        this.sessionUsed = true;
-        this.session.reset();
-        this.adapter.sendCommand('history');
+        this.resumeSession(id);
         return;
       }
       case 'login':

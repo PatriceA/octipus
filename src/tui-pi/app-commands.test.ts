@@ -71,7 +71,7 @@ test('/help appends the TUI-local commands the gateway cannot know about', async
   const t = mount();
   gateway.listener({ kind: 'command.result', name: 'h', result: 'Available commands:\n  /help — List' });
   expect(t.text()).toContain('TUI commands:');
-  expect(t.text()).toContain('/resume <n|id>');
+  expect(t.text()).toContain('/resume [n|id]');
   await t.app.stop();
 });
 

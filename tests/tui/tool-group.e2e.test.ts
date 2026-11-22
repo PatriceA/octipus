@@ -20,6 +20,9 @@ describe.skipIf(process.platform === 'win32')('tool groups in a real terminal', 
     await tui.waitFor('connected');
     turn(tui);
     await tui.waitFor('▸ 2 tool calls · 1 running — Bash, str_replace_editor');
+    // The whole turn is on screen before rows are counted: the second iteration folds the first's text.
+    await tui.waitFor('Fixed.');
+    await tui.waitFor('▸ Thinking');
     const screen = await tui.text();
     expect(screen).toContain('▸ Thinking · 1 line — I will look at the file, then fix it.');
     expect(screen).not.toContain('cat app.ts');
