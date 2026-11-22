@@ -144,4 +144,30 @@ describe('splitParagraphs', () => {
     // Every row once, in order.
     expect(tablePieces.flatMap((p) => p.split('\n').filter((l) => l.startsWith('| part ')))).toEqual(rows);
   });
+
+  /** Text with whitespace removed, to compare what pieces hold against what went in. */
+  const squash = (s: string) => s.replace(/\s+/g, '');
+
+  test('a table row longer than a piece is cut like prose, never past the size bound', () => {
+    const header = '| Key | Value |\n| --- | --- |';
+    const long = `| k2 | ${'word '.repeat(1280).trim()} |`;
+    const table = [header, '| k1 | short |', long, '| k3 | short |'].join('\n');
+    const pieces = splitParagraphs(table, 1000);
+    expect(Math.max(...pieces.map((p) => p.length))).toBeLessThanOrEqual(1000);
+    // Nothing lost or doubled, other than the header repeated over row pieces.
+    const withoutHeaders = pieces.map((p) => (p.startsWith(header) ? p.slice(header.length) : p)).join('');
+    expect(squash(withoutHeaders)).toBe(squash(table.slice(header.length)));
+  });
+
+  test('a table whose header would dominate every piece is cut like prose', () => {
+    // 80 columns x 50 rows, the shape a wide sheet comes out as.
+    const cols = Array.from({ length: 80 }, (_, c) => `Column ${c} name`);
+    const header = `| ${cols.join(' | ')} |\n| ${cols.map(() => '---').join(' | ')} |`;
+    const rows = Array.from({ length: 50 }, (_, r) => `| ${cols.map((_, c) => `${r * c}`).join(' | ')} |`);
+    const table = [header, ...rows].join('\n');
+    const pieces = splitParagraphs(table, 1000);
+    expect(Math.max(...pieces.map((p) => p.length))).toBeLessThanOrEqual(1000);
+    // The header is not repeated: about as much text goes out as came in.
+    expect(squash(pieces.join(''))).toBe(squash(table));
+  });
 });
