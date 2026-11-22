@@ -936,11 +936,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `utils` | 7 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
-| `skills` | `core` | 8 |
+| `skills` | `core` | 9 |
 | `skills` | `db` | 17 |
 | `skills` | `models` | 2 |
 | `skills` | `security` | 4 |
-| `skills` | `utils` | 8 |
+| `skills` | `utils` | 9 |
 | `test-helpers` | `config` | 1 |
 | `test-helpers` | `core` | 2 |
 | `test-helpers` | `db` | 11 |

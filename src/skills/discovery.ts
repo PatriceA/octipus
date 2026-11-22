@@ -49,6 +49,7 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getSkillRegistry } from '@/skills/registry';
 import { isExternalSkillId } from './external-loader';
 import { coreLogger } from '@/utils/logger';
+import { withDeadline } from '@/utils/concurrency';
 
 export interface DiscoveryOptions {
   topic: string;
@@ -223,12 +224,24 @@ async function fetchTriggerMatchIds(where: SQL, message: string): Promise<string
   return matched;
 }
 
-/** The message's query embedding, or null when there is none (no model, or it failed). */
-async function embedQuery(message: string, logTopic: string): Promise<number[] | null> {
+/**
+ * The message's query embedding, or null when there is none (no model, it
+ * failed, or it was not ready within `deadlineMs`: a stalled provider then
+ * costs the spawn the vector set, not minutes).
+ */
+async function embedQuery(message: string, logTopic: string, deadlineMs?: number): Promise<number[] | null> {
   if (!isCapabilityOn('embedding')) return null;
   try {
-    return await getEmbeddingService().generateEmbedding(message, 'query');
+    const embed = () => getEmbeddingService().generateEmbedding(message, 'query');
+    return deadlineMs === undefined ? await embed() : await withDeadline(embed, deadlineMs);
   } catch (err) {
+    if (deadlineMs !== undefined && (err as Error)?.message === 'timeout') {
+      coreLogger.warn(
+        { topic: logTopic, messageLength: message.length, deadlineMs, component: 'skill-discovery' },
+        'Skill discovery: the query embedding was not ready in time — vector set empty, other sets still apply',
+      );
+      return null;
+    }
     if (isNoEmbeddingModelError(err)) {
       if (!warnedNoEmbeddingModel) {
         warnedNoEmbeddingModel = true;
@@ -329,6 +342,8 @@ interface RunOptions {
   maxByVector: number;
   minSimilarity: number;
   logTopic: string;
+  /** The longest the query embedding is waited for; unset: as long as the provider takes. */
+  embedDeadlineMs?: number;
 }
 
 /** The hybrid algorithm over `scope`, ranked. */
@@ -358,7 +373,7 @@ async function discoverInScope(scope: Scope, opts: RunOptions): Promise<string[]
     names ? safe(() => fetchStaleAssignedIds(names), 'stale_fallback') : [],
     topic !== null ? safe(() => fetchActiveSkillIdsForTopic(topic), 'mounted_assignments') : [],
   ]);
-  const embedding = await embedQuery(opts.message, opts.logTopic);
+  const embedding = await embedQuery(opts.message, opts.logTopic, opts.embedDeadlineMs);
   const [vectorMatches, learnedFallback] = await Promise.all([
     embedding ? safe(() => fetchVectorMatches(where, embedding, opts.maxByVector, opts.minSimilarity), 'vector') : [],
     // With a query embedding a learned skill is found by meaning; only one not
@@ -418,6 +433,9 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
     }
   }
 
+  // A worker or swarm child waits for its query embedding no longer than an
+  // agent start waits for its context hooks.
+  const { START_DEADLINE_MS } = await import('@/core/context-hooks/run');
   const ids = await discoverInScope(
     { topic: opts.topic, learner: opts.userId && !opts.inSpace ? opts.userId : null },
     {
@@ -425,6 +443,7 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
       maxByVector: opts.maxByVector ?? DEFAULT_MAX_BY_VECTOR,
       minSimilarity: opts.minSimilarity ?? DEFAULT_MIN_SIMILARITY,
       logTopic: opts.topic,
+      embedDeadlineMs: START_DEADLINE_MS,
     },
   );
   return opts.userId ? visibleOnly(ids, opts.userId, opts.topic) : ids;

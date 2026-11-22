@@ -366,3 +366,12 @@ describe('the root turn block, bounded', () => {
     expect(Date.now() - started).toBeLessThan(START_DEADLINE_MS + 1500);
   }, 15_000);
 });
+
+test('a worker spawn waits for a stalled query embedding no longer than the start deadline; triggers still match', async () => {
+  const assigned = await seed({ assign: { topic: ROLE_A }, triggers: ['deploy'] });
+  embeddingHangs = true;
+  const { START_DEADLINE_MS } = await import('@/core/context-hooks/run');
+  const started = Date.now();
+  expect(await discover(ROLE_A, 'deploy the preview')).toContain(assigned);
+  expect(Date.now() - started).toBeLessThan(START_DEADLINE_MS + 1500);
+}, 15_000);
