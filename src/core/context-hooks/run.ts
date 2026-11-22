@@ -3,8 +3,9 @@
  * injected and what the agent then did (docs/CONTEXT-HOOKS.md).
  *
  * Hooks run together and share one token budget (`contextHooks.maxTokens`),
- * spent in list order. A hook that fails or takes longer than HOOK_TIMEOUT_MS
- * costs the turn its block, never the turn: the agent starts without it.
+ * spent in list order. A hook that fails or is not done HOOK_TIMEOUT_MS after
+ * the run began costs the turn its block, never the turn: the agent starts
+ * without it. Listing, hooks and commits all end by START_DEADLINE_MS.
  *
  * A hook computes its block without side effects; what showing it implies
  * (recall: the session's protection level, the passages' access counts) is
@@ -13,6 +14,7 @@
  * leaves nothing behind but its run record.
  */
 import { isJobOn } from '@/core/modules/registry';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
@@ -26,7 +28,19 @@ import { listContextHooks } from './store';
 import { agentUsageKey, toolUseSnapshot, type ToolUseCount } from './tool-usage';
 import type { ContextHookInput, ContextHookItem, ContextHookResult } from './types';
 
+/**
+ * The latest a hook's block can be ready, counted from the start of the run
+ * (listing the user's hooks included): a hook still running then is cut off
+ * (`timeout`) and the agent starts without its block.
+ */
 export const HOOK_TIMEOUT_MS = 4_000;
+/**
+ * The whole run before an agent starts: listing the hooks, running them
+ * (HOOK_TIMEOUT_MS of it) and committing what is shown. A commit still
+ * running at it leaves its block out (`commit_failed`). The turn record is
+ * written after, without holding up the start.
+ */
+export const START_DEADLINE_MS = 4_500;
 
 /** A recorded turn, handed back to `finishContextTurn` when the agent is done. */
 export interface ContextTurnHandle {
@@ -45,6 +59,8 @@ export interface ContextTurnHandle {
    * (`usedPassages`). In memory only; the row gets the count.
    */
   shown: Array<{ excerpt: string; query: string }>;
+  /** The record's write (`runContextHooks` does not wait for it); false when it failed. Absent: written. */
+  recorded?: Promise<boolean>;
 }
 
 export interface ContextHooksOutcome {
@@ -83,9 +99,12 @@ export async function runContextHooks(
   // Recall is the `recall` module (docs/MODULES.md): off, no hook runs.
   if (!settings?.enabled || !isJobOn('context-hooks')) return NONE;
   const started = Date.now();
+  const hooksBy = started + HOOK_TIMEOUT_MS;
+  const startBy = started + START_DEADLINE_MS;
+  const left = (by: number) => Math.max(0, by - Date.now());
   let hooks;
   try {
-    hooks = (await listContextHooks(input.userId)).filter((h) => h.enabled && h.events.includes(input.event));
+    hooks = (await withDeadline(() => listContextHooks(input.userId), left(hooksBy))).filter((h) => h.enabled && h.events.includes(input.event));
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: could not list hooks — agent starts without them');
     return NONE;
@@ -99,17 +118,17 @@ export async function runContextHooks(
   // All hooks at once, under one deadline: a slow embedding provider costs the
   // turn HOOK_TIMEOUT_MS at most, however many hooks the user has. The shared
   // budget is applied afterwards, in list order: a block that no longer fits
-  // is left out.
-  const deadlineAt = Date.now() + HOOK_TIMEOUT_MS;
+  // is left out. A hook is handed the deadline and its signal, which aborts
+  // when it passes: recall then does not search after it.
   const results = await Promise.all(hooks.map(async (hook) => {
     const hookStart = Date.now();
     let result: ContextHookResult;
     try {
-      result = await withDeadline(async () => {
+      result = await withDeadline(async (signal) => {
         // Only recall reads the previous message (`buildRecallQuery`).
         const prev = hook.kind === 'recall' ? await previousFor() : undefined;
-        return KIND_RUNNERS[hook.kind]({ ...hookInput, ...(prev ? { previousMessage: prev } : {}), tokenBudget: settings.maxTokens, deadlineAt }, hook.config);
-      }, HOOK_TIMEOUT_MS);
+        return KIND_RUNNERS[hook.kind]({ ...hookInput, ...(prev ? { previousMessage: prev } : {}), tokenBudget: settings.maxTokens, deadlineAt: hooksBy, signal }, hook.config);
+      }, left(hooksBy));
     } catch (err) {
       const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';
       coreLogger.warn({ err, hook: hook.name, userId: input.userId }, 'context hook failed — skipped for this turn');
@@ -118,32 +137,43 @@ export async function runContextHooks(
     return { hook, result, latencyMs: Date.now() - hookStart };
   }));
 
-  // The shared budget, in list order: a block that no longer fits is left out.
-  let budget = settings.maxTokens;
-  const kept = results.map(({ hook, latencyMs, result: ran }) => {
-    let result = ran;
-    if (result.status === 'injected' && result.tokens > budget) {
-      result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0, ...(ran.degraded ? { degraded: ran.degraded } : {}) };
-    }
-    if (result.status === 'injected' && result.text) budget -= result.tokens;
-    return { hook, latencyMs, result };
-  });
-
-  // The side effects of what is shown, before the agent starts: the session
-  // must hold the level of what it was given before it can pass it on. A
-  // commit that fails leaves its block out (fail safe: a block whose level
-  // could not be raised is not shown).
-  await Promise.all(kept.map(async (entry) => {
-    const { hook, result } = entry;
-    const commit = result.commit;
-    if (result.status !== 'injected' || !result.text || !commit) return;
-    try {
-      await withDeadline(() => commit(), HOOK_TIMEOUT_MS);
-    } catch (err) {
-      coreLogger.error({ err, hook: hook.name, userId: input.userId }, 'context hook: committing its block failed — the block is left out of this turn');
-      entry.result = { status: 'error', reason: 'commit_failed', text: '', items: [], tokens: 0, ...(result.degraded ? { degraded: result.degraded } : {}) };
-    }
-  }));
+  // The shared budget in list order, and the side effects of what is shown
+  // before the agent starts: the session must hold the level of what it was
+  // given before it can pass it on. A commit that fails leaves its block out
+  // (fail safe: a block whose level could not be raised is not shown) and
+  // gives its tokens back: a later block left out for the budget is then
+  // considered again, and committed in turn. A block once committed stays.
+  const kept = results.map((r) => ({ ...r, decided: r.result.status !== 'injected' || !r.result.text }));
+  const spent = () => kept.reduce((n, e) => n + (e.decided && e.result.status === 'injected' ? e.result.tokens : 0), 0);
+  for (;;) {
+    let budget = settings.maxTokens - spent();
+    const round = kept.filter((e) => {
+      if (e.decided || e.result.tokens > budget) return false;
+      budget -= e.result.tokens;
+      return true;
+    });
+    if (round.length === 0) break;
+    const failed = await Promise.all(round.map(async (entry) => {
+      entry.decided = true;
+      const { hook, result } = entry;
+      if (!result.commit) return false;
+      const commit = result.commit;
+      try {
+        await withDeadline(() => commit(), left(startBy));
+        return false;
+      } catch (err) {
+        coreLogger.error({ err, hook: hook.name, userId: input.userId }, 'context hook: committing its block failed — the block is left out of this turn');
+        entry.result = { status: 'error', reason: 'commit_failed', text: '', items: [], tokens: 0, ...(result.degraded ? { degraded: result.degraded } : {}) };
+        return true;
+      }
+    }));
+    if (!failed.some(Boolean)) break;
+  }
+  for (const entry of kept) {
+    if (entry.decided) continue;
+    const ran = entry.result;
+    entry.result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0, ...(ran.degraded ? { degraded: ran.degraded } : {}) };
+  }
 
   const texts: string[] = [];
   const repeatable: RepeatableBlock[] = [];
@@ -176,23 +206,26 @@ export async function runContextHooks(
   }
 
   const text = texts.join('');
-  let turn: ContextTurnHandle | null = null;
-  try {
-    const [row] = await getDb().insert(contextTurns).values({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      event: input.event,
-      role: input.role ?? null,
-      channel: input.channel ?? null,
-      hooks: records,
-      injectedItems,
-      tokens: records.reduce((n, r) => n + r.tokens, 0),
-      latencyMs: Date.now() - started,
-    }).returning({ id: contextTurns.id });
-    turn = { id: row.id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable, shown };
-  } catch (err) {
+  // The record is measurement: written after, without holding up the start.
+  // The handle exists at once (its id chosen here); finishing it waits for
+  // the write, and is skipped when the write failed.
+  const id = randomUUID();
+  const recorded = getDb().insert(contextTurns).values({
+    id,
+    userId: input.userId,
+    sessionId: input.sessionId,
+    event: input.event,
+    role: input.role ?? null,
+    channel: input.channel ?? null,
+    hooks: records,
+    injectedItems,
+    tokens: records.reduce((n, r) => n + r.tokens, 0),
+    latencyMs: Date.now() - started,
+  }).then(() => true, (err: unknown) => {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
-  }
+    return false;
+  });
+  const turn: ContextTurnHandle = { id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable, shown, recorded };
   return { text, blocks: texts.filter(Boolean), labelledBlocks, repeatable, turn };
 }
 
@@ -233,6 +266,7 @@ export async function finishContextTurn(
   if (!turn) return;
   try {
     const end = toolUseSnapshot(turn.usageKey);
+    if (turn.recorded && !(await turn.recorded)) return;
     const { model, cli } = await describeModel(done.agentId).catch(() => ({ model: null, cli: null }));
     await getDb().update(contextTurns).set({
       agentId: done.agentId ?? null,

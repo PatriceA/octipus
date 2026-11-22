@@ -972,9 +972,14 @@ export class EmbeddingService {
       scope?: Omit<SearchScope, 'skipAccess'>;
       /** Cancel the search statement after this long (Postgres only). */
       timeoutMs?: number;
+      /**
+       * Aborted: the search statement is not started. The embedding request
+       * itself cannot be cancelled (the provider clients take no signal).
+       */
+      signal?: AbortSignal;
     } = {},
   ): Promise<AnyTermSearch> {
-    const { purposes, excludeProductDocs = false, perSource, alpha = 0.6, scope, timeoutMs } = options;
+    const { purposes, excludeProductDocs = false, perSource, alpha = 0.6, scope, timeoutMs, signal } = options;
     const started = Date.now();
     const [embedded, queryLexemes] = await Promise.all([
       this.generateEmbedding(query, 'query').then(
@@ -986,6 +991,7 @@ export class EmbeddingService {
       ),
       this.queryLexemes(query),
     ]);
+    signal?.throwIfAborted();
     const keywordLexemes = keywordLegLexemes(queryLexemes);
     const remaining = timeoutMs === undefined ? undefined : Math.max(1, timeoutMs - (Date.now() - started));
 

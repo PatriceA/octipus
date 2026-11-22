@@ -25,7 +25,7 @@ Every user starts with two built-in hooks, both on:
 
 | Hook | Kind | Runs before | What it injects |
 |---|---|---|---|
-| Knowledge recall | `recall` | each message, each specialist | The passages of the user's knowledge base and notes that qualify for the message (or the specialist's brief): at most 4, one per source, within 1000 tokens. Nothing when no passage qualifies. |
+| Knowledge recall | `recall` | each message, each specialist | The passages of the user's knowledge base and notes that qualify for the message (or the specialist's brief): at most 4, one per source, within 1200 tokens. Nothing when no passage qualifies. |
 | Notes index | `notes_index` | each message | The number of notes, the titles of the pinned ones, then the most recently changed (15 titles, 150 tokens). Tells the agent what there is to look up. |
 
 A user can add hooks of their own on the **Recall** page (`/recall`):
@@ -40,7 +40,11 @@ All hooks of one agent start run at the same time and share
 `contextHooks.maxTokens` (default 2000, enough for every default together).
 The budget is spent in list order (built-ins first): a block that no longer
 fits is left out (recorded as `skipped`, `budget_spent`). A hook that fails or
-takes longer than 4 seconds is left out of that start. The agent still starts.
+is not done 4 seconds after the start began (`HOOK_TIMEOUT_MS`, listing the
+hooks included) is left out of that start. Committing what is shown (below)
+must end by 4.5 seconds (`START_DEADLINE_MS`), so an agent start waits for its
+hooks at most that long; the turn record is written after, without holding it
+up. The agent still starts.
 
 ## Where hooks run
 
@@ -183,7 +187,12 @@ block that is actually shown: after the deadline and the shared budget, and
 before the agent starts (the session must hold the level of what it was given
 before it can pass it on). A block dropped for the budget, or a hook that
 timed out and finishes later, leaves nothing behind but its run record. When
-raising the level fails, the block is left out (`error`, `commit_failed`).
+raising the level fails or is not done by the start deadline, the block is
+left out (`error`, `commit_failed`) and its tokens go back to the shared
+budget: a later block left out for the budget is considered again. The
+embedding request of a hook cut off by its deadline cannot be cancelled (the
+provider clients take no abort signal), but recall does not search after
+the deadline, and on Postgres its search statement is cancelled at it.
 
 ## Without an embedding model, and when embedding fails
 

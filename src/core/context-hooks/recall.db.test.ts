@@ -400,6 +400,51 @@ describe('side effects only for what is shown', () => {
     expect((await accessCounts())[id]).toBe(0);
   }, 15_000);
 
+  test('a block dropped when its commit fails gives its tokens back to a later block', async () => {
+    const contentRead = await import('@/core/protection/content-read');
+    vi.spyOn(contentRead, 'readKnowledge').mockRejectedValue(new Error('level store down'));
+    const { createContextHook, updateContextHook } = await import('@/core/context-hooks');
+    const { getConfig } = await import('@/config');
+    // Recall first, a context note after it: together they exceed the budget, the note alone fits.
+    await updateContextHook(userId, 'builtin:knowledge-recall', { enabled: false });
+    await createContextHook(userId, { name: 'Recall', kind: 'recall' });
+    await queryRaw(`INSERT INTO notes (id, user_id, slug, title, body, body_sha256) VALUES ($1, $2, 'about-me', 'About me', $3, $4)`,
+      [randomUUID(), userId, 'I run a design studio. '.repeat(60), randomUUID()]);
+    await createContextHook(userId, { name: 'About me', kind: 'note', config: { slug: 'about-me', tokenBudget: 400 } });
+    await chunk('Pricing', 'Pricing: a website costs 2400 euro.');
+    const settings = getConfig().contextHooks;
+    const before = settings.maxTokens;
+    settings.maxTokens = 450;
+    try {
+      const { text } = await run('What do we charge for a website?', { sessionId: 'sess-giveback' });
+      expect(text).not.toContain('<recalled-knowledge>');
+      expect(text).toContain('<context-note');
+    } finally {
+      settings.maxTokens = before;
+    }
+    const { rows } = await queryRaw('SELECT hooks FROM context_turns ORDER BY created_at DESC LIMIT 1');
+    const hooks = rows[0].hooks as ContextHookRunRecord[];
+    expect(hooks.map((h) => [h.hook, h.status, h.reason ?? null])).toEqual([['Recall', 'error', 'commit_failed'], ['About me', 'injected', null]]);
+  });
+
+  test('hooks and their commits share one deadline: a slow hook leaves its commit only the rest of it', async () => {
+    const { START_DEADLINE_MS } = await import('@/core/context-hooks/run');
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    vi.mocked(getEmbeddingService().generateEmbedding).mockImplementation(async (text: string) => {
+      await new Promise((r) => setTimeout(r, 3_000));
+      return embed(text);
+    });
+    const contentRead = await import('@/core/protection/content-read');
+    vi.spyOn(contentRead, 'readKnowledge').mockImplementation(() => new Promise<never>(() => {}));
+    await chunk('Pricing', 'Pricing: a website costs 2400 euro, design and build included.');
+    const started = Date.now();
+    const { text } = await run('What do we charge for a website?', { sessionId: 'sess-deadline' });
+    const took = Date.now() - started;
+    expect(text).not.toContain('<recalled-knowledge>');
+    expect(await lastRecord()).toMatchObject({ status: 'error', reason: 'commit_failed' });
+    expect(took).toBeLessThan(START_DEADLINE_MS + 500);
+  }, 15_000);
+
   test('a commit that fails leaves its block out and is logged', async () => {
     const contentRead = await import('@/core/protection/content-read');
     vi.spyOn(contentRead, 'readKnowledge').mockRejectedValue(new Error('level store down'));

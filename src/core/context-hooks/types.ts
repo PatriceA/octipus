@@ -44,6 +44,8 @@ export interface ContextHookInput {
    * search statement is cancelled at it on Postgres.
    */
   deadlineAt?: number;
+  /** Aborted when the hook's deadline passes: a hook stops its work then (recall does not search after it). */
+  signal?: AbortSignal;
 }
 
 export interface ContextHookItem {

@@ -188,7 +188,7 @@ export interface RecallSearch {
  * searches once per question and selects at every threshold.
  */
 export async function searchRecall(
-  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt'>,
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt' | 'signal'>,
   config: Pick<RecallConfig, 'limit' | 'purposes' | 'includeProductDocs'>,
 ): Promise<RecallSearch | null> {
   // A short message is searched only as a follow-up of the previous one, and
@@ -203,7 +203,7 @@ const CHUNKS_PER_SOURCE = 3;
 
 /** One search behind recall: the purposes, the product-docs rule and the per-source cap applied in SQL. */
 async function recallSearch(
-  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'deadlineAt'>,
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'deadlineAt' | 'signal'>,
   config: Pick<RecallConfig, 'limit' | 'purposes' | 'includeProductDocs'>,
   query: string,
 ): Promise<AnyTermSearch> {
@@ -219,6 +219,7 @@ async function recallSearch(
     excludeProductDocs: !config.includeProductDocs,
     perSource: CHUNKS_PER_SOURCE,
     ...(input.deadlineAt !== undefined ? { timeoutMs: Math.max(1, input.deadlineAt - Date.now()) } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   });
   if (search.embeddingError) {
     coreLogger.warn({ userId: input.userId, error: search.embeddingError }, 'recall: the query could not be embedded — keyword rules only for this turn');
@@ -328,7 +329,7 @@ export function choosePassages({ query, search, combined }: RecallSearch, config
  * what the eval and the sweep run.
  */
 export async function selectRecallPassages(
-  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt'>,
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt' | 'signal'>,
   config: RecallConfig,
   tokenBudget: number,
 ): Promise<RecallSelection> {
