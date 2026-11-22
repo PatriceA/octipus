@@ -1,6 +1,6 @@
 /** Files held for a mail: per user, limited, for an hour, and resolved in order with forwarded files. */
-import { beforeEach, describe, expect, test } from 'vitest';
-import { clearUploads, dropUploads, heldUploads, holdUpload, resolveAttachments, UPLOAD_TTL_MS, USER_MAX_BYTES, USER_MAX_FILES } from './outgoing';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { clearUploads, dropUploads, heldUploads, holdUpload, resolveAttachments, sweepUploads, UPLOAD_TTL_MS, uploadHolders, USER_MAX_BYTES, USER_MAX_FILES } from './outgoing';
 import { EmailInputError, MAX_ATTACHMENT_BYTES } from './send-mime';
 
 const file = (size = 3, name = 'a.txt') => ({ name, contentType: 'text/plain', content: new Uint8Array(size) });
@@ -38,6 +38,23 @@ describe('held uploads', () => {
     expect(() => heldUploads('u1', [kept.id])).toThrow(EmailInputError);
   });
 
+  test('the sweep drops files nobody came back for, and the users left with none', () => {
+    const t0 = Date.now();
+    holdUpload('gone', file(MAX_ATTACHMENT_BYTES), t0);
+    const kept = holdUpload('back', file(), t0 + UPLOAD_TTL_MS);
+    sweepUploads(t0 + UPLOAD_TTL_MS + 1);
+    expect(uploadHolders()).toBe(1);
+    expect(heldUploads('back', [kept.id])).toHaveLength(1);
+    sweepUploads(t0 + 2 * UPLOAD_TTL_MS + 1);
+    expect(uploadHolders()).toBe(0);
+  });
+
+  test('reading as a user who holds nothing keeps no entry for them', () => {
+    expect(() => heldUploads('reader', ['x'])).toThrow(EmailInputError);
+    expect(heldUploads('reader', [])).toEqual([]);
+    expect(uploadHolders()).toBe(0);
+  });
+
   test('uploads and forwarded files come back in the order the send names them', async () => {
     const a = holdUpload('u1', file(1, 'a.txt'));
     const b = holdUpload('u1', file(2, 'b.txt'));
@@ -49,5 +66,20 @@ describe('held uploads', () => {
     expect(files.map((f) => f.name)).toEqual(['b.txt', 'orig.pdf', 'a.txt']);
     expect(uploads).toEqual([b.id, a.id]);
     expect(fetched).toEqual(['m1/2']);
+  });
+});
+
+describe('the periodic sweep', () => {
+  afterEach(() => { clearUploads(); vi.useRealTimers(); });
+
+  test('runs on its own after an upload, on a timer that does not hold the process open', () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    holdUpload('gone', file());
+    const timer = spy.mock.results[0]?.value;
+    spy.mockRestore();
+    expect(timer?.hasRef()).toBe(false);
+    vi.advanceTimersByTime(UPLOAD_TTL_MS + 10 * 60_000);
+    expect(uploadHolders()).toBe(0);
   });
 });
