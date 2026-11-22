@@ -10,7 +10,7 @@ import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from
 import { isTypedOwnerRow } from '@/core/memory/owner-messages';
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
-import { contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
+import { type ContextTurnHandle, contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
 import { runPluginContexts } from '@/plugins/packages/contributions/context';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
@@ -676,6 +676,14 @@ export class AgentService {
     // path saves it before running; a room post always is), so the refusal
     // path does not save it twice.
     let userMessageSaved = isRoom;
+    // The context-hook record of this turn (`finishContextTurn`), closed once
+    // on whichever way the turn ends: answered, cleared or failed.
+    let contextTurn: ContextTurnHandle | null = null;
+    const closeContextTurn = (done: Parameters<typeof finishContextTurn>[1]) => {
+      const turn = contextTurn;
+      contextTurn = null;
+      void finishContextTurn(turn, done);
+    };
     try {
       const resolvedSessionId = sessionId;
       const companion = isRoom && trigger !== 'remote'
@@ -1079,6 +1087,7 @@ export class AgentService {
       }
 
       const contextHooks = await contextHooksRun;
+      contextTurn = contextHooks.turn;
       const pluginContext = await pluginContextRun;
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
@@ -1185,6 +1194,7 @@ export class AgentService {
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
       if (sessionGeneration(activeSession?.context) !== turnGeneration) {
+        closeContextTurn({ agentId, outcome: 'cleared' });
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
@@ -1232,6 +1242,7 @@ export class AgentService {
         },
       }, turnGeneration);
       if (!persistedAnswer) {
+        closeContextTurn({ agentId, outcome: 'cleared' });
         if (isRoom) await this.roomCleared();
         return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       }
@@ -1260,7 +1271,7 @@ export class AgentService {
       // Memory learns from the owner's own messages only: Companion handoffs,
       // monitors and schedules are not the owner speaking.
       if(!syntheticCoordination&&scope.trigger==='user')fireMemoryUpdate();
-      void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
+      closeContextTurn({ agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
       if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination && !session.context?.oneShot) {
@@ -1280,6 +1291,7 @@ export class AgentService {
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
+      closeContextTurn({ outcome: signal?.aborted ? 'cancelled' : 'failed' });
       // A stopped or dropped room turn ends here; the queue announces it.
       if (isRoom && (signal?.aborted || (error as Error)?.name === 'RoomTurnDropped')) throw error;
       return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom, requesterId: userId });
