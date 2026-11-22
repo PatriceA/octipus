@@ -11,21 +11,33 @@ labels reflect blast radius, not contract guarantees.
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).
   - Context hooks now run for every agent start on a user's task: swarm
-    children, plan runs, side questions and agents spawned by a hook or
-    `POST /api/agents` as well as root turns and specialists. The voice
-    planning reply and retry respawns are exempt, with the reason in the docs.
+    children, plan runs, side questions, agents spawned by a hook or
+    `POST /api/agents`, and a live agent's new task sent by its owner
+    (`POST /api/agents/:id/message`), as well as root turns and specialists.
+    The voice planning reply and retry respawns are exempt, with the reason
+    in the docs. A direct spawn and a side question choose their model after
+    the hooks, so a level 3-4 passage puts them on a local model or refuses
+    with the reason.
   - A passage is shown when it is similar enough, covers most of the
     message's distinctive words, or contains an identifier from it (an
-    invoice number, a version, an error code; not a year, time, amount or
-    date); a keyword match no longer
-    bypasses the bar. A follow-up ("Enterprise?", "and for enterprise?") is
-    searched together with the previous typed message; an acknowledgement
-    ("ok", "thanks", "yes please") is never searched. A long message keeps
-    its head and its tail. The excerpt is the part of the passage that
-    matches the message.
+    invoice number, a version, an error code; not a year, time, amount,
+    date, or a two-digit key like `OCT-42`); a keyword match no longer
+    bypasses the bar. A short follow-up ("Enterprise?", "and for
+    enterprise?") is searched on its own first; only free slots are filled
+    from a search together with the previous typed message, with passages
+    that hold the new message's own words. An acknowledgement ("ok",
+    "thanks", "yes please") is never searched. A long message keeps its head
+    and its tail. The keyword search ORs at most 16 lexemes and filters
+    purposes, product docs and at most three chunks per source in SQL.
+  - Hooks end 4 s after a start began and committing what they show by
+    4.5 s; on Postgres the search statement is cancelled at the deadline.
   - A passage still in view from an earlier turn is not sent again. Raising
     the session's protection level and counting accesses happen only for
-    passages actually shown.
+    passages actually shown; for a specialist or swarm child the access is
+    counted once the agent has started.
+  - **Indexing:** a paragraph longer than a chunk is split, so new chunks are
+    at most 1000 characters. Chunks indexed earlier keep their size until
+    reindexed.
   - **New recall settings** `keywordCoverage` (0.6) and `maxGap` (0.15).
     **Defaults changed:** the recall block's `tokenBudget` is 1200 (was
     700) and `excerptChars` 1000 (was 700), the indexers' largest chunk, so
@@ -34,22 +46,31 @@ labels reflect blast radius, not contract guarantees.
     the run is marked `embedding_failed`.
   - **Measurement:** the stats show "used" beside "named": an answer uses a
     passage when it repeats a number, code or uncommon word from it that the
-    question did not hold. "Named" matches titles on word boundaries and
-    counts recall passages only, over the turns where recall showed some.
-    Per hook: keyword-only runs, blocks dropped for the shared budget or a
-    failed commit, and the rule passages were shown on; the average best
-    match leaves out keyword-only passages. Numbers per event (root turns
-    apart from specialists and swarm children). A calibration warning when a
-    recall hook shows passages on 95% or more, or 5% or fewer, of at least 30
-    searched messages.
+    question did not hold. Numbers are compared by value in either
+    convention (`1.000` and `1,000` are 1000, `$5.00` is 5 and no evidence);
+    list numbers, round percentages and times on the quarter hour are no
+    evidence; text is compared NFC-normalised. "Named" matches titles on
+    word boundaries, counts recall passages only, and not a title made of
+    the question's own words. Both rates count only turns that ended with an
+    answer; failed, cancelled and cleared ones are shown apart. Per hook:
+    keyword-only runs, blocks dropped for the shared budget or a failed
+    commit, and the rule passages were shown on; the average best match
+    leaves out keyword-only passages. Numbers per event (root turns apart
+    from agents started on a task). A calibration warning when a passage
+    cleared a recall hook's `minSimilarity` on 95% or more, or 5% or fewer,
+    of at least 30 searched messages at its current value; runs recorded
+    before the bar was, and an empty knowledge base, give none.
   - **Threshold sweep:** `POST /api/context-hooks/eval/sweep` runs the eval
     at `minSimilarity` 0.20 to 0.80 and recommends a value; the Recall page
     applies it in one click.
   - **Recall page:** a context note is picked from your notes instead of
-    typed as a slug; every recall setting is editable with its default shown.
+    typed as a slug; every recall setting is editable, the numbers with
+    their default shown, what it searches (`purposes`, the Octipus manual)
+    as checkboxes.
   - **Migration 0199** adds the nullable `context_turns.used_items`. Older
-    rows stay readable and are left out of "used". The row still stores no
-    message, passage or answer text.
+    rows stay readable and are left out of "used". A recall run's jsonb
+    record gains `bar` (no migration). The row still stores no message,
+    passage or answer text.
 
 - **Interactive answers as views: forms, tables and charts that answer back**
   ([spec](docs/plans/inline-ui-views-spec.md), [reference](docs/INLINE-UI.md)).

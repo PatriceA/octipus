@@ -184,3 +184,39 @@ Sequential, one working tree, each stage committed with its tests green.
 - A follow-up question, an identifier lookup and a paraphrased question each
   recall the right passage in tests; a second turn does not repeat a passage
   still in view; a block dropped for budget raises no protection level.
+
+## What changed during review
+
+Two review passes found gaps in what was built; the design above is kept as
+it was written. Where the code now differs from it:
+
+- **Coverage.** `POST /api/agents/:id/message` (a new task for a live agent)
+  is hooked for the agent's owner, and the spawn-site test also scans
+  `.run(` on an agent taken from the manager. Direct spawns and the side
+  question choose their model after the hooks.
+- **Retrieval.** Identifiers are only real references (three digits or more,
+  or the shapes listed in CONTEXT-HOOKS.md; not `OCT-42`). A short follow-up
+  is searched alone first and the previous message only fills free slots.
+  The keyword leg ORs at most 16 lexemes, digits first then the longest, and
+  runs under a statement timeout on Postgres (PGlite ignores it). Purposes,
+  product docs and three chunks per source are filtered in SQL.
+- **Excerpt and budget.** Chunkers split long paragraphs, so a new chunk is
+  at most 1000 characters; `excerptChars` defaults to 1000 (a chunk shown
+  whole keeps its bytes whatever the question) and recall's `tokenBudget` to
+  1200. In-view omission compares whole blocks, not substrings.
+- **Deadlines.** One start deadline: hooks by 4000 ms, commits by 4500 ms;
+  a failed commit gives its tokens back. Access is counted when a worker or
+  swarm child actually starts. The embedding request itself is still not
+  cancelled.
+- **Measurement.** "Used" reads numbers by value in both conventions,
+  ignores list numbers, round percentages and quarter-hour times,
+  NFC-normalises, keeps combining marks in words, has a Korean word rule,
+  and reads at most 20,000 characters of an answer. "Named" does not count
+  a title made of the query's words. Named and used count only turns that
+  ended with an answer.
+- **Calibration.** Each recall run records its bar (`minSimilarity`, and
+  whether a found passage cleared it on similarity); only such runs at the
+  hook's current value are samples, "almost never" needs knowledge-base rows
+  to search, and the message for a custom hook says to set its own value.
+- **Recall page.** `purposes` and `includeProductDocs` are checkboxes;
+  `worker_start` is labelled as every agent started on a task.

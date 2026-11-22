@@ -25,7 +25,7 @@ Every user starts with two built-in hooks, both on:
 
 | Hook | Kind | Runs before | What it injects |
 |---|---|---|---|
-| Knowledge recall | `recall` | each message, each specialist | The passages of the user's knowledge base and notes that qualify for the message (or the specialist's brief): at most 4, one per source, within 1200 tokens. Nothing when no passage qualifies. |
+| Knowledge recall | `recall` | each message, each agent started on a task | The passages of the user's knowledge base and notes that qualify for the message (or the specialist's brief): at most 4, one per source, within 1200 tokens. Nothing when no passage qualifies. |
 | Notes index | `notes_index` | each message | The number of notes, the titles of the pinned ones, then the most recently changed (15 titles, 150 tokens). Tells the agent what there is to look up. |
 
 A user can add hooks of their own on the **Recall** page (`/recall`):
@@ -64,7 +64,7 @@ hooks: the owner's knowledge is not pushed into a reply someone else reads.
 | Plan execution ("go" on a plan) | `turn_start` | the plan brief | the same |
 | A side question (`chat.interject`) | `turn_start` | the question (a short one with the previous typed message) | `directResponse`'s per-turn context |
 | A specialist (`spawnWorker`, pipeline stages included) | `worker_start` | task and input | the volatile part of its system prompt |
-| A swarm child (`spawn_child`) | `worker_start` | its brief | its first message; every retry reruns that message |
+| A swarm child (`spawn_child`) | `worker_start` | its brief | its first message; every attempt (crash, backup, contract retry) reruns that message. A fork child gets none of its own: it carries its parent's conversation, which already holds the parent's blocks (unless an attempt runs as an ordinary child). |
 | A hook's spawned agent, `POST /api/agents` with a message | `worker_start` | the message | before the message |
 | A new task for a live agent (`POST /api/agents/:id/message`), sent by its owner | `worker_start` | the message | before the message |
 
@@ -76,24 +76,29 @@ a hook's agent is spawned when the hook fires (so a refusal for capacity
 fails the action at once) and, when its hooks then raise the session to a
 local-only level, is spawned again before it runs.
 
-Deliberately not hooked:
+Deliberately not hooked (the exemptions `spawn-sites.test.ts` lists):
 
 - **The voice planning reply.** It is spoken on the fast voice model, where
   the hooks' deadline would be heard. The confirmed turn that follows is an
   ordinary turn and is hooked.
 - **Retry and backup respawns** of a failed specialist. They rerun the prompt
   `spawnWorker` already assembled, block included.
-- **A fork child.** It carries its parent's conversation, which already holds
-  the parent's blocks, so it gets none of its own (unless an attempt runs as
-  an ordinary child).
 
 ## How a passage qualifies
 
 Recall searches the knowledge base in two legs at once: by meaning (the
 query's embedding, cosine similarity) and by keyword (chunks sharing at least
-one word of the query, any word). Sharing a word is not evidence of
-relevance, so a candidate is shown only when it qualifies under one of three
-rules:
+one word of the query, any word). The keyword leg ORs at most 16 of the
+query's lexemes (`MAX_KEYWORD_LEXEMES`): those holding a digit first, then
+the longest. Shape stands in for rarity, which would need corpus statistics:
+ORing every lexeme of a 2000-character paste ranked every matching row and
+ran for tens of seconds on a large knowledge base, and on an embedded
+install it held the one database connection that long. Coverage (rule 2)
+still counts every lexeme of the message. Both legs filter `purposes` and
+the product docs in SQL and consider at most three chunks of one source, so
+a hook limited to notes is not crowded out by documents, nor one large
+document by its own chunks. Sharing a word is not evidence of relevance, so
+a candidate is shown only when it qualifies under one of three rules:
 
 1. **Similarity**: its cosine similarity reaches `minSimilarity` (0.45).
 2. **Coverage**: it contains at least `keywordCoverage` (0.6) of the query's
@@ -126,7 +131,8 @@ The record of each run says which rule each shown passage qualified under
 
 ### The query
 
-What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`):
+What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`;
+the follow-up search is in `selectRecallPassages`, `kinds.ts`):
 
 - **A follow-up keeps its subject.** For a root turn or a side question the
   user typed, a message with fewer than four distinctive words is searched
@@ -135,11 +141,12 @@ What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`):
   "and for enterprise?" after "What do we charge for a website?". The message
   is searched on its own first, and its own passages come first: a short
   question on a new topic ("What is our refund policy?") is not steered by
-  the one before. Only when that leaves slots free are the two searched
-  together, to fill them; a passage from that second search must hold a
-  distinctive word of the new message (or its identifier), identifiers come
-  from the new message only, and the excerpt is steered by the new message's
-  words first. The second search costs one more embedding call for such a
+  the one before. Only when that leaves slots free (fewer than `limit`
+  passages) are the two searched together, to fill them; a passage added by
+  that second search must hold one of the new message's own distinctive
+  words or its identifier, identifiers come from the new message only, and
+  the excerpt is steered by the new message's words first. The eval and the
+  sweep pass no previous message and run only the first search. The second search costs one more embedding call for such a
   message, inside the same deadline. There is no model call: recall does not
   add a model round trip to every turn.
 - **A short message.** A message of fewer than two content words is skipped
@@ -158,12 +165,16 @@ What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`):
 ### The excerpt
 
 Each passage shows up to `excerptChars` (1000) characters. That is the
-indexers' largest chunk, so a chunk is normally shown whole and keeps the
-same bytes whichever question found it. A longer chunk (indexed before long
-paragraphs were split) shows the window that holds the most words of the
-query, not its first characters. A cut is marked with "…". The label line gives the kind (note or document), the
-title, the section and the age of a passage over a month old; never a score
-or a position, so the same passage keeps the same bytes from turn to turn.
+indexers' largest chunk: both chunkers now split a paragraph longer than a
+chunk (at sentence ends, then whitespace, then anywhere, the structural
+chunker counting the heading line it adds), so no newly indexed chunk is
+over 1000 characters. A chunk is then shown whole and keeps the same bytes
+whichever question found it. A longer chunk (indexed before long paragraphs
+were split, until it is reindexed) shows the window that holds the most
+words of the query, not its first characters. A cut is marked with "…". The
+label line gives the kind (note or document), the title, the section and the
+age of a passage over a month old; never a score or a position, so the same
+passage keeps the same bytes from turn to turn.
 
 ## A passage is not sent twice
 
@@ -181,9 +192,11 @@ put back. Limits:
   only chunks indexed before long paragraphs were split are that long.
 - A part under 120 characters is always sent again: it is too short to be
   recognised safely in earlier messages.
-- In view means the same passage as a whole: a passage edited so that it
-  is now the start of its earlier copy (its last sentence removed) is new
-  text and is sent.
+- In view means the same passage as a whole, not a substring: it has to
+  start a line and end where a passage ends in the earlier message. A
+  passage edited so that it is now the start of its earlier copy (its last
+  sentence removed) is new text and is sent. A block other than recall's is
+  compared the same way, ending at a blank line or the end.
 - Side questions resend their passages: `directResponse` has no cross-turn
   omission.
 
@@ -206,9 +219,12 @@ is the safe direction. When
 raising the level fails or is not done by the start deadline, the block is
 left out (`error`, `commit_failed`) and its tokens go back to the shared
 budget: a later block left out for the budget is considered again. The
-embedding request of a hook cut off by its deadline cannot be cancelled (the
-provider clients take no abort signal), but recall does not search after
-the deadline, and on Postgres its search statement is cancelled at it.
+embedding request of a hook cut off by its deadline is not cancelled (the
+provider clients take no abort signal), but recall does not start its search
+after the deadline. On Postgres the search statement runs under a statement
+timeout of what is left of the deadline (`SET LOCAL statement_timeout`). The
+embedded database (PGlite) ignores that setting: there the 16-lexeme bound
+is what keeps the keyword leg short.
 
 ## Without an embedding model, and when embedding fails
 
@@ -224,7 +240,9 @@ runs per hook as "keywords only".
 
 ## Recall settings
 
-Set per hook on the Recall page; a blank field takes the default shown in it.
+Set per hook on the Recall page: the numbers in fields (a blank field takes
+the default shown in it), `purposes` and `includeProductDocs` as checkboxes,
+saved when ticked.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -281,24 +299,53 @@ passage qualified under, tokens and time) and, once the agent is done:
   covers that agent alone.
 - `cited_items` (**named**): how many recall passages the answer named, by
   title on word boundaries (four characters or more, a file without its
-  extension, any script) or by id. A context note is not counted: it is
-  standing guidance, not a source to name.
+  extension, any script) or by id. A title whose every word was already in
+  the query does not count by its title: a note "Pricing" is in any answer
+  to "what's our pricing?", whether or not the note was read. A context note
+  is not counted: it is standing guidance, not a source to name.
 - `used_items` (**used**): how many recall passages the answer used. A
   passage counts as used when the answer repeats distinctive content of its
-  excerpt that was not already in the query: one strong token (a number of
-  three digits or more that is not a bare year, such as `2400`, `2,400` or
-  `2024-05-14`; a token of four characters or more mixing letters and digits,
-  such as `INV-2024-118`; a run of eight characters of a script written
-  without spaces) or two different weak ones (a two-digit number, a year, a
-  word of eight letters or more that is not a common one, compared on its
-  first seven letters). Null when no recall passage was shown, and on rows
-  from before it was measured.
+  excerpt that was not already in the query: one strong token or two
+  different weak ones.
+  - Strong: a number whose value has three digits or more and is not a bare
+    year (`2400`, `2,400`, `2.400`, `1.000,50`, `2024-05-14`); a clock time
+    off the quarter hour (`14:37`); a token of four characters or more mixing
+    letters and digits (`INV-2024-118`); a run of eight characters of a
+    script written without spaces.
+  - Weak: a number whose value has two digits; a year; a percentage that is
+    not a multiple of five (`37%`); a word of eight characters or more that
+    is not a common one, compared on its first seven; a Korean word of four
+    syllables or more that is not a sentence-final predicate (…다, …요),
+    compared on its first three.
+  - No evidence: a number whose value has one digit (`$5.00` is 5, `1,00` is
+    1); a list item's number; a round percentage (`50%`, `100%`, and `100%`
+    is not `100`); a time on the quarter hour (`10:00`).
+  - A number is read by its value in either convention: a grouping mark (`.`
+    `,` `'` `_`) stands only before exactly three digits, a decimal mark is
+    the last mark, of the other kind, before one or two digits. One mark
+    before three digits reads as grouping (`1.000` and `1,000` are 1000):
+    the reading that never turns a number into a shorter one.
+  - Null when no recall passage was shown, and on rows from before it was
+    measured.
+
+  Both read the answer, the excerpt and the query in one form: Unicode NFC
+  (a decomposed "Ü" is the precomposed one), lower case, a word with its
+  combining marks (Indic vowel signs). An answer is read on its first 20,000
+  characters (`MAX_MEASURED_CHARS`), which bounds the work done when a turn
+  finishes.
 - `model` and `cli`: which model ran and whether it was a vendor CLI.
 
 For a root turn or a side question the answer is the reply; for a
 specialist, a swarm child or a directly spawned agent it is its result text.
-A turn that failed or was cancelled has no answer: it stays in the
-denominator, as neither named nor used.
+The row's `outcome` says how the start ended. Only turns that ended with an
+answer (`success`) are in the named and used rates; a row without an
+outcome predates it, and such rows were only closed with an answer, so they
+count too. The others are counted apart ("no answer"): a root turn or side
+question that `failed`, was `cancelled` or `cleared`, a worker or start that
+threw (`error`), and a swarm child that did not complete (`budget`,
+`timeout`, `tool_error`, `provider_error`, `cancelled`, `denied`,
+`concurrency_limit`, `contract_failed`) or was a `cache_hit` (no model ran
+on the passages).
 
 The row never stores the message, the passages or the answer: the excerpts
 and the query are kept only in memory, on the turn handle, until the turn is
@@ -309,17 +356,20 @@ rows into:
 
 | Number | Read it as | What it cannot tell you |
 |---|---|---|
-| answers naming a recalled passage | Of the finished turns where recall showed passages, how often the answer named one. | Agents rarely name sources unless asked: a low number does not mean the passages were ignored. |
+| answers naming a recalled passage | Of the answered turns where recall showed passages, how often the answer named one by a title that adds something to the question, or by its id. | Agents rarely name sources unless asked: a low number does not mean the passages were ignored. A title of the question's own words is not counted, so a note named after its topic is undercounted. |
 | answers using a recalled passage | Of the same turns, how often the answer repeated a number, code or uncommon word from a passage that the question did not hold. | It misses a passage that informed the answer in other words, and an answer can repeat a number that came from elsewhere. It counts passages chosen for the turn, also those left out as still in view from an earlier turn; a passage still in view that recall did not choose this turn is not counted. |
 | KB or notes searched by a tool call | How often agents still went looking. For a message this counts the specialists the agent spawned too. | Searching after recall is not a failure: the passages may have pointed at more. |
 | searched after recall found nothing | High: recall is missing things the agent then found itself. | Low is also what an agent that never searches looks like. |
-| per event | Messages (root turns, plan runs, side questions) apart from specialists and swarm children. | Side questions and plan runs are not separated from ordinary turns. |
-| per model, CLI apart | Whether one model or vendor CLI ignores what it is given. | |
+| no answer | Finished starts that ended without an answer, overall and per event; not in any rate. | Why: the outcome is per row, in the recent list. |
+| per event | Messages (root turns, plan runs, side questions) apart from agents started on a task (specialists, swarm children, spawned and hook agents). | Side questions and plan runs are not separated from ordinary turns. |
+| per model, CLI apart | Over answered turns: whether one model or vendor CLI ignores what it is given. | A start that failed before it ran may have no model, so starts without an answer are not in this table. |
 | per hook | Runs injected, found nothing, skipped and failed; runs degraded to keywords; blocks dropped for the shared budget or a failed commit; the rules shown passages qualified under; average tokens, time, and best similarity (over passages shown on similarity only: a keyword-only passage has a score of 0). | |
 
 Both "named" and "used" count turns, not passages: a turn counts when at
 least one passage was named or used. Rows from before named was limited to
-recall passages may count a context note named.
+recall passages may count a context note named, and rows from before this
+version were measured by the earlier rules (a number keyed on its digits as
+written, no normal form, a title of the query's words counted).
 
 The page also warns when long-term memory is not being filled, and says why:
 no model on the `background` topic (it extracts and judges facts), no
@@ -332,17 +382,32 @@ ignores memory".
 One fixed `minSimilarity` does not suit every embedding model: their cosines
 sit in different ranges. The stats flag a recall hook whose bar looks wrong:
 
-- **injects on nearly every message**: passages were found on 95% or more of
-  the runs that searched (likely too low: passages that do not help cost
-  tokens on every turn);
+- **injects on nearly every message**: a passage cleared `minSimilarity` on
+  95% or more of the runs that searched (likely too low: passages that do not
+  help cost tokens on every turn);
 - **injects almost never**: on 5% or fewer (likely too high for the model, if
   the notes cover what is asked).
 
-Only runs that searched on the bar count: not a skipped run (a short message,
-no embedding model), not a failed or timed-out one, not one degraded to
-keywords. A block found and then dropped for the budget or a failed commit
-counts as found. No warning is given under 30 such runs: a day spent on one
-project looks like a wrong bar. The warning points at the sweep.
+A run is a sample when its record carries its `bar`: the `minSimilarity` it
+was decided at and whether a passage it found cleared it on similarity
+(shown or not: a block dropped for the budget or a failed commit keeps it).
+A passage shown on keywords or an identifier alone did not clear it. Every
+recall run that searches records it; a skipped run (a short message, no
+embedding model), a failed or timed-out one has none, and a run degraded to
+keywords does not count. Rows from before the bar was recorded were decided
+by the earlier rules (a keyword match bypassed the bar) and are not samples.
+
+Only runs at the hook's current `minSimilarity` count, so changing it (the
+sweep's button, or by hand) starts a new sample. No warning is given under
+30 such runs: a day spent on one project looks like a wrong bar. "Almost
+never" is not given when the user has no knowledge-base row of a purpose the
+hook searches (nor a product doc, when it includes them): then nothing can
+clear any bar. That check looks at the user's own rows in any workspace or
+space, not at rows other members wrote into a space.
+
+The warning points at the sweep. The sweep runs with Knowledge recall's
+settings and its button sets that hook, so for another recall hook the
+warning says to set the value as that hook's own `minSimilarity`.
 
 ### The recall eval
 
@@ -413,8 +478,8 @@ an embedding model.
 | POST | `/api/context-hooks/eval/sweep` | The threshold sweep (1 to 100 cases; optional `thresholds`, 1 to 21 values between 0 and 1, and `limit`). |
 
 Events are `turn_start` (before the root agent answers, a plan run or a side
-question) and `worker_start` (before a specialist, a swarm child or a directly
-spawned agent). The response shapes are in `src/shared/context-hooks.ts`.
+question) and `worker_start` (before a specialist, a swarm child, an agent
+spawned by a hook or `POST /api/agents`, or a live agent's new task). The response shapes are in `src/shared/context-hooks.ts`.
 
 ## Known limits
 
@@ -428,7 +493,20 @@ spawned agent). The response shapes are in `src/shared/context-hooks.ts`.
   subject.
 - **Swarm children get no long-term memory**, only the context hooks.
 - **Side questions resend their passages** (no cross-turn omission).
-- **Used is a heuristic.** See [Measurement](#measurement).
+- **Chunks indexed before long paragraphs were split** can be longer than
+  1000 characters until they are reindexed: they show a query-dependent
+  window and can be sent again beside an earlier copy.
+- **A cut-off embedding request runs on.** The hook's deadline stops recall
+  from searching, but the request to the embedding provider is not
+  cancelled (the clients take no abort signal).
+- **Used is a heuristic.** See [Measurement](#measurement). It also reads
+  only some scripts well: in Indic scripts a vowel sign counts as a
+  character, so words reach the long-word length at about four or five
+  syllables; Korean predicates and words under four syllables are never
+  evidence; other scripts written with spaces but without the long words
+  of European languages (Arabic, Hebrew) rely on numbers and codes. A
+  number is read by its value only when its marks follow one of the two
+  conventions; anything else (`192.168.0.1`) is compared as written.
 
 ## Settings
 
