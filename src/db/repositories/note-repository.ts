@@ -94,6 +94,14 @@ export function guestNoteIds(workspaceId: string, folders: readonly string[]): S
   return sql`(SELECT gn.id FROM notes gn WHERE gn.workspace_id = ${workspaceId} AND ${slugInFolders(sql`gn.slug`, folders)})`;
 }
 
+/**
+ * A lesson note's frontmatter without the marks the system leaves when it
+ * archives one (`archivedBy`, `mergedInto`): set by an archive or unarchive
+ * through the notes API, UI or tool, which is the user's choice. Other notes'
+ * frontmatter is untouched.
+ */
+const withoutArchiveMarkers = sql`CASE WHEN ${notes.noteKind} = 'lesson' THEN ${notes.frontmatter} - 'archivedBy' - 'mergedInto' ELSE ${notes.frontmatter} END`;
+
 /** The personal workspace rule, or no condition when no workspace is given (or in a space). */
 function inWorkspace(scope: NoteScope | string, workspaceId: string | undefined): SQL | undefined {
   if (typeof scope !== 'string' && scope.kind === 'space') return undefined;
@@ -283,11 +291,15 @@ export class NoteRepository {
     return result[0] ?? null;
   }
 
-  /** Soft delete — notes archive, they don't vanish. */
+  /**
+   * Soft delete — notes archive, they don't vanish. Also the user's own
+   * archive of a lesson note: the system's archive markers are dropped, so a
+   * lesson seen again is not revived over it (src/core/learning/lesson-notes.ts).
+   */
   async archive(scope: NoteScope | string, id: string, workspaceId?: string): Promise<boolean> {
     const result = await this.db
       .update(notes)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .set({ archivedAt: new Date(), updatedAt: new Date(), frontmatter: withoutArchiveMarkers })
       .where(and(eq(notes.id, id), ...owner(scope), isNull(notes.archivedAt), inWorkspace(scope, workspaceId)))
       .returning({ id: notes.id });
     return result.length > 0;
@@ -296,7 +308,7 @@ export class NoteRepository {
   async unarchive(scope: NoteScope | string, id: string): Promise<boolean> {
     const result = await this.db
       .update(notes)
-      .set({ archivedAt: null, updatedAt: new Date() })
+      .set({ archivedAt: null, updatedAt: new Date(), frontmatter: withoutArchiveMarkers })
       .where(and(eq(notes.id, id), ...owner(scope)))
       .returning({ id: notes.id });
     return result.length > 0;

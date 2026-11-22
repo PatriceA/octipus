@@ -33,10 +33,15 @@ process.env.DATA_DIR = DATA_DIR;
 
 let currentEmbedding: number[] | null = null;
 let embeddingError: Error | null = null;
+/** Calls of the query embedding; `embeddingHangs`: it never answers (a stalled provider). */
+let embedCalls = 0;
+let embeddingHangs = false;
 vi.mock('@/core/rag/embeddings', async () => ({
   ...(await vi.importActual<typeof import('@/core/rag/embeddings')>('@/core/rag/embeddings')),
   getEmbeddingService: () => ({
     generateEmbedding: async (_text: string) => {
+      embedCalls++;
+      if (embeddingHangs) await new Promise(() => {});
       if (embeddingError) throw embeddingError;
       return currentEmbedding ?? unit(1023);
     },
@@ -81,6 +86,8 @@ afterAll(async () => {
 beforeEach(async () => {
   currentEmbedding = null;
   embeddingError = null;
+  embedCalls = 0;
+  embeddingHangs = false;
   delete process.env.SKILL_DISCOVERY_MODE;
   setCapabilitiesForTest({ embedding: true });
   await getDb().delete(skillTopicAssignments);
@@ -337,4 +344,25 @@ describe('the root turn block', () => {
     expect(await learnedSkillsBlock(ME, 'x', true)).toBe('');
     expect(await learnedSkillsBlock(OTHER, 'x', false)).toBe('');
   });
+});
+
+describe('the root turn block, bounded', () => {
+  test('a user with no learned skill costs one existence query, no embedding call', async () => {
+    await seed({ userId: OTHER });
+    await seed({ assign: { topic: ROLE_A } });
+    const { learnedSkillsBlock } = await import('@/core/agent/root-runner');
+    expect(await learnedSkillsBlock(ME, 'deploy the preview', false)).toBe('');
+    expect(embedCalls).toBe(0);
+  });
+
+  test('a stalled embedding provider drops the block at the start deadline instead of holding the turn', async () => {
+    await seed({ embedding: unit(0) });
+    embeddingHangs = true;
+    const { learnedSkillsBlock } = await import('@/core/agent/root-runner');
+    const { START_DEADLINE_MS } = await import('@/core/context-hooks/run');
+    const started = Date.now();
+    expect(await learnedSkillsBlock(ME, 'x', false)).toBe('');
+    expect(embedCalls).toBe(1);
+    expect(Date.now() - started).toBeLessThan(START_DEADLINE_MS + 1500);
+  }, 15_000);
 });

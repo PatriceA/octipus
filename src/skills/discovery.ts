@@ -430,6 +430,13 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
   return opts.userId ? visibleOnly(ids, opts.userId, opts.topic) : ids;
 }
 
+/** Whether `userId` has a learned skill that discovery could return (`learnedBy`, not archived). */
+export async function hasLearnedSkills(userId: string): Promise<boolean> {
+  const rows = await getDb().select({ id: skills.id }).from(skills)
+    .where(and(isNull(skills.archivedAt), learnedBy(userId))).limit(1);
+  return rows.length > 0;
+}
+
 /**
  * Only the learned-skill half of `discoverSkillIds`, by the same rule: for an
  * agent that gets no role-assignment index of its own from discovery (the
@@ -437,6 +444,13 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
  */
 export async function discoverLearnedSkillIds(opts: LearnedDiscoveryOptions): Promise<string[]> {
   if (opts.inSpace || resolveMode() === 'topic_only') return [];
+  // Most users have none: one indexed lookup, and no embedding call for them.
+  try {
+    if (!(await hasLearnedSkills(opts.userId))) return [];
+  } catch (err) {
+    coreLogger.error({ err, component: 'skill-discovery' }, 'Skill discovery: could not check for learned skills — returning none');
+    return [];
+  }
   const ids = await discoverInScope(
     { topic: null, learner: opts.userId },
     {

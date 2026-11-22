@@ -35,6 +35,18 @@ export interface LessonFrontmatter {
   sources: string[];
   /** Set on a lesson note consolidation absorbed (and archived): the note it was merged into. */
   mergedInto?: string;
+  /**
+   * Set on a lesson note the system archived for another reason than a merge:
+   * `expiry`, unused past `learning.lessonTtlDays`. A lesson seen again revives
+   * it. A note the user archived carries neither this nor `mergedInto`.
+   */
+  archivedBy?: 'expiry';
+  /**
+   * Lesson notes the merge model judged to be other lessons (at most
+   * MAX_LESSON_REFS, newest last): consolidation does not ask again about a
+   * pair that lists each other. Cleared when a merge rewrites this note's body.
+   */
+  distinctFrom?: string[];
 }
 
 /** One outcome of a learning check. */

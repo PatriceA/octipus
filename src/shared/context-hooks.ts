@@ -30,8 +30,10 @@ export const RECALL_DEFAULTS = {
 /**
  * The knowledge-base rows recall can search (`purposes`), all of them by
  * default. `lesson`: a note written by a learning review
- * (docs/SESSION-LEARNING.md). A hook that stored its own list before
- * `lesson` was added keeps that list, so lessons stay off for it until ticked.
+ * (docs/SESSION-LEARNING.md). A hook that stored its own list with `note`
+ * before `lesson` was added had `lesson` appended by migration 0202, so the
+ * learning notes it recalled as notes are recalled still; one stored without
+ * `note` stays without lessons until ticked.
  */
 export const RECALL_PURPOSES = ['note', 'lesson', 'document', 'knowledge_artifact', 'image_description'] as const;
 export type RecallPurpose = (typeof RECALL_PURPOSES)[number];

@@ -210,3 +210,15 @@ test('two reviews of one decision in two sessions end as one lesson note seen tw
   const purposes = (await queryRaw(`SELECT DISTINCT purpose FROM embeddings WHERE source_id = $1`, [`note:${lessons[0].id}`])).rows;
   expect(purposes).toEqual([{ purpose: 'lesson' }]);
 });
+
+test('a failure reading the lesson notes leaves the rest of the review context', async () => {
+  const { gatherReviewContext } = await import('./evidence');
+  const plan = { id: 'p9', title: 'Fix the stale build cache', goal: 'Tests pass again', steps: [] };
+  const { randomUUID: uuid } = await import('node:crypto');
+  const intact = await gatherReviewContext(userId, uuid(), sessionA, new Date(), plan, []);
+  // Not a uuid: the lesson-notes query fails, and only it reads the workspace.
+  const degraded = await gatherReviewContext(userId, 'not-a-workspace', sessionA, new Date(), plan, []);
+  expect(degraded.existing.notes).toEqual([]);
+  expect(degraded.existing.proposals).toEqual(intact.existing.proposals);
+  expect(degraded.existing.skills).toEqual(intact.existing.skills);
+});

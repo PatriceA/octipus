@@ -321,7 +321,14 @@ const openProposalsOf = (userId: string) => and(eq(skillProposals.userId, userId
 export async function gatherReviewContext(userId: string, workspaceId: string, sessionId: string, through: Date, plan: unknown, loaded: PatchableSkill[]): Promise<{ existing: ExistingContext; patchTargets: PatchableSkill[] }> {
   const db = getDb();
   const embedding = await topicEmbedding(userId, await reviewTopicText(sessionId, through, plan));
-  const lessonNotes = await existingLessonNotes(userId, workspaceId, embedding);
+  // Lesson notes are one part of `existing`: failing to read them costs the
+  // review only them, not the skills and proposals as well.
+  let lessonNotes: ExistingNote[] = [];
+  try {
+    lessonNotes = await existingLessonNotes(userId, workspaceId, embedding);
+  } catch (err) {
+    coreLogger.warn({ err, userId, sessionId }, 'Learning check: could not read existing lesson notes; reviewing without them');
+  }
   if (!embedding) {
     const [proposals, names] = await Promise.all([
       db.select({ id: skillProposals.id, name: skillProposals.name, description: skillProposals.description, draft: skillProposals.draftPromptTemplate })

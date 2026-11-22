@@ -234,7 +234,9 @@ export class NoteService {
         title,
         // A space note's body was written above, under the note's mutex.
         ...(scope.kind === 'space' ? {} : { body, bodySha256: bodySha }),
-        frontmatter: input.frontmatter ?? existing.frontmatter,
+        // Omitted: the stored frontmatter is left as it is, not written back
+        // from the read above (a write to it since would be lost).
+        ...(input.frontmatter !== undefined ? { frontmatter: input.frontmatter } : {}),
         tags,
         noteKind: input.noteKind ?? existing.noteKind,
         noteDate: input.noteDate ?? existing.noteDate,

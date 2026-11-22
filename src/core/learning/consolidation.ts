@@ -17,12 +17,16 @@
  *   4. the remaining candidates are promoted when eligible, oldest first;
  *   5. the user's near-duplicate lesson notes (personal workspaces only, never
  *      a space; pairs within one workspace) merge pairwise like proposals,
- *      within what is left of `maxMerges`: the target is the pinned one, then
- *      the one seen more often (`sightings`), then the older; the other is
- *      archived with `frontmatter.mergedInto` (`absorbLessonNote`);
+ *      within what is left of `maxMerges` and at most MAX_LESSON_MERGE_CALLS
+ *      model calls: the target is the pinned one, then the one seen more often
+ *      (`sightings`), then the older; the other is archived with
+ *      `frontmatter.mergedInto` once the target holds it (`absorbLessonNote`).
+ *      A pinned note is never absorbed; a pair the model called distinct is
+ *      recorded on both (`distinctFrom`) and not asked again;
  *   6. lesson notes not pinned and neither updated (`updated_at`) nor shown
  *      to an agent (`last_accessed_at` of their chunks) within
- *      `learning.lessonTtlDays` are archived. 0 days archives none.
+ *      `learning.lessonTtlDays` are archived, marked `archivedBy: 'expiry'`.
+ *      0 days archives none.
  *
  * `runDailyLearningMaintenance()` runs that for every user with open
  * proposals or live lesson notes and then the skill curator, at most once per 24 hours across all
@@ -46,9 +50,17 @@ import { absorbProposal } from '@/services/skill-proposal-service';
 import { ensureProposalEmbeddings, ensureSkillEmbeddings } from '@/skills/embedding-backfill';
 import { runSkillCurator } from '@/skills/curator';
 import { coreLogger } from '@/utils/logger';
-import { decideLessonMerge, lessonFrontmatterOf, stripEvidenceFooter, writeLessonMerge, mergedFrontmatter } from './lesson-notes';
+import { decideLessonMerge, knownDistinct, type LessonMergeDecision, lessonFrontmatterOf, noteLevelDuplicate, recordDistinctLessons, sameLessonText,
+  stripEvidenceFooter, writeLessonMerge } from './lesson-notes';
 
 export type { ConsolidationReport };
+
+/**
+ * Most merge-model calls one run makes for proposal pairs, whatever the
+ * verdict: a pair called distinct costs no merge budget but does cost a call,
+ * and is asked again by the next run.
+ */
+export const MAX_PROPOSAL_MERGE_CALLS = 20;
 
 export interface ConsolidationOptions {
   /** Most proposals and lesson notes absorbed in one run, together (bounds the merge-model calls). Default 20. */
@@ -114,10 +126,13 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
   // so pairs are re-read after every round that merged something; a pair the
   // model called distinct (or could not judge, in the related band) is not
   // asked again in this run and costs no merge budget; a later run asks again.
+  // Every merge-model call counts against MAX_PROPOSAL_MERGE_CALLS, distinct
+  // verdicts included, so a run (and "Consolidate now") stays bounded.
   const distinct = new Set<string>();
   const threshold = Math.min(relatedSimilarity, duplicateSimilarity);
+  let calls = 0;
   let mergedThisRound = true;
-  while (mergedThisRound && report.merged < maxMerges) {
+  while (mergedThisRound && report.merged < maxMerges && calls < MAX_PROPOSAL_MERGE_CALLS) {
     mergedThisRound = false;
     const pairs = (await similarPairs(userId, threshold)).filter(pair => !distinct.has(`${pair.a}:${pair.b}`));
     if (pairs.length === 0) break;
@@ -142,12 +157,13 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
       return q.similarity - p.similarity;
     });
     for (const pair of pairs) {
-      if (report.merged >= maxMerges) break;
+      if (report.merged >= maxMerges || calls >= MAX_PROPOSAL_MERGE_CALLS) break;
       if (touched.has(pair.a) || touched.has(pair.b)) continue;
       const x = rows.get(pair.a);
       const y = rows.get(pair.b);
       if (!x || !y) continue;
       const [target, absorbed] = pickTarget(x, y);
+      calls++;
       const related = pair.similarity < duplicateSimilarity;
       const result = await absorbProposal(absorbed, target, { allowDistinct: related });
       if (result.outcome === 'distinct') {
@@ -197,7 +213,6 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
   // 5. and 6. Lesson notes.
   const lessons = await consolidateLessonNotes(userId, { maxMerges: Math.max(0, maxMerges - report.merged) });
   report.notesMerged = lessons.merged;
-  report.degraded += lessons.degraded;
   report.notesArchived = await expireLessonNotes(userId);
 
   coreLogger.info({ userId, ...report }, 'Skill proposals and lesson notes consolidated');
@@ -210,11 +225,18 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
 const liveLessonsOf = (userId: string) => and(eq(notes.userId, userId), eq(notes.noteKind, 'lesson'), isNull(notes.archivedAt),
   notInSharedWorkspace(notes.workspaceId));
 
+interface LessonPair extends Pair {
+  /** A duplicate as notes (`noteLevelDuplicate`) at `duplicateSimilarity`, not only by one passage. */
+  duplicate: boolean;
+}
+
 /**
  * Pairs of `userId`'s live lesson notes in one workspace at or above
- * `threshold`, by their best pair of `purpose = 'lesson'` chunks, most similar first.
+ * `threshold` by their best pair of `purpose = 'lesson'` chunks, most similar
+ * first, each with whether every chunk of the shorter note has a match at or
+ * above `duplicateSimilarity` in the other (`duplicate`).
  */
-async function similarLessonPairs(userId: string, threshold: number): Promise<Pair[]> {
+async function similarLessonPairs(userId: string, threshold: number, duplicateSimilarity: number): Promise<LessonPair[]> {
   const res = await getDb().execute(sql`
     WITH live AS (
       SELECT n.id, n.workspace_id FROM ${notes} n
@@ -222,19 +244,29 @@ async function similarLessonPairs(userId: string, threshold: number): Promise<Pa
         AND ${notInSharedWorkspace(sql`n.workspace_id`)}
     ),
     chunks AS (
-      SELECT l.id, l.workspace_id, e.embedding FROM live l
+      SELECT l.id, l.workspace_id, e.id AS chunk, e.embedding FROM live l
       JOIN ${embeddings} e ON e.source_id = 'note:' || l.id::text AND e.purpose = 'lesson' AND e.user_id = ${userId}::uuid
+    ),
+    sims AS (
+      SELECT a.id AS a, b.id AS b, a.chunk AS ac, b.chunk AS bc, 1 - (a.embedding <=> b.embedding) AS s
+      FROM chunks a
+      JOIN chunks b ON a.id < b.id AND a.workspace_id IS NOT DISTINCT FROM b.workspace_id
+        AND vector_dims(a.embedding) = vector_dims(b.embedding)
+    ),
+    pairs AS (
+      SELECT a, b, max(s) AS similarity FROM sims GROUP BY a, b HAVING max(s) >= ${threshold}
     )
-    SELECT a.id AS a, b.id AS b, max(1 - (a.embedding <=> b.embedding)) AS similarity
-    FROM chunks a
-    JOIN chunks b ON a.id < b.id AND a.workspace_id IS NOT DISTINCT FROM b.workspace_id
-      AND vector_dims(a.embedding) = vector_dims(b.embedding)
-    GROUP BY a.id, b.id
-    HAVING max(1 - (a.embedding <=> b.embedding)) >= ${threshold}
-    ORDER BY similarity DESC, a.id, b.id
+    SELECT p.a, p.b, p.similarity,
+      (SELECT count(*) FROM chunks c WHERE c.id = p.a)::int AS na,
+      (SELECT count(*) FROM chunks c WHERE c.id = p.b)::int AS nb,
+      (SELECT count(DISTINCT ac) FROM sims x WHERE x.a = p.a AND x.b = p.b AND x.s >= ${duplicateSimilarity})::int AS ma,
+      (SELECT count(DISTINCT bc) FROM sims x WHERE x.a = p.a AND x.b = p.b AND x.s >= ${duplicateSimilarity})::int AS mb
+    FROM pairs p
+    ORDER BY p.similarity DESC, p.a, p.b
   `);
-  const rows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows ?? []) as Array<{ a: string; b: string; similarity: number | string }>;
-  return rows.map(row => ({ a: row.a, b: row.b, similarity: Number(row.similarity) }));
+  const rows = (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows ?? []) as Array<{ a: string; b: string; similarity: number | string; na: number; nb: number; ma: number; mb: number }>;
+  return rows.map(row => ({ a: row.a, b: row.b, similarity: Number(row.similarity),
+    duplicate: noteLevelDuplicate(Number(row.na), Number(row.ma), Number(row.nb), Number(row.mb)) }));
 }
 
 /** Whether lesson note `p` is the better merge target: pinned, then seen more often, then older (ids break a tie). */
@@ -246,61 +278,93 @@ function betterLessonTarget(p: Note, q: Note): boolean {
   return p.createdAt.getTime() !== q.createdAt.getTime() ? p.createdAt < q.createdAt : p.id < q.id;
 }
 
-export type AbsorbLessonResult = { outcome: 'distinct' } | { outcome: 'not_live' } | { outcome: 'merged'; mergeDegraded: boolean };
+export type AbsorbLessonResult =
+  | { outcome: 'distinct' }
+  | { outcome: 'not_live' }
+  /** Nothing written, both notes left live and uncounted, for a later run: the model could not judge a pair whose texts differ, or the target changed meanwhile. */
+  | { outcome: 'deferred'; reason: string }
+  | { outcome: 'merged' };
 
 /**
  * Merge lesson note `absorbed` into `target` (both of one user): one
- * merge-model call (`allowDistinct` in the related band); the target gets the
- * combined text (or, count-only, its own without the legacy evidence footer),
- * both notes' evidence lists and the sum of their sightings; `absorbed` is
- * archived with `frontmatter.mergedInto = target.id`. `not_live` when either
- * was archived or removed meanwhile.
+ * merge-model call (`allowDistinct` in the related band; none when the two
+ * bodies are the same text). In this order:
+ *
+ *   1. the target is written (`writeLessonMerge`): the combined text, or its
+ *      own when the model found nothing new, plus both notes' evidence lists
+ *      and the sum of their sightings;
+ *   2. only then `absorbed` is archived with `frontmatter.mergedInto`.
+ *
+ * Nothing is written, and both stay live for a later run (`deferred`), when
+ * the model could not judge two different texts (a count-only merge would
+ * archive text the target does not hold) or the target's body changed while
+ * the model answered. A failing write throws with the absorbed note still
+ * live. A crash between 1 and 2 leaves the absorbed note live and its
+ * evidence already in the target: a later run finds the pair again and adds
+ * its sightings a second time (an overcount; the lists do not repeat, and no
+ * text is lost). A pair judged `distinct` is recorded on both notes
+ * (`distinctFrom`) and not asked about again. `not_live` when either was
+ * archived or removed meanwhile.
  */
 export async function absorbLessonNote(absorbed: Note, target: Note, opts: { allowDistinct: boolean }): Promise<AbsorbLessonResult> {
   const kindOf = (note: Note) => lessonFrontmatterOf(note.frontmatter).lessonKind;
-  const decision = await decideLessonMerge(
+  const identical = sameLessonText(absorbed.body, target.body);
+  const decision: LessonMergeDecision = identical ? { verdict: 'unchanged' } : await decideLessonMerge(
     { title: target.title, content: stripEvidenceFooter(target.body), kind: kindOf(target) },
     { title: absorbed.title, content: stripEvidenceFooter(absorbed.body), kind: kindOf(absorbed) },
     { userId: target.userId, noteId: target.id, allowDistinct: opts.allowDistinct });
-  if (decision.verdict === 'distinct') return { outcome: 'distinct' };
+  if (decision.verdict === 'distinct') {
+    // The model's own verdict is kept; "could not judge" is asked again next run.
+    if (!decision.degradedReason) await recordDistinctLessons(target, absorbed);
+    return { outcome: 'distinct' };
+  }
+  if (decision.verdict === 'unchanged' && decision.degradedReason) {
+    coreLogger.warn({ noteId: target.id, absorbed: absorbed.id, reason: decision.degradedReason }, 'Lesson note consolidation: the merge model could not judge two different texts; both kept for a later run');
+    return { outcome: 'deferred', reason: decision.degradedReason };
+  }
   const db = getDb();
-  // Archive the absorbed note first, conditionally: a note the user archived
-  // or deleted meanwhile is left alone, and is never counted twice.
+  const live = await db.select({ id: notes.id }).from(notes).where(and(inArray(notes.id, [target.id, absorbed.id]), liveLessonsOf(target.userId)));
+  if (live.length < 2) return { outcome: 'not_live' };
   const incoming = lessonFrontmatterOf(absorbed.frontmatter);
+  const written = await writeLessonMerge(target, decision.verdict === 'merged' ? decision : null, {
+    lessonKind: incoming.lessonKind, sightings: incoming.sightings, sessions: incoming.sessions,
+    learningJobIds: incoming.learningJobIds, sources: incoming.sources }, { onConcurrentChange: 'skip' });
+  if (!written.written) {
+    coreLogger.warn({ noteId: target.id, absorbed: absorbed.id }, 'Lesson note consolidation: the target changed while the model answered; both kept for a later run');
+    return { outcome: 'deferred', reason: 'concurrent_change' };
+  }
   const [gone] = await db.update(notes).set({
     archivedAt: new Date(), updatedAt: new Date(),
-    frontmatter: { ...absorbed.frontmatter, mergedInto: target.id },
+    frontmatter: sql`(${notes.frontmatter} - 'archivedBy') || ${JSON.stringify({ mergedInto: target.id })}::jsonb`,
   }).where(and(eq(notes.id, absorbed.id), eq(notes.userId, absorbed.userId), isNull(notes.archivedAt))).returning({ id: notes.id });
-  if (!gone) return { outcome: 'not_live' };
-  const [live] = await db.select().from(notes).where(and(eq(notes.id, target.id), liveLessonsOf(target.userId)));
-  if (!live) {
-    // The target went meanwhile: the absorbed note stays as it was.
-    await db.update(notes).set({ archivedAt: null, frontmatter: absorbed.frontmatter }).where(eq(notes.id, absorbed.id));
-    return { outcome: 'not_live' };
-  }
-  const written = await writeLessonMerge(target, decision.verdict === 'merged' ? decision : null, mergedFrontmatter(live.frontmatter, {
-    lessonKind: incoming.lessonKind, sightings: incoming.sightings, sessions: incoming.sessions,
-    learningJobIds: incoming.learningJobIds, sources: incoming.sources }));
-  const mergeDegraded = (decision.verdict === 'unchanged' && decision.degradedReason !== undefined) || written.concurrent;
-  coreLogger.info({ noteId: target.id, absorbed: absorbed.id, rewritten: written.rewritten, mergeDegraded }, 'Lesson note absorbed into another');
-  return { outcome: 'merged', mergeDegraded };
+  if (!gone) coreLogger.warn({ noteId: target.id, absorbed: absorbed.id }, 'Lesson note consolidation: the absorbed note was archived or removed while it was merged; its evidence is in the target');
+  coreLogger.info({ noteId: target.id, absorbed: absorbed.id, rewritten: written.rewritten }, 'Lesson note absorbed into another');
+  return { outcome: 'merged' };
 }
+
+/** Most merge-model calls one consolidation run makes for lesson notes, whatever the verdict (merged, unchanged or distinct). */
+export const MAX_LESSON_MERGE_CALLS = 20;
 
 /**
  * Step 5: greedy pairwise merging of `userId`'s near-duplicate lesson notes,
- * as for proposals (a pair the model calls distinct, or cannot judge in the
- * related band, is not asked again this run and costs no budget). Returns
- * the notes absorbed and how many of those merges only counted.
+ * as for proposals. A pair is merged with `allowDistinct: false` only when it
+ * is a duplicate as notes (`LessonPair.duplicate`); otherwise the model may
+ * call it distinct. A pinned note is never absorbed: a pair of two pinned
+ * notes is skipped. A pair both notes record as distinct (`distinctFrom`) is
+ * not asked about again; one the model could not judge, or that was deferred,
+ * is skipped for the rest of this run. At most MAX_LESSON_MERGE_CALLS model
+ * calls per run. Returns the notes absorbed.
  */
-export async function consolidateLessonNotes(userId: string, opts: { maxMerges: number }): Promise<{ merged: number; degraded: number }> {
+export async function consolidateLessonNotes(userId: string, opts: { maxMerges: number }): Promise<{ merged: number }> {
   const { duplicateSimilarity, relatedSimilarity } = getConfig().learning;
-  const out = { merged: 0, degraded: 0 };
-  const distinct = new Set<string>();
+  const out = { merged: 0 };
+  let calls = 0;
+  const skipped = new Set<string>();
   const threshold = Math.min(relatedSimilarity, duplicateSimilarity);
   let mergedThisRound = true;
   while (mergedThisRound && out.merged < opts.maxMerges) {
     mergedThisRound = false;
-    const pairs = (await similarLessonPairs(userId, threshold)).filter(pair => !distinct.has(`${pair.a}:${pair.b}`));
+    const pairs = (await similarLessonPairs(userId, threshold, duplicateSimilarity)).filter(pair => !skipped.has(`${pair.a}:${pair.b}`));
     if (pairs.length === 0) break;
     const ids = [...new Set(pairs.flatMap(pair => [pair.a, pair.b]))];
     const rows = new Map((await getDb().select().from(notes).where(and(inArray(notes.id, ids), liveLessonsOf(userId)))).map(row => [row.id, row]));
@@ -323,19 +387,26 @@ export async function consolidateLessonNotes(userId: string, opts: { maxMerges: 
       const x = rows.get(pair.a);
       const y = rows.get(pair.b);
       if (!x || !y) continue;
+      const key = `${pair.a}:${pair.b}`;
       const [target, absorbed] = betterLessonTarget(x, y) ? [x, y] : [y, x];
-      const result = await absorbLessonNote(absorbed, target, { allowDistinct: pair.similarity < duplicateSimilarity });
-      if (result.outcome === 'distinct') {
-        distinct.add(`${pair.a}:${pair.b}`);
+      // The user's pin is their choice: never archived by a merge.
+      if (absorbed.pinned || knownDistinct(x, y)) { skipped.add(key); continue; }
+      const asks = !sameLessonText(x.body, y.body);
+      if (asks && calls >= MAX_LESSON_MERGE_CALLS) continue;
+      if (asks) calls++;
+      const allowDistinct = pair.similarity < duplicateSimilarity || !pair.duplicate;
+      const result = await absorbLessonNote(absorbed, target, { allowDistinct });
+      if (result.outcome === 'distinct' || result.outcome === 'deferred') {
+        skipped.add(key);
         continue;
       }
       touched.add(pair.a);
       touched.add(pair.b);
       if (result.outcome === 'not_live') continue;
       out.merged++;
-      if (result.mergeDegraded) out.degraded++;
       mergedThisRound = true;
     }
+    if (calls >= MAX_LESSON_MERGE_CALLS) coreLogger.info({ userId, calls }, 'Lesson note consolidation: the run\'s merge-model calls are spent; the rest waits for the next run');
   }
   return out;
 }
@@ -350,14 +421,17 @@ export async function consolidateLessonNotes(userId: string, opts: { maxMerges: 
  * the passages it shows; search_notes, search_knowledge, the knowledge API and
  * link suggestions count what they return), never when it is indexed. A
  * re-index replaces the chunks (no `last_accessed_at`), but it comes with a
- * save, which moves `updated_at`. Archived, never deleted. Returns how many;
- * 0 days archives none.
+ * save, which moves `updated_at`. Archived, never deleted, and marked
+ * `frontmatter.archivedBy = 'expiry'`: a review that sees the lesson again
+ * revives the note. Returns how many; 0 days archives none.
  */
 export async function expireLessonNotes(userId: string): Promise<number> {
   const { lessonTtlDays } = getConfig().learning;
   if (lessonTtlDays <= 0) return 0;
   const cutoff = new Date(Date.now() - lessonTtlDays * 24 * 60 * 60 * 1000);
-  const archived = await getDb().update(notes).set({ archivedAt: new Date(), updatedAt: new Date() }).where(and(
+  // Marked as expiry's archive: a lesson seen again revives it (lesson-notes.ts).
+  const archived = await getDb().update(notes).set({ archivedAt: new Date(), updatedAt: new Date(),
+    frontmatter: sql`${notes.frontmatter} || ${JSON.stringify({ archivedBy: 'expiry' })}::jsonb` }).where(and(
     liveLessonsOf(userId), eq(notes.pinned, false), lt(notes.updatedAt, cutoff),
     sql`NOT EXISTS (SELECT 1 FROM ${embeddings} e WHERE e.source_id = 'note:' || ${notes.id}::text AND e.user_id = ${userId}::uuid
       AND e.last_accessed_at >= ${cutoff.toISOString()}::timestamptz)`,
