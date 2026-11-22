@@ -13,7 +13,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
@@ -350,6 +350,21 @@ describe('the stats', () => {
     expect(stats.recent.find((r: { hooks: Array<{ degraded?: string }> }) => r.hooks[0]?.degraded === 'embedding_failed')).toBeDefined();
     expect((await send(otherApp, 'GET', '/api/context-hooks/stats')).body.used).toEqual({ n: 1, of: 1 });
     expect((await send(anonApp, 'GET', '/api/context-hooks/stats')).status).toBe(401);
+  });
+
+  test('when the memory status cannot be read, the rest is shown and the failure is logged', async () => {
+    const { coreLogger } = await import('@/utils/logger');
+    const warn = vi.spyOn(coreLogger, 'warn');
+    await executeRaw('ALTER VIEW memories_active RENAME TO memories_active_hidden');
+    try {
+      const { status, body } = await send(userApp, 'GET', '/api/context-hooks/stats');
+      expect(status).toBe(200);
+      expect(body.memory).toEqual({ facts: 0, missing: [] });
+      expect(warn.mock.calls.some(([, msg]) => typeof msg === 'string' && /memory status could not be read/.test(msg))).toBe(true);
+    } finally {
+      await executeRaw('ALTER VIEW memories_active_hidden RENAME TO memories_active');
+      warn.mockRestore();
+    }
   });
 
   test('a calibration warning over a meaningful sample of searched runs, none on a small one', async () => {

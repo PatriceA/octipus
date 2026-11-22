@@ -20,6 +20,7 @@ import { getConfig } from '@/config';
 import type {
   ContextHookStats, ContextHookUse, Rate, RecallCalibrationWarning, RecallEvalCase, RecallEvalResult, RecallQualifiedBy,
 } from '@/shared/context-hooks';
+import { coreLogger } from '@/utils/logger';
 import { KIND_CONFIG, type RecallConfig, selectRecallPassages } from './kinds';
 import { calibrationMessage, calibrationSample, calibrationVerdict } from './measure';
 import { listContextHooks } from './store';
@@ -136,7 +137,9 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   let memory: ContextHookStats['memory'] = { facts: 0, missing: [] };
   try {
     memory = await memoryStatus(userId);
-  } catch { /* the panel shows the rest */ }
+  } catch (err) {
+    coreLogger.warn({ err, userId }, 'context hooks: memory status could not be read — the panel shows the rest');
+  }
 
   const calibration: RecallCalibrationWarning[] = [];
   for (const [id, a] of hookAgg) {
