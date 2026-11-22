@@ -77,6 +77,22 @@ describe('session picker', () => {
     await t.app.stop();
   });
 
+  test('a picker closed before its list came drops the late result instead of printing it in the transcript', async () => {
+    const t = mount();
+    t.submit('/sessions');
+    t.press('\x1b'); // Esc: closed while loading
+    expect(t.overlays).toHaveLength(0);
+    gateway.listener({ kind: 'command.result', name: 'sessions', result: '1. Fix the parser\n2. Plan the release', data: SESSIONS });
+    const shown = strip((t.app as unknown as { messages: { render(width: number): string[] } }).messages.render(100));
+    expect(shown).not.toContain('/sessions:');
+    expect(shown).not.toContain('Fix the parser');
+    // A later /sessions list in text form still prints.
+    t.submit('/sessions list');
+    gateway.listener({ kind: 'command.result', name: 'sessions', result: '1. Fix the parser', data: SESSIONS });
+    expect(strip((t.app as unknown as { messages: { render(width: number): string[] } }).messages.render(100))).toContain('/sessions:');
+    await t.app.stop();
+  });
+
   test('/resume alone opens the same picker; /resume <n> and /sessions list keep their text forms', async () => {
     const t = mount();
     t.submit('/resume');

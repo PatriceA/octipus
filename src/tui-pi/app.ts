@@ -193,6 +193,8 @@ export class OctipusTuiApp {
   private pickerHandle: OverlayHandle | null = null;
   /** The picker waiting for the gateway's list, if one is. */
   private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
+  /** Lists a picker asked for and was closed before they came: their late results are dropped, not shown in the transcript. */
+  private readonly cancelledLists: Array<'sessions' | 'skills'> = [];
   private readonly search?: TranscriptSearch;
   private readonly attention?: Attention;
   private themeSetting: ThemeSetting;
@@ -757,6 +759,13 @@ export class OctipusTuiApp {
           this.sessionId = fallback;
           return;
         }
+        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills');
+        if (cancelled >= 0) {
+          // The picker that asked was closed: keep the session list for `/resume <n>`, show nothing.
+          this.cancelledLists.splice(cancelled, 1);
+          if (event.name === 'sessions' && Array.isArray(event.data)) this.sessionList = event.data.filter(isSessionRow);
+          return;
+        }
         if (this.loading && event.name === this.loading.command) {
           this.fillPicker(event);
           return;
@@ -1092,6 +1101,8 @@ export class OctipusTuiApp {
     const close = () => {
       this.pickerHandle?.hide();
       this.pickerHandle = null;
+      // Closed while its list was still on the way: that answer is no longer wanted.
+      if (this.loading) this.cancelledLists.push(this.loading.command);
       this.loading = null;
       this.tui.setFocus(this.composer);
       this.tui.requestRender();
