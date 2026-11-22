@@ -42,6 +42,14 @@ export const HOOK_TIMEOUT_MS = 4_000;
  */
 export const START_DEADLINE_MS = 4_500;
 
+/** How a hook's search went, kept on its record when its block is left out after: the reduced mode and whether it cleared the bar. */
+function searchedWith(result: ContextHookResult): Pick<ContextHookResult, 'degraded' | 'bar'> {
+  return {
+    ...(result.degraded ? { degraded: result.degraded } : {}),
+    ...(result.bar ? { bar: result.bar } : {}),
+  };
+}
+
 /** A recorded turn, handed back to `finishContextTurn` when the agent is done. */
 export interface ContextTurnHandle {
   id: string;
@@ -174,7 +182,7 @@ export async function runContextHooks(
         return false;
       } catch (err) {
         coreLogger.error({ err, hook: hook.name, userId: input.userId }, 'context hook: committing its block failed — the block is left out of this turn');
-        entry.result = { status: 'error', reason: 'commit_failed', text: '', items: [], tokens: 0, ...(result.degraded ? { degraded: result.degraded } : {}) };
+        entry.result = { status: 'error', reason: 'commit_failed', text: '', items: [], tokens: 0, ...searchedWith(result) };
         return true;
       }
     }));
@@ -183,7 +191,7 @@ export async function runContextHooks(
   for (const entry of kept) {
     if (entry.decided) continue;
     const ran = entry.result;
-    entry.result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0, ...(ran.degraded ? { degraded: ran.degraded } : {}) };
+    entry.result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0, ...searchedWith(ran) };
   }
 
   const texts: string[] = [];
@@ -210,7 +218,7 @@ export async function runContextHooks(
       kind: hook.kind,
       status: result.status,
       ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.degraded ? { degraded: result.degraded } : {}),
+      ...searchedWith(result),
       // The index lists many titles and is not something to cite; its count is enough.
       items: hook.kind === 'notes_index' ? [] : result.items,
       tokens: result.tokens,

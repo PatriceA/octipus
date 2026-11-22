@@ -67,6 +67,8 @@ export interface ContextHookResult {
   tokens: number;
   /** Why the hook ran in a reduced mode (recall: `embedding_failed`, keyword rules only); recorded on the run. */
   degraded?: ContextHookRunRecord['degraded'];
+  /** Recall: the bar its search was decided at and whether a passage found cleared it; recorded on the run (`ContextHookRunRecord.bar`). */
+  bar?: ContextHookRunRecord['bar'];
   /**
    * `text` as a fenced group of parts that repeat separately across turns
    * (recall: one part per passage). Absent: the block repeats as a whole.

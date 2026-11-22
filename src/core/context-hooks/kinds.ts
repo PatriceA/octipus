@@ -25,7 +25,7 @@ import { getDb } from '@/db/postgres';
 import { isCapabilityOn } from '@/core/capabilities/gates';
 import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { notes } from '@/db/schema/notes';
-import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS, RECALL_PURPOSES } from '@/shared/context-hooks';
+import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS, RECALL_PURPOSES, type RecallBar } from '@/shared/context-hooks';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import {
@@ -152,6 +152,13 @@ export interface RecallSelection {
   reason?: string;
   /** `embedding_failed`: the query had no embedding; the keyword rules decided alone. */
   degraded?: 'embedding_failed';
+  /**
+   * The `minSimilarity` applied, and whether a passage found (shown or not,
+   * for the budget) qualified on similarity: what calibration counts
+   * (`calibrationSample`). Set on every run that searched; absent on one
+   * that did not.
+   */
+  bar?: RecallBar;
   /** What would be injected, best first, one per source; empty unless `injected`. */
   passages: RecallPassage[];
   /** What was searched (`buildRecallQuery`); empty unless `injected`. */
@@ -272,8 +279,8 @@ function qualifyContext(search: AnyTermSearch, identifiers: string[], config: Re
  */
 export function choosePassages({ query, search, combined }: RecallSearch, config: RecallConfig, tokenBudget: number): RecallSelection {
   const degraded: 'embedding_failed' | undefined = search.embeddingError || combined?.search.embeddingError ? 'embedding_failed' : undefined;
-  const none = (reason: string): RecallSelection =>
-    ({ status: 'abstained', reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
+  const none = (reason: string, bar: RecallBar): RecallSelection =>
+    ({ status: 'abstained', reason, ...(degraded ? { degraded } : {}), bar, passages: [], query: '', text: '', tokens: 0 });
   const identifiers = messageIdentifiers(query);
   const own = qualifiedHits(search, qualifyContext(search, identifiers, config), config);
   const fromOwn = new Set(own.map((h) => h.sourceId));
@@ -282,7 +289,8 @@ export function choosePassages({ query, search, combined }: RecallSearch, config
       .filter((h) => !fromOwn.has(h.sourceId))
     : [];
   const hits = [...own, ...added].slice(0, config.limit);
-  if (hits.length === 0) return none('nothing_relevant');
+  const bar: RecallBar = { minSimilarity: config.minSimilarity, cleared: hits.some((h) => h.qualifiedBy.includes('similarity')) };
+  if (hits.length === 0) return none('nothing_relevant', bar);
 
   // The window is steered by the message's own words; the previous
   // message's only for a passage that holds none of them.
@@ -303,14 +311,14 @@ export function choosePassages({ query, search, combined }: RecallSearch, config
       item: { id: hit.id, sourceId: hit.sourceId, title, score: Number((hit.cosine ?? 0).toFixed(3)), qualifiedBy },
     });
   }
-  if (passages.length === 0) return none('over_budget');
+  if (passages.length === 0) return none('over_budget', bar);
   const parts = passages.map((p) => p.block);
   const text = RECALL_HEAD + parts.join('') + RECALL_TAIL;
   // What was searched for what is shown: with the previous message when a
   // passage came from that search (the measure's "words the question held").
   const shownQuery = passages.some((p) => added.some((h) => h.id === p.hit.id)) && combined ? combined.query : query;
   return {
-    status: 'injected', ...(degraded ? { degraded } : {}), passages, query: shownQuery, text, tokens: estimateTokens(text),
+    status: 'injected', ...(degraded ? { degraded } : {}), bar, passages, query: shownQuery, text, tokens: estimateTokens(text),
     group: { head: RECALL_HEAD, tail: RECALL_TAIL, parts },
   };
 }
@@ -347,7 +355,10 @@ async function runRecall(input: ContextHookInput, raw: Record<string, unknown>):
   // (a query that fails to embed is another matter: keyword rules, recorded).
   if (!isCapabilityOn('embedding')) return skipped('no_embedding_model');
   const selection = await selectRecallPassages(input, config, Math.min(config.tokenBudget, input.tokenBudget));
-  const degraded = selection.degraded ? { degraded: selection.degraded } : {};
+  const degraded = {
+    ...(selection.degraded ? { degraded: selection.degraded } : {}),
+    ...(selection.bar ? { bar: selection.bar } : {}),
+  };
   if (selection.status !== 'injected' || !selection.group) {
     return { status: selection.status, reason: selection.reason, text: '', items: [], tokens: 0, ...degraded };
   }

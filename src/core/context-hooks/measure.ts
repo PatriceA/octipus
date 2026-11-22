@@ -332,19 +332,18 @@ export const CALIBRATION_NEARLY_ALWAYS = 0.95;
 export const CALIBRATION_ALMOST_NEVER = 0.05;
 
 /**
- * How a recall run counts towards calibration: `found` when the search found
- * passages to show (shown, or dropped afterwards for the budget or a failed
- * commit), `nothing` when nothing cleared the bar, null when the run says
- * nothing about the bar: skipped (a short message, no embedding model),
- * failed or timed out, or degraded to keywords (no cosine was compared).
+ * How a recall run counts towards calibration: `found` when a passage the
+ * search found cleared `minSimilarity` (shown, or dropped afterwards for the
+ * budget or a failed commit), `nothing` when none did (nothing found, or only
+ * passages qualified on keywords or an identifier, which the bar did not
+ * decide), null when the run says nothing about the bar: skipped (a short
+ * message, no embedding model), failed or timed out, degraded to keywords (no
+ * cosine was compared), or recorded before its `bar` was (decided by the
+ * earlier rules, under which a keyword match bypassed the bar).
  */
-export function calibrationSample(run: { status: string; reason?: string; degraded?: string }): 'found' | 'nothing' | null {
-  if (run.degraded) return null;
-  if (run.status === 'injected') return 'found';
-  if (run.status === 'abstained') return run.reason === 'over_budget' ? 'found' : 'nothing';
-  if (run.status === 'skipped' && run.reason === 'budget_spent') return 'found';
-  if (run.status === 'error' && run.reason === 'commit_failed') return 'found';
-  return null;
+export function calibrationSample(run: { degraded?: string; bar?: { cleared: boolean } }): 'found' | 'nothing' | null {
+  if (run.degraded || !run.bar) return null;
+  return run.bar.cleared ? 'found' : 'nothing';
 }
 
 /** Whether a recall hook's bar looks wrong over its searched runs, or null (also for a sample under CALIBRATION_MIN_RUNS). */
@@ -356,12 +355,28 @@ export function calibrationVerdict(found: number, searched: number): 'injects_ne
   return null;
 }
 
-/** The warning's text: what was seen, what it may mean, and the sweep as the way to check. */
-export function calibrationMessage(hook: string, verdict: 'injects_nearly_always' | 'injects_almost_never', found: number, searched: number): string {
+/**
+ * The warning's text: what was seen, what it may mean, and the sweep as the
+ * way to check. The sweep runs with the built-in Knowledge recall hook's
+ * settings and its button sets that hook; for another recall hook the
+ * message says to set the value on the hook itself.
+ */
+export function calibrationMessage(
+  hook: string,
+  verdict: 'injects_nearly_always' | 'injects_almost_never',
+  found: number,
+  searched: number,
+  builtin = true,
+): string {
   const pct = Math.round((found / searched) * 100);
-  return verdict === 'injects_nearly_always'
-    ? `${hook} showed passages on ${pct}% of the ${searched} messages it searched. Its minSimilarity may be too low for your embedding model, so passages that do not help cost tokens on every turn. Run the threshold sweep below with your own questions and apply the value it recommends.`
-    : `${hook} showed passages on ${pct}% of the ${searched} messages it searched. If your notes and documents cover what you ask, its minSimilarity is likely too high for your embedding model. Run the threshold sweep below with your own questions and apply the value it recommends.`;
+  const seen = `${hook} found a passage that cleared its minSimilarity on ${pct}% of the ${searched} messages it searched.`;
+  const meaning = verdict === 'injects_nearly_always'
+    ? ' Its minSimilarity may be too low for your embedding model, so passages that do not help cost tokens on every turn.'
+    : ' If your notes and documents cover what you ask, its minSimilarity is likely too high for your embedding model.';
+  const check = builtin
+    ? ' Run the threshold sweep below with your own questions and apply the value it recommends.'
+    : ` Run the threshold sweep below with your own questions (it uses Knowledge recall's other settings) and set the value it recommends as ${hook}'s minSimilarity.`;
+  return seen + meaning + check;
 }
 
 // ── The threshold sweep ─────────────────────────────────────────────────────

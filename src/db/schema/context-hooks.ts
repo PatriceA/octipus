@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { RecallQualifiedBy } from '@/shared/context-hooks';
+import type { RecallBar, RecallQualifiedBy } from '@/shared/context-hooks';
 import { users } from './users';
 
 /**
@@ -41,6 +41,15 @@ export interface ContextHookRunRecord {
    * could not embed the query and matched by its keyword rules alone.
    */
   degraded?: 'embedding_failed';
+  /**
+   * Recall: the `minSimilarity` the search was decided at, and whether a
+   * passage it found qualified on similarity (cleared it), whether or not it
+   * was then shown. Written on every recall run that searched, from the
+   * qualification rules of the recall hardening on
+   * (docs/plans/recall-hardening.md); absent on a run that did not search and
+   * on rows decided by the earlier rules, which calibration does not count.
+   */
+  bar?: RecallBar;
   items: Array<{ id: string; sourceId: string; title: string; score: number; qualifiedBy?: RecallQualifiedBy[] }>;
   tokens: number;
   latencyMs: number;

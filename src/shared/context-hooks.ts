@@ -14,6 +14,8 @@ export type ContextHookEvent = 'turn_start' | 'worker_start';
 export type ContextHookKind = 'recall' | 'note' | 'notes_index';
 /** The rule a recall passage qualified under (`qualifyHit`). */
 export type RecallQualifiedBy = 'similarity' | 'coverage' | 'identifier';
+/** The bar a recall search was decided at, and whether a passage it found cleared it (calibration). */
+export interface RecallBar { minSimilarity: number; cleared: boolean }
 
 /** The recall kind's defaults: what the hook uses for a setting the user left blank. */
 export const RECALL_DEFAULTS = {
@@ -84,14 +86,19 @@ export interface RecallCalibrationWarning {
   id: string;
   hook: string;
   verdict: 'injects_nearly_always' | 'injects_almost_never';
-  /** Searched runs that found passages to show, of the searched runs. */
+  /** Runs at the hook's current minSimilarity where a passage found cleared it, of those that searched on it. */
   found: Rate;
+  /** True for the built-in Knowledge recall hook: the one the threshold sweep runs with and its button sets. */
+  builtin: boolean;
   message: string;
 }
 
 /** Named and used, for a group of finished turns. */
 export interface ContextHookUse {
+  /** Finished turns that ended with an answer: every rate below is over these. */
   turns: number;
+  /** Finished turns that ended without one (failed, cancelled, cleared, a child that did not complete): not in the rates. */
+  unanswered: number;
   /** Turns where recall showed passages. */
   injected: Rate;
   /** Turns where the knowledge base or notes were read by a tool call. */
@@ -108,8 +115,10 @@ export interface ContextHookStats {
   /** True when the window held more turns than are counted: the numbers cover the newest ones. */
   sampled: boolean;
   byHook: ContextHookStatsHook[];
+  /** Finished turns that ended without an answer, left out of every rate here. */
+  unanswered: number;
   /**
-   * Finished turns where the knowledge base or notes were read by a tool call:
+   * Finished turns that answered where the knowledge base or notes were read by a tool call:
    * by the agent, or for a root turn by it or a specialist it spawned.
    */
   searched: Rate;

@@ -12,7 +12,7 @@ const hooks: ContextHooksResponse = {
 };
 
 const rate = (n: number, of: number) => ({ n, of });
-const use = (turns: number) => ({ turns, injected: rate(2, turns), searched: rate(1, turns), cited: rate(1, 2), used: rate(2, 2) });
+const use = (turns: number, unanswered = 0) => ({ turns, unanswered, injected: rate(2, turns), searched: rate(1, turns), cited: rate(1, 2), used: rate(2, 2) });
 const stats: ContextHookStats = {
   days: 30,
   turns: 4,
@@ -22,17 +22,18 @@ const stats: ContextHookStats = {
     degraded: 1, budgetSpent: 0, commitFailed: 0, qualified: { similarity: 2, coverage: 1, identifier: 1 },
   }],
   searched: rate(1, 4),
+  unanswered: 2,
   searchedAfterInjection: rate(0, 2),
   searchedAfterAbstain: rate(1, 2),
   cited: rate(1, 2),
   used: rate(2, 2),
   byModel: [{ model: 'claude-cli', cli: true, ...use(4) }],
-  byEvent: [{ event: 'turn_start', ...use(3) }, { event: 'worker_start', ...use(1) }],
+  byEvent: [{ event: 'turn_start', ...use(3, 2) }, { event: 'worker_start', ...use(1) }],
   calibration: [],
   recent: [],
   memory: { facts: 0, missing: ['background_model'] },
 };
-const quiet: ContextHookStats = { ...stats, turns: 0, byHook: [], byModel: [], byEvent: [], memory: { facts: 3, missing: [] } };
+const quiet: ContextHookStats = { ...stats, turns: 0, unanswered: 0, byHook: [], byModel: [], byEvent: [], memory: { facts: 3, missing: [] } };
 
 test.describe('recall page', () => {
   test('shows the hooks with their defaults, the numbers per model and per event, and the memory warning; switches a hook off', async ({ authenticatedPage: page }) => {
@@ -54,6 +55,9 @@ test.describe('recall page', () => {
     await expect(page.getByText('answers naming a recalled passage (1/2)')).toBeVisible();
     await expect(page.getByText('answers using a recalled passage (2/2)')).toBeVisible();
     await expect(page.getByText('agents started on a task (specialists, swarm children, spawned and hook agents)')).toBeVisible();
+    // Starts that ended without an answer are counted apart, per event.
+    await expect(page.getByText(/2 finished starts ended without an answer .* not in these rates/)).toBeVisible();
+    await expect(page.locator('tr', { hasText: 'messages (root turns' }).locator('td').nth(2)).toHaveText('2');
     await expect(page.getByText('similarity 2 · coverage 1 · identifier 1')).toBeVisible();
     // Every recall setting is editable, blank ones showing their default.
     const recall = page.locator('li', { hasText: 'Knowledge recall' });
@@ -103,9 +107,9 @@ test.describe('recall page', () => {
   test('a recall hook that injects on nearly every message gets the calibration warning', async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
     await page.route('**/api/context-hooks', (route) => json(route, 200, hooks));
-    const message = 'Knowledge recall showed passages on 98% of the 40 messages it searched. Run the threshold sweep below with your own questions and apply the value it recommends.';
+    const message = 'Knowledge recall found a passage that cleared its minSimilarity on 98% of the 40 messages it searched. Run the threshold sweep below with your own questions and apply the value it recommends.';
     await page.route('**/api/context-hooks/stats*', (route) => json(route, 200, {
-      ...stats, calibration: [{ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', verdict: 'injects_nearly_always', found: rate(39, 40), message }],
+      ...stats, calibration: [{ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', verdict: 'injects_nearly_always', found: rate(39, 40), builtin: true, message }],
     }));
     await page.goto('/recall');
     await expect(page.getByRole('status').filter({ hasText: 'threshold sweep' })).toHaveText(message);

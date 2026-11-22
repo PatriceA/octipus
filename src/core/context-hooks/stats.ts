@@ -51,13 +51,28 @@ const recallPassages = (row: ContextTurnRow) =>
 
 const searchedIn = (row: ContextTurnRow) => (row.knowledgeToolCalls ?? 0) + (row.notesToolCalls ?? 0) > 0;
 
-/** Named and used over finished turns. */
-function use(list: ContextTurnRow[]): ContextHookUse {
+/**
+ * Whether a finished turn ended with an answer: `success` (a root turn, a
+ * worker, a swarm child that returned `ok`, a side question or a hook
+ * agent). Every other outcome is a turn that gave none to measure: `failed`,
+ * `cancelled` and `cleared` root turns and side questions, a worker or start
+ * that threw (`error`), and a swarm child that did not complete (`budget`,
+ * `timeout`, `tool_error`, `provider_error`, `cancelled`, `denied`,
+ * `concurrency_limit`, `contract_failed`, and `cache_hit`, where no model ran
+ * on the passages). A row without an outcome predates it; such turns were
+ * only closed with an answer then, so they count as answered.
+ */
+const answered = (row: Pick<ContextTurnRow, 'outcome'>) => row.outcome === null || row.outcome === 'success';
+
+/** Named and used over finished turns that ended with an answer; the others are counted apart. */
+function use(all: ContextTurnRow[]): ContextHookUse {
+  const list = all.filter(answered);
   const withPassages = list.filter((r) => recallPassages(r) > 0);
   // Rows from before used_items was measured hold null: they are left out of "used".
   const measured = withPassages.filter((r) => r.usedItems !== null);
   return {
     turns: list.length,
+    unanswered: all.length - list.length,
     injected: rate(withPassages.length, list.length),
     searched: rate(list.filter(searchedIn).length, list.length),
     cited: rate(withPassages.filter((r) => (r.citedItems ?? 0) > 0).length, withPassages.length),
@@ -83,8 +98,8 @@ interface HookAgg {
   name: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number;
   tokens: number[]; latency: number[]; top: number[]; degraded: number; budgetSpent: number; commitFailed: number;
   qualified: Record<RecallQualifiedBy, number>;
-  /** Calibration: runs that searched on the bar, and those that found passages (`calibrationSample`). */
-  searched: number; found: number;
+  /** Calibration, per `minSimilarity` the runs were decided at: runs that searched on the bar, and those that cleared it (`calibrationSample`). */
+  bars: Map<number, { searched: number; found: number }>;
 }
 
 export async function contextHookStats(userId: string, days = 30): Promise<ContextHookStats> {
@@ -101,9 +116,9 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
     for (const h of row.hooks) {
       // Grouped by id: names repeat and change. Rows from before ids were recorded group by name.
       const key = h.id ?? `name:${h.hook}`;
-      const a = hookAgg.get(key) ?? {
+      const a: HookAgg = hookAgg.get(key) ?? {
         name: h.hook, kind: h.kind, runs: 0, injected: 0, abstained: 0, skipped: 0, errors: 0, tokens: [], latency: [], top: [],
-        degraded: 0, budgetSpent: 0, commitFailed: 0, qualified: { similarity: 0, coverage: 0, identifier: 0 }, searched: 0, found: 0,
+        degraded: 0, budgetSpent: 0, commitFailed: 0, qualified: { similarity: 0, coverage: 0, identifier: 0 }, bars: new Map(),
       };
       a.runs++;
       if (h.status === 'injected') { a.injected++; a.tokens.push(h.tokens); }
@@ -119,10 +134,12 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
       // keyword-only passage has a score of 0 and says nothing about the bar.
       const scored = h.items.filter(bySimilarity);
       if (scored.length) a.top.push(Math.max(...scored.map((i) => i.score)));
-      if (h.kind === 'recall') {
-        const sample = calibrationSample(h);
-        if (sample) a.searched++;
-        if (sample === 'found') a.found++;
+      const sample = h.kind === 'recall' ? calibrationSample(h) : null;
+      if (sample && h.bar) {
+        const at = a.bars.get(h.bar.minSimilarity) ?? { searched: 0, found: 0 };
+        at.searched++;
+        if (sample === 'found') at.found++;
+        a.bars.set(h.bar.minSimilarity, at);
       }
       a.name = a.name || h.hook;
       hookAgg.set(key, a);
@@ -130,8 +147,9 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   }
 
   const finished = rows.filter((r) => r.finishedAt);
-  const injected = finished.filter((r) => recallStatus(r) === 'injected');
-  const abstainedRows = finished.filter((r) => recallStatus(r) === 'abstained');
+  const answeredRows = finished.filter(answered);
+  const injected = answeredRows.filter((r) => recallStatus(r) === 'injected');
+  const abstainedRows = answeredRows.filter((r) => recallStatus(r) === 'abstained');
   const overall = use(finished);
 
   let memory: ContextHookStats['memory'] = { facts: 0, missing: [] };
@@ -141,12 +159,7 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
     coreLogger.warn({ err, userId }, 'context hooks: memory status could not be read — the panel shows the rest');
   }
 
-  const calibration: RecallCalibrationWarning[] = [];
-  for (const [id, a] of hookAgg) {
-    if (a.kind !== 'recall') continue;
-    const verdict = calibrationVerdict(a.found, a.searched);
-    if (verdict) calibration.push({ id, hook: a.name, verdict, found: rate(a.found, a.searched), message: calibrationMessage(a.name, verdict, a.found, a.searched) });
-  }
+  const calibration = await calibrationWarnings(userId, hookAgg);
 
   return {
     days,
@@ -159,11 +172,13 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
       degraded: a.degraded, budgetSpent: a.budgetSpent, commitFailed: a.commitFailed, qualified: a.qualified,
     })),
     searched: overall.searched,
+    unanswered: overall.unanswered,
     searchedAfterInjection: rate(injected.filter(searchedIn).length, injected.length),
     searchedAfterAbstain: rate(abstainedRows.filter(searchedIn).length, abstainedRows.length),
     cited: overall.cited,
     used: overall.used,
-    byModel: [...groupBy(finished, (r) => `${r.model ?? 'unknown'}|${r.cli}`).values()]
+    // Per model, only turns that answered: a failed start may have no model at all.
+    byModel: [...groupBy(answeredRows, (r) => `${r.model ?? 'unknown'}|${r.cli}`).values()]
       .map((list) => ({ model: list[0].model ?? 'unknown', cli: list[0].cli, ...use(list) }))
       .sort((a, b) => b.turns - a.turns),
     byEvent: CONTEXT_HOOK_EVENTS
@@ -181,6 +196,44 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
     })),
     memory,
   };
+}
+
+/**
+ * A warning per recall hook whose bar looks wrong (`calibrationVerdict`),
+ * over the runs decided at its current `minSimilarity`: a value changed (by
+ * the sweep's button or by hand) starts a new sample. A hook no longer listed
+ * gets none. "Almost never" is not given when the user has no
+ * knowledge-base rows of their own the hook would search (nor the product
+ * docs, when it includes them): then nothing can clear any bar.
+ */
+async function calibrationWarnings(userId: string, hookAgg: Map<string, HookAgg>): Promise<RecallCalibrationWarning[]> {
+  if (![...hookAgg.values()].some((a) => a.kind === 'recall' && a.bars.size)) return [];
+  const hooks = new Map((await listContextHooks(userId)).filter((h) => h.kind === 'recall').map((h) => [h.id, h]));
+  const out: RecallCalibrationWarning[] = [];
+  for (const [id, a] of hookAgg) {
+    const hook = hooks.get(id);
+    if (!hook) continue;
+    const config = KIND_CONFIG.recall.parse(hook.config);
+    const { searched, found } = a.bars.get(config.minSimilarity) ?? { searched: 0, found: 0 };
+    const verdict = calibrationVerdict(found, searched);
+    if (!verdict) continue;
+    if (verdict === 'injects_almost_never' && !(await hasSearchableRows(userId, config))) continue;
+    const builtin = hook.builtin === 'knowledge-recall';
+    out.push({ id, hook: a.name, verdict, found: rate(found, searched), builtin, message: calibrationMessage(a.name, verdict, found, searched, builtin) });
+  }
+  return out;
+}
+
+/** Whether any knowledge-base row of the user's (any workspace or space), or a product doc when the hook shows them, is of a purpose the hook searches. One indexed lookup. */
+async function hasSearchableRows(userId: string, config: Pick<RecallConfig, 'purposes' | 'includeProductDocs'>): Promise<boolean> {
+  const { queryRaw } = await import('@/db/postgres');
+  const { PRODUCT_DOCS_SOURCE } = await import('@/core/rag/knowledge-scope');
+  const docs = config.includeProductDocs ? ` OR (user_id IS NULL AND metadata->>'source' = $3)` : '';
+  const res = await queryRaw(
+    `SELECT EXISTS (SELECT 1 FROM embeddings WHERE (user_id = $1 AND purpose = ANY($2::text[]))${docs}) AS found`,
+    config.includeProductDocs ? [userId, config.purposes, PRODUCT_DOCS_SOURCE] : [userId, config.purposes],
+  );
+  return Boolean(res.rows[0]?.found);
 }
 
 /**

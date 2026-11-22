@@ -445,10 +445,12 @@ function qualifiedText(h: ContextHookStatsHook): string {
   return parts.length ? parts.join(' · ') : '—';
 }
 
-function UseCells({ u }: { u: ContextHookUse }) {
+/** A row's numbers; `unanswered` only where starts without an answer are grouped (per event, not per model: such a start may have no model). */
+function UseCells({ u, unanswered = false }: { u: ContextHookUse; unanswered?: boolean }) {
   return (
     <>
       <td>{u.turns}</td>
+      {unanswered && <td>{u.unanswered}</td>}
       <td>{pct(u.injected)}</td>
       <td>{pct(u.searched)}</td>
       <td title={frac(u.cited)}>{pct(u.cited)}</td>
@@ -457,7 +459,8 @@ function UseCells({ u }: { u: ContextHookUse }) {
   );
 }
 
-const USE_HEADERS = ['turns', 'given passages', 'searched by tool', 'named a passage', 'used a passage'];
+const USE_HEADERS = ['answered', 'given passages', 'searched by tool', 'named a passage', 'used a passage'];
+const EVENT_HEADERS = ['answered', 'no answer', ...USE_HEADERS.slice(1)];
 
 export default function RecallPage() {
   const [days, setDays] = useState(30);
@@ -517,9 +520,9 @@ export default function RecallPage() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <Tile value={String(s.turns)} label="agent starts" />
               <Tile value={pct(s.cited)} label={`answers naming a recalled passage (${frac(s.cited)})`}
-                hint="Of the finished turns where recall showed passages: the answer named one by its title" />
+                hint="Of the answered turns where recall showed passages: the answer named one by a title that adds something to the question, or by its id" />
               <Tile value={pct(s.used)} label={`answers using a recalled passage (${frac(s.used)})`}
-                hint="Of the finished turns where recall showed passages: the answer repeats a number, code or uncommon word from one that the question did not hold" />
+                hint="Of the answered turns where recall showed passages: the answer repeats a number, code or uncommon word from one that the question did not hold" />
               <Tile value={pct(s.searched)} label={`KB or notes searched by a tool call (${frac(s.searched)})`}
                 hint="By the agent, or for a message by the agent or a specialist it spawned" />
               <Tile
@@ -529,17 +532,23 @@ export default function RecallPage() {
               />
             </div>
 
+            {s.unanswered > 0 && (
+              <p className="text-xs text-on-surface-variant">
+                {s.unanswered} finished {s.unanswered === 1 ? 'start' : 'starts'} ended without an answer (failed, cancelled, cleared, or a task that did not complete) and {s.unanswered === 1 ? 'is' : 'are'} not in these rates.
+              </p>
+            )}
+
             {s.byEvent.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs [&_th]:pr-3 [&_td]:pr-3">
                   <thead className="text-on-surface-variant text-left">
-                    <tr><th className="py-1">agent starts</th>{USE_HEADERS.map((h) => <th key={h}>{h}</th>)}</tr>
+                    <tr><th className="py-1">agent starts</th>{EVENT_HEADERS.map((h) => <th key={h}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {s.byEvent.map((e) => (
                       <tr key={e.event} className="border-t border-outline-variant/30">
                         <td className="py-1">{EVENT_ROW_LABEL[e.event]}</td>
-                        <UseCells u={e} />
+                        <UseCells u={e} unanswered />
                       </tr>
                     ))}
                   </tbody>

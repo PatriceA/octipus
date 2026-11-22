@@ -203,11 +203,13 @@ describe('a run', () => {
     const short = await run('thanks');
     expect(short.text).not.toContain('<recalled-knowledge>');
     const { rows } = await queryRaw(`SELECT hooks FROM context_turns ORDER BY created_at`);
-    const statuses = rows.map((r) => (r.hooks as Array<{ hook: string; status: string; reason?: string }>)[0]);
+    const statuses = rows.map((r) => (r.hooks as Array<{ hook: string; status: string; reason?: string; bar?: unknown }>)[0]);
     expect(statuses).toEqual([
-      expect.objectContaining({ status: 'abstained', reason: 'nothing_relevant' }),
+      // Searched: the bar it was decided at is recorded, here not cleared (calibration's sample).
+      expect.objectContaining({ status: 'abstained', reason: 'nothing_relevant', bar: { minSimilarity: 0.45, cleared: false } }),
       expect.objectContaining({ status: 'skipped', reason: 'short_message' }),
     ]);
+    expect(statuses[1].bar).toBeUndefined();
   });
 
   test('a worker gets recall but not the index; a context note is shown every turn', async () => {
@@ -301,15 +303,32 @@ describe('"named" counts recall passages only', () => {
 describe('the stats', () => {
   type Item = { id: string; sourceId: string; title: string; score: number; qualifiedBy?: string[] };
   const item = (title: string, score: number, qualifiedBy?: string[]): Item => ({ id: randomUUID(), sourceId: `note:${randomUUID()}`, title, score, ...(qualifiedBy ? { qualifiedBy } : {}) });
-  const recall = (status: string, extra: { reason?: string; degraded?: string; items?: Item[] } = {}) =>
+  type Bar = { minSimilarity: number; cleared: boolean };
+  const recall = (status: string, extra: { reason?: string; degraded?: string; items?: Item[]; bar?: Bar; id?: string; hook?: string } = {}) =>
     ({ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', kind: 'recall', status, items: [], tokens: status === 'injected' ? 300 : 0, latencyMs: 20, ...extra });
-  async function turn(owner: string, hooks: unknown[], opts: { event?: string; finished?: boolean; cited?: number; used?: number | null; model?: string } = {}) {
+  /** The bar at the default minSimilarity, cleared or not. */
+  const at = (cleared: boolean, minSimilarity = 0.45): Bar => ({ minSimilarity, cleared });
+  async function turn(
+    owner: string,
+    hooks: unknown[],
+    opts: { event?: string; finished?: boolean; cited?: number; used?: number | null; model?: string | null; outcome?: string | null } = {},
+  ) {
     await queryRaw(
-      `INSERT INTO context_turns (user_id, session_id, event, role, model, cli, hooks, injected_items, cited_items, used_items, finished_at)
-       VALUES ($1, 's', $2, 'general', $3, false, $4, 0, $5, $6, $7)`,
-      [owner, opts.event ?? 'turn_start', opts.model ?? 'm1', JSON.stringify(hooks), opts.cited ?? 0, opts.used === undefined ? null : opts.used, opts.finished === false ? null : new Date().toISOString()],
+      `INSERT INTO context_turns (user_id, session_id, event, role, model, cli, hooks, injected_items, cited_items, used_items, outcome, finished_at)
+       VALUES ($1, 's', $2, 'general', $3, false, $4, 0, $5, $6, $7, $8)`,
+      [
+        owner, opts.event ?? 'turn_start', opts.model === undefined ? 'm1' : opts.model, JSON.stringify(hooks), opts.cited ?? 0,
+        opts.used === undefined ? null : opts.used, opts.outcome === undefined ? null : opts.outcome,
+        opts.finished === false ? null : new Date().toISOString(),
+      ],
     );
   }
+  /** A knowledge-base row of the user's, so "almost never" can be about the bar. */
+  const someKnowledge = () => queryRaw(
+    `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+     VALUES ($1, 'x', 'm', '[0.1,0.2,0.3]', 'note', $2, 'm/3', $3, '{}')`,
+    [`note:${randomUUID()}`, randomUUID(), userId],
+  );
 
   test('named and used beside each other, with their denominators, per model and per event; reasons and qualification per hook', async () => {
     // A root turn: shown on similarity and by identifier, named and used.
@@ -371,23 +390,101 @@ describe('the stats', () => {
   });
 
   test('a calibration warning over a meaningful sample of searched runs, none on a small one', async () => {
-    // 29 searched runs, every one injected: too few to say.
-    for (let i = 0; i < 29; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])] })]);
+    await someKnowledge();
+    // 29 searched runs, every one clearing the bar: too few to say.
+    for (let i = 0; i < 29; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])], bar: at(true) })]);
     // Skipped and degraded runs are not searched on the bar.
     for (let i = 0; i < 5; i++) await turn(userId, [recall('skipped', { reason: 'short_message' })]);
-    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])] })]);
+    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])], bar: at(false) })]);
     expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
     // The thirtieth searched run (a block found, then dropped for the budget) makes it a sample.
-    await turn(userId, [recall('skipped', { reason: 'budget_spent' })]);
+    await turn(userId, [recall('skipped', { reason: 'budget_spent', bar: at(true) })]);
     const { calibration } = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
-    expect(calibration).toEqual([expect.objectContaining({ id: 'builtin:knowledge-recall', verdict: 'injects_nearly_always', found: { n: 30, of: 30 } })]);
-    expect(calibration[0].message).toMatch(/threshold sweep/);
+    expect(calibration).toEqual([expect.objectContaining({ id: 'builtin:knowledge-recall', verdict: 'injects_nearly_always', found: { n: 30, of: 30 }, builtin: true })]);
+    expect(calibration[0].message).toMatch(/threshold sweep.*apply the value/s);
 
     await executeRaw('DELETE FROM context_turns;');
-    for (let i = 0; i < 40; i++) await turn(userId, [recall(i === 0 ? 'injected' : 'abstained', { reason: i === 0 ? undefined : 'nothing_relevant' })]);
+    for (let i = 0; i < 40; i++) await turn(userId, [recall(i === 0 ? 'injected' : 'abstained', { reason: i === 0 ? undefined : 'nothing_relevant', bar: at(i === 0) })]);
     expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([
       expect.objectContaining({ verdict: 'injects_almost_never', found: { n: 1, of: 40 } }),
     ]);
+  });
+
+  test('calibration counts only runs recorded with their bar: rows decided by the earlier rules are not samples', async () => {
+    await someKnowledge();
+    // 40 runs from before the bar was recorded, shown on any rule: no sample, whatever their status.
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.2)] })]);
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('abstained', { reason: 'nothing_relevant' })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+  });
+
+  test('a run that showed passages on keywords or an identifier alone did not clear the bar', async () => {
+    await someKnowledge();
+    // Shown every time, but never on similarity: the warning is that the bar is almost never cleared, not that it is too low.
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { items: [item('Invoices', 0.2, ['identifier'])], bar: at(false) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([
+      expect.objectContaining({ verdict: 'injects_almost_never', found: { n: 0, of: 30 } }),
+    ]);
+  });
+
+  test('no "almost never" when the user has no knowledge-base rows the hook would search', async () => {
+    for (let i = 0; i < 40; i++) await turn(userId, [recall('abstained', { reason: 'nothing_relevant', bar: at(false) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    // Rows of a purpose the hook does not search do not count either.
+    await queryRaw(
+      `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+       VALUES ('msg:1', 'x', 'm', '[0.1,0.2,0.3]', 'message', $1, 'm/3', $2, '{}')`,
+      [randomUUID(), userId],
+    );
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    await someKnowledge();
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([expect.objectContaining({ verdict: 'injects_almost_never' })]);
+  });
+
+  test('a changed minSimilarity starts a new sample: the runs at the old bar are not counted', async () => {
+    await someKnowledge();
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])], bar: at(true) })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toHaveLength(1);
+    // What the sweep's button does.
+    expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { minSimilarity: 0.6 } })).status).toBe(200);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+  });
+
+  test('a recall hook of the user\'s own is told to set its own minSimilarity: the sweep\'s button sets the built-in', async () => {
+    await someKnowledge();
+    const created = await send(userApp, 'POST', '/api/context-hooks', { name: 'Contracts', kind: 'recall', config: { minSimilarity: 0.3 } });
+    expect(created.status).toBe(201);
+    const id: string = created.body.id;
+    for (let i = 0; i < 30; i++) await turn(userId, [recall('injected', { id, hook: 'Contracts', items: [item('Contract', 0.8, ['similarity'])], bar: at(true, 0.3) })]);
+    const { calibration } = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(calibration).toEqual([expect.objectContaining({ id, hook: 'Contracts', builtin: false })]);
+    expect(calibration[0].message).toMatch(/as Contracts's minSimilarity/);
+    expect(calibration[0].message).not.toMatch(/apply the value/);
+  });
+
+  test('named and used count only turns that ended with an answer; the others are counted apart, and not per model', async () => {
+    const shown = () => [recall('injected', { items: [item('Pricing', 0.7, ['similarity'])], bar: at(true) })];
+    await turn(userId, shown(), { used: 1, cited: 1, outcome: 'success' });
+    // An older row without an outcome: answered.
+    await turn(userId, shown(), { used: 0, outcome: null });
+    // Failed, cancelled and cleared root turns, closed with no answer and (failed) no model.
+    await turn(userId, shown(), { used: 0, outcome: 'failed', model: null });
+    await turn(userId, shown(), { used: 0, outcome: 'cancelled', model: null });
+    await turn(userId, shown(), { used: 0, outcome: 'cleared' });
+    // A worker that threw, and swarm children that did not complete or did not run.
+    for (const outcome of ['error', 'concurrency_limit', 'timeout', 'cache_hit']) await turn(userId, shown(), { event: 'worker_start', used: 0, outcome, model: null });
+    await turn(userId, shown(), { event: 'worker_start', used: 1, outcome: 'success', model: 'm1' });
+
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.used).toEqual({ n: 2, of: 3 });
+    expect(stats.cited).toEqual({ n: 1, of: 3 });
+    expect(stats.unanswered).toBe(7);
+    expect(stats.byEvent).toEqual([
+      expect.objectContaining({ event: 'turn_start', turns: 2, unanswered: 3, used: { n: 1, of: 2 } }),
+      expect.objectContaining({ event: 'worker_start', turns: 1, unanswered: 4, used: { n: 1, of: 1 } }),
+    ]);
+    // No "unknown" row at 0% made of failed starts.
+    expect(stats.byModel).toEqual([expect.objectContaining({ model: 'm1', turns: 3, unanswered: 0, used: { n: 2, of: 3 } })]);
   });
 });
 

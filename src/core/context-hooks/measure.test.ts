@@ -218,18 +218,17 @@ describe('namesTitle', () => {
 });
 
 describe('calibration', () => {
-  test('which runs count: searched and decided on similarity', () => {
-    expect(calibrationSample({ status: 'injected' })).toBe('found');
-    expect(calibrationSample({ status: 'abstained', reason: 'nothing_relevant' })).toBe('nothing');
-    // Found, then left out: the bar let it through.
-    expect(calibrationSample({ status: 'abstained', reason: 'over_budget' })).toBe('found');
-    expect(calibrationSample({ status: 'skipped', reason: 'budget_spent' })).toBe('found');
-    expect(calibrationSample({ status: 'error', reason: 'commit_failed' })).toBe('found');
-    // Not searched, or not on the bar.
-    expect(calibrationSample({ status: 'skipped', reason: 'short_message' })).toBeNull();
-    expect(calibrationSample({ status: 'skipped', reason: 'no_embedding_model' })).toBeNull();
-    expect(calibrationSample({ status: 'error', reason: 'timeout' })).toBeNull();
-    expect(calibrationSample({ status: 'injected', degraded: 'embedding_failed' })).toBeNull();
+  test('which runs count: those whose record says how the bar went', () => {
+    const cleared = { minSimilarity: 0.45, cleared: true };
+    const notCleared = { minSimilarity: 0.45, cleared: false };
+    // Shown, or found and then left out (over budget, shared budget spent, commit failed): the bar let it through.
+    expect(calibrationSample({ bar: cleared })).toBe('found');
+    // Nothing found, or only passages shown on keywords or an identifier: nothing cleared the bar.
+    expect(calibrationSample({ bar: notCleared })).toBe('nothing');
+    // Degraded to keywords: no cosine was compared.
+    expect(calibrationSample({ bar: notCleared, degraded: 'embedding_failed' })).toBeNull();
+    // No bar: not searched (short message, no embedding model, timeout), or decided by the earlier rules.
+    expect(calibrationSample({})).toBeNull();
   });
 
   test('the thresholds, and no verdict on a small sample', () => {
@@ -246,9 +245,12 @@ describe('calibration', () => {
     expect(calibrationVerdict(95, 100)).toBe('injects_nearly_always');
   });
 
-  test('the message points at the sweep', () => {
-    expect(calibrationMessage('Knowledge recall', 'injects_nearly_always', 39, 40)).toMatch(/98% of the 40 messages.*too low.*threshold sweep/s);
+  test('the message points at the sweep, and for another hook at its own setting', () => {
+    expect(calibrationMessage('Knowledge recall', 'injects_nearly_always', 39, 40)).toMatch(/cleared its minSimilarity on 98% of the 40 messages.*too low.*threshold sweep.*apply the value/s);
     expect(calibrationMessage('Knowledge recall', 'injects_almost_never', 1, 40)).toMatch(/3% of the 40 messages.*too high.*threshold sweep/s);
+    const custom = calibrationMessage('Contracts', 'injects_nearly_always', 39, 40, false);
+    expect(custom).toMatch(/Knowledge recall's other settings.*as Contracts's minSimilarity/s);
+    expect(custom).not.toMatch(/apply the value/);
   });
 });
 

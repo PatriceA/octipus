@@ -145,6 +145,8 @@ describe('which passages qualify', () => {
     // Qualified on similarity: "website" alone is half the message's distinctive words.
     expect(record.items.map((i) => [i.title, i.qualifiedBy])).toEqual([['Pricing', ['similarity']]]);
     expect(record.items[0].score).toBeGreaterThanOrEqual(0.45);
+    // Calibration's sample: the bar this run was decided at, cleared.
+    expect(record.bar).toEqual({ minSimilarity: 0.45, cleared: true });
   });
 
   test('an identifier inside a long sentence is recalled through the keyword leg', async () => {
@@ -401,6 +403,8 @@ describe('side effects only for what is shown', () => {
     const { rows } = await queryRaw('SELECT hooks FROM context_turns');
     const hooks = rows[0].hooks as ContextHookRunRecord[];
     expect(hooks.map((h) => [h.hook, h.status, h.reason ?? null])).toEqual([['About me', 'injected', null], ['Recall', 'skipped', 'budget_spent']]);
+    // Left out after it searched: the record keeps how its search went.
+    expect(hooks[1].bar).toEqual({ minSimilarity: 0.45, cleared: expect.any(Boolean) });
     expect(sessionProtectionLevel('sess-budget')).toBe(1);
     expect((await accessCounts())[id]).toBe(0);
   });
@@ -492,7 +496,7 @@ describe('side effects only for what is shown', () => {
     const { text, repeatable } = await run('What do we charge for a website?');
     expect(text).not.toContain('<recalled-knowledge>');
     expect(repeatable).toEqual([]);
-    expect(await lastRecord()).toMatchObject({ status: 'error', reason: 'commit_failed', tokens: 0, items: [] });
+    expect(await lastRecord()).toMatchObject({ status: 'error', reason: 'commit_failed', tokens: 0, items: [], bar: { minSimilarity: 0.45, cleared: true } });
     expect(error.mock.calls.some(([, msg]) => typeof msg === 'string' && /committing its block failed/.test(msg))).toBe(true);
   });
 });
