@@ -58,7 +58,7 @@ describe('an in-turn compaction that summarizes the earlier copy', () => {
   const start = () => {
     const sent = withoutRepeatedContext(turn('\n\nCURRENT DATE & TIME: later', memory, note), [memory, note], [earlier]);
     const message = user(`${sent.text}\n\nsecond question`);
-    return { message, state: { content: message.content as string, omitted: sent.omitted } };
+    return { message, state: { content: message.content as string, omitted: sent.omitted, noteAt: sent.noteAt } };
   };
 
   test('puts the blocks back into this turn\'s message', () => {
@@ -97,7 +97,7 @@ describe('an in-turn compaction that summarizes the earlier copy', () => {
     const sent = withoutRepeatedContext(turn('\n\nCURRENT DATE & TIME: later', dollars), [dollars], [first]);
     const message = user(`${sent.text}\n\nsecond question`);
     const history = [{ ...message }];
-    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted })).toBeUndefined();
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, noteAt: sent.noteAt })).toBeUndefined();
     expect(history[0].content).toContain("Day rate US$'900, rush jobs $& weekends $` double.");
   });
 
@@ -150,7 +150,7 @@ describe('a group repeated per part (the recall block)', () => {
     const sent = withoutRepeatedContext(turn(date, block(pricing, hosting)), [group(pricing, hosting)], [earlier]);
     const message = user(`${sent.text}\n\nsecond question`);
     const history: AgentMessage[] = [{ role: 'system', content: '[Context Summary] pricing came up', timestamp: new Date() }, message];
-    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences })).toBeUndefined();
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences, noteAt: sent.noteAt })).toBeUndefined();
     const content = message.content as string;
     expect(content.match(/<recalled-knowledge>/g)).toHaveLength(1);
     const close = content.indexOf('</recalled-knowledge>');
@@ -167,7 +167,7 @@ describe('a group repeated per part (the recall block)', () => {
     const message = user(`${sent.text}\n\nthird question`);
     // The compaction dropped the turn with the pricing passage; the one with memory and hosting stays.
     const history = [history0[1], message];
-    const next = restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences });
+    const next = restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences, noteAt: sent.noteAt });
     const content = message.content as string;
     expect(content).toContain(`<recalled-knowledge>`);
     expect(content).toContain('2400 euro');
@@ -213,7 +213,40 @@ describe('in view means the same block, not a longer one that starts the same wa
     const message = user(`${sent.text}\n\nsecond question`);
     // The compaction kept only a longer copy of the passage (an older turn).
     const history = [user(`${turn(date, block(before))}\n\nolder`), message];
-    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences })).toBeUndefined();
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences, noteAt: sent.noteAt })).toBeUndefined();
     expect(message.content).toContain('one round of changes.\n');
+  });
+});
+
+describe('the restore anchors on the note it put there', () => {
+  test('a block that quotes the note does not receive the restored blocks', () => {
+    const quoting = `\n\n<context-note title="About Octipus">\nA note the user asked to show you on every turn.\nThe agent sometimes says: ${REPEATED_CONTEXT_NOTE}\n</context-note>\n`;
+    const earlier = user(`${turn(date, memory)}\n\nfirst question`);
+    const sent = withoutRepeatedContext(turn(date, memory, quoting), [memory, quoting], [earlier]);
+    expect(sent.omitted).toEqual([memory.trim()]);
+    // The quoting block is sent and comes first; the note the omission added is the last occurrence.
+    expect(sent.text.indexOf(REPEATED_CONTEXT_NOTE)).toBeLessThan(sent.noteAt);
+    const message = user(`${sent.text}\n\nwhat about ${REPEATED_CONTEXT_NOTE}`);
+    const history = [{ role: 'system', content: '[Context Summary] earlier turns', timestamp: new Date() } as AgentMessage, message];
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, noteAt: sent.noteAt })).toBeUndefined();
+    const content = message.content as string;
+    // Restored after the quoting block, where the note was; the quote and the user's text are untouched.
+    expect(content.indexOf('Prefers TypeScript')).toBeGreaterThan(content.indexOf('</context-note>'));
+    expect(content).toContain(`The agent sometimes says: ${REPEATED_CONTEXT_NOTE}\n</context-note>`);
+    expect(content.endsWith(`what about ${REPEATED_CONTEXT_NOTE}`)).toBe(true);
+    expect(content.split(REPEATED_CONTEXT_NOTE)).toHaveLength(3);
+  });
+
+  test('the state kept for a later restore points at the note in the rewritten message', () => {
+    const earlier = user(`${turn(date, memory)}\n\nfirst`);
+    const keepsNote = user(`${turn(date, note)}\n\nolder`);
+    const sent = withoutRepeatedContext(turn(date, memory, note), [memory, note], [earlier, keepsNote]);
+    const message = user(`${sent.text}\n\nsecond`);
+    const next = restoreOmittedContext([keepsNote, message], { content: message.content as string, omitted: sent.omitted, noteAt: sent.noteAt });
+    expect(next?.omitted).toEqual([note.trim()]);
+    expect((message.content as string).slice(next?.noteAt ?? -1).startsWith(REPEATED_CONTEXT_NOTE)).toBe(true);
+    expect(restoreOmittedContext([message], next as NonNullable<typeof next>)).toBeUndefined();
+    expect(message.content).toContain('British spelling');
+    expect(message.content).not.toContain(REPEATED_CONTEXT_NOTE);
   });
 });

@@ -22,6 +22,7 @@
  */
 
 import type { AgentMessage } from '@/core/types';
+import { coreLogger } from '@/utils/logger';
 
 /** `AgentContext.metadata` key: this turn's repeatable (retrieved) blocks, verbatim. */
 export const REPEATABLE_CONTEXT_KEY = 'repeatableContext';
@@ -101,6 +102,8 @@ export interface WithoutRepeatedContext {
    * composition, which knows each hook's block as one piece.
    */
   leftOut: string[];
+  /** Where `REPEATED_CONTEXT_NOTE` starts in `text`; -1 when nothing was left out. */
+  noteAt: number;
 }
 
 /** `omitRepeatedContext`, also naming what it left out. */
@@ -109,7 +112,7 @@ export function withoutRepeatedContext(
   blocks: readonly unknown[] | undefined,
   history: readonly AgentMessage[],
 ): WithoutRepeatedContext {
-  const unchanged: WithoutRepeatedContext = { text: promptContext, omitted: [], fences: [], leftOut: [] };
+  const unchanged: WithoutRepeatedContext = { text: promptContext, omitted: [], fences: [], leftOut: [], noteAt: -1 };
   if (!promptContext || !blocks?.length) return unchanged;
   const earlier = userContents(history);
   if (!earlier.length) return unchanged;
@@ -148,7 +151,8 @@ export function withoutRepeatedContext(
   }
   if (!omitted.length) return unchanged;
   const rest = out.replace(/\n{3,}/g, '\n\n').trim();
-  return { text: rest ? `${rest}\n\n${REPEATED_CONTEXT_NOTE}` : REPEATED_CONTEXT_NOTE, omitted, fences, leftOut };
+  const text = rest ? `${rest}\n\n${REPEATED_CONTEXT_NOTE}` : REPEATED_CONTEXT_NOTE;
+  return { text, omitted, fences, leftOut, noteAt: text.length - REPEATED_CONTEXT_NOTE.length };
 }
 
 /** This turn's user message as sent, and the blocks left out of it. */
@@ -157,6 +161,13 @@ export interface OmittedContext {
   omitted: string[];
   /** Which of `omitted` are parts of a fenced group, and the fence to put them back in. */
   fences?: OmittedFence[];
+  /**
+   * Where `REPEATED_CONTEXT_NOTE` starts in `content` (`noteAt` of
+   * `withoutRepeatedContext` when the context opens the message). A passage
+   * or the user's own text can hold the same sentence; the restore replaces
+   * this one.
+   */
+  noteAt: number;
 }
 
 /**
@@ -182,7 +193,13 @@ export function restoreOmittedContext(history: AgentMessage[], turn: OmittedCont
   const missing = turn.omitted.filter((block) => !others.some((content) => holdsBlock(content, block, isPart(block))));
   if (!missing.length) return turn;
   const still = turn.omitted.filter((block) => !missing.includes(block));
-  let content = turn.content;
+  if (turn.content.slice(turn.noteAt, turn.noteAt + REPEATED_CONTEXT_NOTE.length) !== REPEATED_CONTEXT_NOTE) {
+    coreLogger.warn({ noteAt: turn.noteAt }, 'repeated context: the note is not where it was put — the left-out blocks are not restored');
+    return undefined;
+  }
+  // Fences sit before the note; what follows it (the user's text) is not touched.
+  let content = turn.content.slice(0, turn.noteAt);
+  const afterNote = turn.content.slice(turn.noteAt + REPEATED_CONTEXT_NOTE.length);
   const loose = missing.filter((block) => !turn.fences?.some((f) => f.parts.includes(block)));
   const fences: OmittedFence[] = [];
   for (const fence of turn.fences ?? []) {
@@ -198,9 +215,11 @@ export function restoreOmittedContext(history: AgentMessage[], turn: OmittedCont
     else loose.push(`${head}\n${back.join('\n')}\n${tail}`);
   }
   const replacement = [loose.join('\n\n'), still.length ? REPEATED_CONTEXT_NOTE : ''].filter(Boolean).join('\n\n');
-  content = replacement ? content.replace(REPEATED_CONTEXT_NOTE, () => replacement) : content.replace(`\n\n${REPEATED_CONTEXT_NOTE}`, '').replace(REPEATED_CONTEXT_NOTE, '');
+  const before = replacement ? content : content.replace(/\n\n$/, '');
+  content = `${before}${replacement}${afterNote}`;
   message.content = content;
-  return still.length ? { content, omitted: still, ...(fences.length ? { fences } : {}) } : undefined;
+  const noteAt = before.length + replacement.length - REPEATED_CONTEXT_NOTE.length;
+  return still.length ? { content, omitted: still, ...(fences.length ? { fences } : {}), noteAt } : undefined;
 }
 
 function userContents(history: readonly AgentMessage[]): string[] {

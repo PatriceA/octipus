@@ -449,7 +449,7 @@ describe('a passage still in view is not sent again', () => {
     // An in-turn compaction summarizes the earlier turns away: both passages come back, fenced.
     const message = user(`${again.text}\n\nanything else?`);
     const compacted: AgentMessage[] = [{ role: 'system', content: '[Context Summary] pricing was discussed', timestamp: new Date() }, message];
-    expect(restoreOmittedContext(compacted, { content: message.content as string, omitted: again.omitted, fences: again.fences })).toBeUndefined();
+    expect(restoreOmittedContext(compacted, { content: message.content as string, omitted: again.omitted, fences: again.fences, noteAt: again.noteAt })).toBeUndefined();
     const restored = message.content as string;
     expect(restored).toContain('<recalled-knowledge>');
     expect(restored).toContain('2400 euro');
