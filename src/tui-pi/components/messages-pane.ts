@@ -24,6 +24,9 @@ export class MessagesPane implements Component {
   private width = 80;
   private offset = 0;
   private live: string | null = null;
+  /** What each message said before `displayText`: `/copy` hands over the text, not the screen's version of it. */
+  private raw = new WeakMap<ChatMessage, string>();
+  private liveRaw: string | null = null;
   private revision = 0;
   private cachedRevision = -1;
   private cachedWidth = -1;
@@ -54,16 +57,19 @@ export class MessagesPane implements Component {
     return false;
   }
   push(message: ChatMessage): void {
-    this.history.push({ ...message, content: displayText(message.content) });
+    const shown = { ...message, content: displayText(message.content) };
+    this.raw.set(shown, message.content);
+    this.history.push(shown);
     if (this.frozen) this.newer++;
     this.revision++;
   }
   setLive(raw: string | null): void {
     const text = raw === null ? null : displayText(raw);
+    this.liveRaw = raw;
     if (this.live !== text) { this.live = text; this.revision++; }
   }
   reset(): void {
-    this.history = []; this.live = null; this.offset = 0;
+    this.history = []; this.live = null; this.liveRaw = null; this.offset = 0;
     this.frozen = null; this.frozenMessages = []; this.newer = 0; this.revision++;
   }
   scrollUp(by = Math.max(1, this.height - 2)): boolean {
@@ -91,7 +97,8 @@ export class MessagesPane implements Component {
   scrollToBottom(): void { this.offset = 0; this.frozen = null; this.frozenMessages = []; this.newer = 0; }
   /** Raw text, independent of viewport width/scroll and rendered ANSI styling. */
   getCopyText(scope: 'last' | 'transcript'): string {
-    const all = this.allMessages();
+    const all = this.history.map(message => ({ role: message.role, content: this.raw.get(message) ?? message.content }));
+    if (this.liveRaw) all.push({ role: 'assistant', content: this.liveRaw });
     if (scope === 'last') return all.findLast(message => message.role === 'assistant' && message.content.length > 0)?.content ?? '';
     return all.map(message => `${message.role}:\n${message.content}`).join('\n\n');
   }

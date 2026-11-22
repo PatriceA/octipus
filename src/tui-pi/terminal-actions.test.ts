@@ -43,6 +43,18 @@ test('copy transcript includes loaded roles and current streamed text without re
   expect(f.write).toHaveBeenLastCalledWith(`\x1b]52;c;${Buffer.from('stream so far').toString('base64')}\x07`);
 });
 
+test('copy hands over the reply as received, not the version cleaned for the screen', () => {
+  const f = fixture();
+  const reply = 'make:\n\tcc main.c\r\nwindows line\x1b[1mbold\x1b[0m 👍🏽';
+  f.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
+  expect(f.messages.render(80).join('\n')).not.toContain('\t');
+  f.run('/copy last');
+  expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe(reply);
+  f.messages.setLive('streamed\tstill raw');
+  f.run('/copy');
+  expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe('streamed\tstill raw');
+});
+
 test('empty, invalid, and oversized copies do not overwrite the clipboard or silently truncate', () => {
   const f = fixture(); f.run('/copy'); f.run('/copy nonsense');
   f.messages.setLive('🐙'.repeat(20_000)); f.run('/copy');
