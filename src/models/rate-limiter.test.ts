@@ -25,6 +25,17 @@ describe('RateLimitError', () => {
   });
 });
 
+describe('RateLimitManager — TPM window', () => {
+  test('tokens reported without a verdict count like a success\'s', async () => {
+    const m = new RateLimitManager({ globalMaxConcurrency: 10 });
+    const ticket = await m.acquire('openai'); // tpm 150000
+    ticket.reportTokens(100_000);
+    ticket.release();
+    expect(m.hasTokenBudget('openai', 40_000)).toBe(true);
+    expect(m.hasTokenBudget('openai', 60_000)).toBe(false);
+  });
+});
+
 describe('RateLimitManager — basic acquire/release', () => {
   test('acquire returns a release function and report helpers', async () => {
     const m = new RateLimitManager({ globalMaxConcurrency: 10 });
