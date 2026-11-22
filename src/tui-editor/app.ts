@@ -15,7 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { Container, getKeybindings, Spacer, type TUI, type TuiMouseEvent } from '@/tui-kit';
+import { Container, getKeybindings, type TUI, type TuiMouseEvent } from '@/tui-kit';
 import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
 import { StatusBar } from '@/tui-pi/components/status-bar';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
@@ -30,6 +30,7 @@ import { ChatPane } from './components/chat-pane';
 import { FileTree } from './components/file-tree';
 import { ModeBar } from './components/mode-bar';
 import { SplitPane } from './components/split-pane';
+import { EditorPane } from './components/editor-pane';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
 import { installTreeSitterHighlighter } from './editor/highlight-tree-sitter';
@@ -133,7 +134,9 @@ export class OctipusEditorApp {
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
     const copy = terminalClipboard(tui);
-    this.tabs = new TabStrip(this.buffers);
+    this.tabs = new TabStrip(this.buffers, {
+      onClose: (id) => this.files.confirmUnsaved([id], () => this.buffers.close(id)),
+    });
     this.editor = new TextEditor(this.buffers, {
       onSave: (record) => { this.files.saveBuffer(record.id); },
       onVimCommand: (command, record) => this.runVimCommand(command, record.id),
@@ -159,11 +162,14 @@ export class OctipusEditorApp {
     this.tree = new FileTree({
       root: this.projectPath,
       onOpen: (path) => this.files.openFile(path),
+      onFocus: () => { if (this.layout.get().focused !== 'tree') this.layout.focus('tree'); },
     });
     this.chat = new ChatPane({
       tui,
       basePath: this.projectPath,
       onSubmit: (text) => this.handleChatSubmit(text),
+      onFocus: () => { if (this.layout.get().focused !== 'chat') this.layout.focus('chat'); },
+      onCopy: (text) => { void copy(text).then((result) => this.pushMessage('system', result.ok ? result.message : `Error: ${result.message}`)); },
     });
     this.overlays = new EditorOverlays(this.ctx, {
       editor: this.editor,
@@ -177,14 +183,14 @@ export class OctipusEditorApp {
     this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
     this.chat.messages.push({
       role: 'system',
-      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Wheel: scroll · Shift+drag: select · /copy last: copy reply.`,
+      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Wheel: scroll · Drag: select and copy · /copy last: copy reply.`,
       timestamp: new Date(),
     });
 
     this.split = new SplitPane({
       layout: this.layout,
       tree: this.tree,
-      editor: buildEditorPane(this.tabs, this.editor),
+      editor: new EditorPane(this.tabs, this.editor),
       chat: this.chat,
       onResize: (_sizes) => {
         const paneRows = Math.max(0, tui.terminal.rows - this.status.render(tui.terminal.columns).length - 2);
@@ -197,15 +203,13 @@ export class OctipusEditorApp {
     // Status rows on top (up to a third of the screen); the mode bar is the single bottom row.
     this.status.setProject(basenameOf(this.projectPath));
     const status = this.status;
-    // On the alternate screen the renderer parses mouse reports and hands a wheel notch to the
-    // component under the pointer; route it through the same handling as a raw report.
-    const wheel = (up: boolean) => this.handleGlobalKey(up ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M');
+    // On the alternate screen the renderer parses mouse reports and hands each to the pane under
+    // the pointer (`SplitPane.handleMouse`). While a modal is open the panes behind it take nothing.
     const root = new class extends Container {
       override render(width: number): string[] { status.setMaxRows(Math.max(1, Math.floor(tui.terminal.rows / 3))); return super.render(width).slice(0, tui.terminal.rows); }
       override handleMouse(event: TuiMouseEvent): ReturnType<Container['handleMouse']> {
-        if (event.type !== 'wheel' || !event.wheelDelta) return super.handleMouse(event);
-        wheel(event.wheelDelta < 0);
-        return { handled: true, target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height } };
+        if (tui.hasOverlay()) return { handled: true, target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height } };
+        return super.handleMouse(event);
       }
     }();
     root.addChild(this.status);
@@ -398,14 +402,6 @@ export class OctipusEditorApp {
                  :                       this.editor;
     this.tui.setFocus(target);
   }
-}
-
-function buildEditorPane(tabs: TabStrip, editor: TextEditor): Container {
-  const c = new Container();
-  c.addChild(tabs);
-  c.addChild(new Spacer(0));
-  c.addChild(editor);
-  return c;
 }
 
 function basenameOf(path: string): string {

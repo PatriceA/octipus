@@ -8,7 +8,7 @@
  * if already collapsed) and Right expands it (or descends if already
  * expanded).
  */
-import { type Component, displayLine, type Focusable, matchesKey, truncateToWidth } from '@/tui-kit';
+import { type Component, displayLine, type Focusable, matchesKey, truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import { basename } from 'node:path';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 import { getGlyphs } from '@/tui-pi/theme/glyphs';
@@ -26,6 +26,8 @@ interface Entry {
 export interface FileTreeOptions {
   root: string;
   onOpen: (absolutePath: string) => void;
+  /** The tree was clicked: give it the focus. */
+  onFocus?: () => void;
 }
 
 export class FileTree implements Component, Focusable {
@@ -95,6 +97,31 @@ export class FileTree implements Component, Focusable {
     }
     if (matchesKey(data, 'r') && this.focused) { this.refresh(); }
   }
+
+  /**
+   * The mouse: a click on a row selects it and opens the file or expands
+   * (collapses) the folder; the wheel scrolls without moving the selection.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === 'wheel') { if (event.wheelDelta) this.scrollBy(event.wheelDelta); return { handled: true }; }
+    if (event.type === 'press' && event.button === 'left') { this.options.onFocus?.(); return { handled: true }; }
+    if (event.type !== 'click' || event.button !== 'left') return { handled: true };
+    const index = this.scrollTop + event.y;
+    const entry = this.entries[index];
+    if (!entry) return { handled: true };
+    this.selected = index;
+    if (entry.isDir) this.toggle(entry);
+    else this.options.onOpen(entry.path);
+    return { handled: true };
+  }
+
+  /** Scroll the rows shown by `delta`, leaving the selection where it is. */
+  scrollBy(delta: number): void {
+    this.scrollTop = Math.max(0, Math.min(Math.max(0, this.entries.length - this.height), this.scrollTop + delta));
+  }
+
+  /** Paths of the folders shown expanded (tests, and keeping them open across a refresh). */
+  isExpanded(path: string): boolean { return this.expanded.has(path); }
 
   render(width: number): string[] {
     const palette = getPalette();

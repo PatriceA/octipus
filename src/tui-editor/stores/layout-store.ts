@@ -25,6 +25,9 @@ export interface LayoutState {
   editorMode: EditorMode;
   /** Long lines break into rows instead of scrolling sideways. */
   softWrap: boolean;
+  /** Widths the user dragged the dividers to; null for the default share of the screen. */
+  treeWidth: number | null;
+  chatWidth: number | null;
 }
 
 export type LayoutListener = (s: LayoutState) => void;
@@ -38,6 +41,8 @@ export class LayoutStore {
     rows: 30,
     editorMode: 'modeless',
     softWrap: false,
+    treeWidth: null,
+    chatWidth: null,
   };
   private listeners = new Set<LayoutListener>();
 
@@ -78,4 +83,10 @@ export class LayoutStore {
   setEditorMode(mode: EditorMode): void { this.set({ editorMode: mode }); }
 
   setSoftWrap(on: boolean): void { if (on !== this.state.softWrap) this.set({ softWrap: on }); }
+
+  /** A side pane's width, from dragging its divider (null: back to the default). */
+  setPaneWidth(pane: 'tree' | 'chat', width: number | null): void {
+    const key = pane === 'tree' ? 'treeWidth' : 'chatWidth';
+    if (this.state[key] !== width) this.set({ [key]: width });
+  }
 }
