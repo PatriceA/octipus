@@ -2,15 +2,11 @@ import type { ContextHookRunRecord } from '@/db/schema/context-hooks';
 import type { RepeatableGroup } from '@/core/agent/repeated-context';
 import type { AgentContext } from '@/core/types';
 
-/**
- * When a hook runs. `turn_start`: before the root agent answers a message
- * (chat, a channel, a heartbeat or scheduled turn). `worker_start`: before a
- * specialist or role agent starts on its brief.
- */
-export type ContextHookEvent = 'turn_start' | 'worker_start';
+import type { ContextHookEvent, ContextHookKind, RecallQualifiedBy } from '@/shared/context-hooks';
+
+export type { ContextHookEvent, ContextHookKind } from '@/shared/context-hooks';
 export const CONTEXT_HOOK_EVENTS: readonly ContextHookEvent[] = ['turn_start', 'worker_start'];
 
-export type ContextHookKind = 'recall' | 'note' | 'notes_index';
 export const CONTEXT_HOOK_KINDS: readonly ContextHookKind[] = ['recall', 'note', 'notes_index'];
 
 export interface ContextHookDefinition {
@@ -52,7 +48,7 @@ export interface ContextHookItem {
   /** Recall: the passage's cosine similarity to the query (0 when the query had no embedding). */
   score: number;
   /** Recall: the rules the passage qualified under (`qualifyHit`). */
-  qualifiedBy?: Array<'similarity' | 'coverage' | 'identifier'>;
+  qualifiedBy?: RecallQualifiedBy[];
 }
 
 export interface ContextHookResult {

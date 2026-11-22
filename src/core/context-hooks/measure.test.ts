@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { citedItems, namesTitle, passageUsed, usedPassages } from './measure';
+import {
+  CALIBRATION_MIN_RUNS, calibrationMessage, calibrationSample, calibrationVerdict, citedItems, namesTitle, passageUsed, usedPassages,
+} from './measure';
 
 describe('passageUsed', () => {
   const excerpt = 'Pricing: a five-page website costs 2,400 euro, hosting is billed apart at 15 euro a month. Renovation of an existing site is quoted per project.';
@@ -101,5 +103,40 @@ describe('namesTitle', () => {
     expect(namesTitle('Ask the AI.', 'AI')).toBe(false);
     expect(namesTitle('the faq says', 'faq.md')).toBe(false);
     expect(namesTitle('the plan says', 'plan.md')).toBe(true);
+  });
+});
+
+describe('calibration', () => {
+  test('which runs count: searched and decided on similarity', () => {
+    expect(calibrationSample({ status: 'injected' })).toBe('found');
+    expect(calibrationSample({ status: 'abstained', reason: 'nothing_relevant' })).toBe('nothing');
+    // Found, then left out: the bar let it through.
+    expect(calibrationSample({ status: 'abstained', reason: 'over_budget' })).toBe('found');
+    expect(calibrationSample({ status: 'skipped', reason: 'budget_spent' })).toBe('found');
+    expect(calibrationSample({ status: 'error', reason: 'commit_failed' })).toBe('found');
+    // Not searched, or not on the bar.
+    expect(calibrationSample({ status: 'skipped', reason: 'short_message' })).toBeNull();
+    expect(calibrationSample({ status: 'skipped', reason: 'no_embedding_model' })).toBeNull();
+    expect(calibrationSample({ status: 'error', reason: 'timeout' })).toBeNull();
+    expect(calibrationSample({ status: 'injected', degraded: 'embedding_failed' })).toBeNull();
+  });
+
+  test('the thresholds, and no verdict on a small sample', () => {
+    expect(CALIBRATION_MIN_RUNS).toBe(30);
+    expect(calibrationVerdict(29, 29)).toBeNull();
+    expect(calibrationVerdict(0, 29)).toBeNull();
+    expect(calibrationVerdict(29, 30)).toBe('injects_nearly_always');
+    expect(calibrationVerdict(28, 30)).toBeNull();
+    expect(calibrationVerdict(19, 20)).toBeNull();
+    expect(calibrationVerdict(1, 30)).toBe('injects_almost_never');
+    expect(calibrationVerdict(2, 30)).toBeNull();
+    expect(calibrationVerdict(50, 100)).toBeNull();
+    expect(calibrationVerdict(5, 100)).toBe('injects_almost_never');
+    expect(calibrationVerdict(95, 100)).toBe('injects_nearly_always');
+  });
+
+  test('the message points at the sweep', () => {
+    expect(calibrationMessage('Knowledge recall', 'injects_nearly_always', 39, 40)).toMatch(/98% of the 40 messages.*too low.*threshold sweep/s);
+    expect(calibrationMessage('Knowledge recall', 'injects_almost_never', 1, 40)).toMatch(/3% of the 40 messages.*too high.*threshold sweep/s);
   });
 });

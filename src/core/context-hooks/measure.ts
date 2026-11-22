@@ -159,3 +159,49 @@ export function citedItems(response: string, items: ReadonlyArray<{ id: string; 
   const text = response.toLowerCase();
   return items.filter((item) => namesTitle(response, item.title) || text.includes(item.id.toLowerCase()) || text.includes(item.sourceId.toLowerCase())).length;
 }
+
+// ── Calibration ─────────────────────────────────────────────────────────────
+
+/**
+ * The fewest searched runs a calibration warning is given on. Below it, a
+ * run of similar questions (a day spent on one project) reads as a bar that
+ * is wrong.
+ */
+export const CALIBRATION_MIN_RUNS = 30;
+/** At or above this share of searched runs showing passages, the bar is likely too low. */
+export const CALIBRATION_NEARLY_ALWAYS = 0.95;
+/** At or below this share, the bar is likely too high for the embedding model. */
+export const CALIBRATION_ALMOST_NEVER = 0.05;
+
+/**
+ * How a recall run counts towards calibration: `found` when the search found
+ * passages to show (shown, or dropped afterwards for the budget or a failed
+ * commit), `nothing` when nothing cleared the bar, null when the run says
+ * nothing about the bar: skipped (a short message, no embedding model),
+ * failed or timed out, or degraded to keywords (no cosine was compared).
+ */
+export function calibrationSample(run: { status: string; reason?: string; degraded?: string }): 'found' | 'nothing' | null {
+  if (run.degraded) return null;
+  if (run.status === 'injected') return 'found';
+  if (run.status === 'abstained') return run.reason === 'over_budget' ? 'found' : 'nothing';
+  if (run.status === 'skipped' && run.reason === 'budget_spent') return 'found';
+  if (run.status === 'error' && run.reason === 'commit_failed') return 'found';
+  return null;
+}
+
+/** Whether a recall hook's bar looks wrong over its searched runs, or null (also for a sample under CALIBRATION_MIN_RUNS). */
+export function calibrationVerdict(found: number, searched: number): 'injects_nearly_always' | 'injects_almost_never' | null {
+  if (searched < CALIBRATION_MIN_RUNS) return null;
+  const share = found / searched;
+  if (share >= CALIBRATION_NEARLY_ALWAYS) return 'injects_nearly_always';
+  if (share <= CALIBRATION_ALMOST_NEVER) return 'injects_almost_never';
+  return null;
+}
+
+/** The warning's text: what was seen, what it may mean, and the sweep as the way to check. */
+export function calibrationMessage(hook: string, verdict: 'injects_nearly_always' | 'injects_almost_never', found: number, searched: number): string {
+  const pct = Math.round((found / searched) * 100);
+  return verdict === 'injects_nearly_always'
+    ? `${hook} showed passages on ${pct}% of the ${searched} messages it searched. Its minSimilarity may be too low for your embedding model, so passages that do not help cost tokens on every turn. Run the threshold sweep below with your own questions and apply the value it recommends.`
+    : `${hook} showed passages on ${pct}% of the ${searched} messages it searched. If your notes and documents cover what you ask, its minSimilarity is likely too high for your embedding model. Run the threshold sweep below with your own questions and apply the value it recommends.`;
+}

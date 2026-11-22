@@ -1,52 +1,35 @@
 /**
- * The numbers behind the "Automatic recall" panel: how often each hook
- * injected something, and what agents did afterwards — searched the
- * knowledge base or notes themselves, named an injected source in the
- * answer — overall and per model, CLI agents apart from the others.
+ * The numbers behind the Recall page: how often each hook injected
+ * something and why it did not, and what agents did afterwards — searched
+ * the knowledge base or notes themselves, named a recall passage in the
+ * answer, used one — overall, per model (CLI agents apart from the others)
+ * and per event (root turns apart from specialists and swarm children). A
+ * recall hook that shows passages on nearly every searched message, or
+ * almost never, gets a calibration warning (`calibrationVerdict`).
  *
  * And the eval: a list of questions, each with what a good answer would be
  * found in, run through the recall search against the user's real knowledge
- * base without a model call. That is the number to watch when tuning
- * `minSimilarity`: how many answerable questions found their source, and how
- * many questions that should find nothing were given something anyway.
+ * base without a model call — once at the hook's settings, or swept across a
+ * range of `minSimilarity` values with a recommended one (`sweepRecall`).
  */
 import { requireCapability } from '@/core/capabilities/gates';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type ContextTurnRow, contextTurns } from '@/db/schema/context-hooks';
+import { type ContextHookRunRecord, type ContextTurnRow, contextTurns } from '@/db/schema/context-hooks';
 import { getConfig } from '@/config';
+import type {
+  ContextHookStats, ContextHookUse, Rate, RecallCalibrationWarning, RecallEvalCase, RecallEvalResult, RecallQualifiedBy,
+} from '@/shared/context-hooks';
 import { KIND_CONFIG, type RecallConfig, selectRecallPassages } from './kinds';
+import { calibrationMessage, calibrationSample, calibrationVerdict } from './measure';
 import { listContextHooks } from './store';
+import { CONTEXT_HOOK_EVENTS } from './types';
+
+export type { ContextHookStats, RecallEvalCase, RecallEvalResult } from '@/shared/context-hooks';
 
 const MAX_ROWS = 5_000;
 
-interface Rate { n: number; of: number }
 const rate = (n: number, of: number): Rate => ({ n, of });
-
-export interface ContextHookStats {
-  days: number;
-  turns: number;
-  /** True when the window held more than MAX_ROWS turns: the numbers cover the newest MAX_ROWS. */
-  sampled: boolean;
-  byHook: Array<{ id: string; hook: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; avgTokens: number; avgLatencyMs: number; avgTopScore: number | null }>;
-  /**
-   * Finished turns where the knowledge base or notes were read by a tool call:
-   * by the agent, or for a root turn by it or a specialist it spawned.
-   */
-  searched: Rate;
-  /** …of those where recall injected passages, and of those where it found nothing. */
-  searchedAfterInjection: Rate;
-  searchedAfterAbstain: Rate;
-  /** Finished turns with recall passages whose answer named at least one of them (by title or id). */
-  cited: Rate;
-  byModel: Array<{ model: string; cli: boolean | null; turns: number; injected: Rate; searched: Rate; cited: Rate }>;
-  recent: Array<Pick<ContextTurnRow, 'id' | 'event' | 'role' | 'channel' | 'model' | 'cli' | 'tokens' | 'latencyMs' | 'knowledgeToolCalls' | 'notesToolCalls' | 'citedItems' | 'outcome'> & {
-    createdAt: string;
-    hooks: Array<{ hook: string; status: string; reason?: string; titles: string[]; tokens: number }>;
-  }>;
-  /** What keeps long-term memory from filling; empty when nothing does. */
-  memory: { facts: number; missing: Array<'background_model' | 'embedding_model' | 'extraction_off'> };
-}
 
 const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
 
@@ -67,6 +50,42 @@ const recallPassages = (row: ContextTurnRow) =>
 
 const searchedIn = (row: ContextTurnRow) => (row.knowledgeToolCalls ?? 0) + (row.notesToolCalls ?? 0) > 0;
 
+/** Named and used over finished turns. */
+function use(list: ContextTurnRow[]): ContextHookUse {
+  const withPassages = list.filter((r) => recallPassages(r) > 0);
+  // Rows from before used_items was measured hold null: they are left out of "used".
+  const measured = withPassages.filter((r) => r.usedItems !== null);
+  return {
+    turns: list.length,
+    injected: rate(withPassages.length, list.length),
+    searched: rate(list.filter(searchedIn).length, list.length),
+    cited: rate(withPassages.filter((r) => (r.citedItems ?? 0) > 0).length, withPassages.length),
+    used: rate(measured.filter((r) => (r.usedItems ?? 0) > 0).length, measured.length),
+  };
+}
+
+function groupBy<K>(rows: ContextTurnRow[], key: (r: ContextTurnRow) => K): Map<K, ContextTurnRow[]> {
+  const out = new Map<K, ContextTurnRow[]>();
+  for (const r of rows) {
+    const k = key(r);
+    const list = out.get(k);
+    if (list) list.push(r);
+    else out.set(k, [r]);
+  }
+  return out;
+}
+
+/** A passage qualified on similarity: what a top score is about. Rows from before `qualifiedBy` was recorded count every passage. */
+const bySimilarity = (item: ContextHookRunRecord['items'][number]) => !item.qualifiedBy || item.qualifiedBy.includes('similarity');
+
+interface HookAgg {
+  name: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number;
+  tokens: number[]; latency: number[]; top: number[]; degraded: number; budgetSpent: number; commitFailed: number;
+  qualified: Record<RecallQualifiedBy, number>;
+  /** Calibration: runs that searched on the bar, and those that found passages (`calibrationSample`). */
+  searched: number; found: number;
+}
+
 export async function contextHookStats(userId: string, days = 30): Promise<ContextHookStats> {
   const since = new Date(Date.now() - days * 86_400_000);
   const rows = await getDb().select().from(contextTurns)
@@ -76,19 +95,34 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   const sampled = rows.length > MAX_ROWS;
   if (sampled) rows.pop();
 
-  const hookAgg = new Map<string, { name: string; kind: string; runs: number; injected: number; abstained: number; skipped: number; errors: number; tokens: number[]; latency: number[]; top: number[] }>();
+  const hookAgg = new Map<string, HookAgg>();
   for (const row of rows) {
     for (const h of row.hooks) {
       // Grouped by id: names repeat and change. Rows from before ids were recorded group by name.
       const key = h.id ?? `name:${h.hook}`;
-      const a = hookAgg.get(key) ?? { name: h.hook, kind: h.kind, runs: 0, injected: 0, abstained: 0, skipped: 0, errors: 0, tokens: [], latency: [], top: [] };
+      const a = hookAgg.get(key) ?? {
+        name: h.hook, kind: h.kind, runs: 0, injected: 0, abstained: 0, skipped: 0, errors: 0, tokens: [], latency: [], top: [],
+        degraded: 0, budgetSpent: 0, commitFailed: 0, qualified: { similarity: 0, coverage: 0, identifier: 0 }, searched: 0, found: 0,
+      };
       a.runs++;
       if (h.status === 'injected') { a.injected++; a.tokens.push(h.tokens); }
       else if (h.status === 'abstained') a.abstained++;
       else if (h.status === 'skipped') a.skipped++;
       else a.errors++;
       if (h.status !== 'skipped') a.latency.push(h.latencyMs);
-      if (h.items.length) a.top.push(Math.max(...h.items.map((i) => i.score)));
+      if (h.degraded) a.degraded++;
+      if (h.reason === 'budget_spent') a.budgetSpent++;
+      if (h.reason === 'commit_failed') a.commitFailed++;
+      if (h.status === 'injected') for (const item of h.items) for (const q of item.qualifiedBy ?? []) a.qualified[q]++;
+      // The top score is the cosine of a passage that cleared the bar on it: a
+      // keyword-only passage has a score of 0 and says nothing about the bar.
+      const scored = h.items.filter(bySimilarity);
+      if (scored.length) a.top.push(Math.max(...scored.map((i) => i.score)));
+      if (h.kind === 'recall') {
+        const sample = calibrationSample(h);
+        if (sample) a.searched++;
+        if (sample === 'found') a.found++;
+      }
       a.name = a.name || h.hook;
       hookAgg.set(key, a);
     }
@@ -97,18 +131,19 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   const finished = rows.filter((r) => r.finishedAt);
   const injected = finished.filter((r) => recallStatus(r) === 'injected');
   const abstainedRows = finished.filter((r) => recallStatus(r) === 'abstained');
-  const withPassages = finished.filter((r) => recallPassages(r) > 0);
-
-  const models = new Map<string, ContextTurnRow[]>();
-  for (const r of finished) {
-    const key = `${r.model ?? 'unknown'}|${r.cli}`;
-    models.set(key, [...(models.get(key) ?? []), r]);
-  }
+  const overall = use(finished);
 
   let memory: ContextHookStats['memory'] = { facts: 0, missing: [] };
   try {
     memory = await memoryStatus(userId);
   } catch { /* the panel shows the rest */ }
+
+  const calibration: RecallCalibrationWarning[] = [];
+  for (const [id, a] of hookAgg) {
+    if (a.kind !== 'recall') continue;
+    const verdict = calibrationVerdict(a.found, a.searched);
+    if (verdict) calibration.push({ id, hook: a.name, verdict, found: rate(a.found, a.searched), message: calibrationMessage(a.name, verdict, a.found, a.searched) });
+  }
 
   return {
     days,
@@ -118,24 +153,28 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
       id, hook: a.name, kind: a.kind, runs: a.runs, injected: a.injected, abstained: a.abstained, skipped: a.skipped, errors: a.errors,
       avgTokens: avg(a.tokens), avgLatencyMs: avg(a.latency),
       avgTopScore: a.top.length ? Number((a.top.reduce((x, y) => x + y, 0) / a.top.length).toFixed(3)) : null,
+      degraded: a.degraded, budgetSpent: a.budgetSpent, commitFailed: a.commitFailed, qualified: a.qualified,
     })),
-    searched: rate(finished.filter(searchedIn).length, finished.length),
+    searched: overall.searched,
     searchedAfterInjection: rate(injected.filter(searchedIn).length, injected.length),
     searchedAfterAbstain: rate(abstainedRows.filter(searchedIn).length, abstainedRows.length),
-    cited: rate(withPassages.filter((r) => (r.citedItems ?? 0) > 0).length, withPassages.length),
-    byModel: [...models.values()].map((list) => ({
-      model: list[0].model ?? 'unknown',
-      cli: list[0].cli,
-      turns: list.length,
-      injected: rate(list.filter((r) => recallPassages(r) > 0).length, list.length),
-      searched: rate(list.filter(searchedIn).length, list.length),
-      cited: rate(list.filter((r) => recallPassages(r) > 0 && (r.citedItems ?? 0) > 0).length, list.filter((r) => recallPassages(r) > 0).length),
-    })).sort((a, b) => b.turns - a.turns),
+    cited: overall.cited,
+    used: overall.used,
+    byModel: [...groupBy(finished, (r) => `${r.model ?? 'unknown'}|${r.cli}`).values()]
+      .map((list) => ({ model: list[0].model ?? 'unknown', cli: list[0].cli, ...use(list) }))
+      .sort((a, b) => b.turns - a.turns),
+    byEvent: CONTEXT_HOOK_EVENTS
+      .map((event) => ({ event, ...use(finished.filter((r) => r.event === event)) }))
+      .filter((e) => e.turns > 0),
+    calibration,
     recent: rows.slice(0, 25).map((r) => ({
       id: r.id, event: r.event, role: r.role, channel: r.channel, model: r.model, cli: r.cli, tokens: r.tokens, latencyMs: r.latencyMs,
-      knowledgeToolCalls: r.knowledgeToolCalls, notesToolCalls: r.notesToolCalls, citedItems: r.citedItems, outcome: r.outcome,
+      knowledgeToolCalls: r.knowledgeToolCalls, notesToolCalls: r.notesToolCalls, citedItems: r.citedItems, usedItems: r.usedItems, outcome: r.outcome,
       createdAt: r.createdAt.toISOString(),
-      hooks: r.hooks.map((h) => ({ hook: h.hook, status: h.status, ...(h.reason ? { reason: h.reason } : {}), titles: h.items.map((i) => i.title), tokens: h.tokens })),
+      hooks: r.hooks.map((h) => ({
+        hook: h.hook, status: h.status, ...(h.reason ? { reason: h.reason } : {}), ...(h.degraded ? { degraded: h.degraded } : {}),
+        titles: h.items.map((i) => i.title), tokens: h.tokens,
+      })),
     })),
     memory,
   };
@@ -166,23 +205,6 @@ async function memoryStatus(userId: string): Promise<ContextHookStats['memory']>
 }
 
 // ── Eval ────────────────────────────────────────────────────────────────────
-
-export interface RecallEvalCase {
-  question: string;
-  /** Text naming where the answer is: a note title, a file name, a source id, or a phrase from the passage. Empty: the knowledge base should have nothing. */
-  expect: string[];
-}
-
-export interface RecallEvalResult {
-  config: Pick<RecallConfig, 'limit' | 'minSimilarity'>;
-  cases: Array<{ question: string; expect: string[]; hits: Array<{ title: string; sourceId: string; score: number }>; rank: number | null; pass: boolean }>;
-  /** Answerable questions whose source was injected. */
-  found: Rate;
-  /** Mean reciprocal rank over answerable questions (1 = always first). */
-  mrr: number;
-  /** Questions that should find nothing and were given nothing. */
-  abstained: Rate;
-}
 
 export async function evaluateRecall(
   userId: string,

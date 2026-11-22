@@ -21,7 +21,9 @@
  * stopwords.
  */
 
-export type QualifiedBy = 'similarity' | 'coverage' | 'identifier';
+import type { RecallQualifiedBy } from '@/shared/context-hooks';
+
+export type QualifiedBy = RecallQualifiedBy;
 
 /** Rule 2's cosine floor, as a share of `minSimilarity`. */
 export const COVERAGE_COSINE_FLOOR = 0.6;

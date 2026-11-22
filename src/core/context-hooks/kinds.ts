@@ -25,6 +25,7 @@ import { getDb } from '@/db/postgres';
 import { isCapabilityOn } from '@/core/capabilities/gates';
 import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { notes } from '@/db/schema/notes';
+import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS } from '@/shared/context-hooks';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import {
@@ -40,20 +41,20 @@ const RECALL_PURPOSES = ['note', 'document', 'knowledge_artifact', 'image_descri
 export const KIND_CONFIG = {
   recall: z.object({
     /** Most passages to inject (one per source). */
-    limit: z.number().int().min(1).max(10).default(4),
+    limit: z.number().int().min(1).max(10).default(RECALL_DEFAULTS.limit),
     /**
      * Lowest cosine similarity a passage needs to qualify on similarity
      * (rule 1 of `qualifyHit`). Higher than search_knowledge's 0.3: an
      * injected passage costs every turn, a searched one only when asked for.
      */
-    minSimilarity: z.number().min(0).max(1).default(0.45),
+    minSimilarity: z.number().min(0).max(1).default(RECALL_DEFAULTS.minSimilarity),
     /**
      * Rule 2: the share of the message's distinctive lexemes a passage must
      * contain (and at least two) to qualify on keywords.
      */
-    keywordCoverage: z.number().min(0).max(1).default(0.6),
+    keywordCoverage: z.number().min(0).max(1).default(RECALL_DEFAULTS.keywordCoverage),
     /** The relative cut: a passage qualified on similarity alone is dropped this far below the best one. */
-    maxGap: z.number().min(0).max(1).default(0.15),
+    maxGap: z.number().min(0).max(1).default(RECALL_DEFAULTS.maxGap),
     /**
      * Room for the default four passages of 700 characters with their labels
      * and the fence: about 720 tokens of plain prose (kinds.test.ts checks it
@@ -61,20 +62,20 @@ export const KIND_CONFIG = {
      * The old 700 did not fit them. With the notes index and a context note
      * it stays within the install's `contextHooks.maxTokens` of 2000.
      */
-    tokenBudget: z.number().int().min(50).max(4000).default(1000),
+    tokenBudget: z.number().int().min(50).max(4000).default(RECALL_DEFAULTS.tokenBudget),
     /** Characters of each passage: the window of the chunk with the most query terms. */
-    excerptChars: z.number().int().min(100).max(3000).default(700),
+    excerptChars: z.number().int().min(100).max(3000).default(RECALL_DEFAULTS.excerptChars),
     purposes: z.array(z.enum(RECALL_PURPOSES)).min(1).default([...RECALL_PURPOSES]),
     /** Octipus's own manual. Off: agents already search it for setup questions. */
     includeProductDocs: z.boolean().default(false),
   }),
   note: z.object({
     slug: z.string().min(1).max(200),
-    tokenBudget: z.number().int().min(50).max(4000).default(600),
+    tokenBudget: z.number().int().min(50).max(4000).default(NOTE_DEFAULTS.tokenBudget),
   }),
   notes_index: z.object({
-    limit: z.number().int().min(1).max(50).default(15),
-    tokenBudget: z.number().int().min(30).max(1000).default(150),
+    limit: z.number().int().min(1).max(50).default(NOTES_INDEX_DEFAULTS.limit),
+    tokenBudget: z.number().int().min(30).max(1000).default(NOTES_INDEX_DEFAULTS.tokenBudget),
   }),
 } satisfies Record<ContextHookKind, z.ZodType>;
 

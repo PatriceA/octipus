@@ -295,6 +295,84 @@ describe('"named" counts recall passages only', () => {
   });
 });
 
+describe('the stats', () => {
+  type Item = { id: string; sourceId: string; title: string; score: number; qualifiedBy?: string[] };
+  const item = (title: string, score: number, qualifiedBy?: string[]): Item => ({ id: randomUUID(), sourceId: `note:${randomUUID()}`, title, score, ...(qualifiedBy ? { qualifiedBy } : {}) });
+  const recall = (status: string, extra: { reason?: string; degraded?: string; items?: Item[] } = {}) =>
+    ({ id: 'builtin:knowledge-recall', hook: 'Knowledge recall', kind: 'recall', status, items: [], tokens: status === 'injected' ? 300 : 0, latencyMs: 20, ...extra });
+  async function turn(owner: string, hooks: unknown[], opts: { event?: string; finished?: boolean; cited?: number; used?: number | null; model?: string } = {}) {
+    await queryRaw(
+      `INSERT INTO context_turns (user_id, session_id, event, role, model, cli, hooks, injected_items, cited_items, used_items, finished_at)
+       VALUES ($1, 's', $2, 'general', $3, false, $4, 0, $5, $6, $7)`,
+      [owner, opts.event ?? 'turn_start', opts.model ?? 'm1', JSON.stringify(hooks), opts.cited ?? 0, opts.used === undefined ? null : opts.used, opts.finished === false ? null : new Date().toISOString()],
+    );
+  }
+
+  test('named and used beside each other, with their denominators, per model and per event; reasons and qualification per hook', async () => {
+    // A root turn: shown on similarity and by identifier, named and used.
+    await turn(userId, [recall('injected', { items: [item('Pricing', 0.71, ['similarity']), item('Invoices', 0.2, ['identifier'])] })], { cited: 1, used: 1 });
+    // A root turn: a keyword-only passage (score 0) on a degraded run, neither named nor used.
+    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])] })], { used: 0 });
+    // A swarm child: shown on similarity, used but not named.
+    await turn(userId, [recall('injected', { items: [item('Contract', 0.55, ['similarity', 'coverage'])] })], { event: 'worker_start', used: 1 });
+    // An older row: no qualifiedBy, no used_items. Named counts it; used does not.
+    await turn(userId, [{ hook: 'Knowledge recall', kind: 'recall', status: 'injected', items: [item('Old note', 0.6)], tokens: 200, latencyMs: 10 }], { cited: 1, used: null, model: 'm2' });
+    // Recall found nothing; a context note was shown and named: not in either denominator.
+    await turn(userId, [recall('abstained', { reason: 'nothing_relevant' }), { id: 'n1', hook: 'About me', kind: 'note', status: 'injected', items: [item('About me', 1)], tokens: 50, latencyMs: 5 }], { cited: 0 });
+    // Dropped for the budget, and a failed commit: no passages shown.
+    await turn(userId, [recall('skipped', { reason: 'budget_spent' })]);
+    await turn(userId, [recall('error', { reason: 'commit_failed' })]);
+    // Not finished: in the hook counts, not in the turn rates.
+    await turn(userId, [recall('injected', { items: [item('Pricing', 0.9, ['similarity'])] })], { finished: false });
+    // Another user's row is theirs.
+    await turn(otherId, [recall('injected', { items: [item('Theirs', 0.9, ['similarity'])] })], { cited: 1, used: 1 });
+
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.turns).toBe(8);
+    expect(stats.cited).toEqual({ n: 2, of: 4 });
+    expect(stats.used).toEqual({ n: 2, of: 3 });
+    const recallHook = stats.byHook.find((h: { id: string }) => h.id === 'builtin:knowledge-recall');
+    expect(recallHook).toMatchObject({
+      runs: 7, injected: 4, abstained: 1, skipped: 1, errors: 1, degraded: 1, budgetSpent: 1, commitFailed: 1,
+      qualified: { similarity: 3, coverage: 2, identifier: 1 },
+    });
+    // Over passages qualified on similarity only: 0.71, 0.55, 0.9; the keyword-only 0 does not drag it down.
+    expect(recallHook.avgTopScore).toBeCloseTo((0.71 + 0.55 + 0.9) / 3, 3);
+    // The older row (by name) keeps its own entry and its score.
+    expect(stats.byHook.find((h: { id: string }) => h.id === 'name:Knowledge recall')).toMatchObject({ runs: 1, avgTopScore: 0.6 });
+    expect(stats.byModel.find((m: { model: string }) => m.model === 'm1')).toMatchObject({ turns: 6, injected: { n: 3, of: 6 }, cited: { n: 1, of: 3 }, used: { n: 2, of: 3 } });
+    expect(stats.byModel.find((m: { model: string }) => m.model === 'm2')).toMatchObject({ turns: 1, cited: { n: 1, of: 1 }, used: { n: 0, of: 0 } });
+    expect(stats.byEvent).toEqual([
+      expect.objectContaining({ event: 'turn_start', turns: 6, injected: { n: 3, of: 6 }, cited: { n: 2, of: 3 }, used: { n: 1, of: 2 } }),
+      expect.objectContaining({ event: 'worker_start', turns: 1, injected: { n: 1, of: 1 }, cited: { n: 0, of: 1 }, used: { n: 1, of: 1 } }),
+    ]);
+    expect(stats.calibration).toEqual([]);
+    expect(stats.recent.find((r: { hooks: Array<{ degraded?: string }> }) => r.hooks[0]?.degraded === 'embedding_failed')).toBeDefined();
+    expect((await send(otherApp, 'GET', '/api/context-hooks/stats')).body.used).toEqual({ n: 1, of: 1 });
+    expect((await send(anonApp, 'GET', '/api/context-hooks/stats')).status).toBe(401);
+  });
+
+  test('a calibration warning over a meaningful sample of searched runs, none on a small one', async () => {
+    // 29 searched runs, every one injected: too few to say.
+    for (let i = 0; i < 29; i++) await turn(userId, [recall('injected', { items: [item('Pricing', 0.8, ['similarity'])] })]);
+    // Skipped and degraded runs are not searched on the bar.
+    for (let i = 0; i < 5; i++) await turn(userId, [recall('skipped', { reason: 'short_message' })]);
+    await turn(userId, [recall('injected', { degraded: 'embedding_failed', items: [item('Hosting', 0, ['coverage'])] })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([]);
+    // The thirtieth searched run (a block found, then dropped for the budget) makes it a sample.
+    await turn(userId, [recall('skipped', { reason: 'budget_spent' })]);
+    const { calibration } = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(calibration).toEqual([expect.objectContaining({ id: 'builtin:knowledge-recall', verdict: 'injects_nearly_always', found: { n: 30, of: 30 } })]);
+    expect(calibration[0].message).toMatch(/threshold sweep/);
+
+    await executeRaw('DELETE FROM context_turns;');
+    for (let i = 0; i < 40; i++) await turn(userId, [recall(i === 0 ? 'injected' : 'abstained', { reason: i === 0 ? undefined : 'nothing_relevant' })]);
+    expect((await send(userApp, 'GET', '/api/context-hooks/stats')).body.calibration).toEqual([
+      expect.objectContaining({ verdict: 'injects_almost_never', found: { n: 1, of: 40 } }),
+    ]);
+  });
+});
+
 describe('the recall eval', () => {
   test('scores found sources, their rank, and questions that should find nothing', async () => {
     await note(userId, 'Pricing', 'Website pricing: a five page website costs 900 euro.');

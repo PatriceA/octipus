@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { RecallQualifiedBy } from '@/shared/context-hooks';
 import { users } from './users';
 
 /**
@@ -40,7 +41,7 @@ export interface ContextHookRunRecord {
    * could not embed the query and matched by its keyword rules alone.
    */
   degraded?: 'embedding_failed';
-  items: Array<{ id: string; sourceId: string; title: string; score: number; qualifiedBy?: Array<'similarity' | 'coverage' | 'identifier'> }>;
+  items: Array<{ id: string; sourceId: string; title: string; score: number; qualifiedBy?: RecallQualifiedBy[] }>;
   tokens: number;
   latencyMs: number;
 }
