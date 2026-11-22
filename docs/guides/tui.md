@@ -84,7 +84,9 @@ At 80 columns and wider, the editor shows a file tree, buffer editor and chat. B
 | Key | Action |
 | --- | --- |
 | `Ctrl+O` | Find and open a file |
-| `Ctrl+S` | Save the active file |
+| `Ctrl+S` | Save the active file (a scratch buffer asks for a path) |
+| `F12` | Save As: save the active buffer under a new path |
+| `Alt+M` | Switch vim mode on or off |
 | `Ctrl+W` | Close a buffer, with unsaved-change protection |
 | `Alt+,` / `F2`, `Alt+.` / `F3` | Previous / next buffer |
 | `Ctrl+B` | Toggle file tree |
@@ -96,9 +98,54 @@ At 80 columns and wider, the editor shows a file tree, buffer editor and chat. B
 | `Ctrl+E` | MCP server list |
 | `Ctrl+Q` | Quit, with unsaved-change protection |
 
-Long lines scroll horizontally to keep the cursor visible. Tabs and wide characters are measured in terminal cells. Bracketed multiline paste inserts text without inserting the terminal control markers.
+Long lines scroll horizontally to keep the cursor visible. Tabs advance to the next stop of four cells, and wide characters are measured in terminal cells. The cursor moves and deletes by whole characters: an emoji with a skin tone, a flag or a letter with its accent is one step. Tab inserts what the file indents with — a tab, or its step of spaces (two in a file with no indentation yet). Bracketed multiline paste inserts text without inserting the terminal control markers.
 
-When closing a dirty buffer or quitting, choose **Save**, **Discard**, or **Cancel**. Enter and Escape cancel by default. Failed saves retain the buffer and report an error. Scratch buffers do not yet have a Save As dialog; they remain recoverable drafts until discarded.
+Undo (`Ctrl+Z`, redo `Ctrl+Y`) works in steps you would expect: a burst of typing, a paste, a replace-all or an accepted agent edit is one step. The unsaved marker (`●`) compares the buffer with the file as last opened or saved, so undoing back to it clears the marker.
+
+Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode.
+
+### Saving
+
+Saving writes a temporary file next to the original and renames it into place, so a crash or a full disk leaves the old file rather than half of the new one. The file keeps its permissions, its line endings (a CRLF file is shown without `␍` and saved as CRLF) and its byte-order mark. A file that mixes CRLF and LF is saved with the more common one, and the editor says so when it opens. A file reached through a symlink is written at its target; a file with several hard links is written in place.
+
+If the file changed on disk after you opened or last saved it — another editor, a formatter, the agent — saving asks first: **r** reloads the file (one undo step brings your version back), **o** overwrites it with yours, Enter or Escape cancels. A file deleted on disk can be written again with **o**.
+
+The editor does not open a file it could not save back unchanged: a file that is not valid UTF-8, a binary file (it contains NUL bytes), a folder, or a file over 5 MB is refused with the reason.
+
+Scratch buffers are saved with Save As: Ctrl+S on one asks for a path. Save As refuses a folder that does not exist and a path already open in another tab, and asks for a second Enter before replacing an existing file.
+
+When closing a dirty buffer or quitting, choose **Save**, **Discard**, or **Cancel**. Enter and Escape cancel by default. Failed saves retain the buffer and report an error; a buffer that has no file yet or whose file changed on disk is not saved from this prompt — cancel, then use Save As or Ctrl+S.
+
+### Finding and replacing
+
+`Ctrl+F` searches from the cursor: the first match shown is the first one after it. Matches are highlighted in the buffer, the current one distinct, and the current one is selected. Enter and Shift+Enter move between matches; **Escape** closes the box and puts the cursor back where it was; **Alt+Enter** closes it with the cursor on the match. `Alt+C`, `Alt+R` and `Alt+W` toggle case sensitivity, regular expressions and whole words; an invalid regular expression is reported in the box.
+
+`Alt+R` opens find and replace: Tab switches fields, Enter replaces every match as one undo step. With regular expressions on, the replacement can use `$1`, `$<name>`, `$&` and `$$`.
+
+The query, replacement, file filter and Save As fields accept paste, emoji and input-method text.
+
+### Opening files
+
+`Ctrl+O` lists the project's files: in a git repository, the files `git ls-files` reports (tracked and untracked, without what `.gitignore` excludes); otherwise a walk of the folder that skips `.git`, `node_modules`, `dist`, `build`, `.next`, `.cache` and `.octipus`. The list is built in the background, and typing filters it by fuzzy match over every file — letters in order, so `hdr` finds `header.ts`. The best 500 matches are listed. Typing a name and Enter before the list is ready opens the best match when it is.
+
+### Vim mode
+
+`Alt+M` or `/vim` switches vim mode; the setting is remembered per project. The bottom bar shows `EDIT`, or `VIM NORMAL` / `VIM INSERT` / `VIM VISUAL`, and the `:` command while you type it. The selection is drawn in VISUAL mode, as everywhere else.
+
+| Key | Action |
+| --- | --- |
+| `h` `j` `k` `l`, arrows, `w` `b`, `0` `$`, `gg` `G` | Move (in VISUAL, extend the selection) |
+| `i` / `a` / `o` / `O` | INSERT at, after, on a new line below / above |
+| `v` | VISUAL |
+| `x`, `dd`, `yy`, `p`, `u`, `Ctrl+R` | Delete character, delete line, yank line, paste, undo, redo |
+| `"` + register | Use that register for the next yank, delete or paste |
+| `:w` | Save |
+| `:q` / `:q!` | Close the buffer (asking if it has unsaved changes) / close it discarding them |
+| `:wq` / `:x` | Save and close the buffer |
+| `:qa` / `:qa!` | Quit the editor (asking) / quit discarding changes |
+| `Esc` | Back to NORMAL; closes the `:` line |
+
+`Ctrl+S` saves in every mode. Escape is recognised however the terminal sends it, including the kitty keyboard protocol's `ESC[27u`. It is a small subset of vim, not a replacement for it.
 
 Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
 
@@ -108,7 +155,9 @@ Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
 
 The state file is private to its owner. Changes are checkpointed after a short debounce and flushed during orderly shutdown, including SIGTERM. Reopening the editor restores drafts as unsaved buffers for review. A forced kill or machine failure can lose edits since the last successful checkpoint. A checkpoint failure is reported in the mode bar.
 
-Agent file changes to open buffers are queued for diff review in the default lock mode. Accept updates the in-memory buffer; save it to write that buffer to disk. Reject keeps the current buffer. This review controls the editor buffer; it does not undo a filesystem write the agent already performed.
+Agent file changes to open buffers are queued for diff review in the default lock mode; a change to a file the agent names relative to the project reaches its tab too. The diff box fits the terminal's height and scrolls with Up/Down and PageUp/PageDown. Accept updates the in-memory buffer as one undo step; Reject keeps the current buffer. This review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after Accept it is clean (buffer and disk agree), after Reject it shows as unsaved, and Ctrl+S writes your version back over the agent's.
+
+Opening the workspace picker (`Ctrl+K`) or the MCP list (`Ctrl+E`) again while it loads does nothing; a workspace request that gets no answer within 5 seconds, or fails, is shown in the picker with the reason.
 
 ## Connection and appearance
 
@@ -125,7 +174,7 @@ OCTIPUS_TUI_ICONS=ascii octi edit
 OCTIPUS_TUI_ICONS=emoji octi tui
 ```
 
-Keybindings can be overridden in `~/.octipus/keybindings.json`. The editor's `/reload` reloads those bindings; `/hotkeys` displays them.
+Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own are `app.file.saveAs` and `app.vim.toggle`). The editor's `/reload` reloads those bindings; `/hotkeys` (`F5`) displays them, with vim mode's keys and commands.
 
 If either surface stops on an error, or the terminal closes under it, it first turns mouse reporting off, shows the cursor and leaves raw mode, then prints the error and exits with a non-zero status, so the shell you return to works normally.
 
