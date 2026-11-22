@@ -76,6 +76,8 @@ const CASES: Array<[label: string, input: string, known?: Known]> = [
   ['ambiguous width: ± ① ─ ● … α ж', '± ① ─ ● … α ж'],
   ['private use', 'a\ue000b'],
   ['replacement character', 'a�b'],
+  ['emoji cut in half by a length limit', `a${'🐙'.slice(0, 1)}b`],
+  ['emoji cut at the end of a preview', `preview ${'👨\u200d👩'.slice(0, 1)}`],
   ['mathematical bold', '𝐀𝐁'],
   ['Devanagari conjunct with a spacing vowel sign', 'क\u094dष\u093f', { wider: 'pi-tui gives a spacing mark (Mc) no cells; terminals draw it in its own cell. Not normalised: removing or replacing the mark corrupts the script' }],
   ['Devanagari visarga', 'a\u0903b', { wider: 'spacing mark (Mc), as above' }],
@@ -110,6 +112,11 @@ describe('what displayText changes for width', () => {
 
   test('a combining mark with nothing to combine with is put on a no-break space', () => {
     expect(displayText('\u0301\u0302x\n\u0301y\nz\u0301')).toBe('\u00a0\u0301\u0302x\n\u00a0\u0301y\nz\u0301');
+  });
+
+  test('half of a surrogate pair becomes a replacement character; whole pairs are kept', () => {
+    expect(displayText(`x${'🐙'.slice(0, 1)}y${'🐙'.slice(1)}`)).toBe('x\ufffdy\ufffd');
+    expect(displayText('🐙')).toBe('🐙');
   });
 
   test('joiners that shape scripts stay', () => {

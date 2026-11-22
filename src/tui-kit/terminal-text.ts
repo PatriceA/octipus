@@ -40,6 +40,12 @@ const EMOJI_JOINERS = /(?<=\p{Extended_Pictographic})(?:\u200d|\p{Emoji_Modifier
  * Unicode's convention for showing a mark alone is to put it on a space.
  */
 const ORPHAN_MARKS = /(^|\n)(\p{M}+)/gu;
+/**
+ * Half of a surrogate pair, left when UTF-16 text was cut by length — the
+ * adapter's 80-character previews do that to an emoji. pi-tui counts it as
+ * no cells; the terminal draws a replacement character in one.
+ */
+const LONE_SURROGATES = /\p{Surrogate}/gu;
 /** What a finished frame row may not contain. ESC and BEL stay: the app's own styling, links and cursor marker use them. */
 const ROW_BREAKERS = /[\x00-\x06\x08\x0a-\x1a\x1c-\x1f\x7f]/g;
 
@@ -52,6 +58,7 @@ export function displayText(text: string): string {
     .replace(/\t/g, '    ')
     .replace(CONTROLS, '')
     // Widths: what pi-tui measures is what the terminal draws (terminal-text.width.test.ts).
+    .replace(LONE_SURROGATES, '\ufffd')
     .replace(INVISIBLE, '')
     .replace(EMOJI_JOINERS, '')
     .replace(ORPHAN_MARKS, '$1\u00a0$2');
