@@ -26,7 +26,7 @@ describe('TabStrip', () => {
   test('a click on a tab activates it, a click on its × closes it (docs/plans/tui-modernization.md §7, Phase 5)', () => {
     const buffers = new BufferStore();
     const a = buffers.openFile('/p/a.ts', 'a');
-    buffers.openFile('/p/b.ts', 'b');
+    const b = buffers.openFile('/p/b.ts', 'b');
     const closed: string[] = [];
     const tabs = new TabStrip(buffers, { onClose: (id) => closed.push(id) });
     const line = strip(tabs.render(80)[0]);
@@ -34,8 +34,8 @@ describe('TabStrip', () => {
     click(line.indexOf('a.ts'));
     expect(buffers.active()?.id).toBe(a.id);
     click(line.lastIndexOf('×'));
-    expect(closed).toEqual(['file:/p/b.ts']);
+    expect(closed).toEqual([b.id]);
     click(line.indexOf('×'));
-    expect(closed).toEqual(['file:/p/b.ts', a.id]);
+    expect(closed).toEqual([b.id, a.id]);
   });
 });

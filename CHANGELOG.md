@@ -7,6 +7,11 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: Save As no longer leaves two tabs sharing one identity.**
+  Saving `a.ts` as `b.ts` and then opening `a.ts` again gave both tabs the
+  same internal id, so Ctrl+S in the `a.ts` tab wrote `b.ts`, closing one tab
+  closed the other and highlighting mixed the two files. Every buffer now has
+  an id of its own that never follows its path.
 - **Terminal editor: review the agent's edits hunk by hunk.** The diff box
   accepts (`y`) or rejects (`n`) each change on its own, moves between them
   with `]` / `[`, folds unchanged lines (`z`), highlights the words that

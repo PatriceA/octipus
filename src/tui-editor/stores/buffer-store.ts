@@ -12,7 +12,9 @@
  * `dirty` is a comparison, not a flag: the buffer's text differs from the
  * saved text. Undoing back to what was saved makes the buffer clean again.
  *
- * Path keys are absolute. Display labels strip the workspace root
+ * Ids are a counter, not the path (two records never share one, whatever
+ * Save As and rename do); `findByPath` is the only path lookup. Paths are
+ * absolute. Display labels strip the workspace root
  * for shorter tab labels.
  */
 import { Buffer as TextBuffer } from '../editor/buffer';
@@ -21,7 +23,12 @@ import { detectLanguage, type Language } from '../editor/lang';
 import type { DiskInfo } from '../workspace-fs-bridge';
 
 export interface BufferRecord {
-  id: string;            // stable id; `file:<absPath>` for buffers opened from a file
+  /**
+   * `buffer:<n>`, unique for the store's life and never derived from the
+   * path: Save As and rename change `path`, never `id`, and a path opened
+   * again after its buffer moved away gets a new id.
+   */
+  id: string;
   path: string | null;   // absolute path; null for scratch buffers
   label: string;         // display name (basename or "Scratch <n>")
   language: Language;
@@ -59,6 +66,10 @@ export class BufferStore {
   private state: BufferState = { buffers: [], activeId: null };
   private listeners = new Set<BufferListener>();
   private scratchCounter = 1;
+  /** Never reset, not even by `reset()`: an id handed out once is never handed out again. */
+  private idCounter = 0;
+
+  private nextId(): string { return `buffer:${++this.idCounter}`; }
 
   get(): BufferState { return this.state; }
 
@@ -98,7 +109,7 @@ export class BufferStore {
       return existing;
     }
     const rec = this.track({
-      id: `file:${absPath}`,
+      id: this.nextId(),
       path: absPath,
       label: options.label ?? basename(absPath),
       language: detectLanguage(absPath),
@@ -118,7 +129,7 @@ export class BufferStore {
   openScratch(language: Language = 'text'): BufferRecord {
     const n = this.scratchCounter++;
     const rec = this.track({
-      id: `scratch:${n}`,
+      id: this.nextId(),
       path: null,
       label: `Scratch ${n}`,
       language,

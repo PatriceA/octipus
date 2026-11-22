@@ -18,6 +18,22 @@ describe('BufferStore', () => {
     expect(s.get().buffers.length).toBe(1);
   });
 
+  // Ids used to be `file:<path>` and kept across Save As: saving a.ts as b.ts and opening a.ts
+  // again gave two buffers one id, so saving, closing and highlighting reached the wrong one.
+  test('ids never repeat and never follow the path: Save As then reopening the old path gives two buffers', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/abs/a.ts', 'one');
+    s.rebind(a.id, '/abs/b.ts', 'one', { mtimeMs: 1, size: 3, eol: '\n', bom: false, mode: 0o644 });
+    const again = s.openFile('/abs/a.ts', 'two');
+    expect(again.id).not.toBe(a.id);
+    expect(new Set(s.get().buffers.map((b) => b.id)).size).toBe(2);
+    expect(s.byId(a.id)?.path).toBe('/abs/b.ts');
+    expect(s.byId(again.id)?.path).toBe('/abs/a.ts');
+    s.close(again.id);
+    expect(s.get().buffers.map((b) => b.path)).toEqual(['/abs/b.ts']);
+    expect(a.id).not.toContain('/abs');
+  });
+
   test('openScratch creates an unbacked buffer', () => {
     const s = new BufferStore();
     const a = s.openScratch();

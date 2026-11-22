@@ -370,3 +370,20 @@ test('a file changed on disk by something else during the review is not taken as
   expect(modalText()).toContain('changed on disk');
   expect(f.save).not.toHaveBeenCalled();
 });
+
+test('after Save As a.ts → b.ts, reopening a.ts gives its own tab: Ctrl+S there writes a.ts and closing it leaves b.ts open', () => {
+  const app = mount();
+  const files = (app as unknown as { files: import('./shell/file-ops').FileOps }).files;
+  const a = `${process.cwd()}/a-original.ts`; const b = `${process.cwd()}/b-copy.ts`;
+  app.buffers.openFile(a, 'on disk', { disk: DISK });
+  expect(files.saveAs(app.buffers.active()!.id, 'b-copy.ts', 'b-copy.ts')).toBe('saved');
+  files.openFile(a);
+  const reopened = app.buffers.active()!;
+  expect(reopened.path).toBe(a);
+  reopened.buffer.setText('edited a');
+  f.save.mockClear();
+  editorKey('\x13');
+  expect(f.save).toHaveBeenCalledWith(a, 'edited a', DISK);
+  key('\x17');
+  expect(app.buffers.get().buffers.map((r) => r.path)).toEqual([b]);
+});
