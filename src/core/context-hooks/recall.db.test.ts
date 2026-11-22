@@ -60,8 +60,17 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   // recordAccess is fire-and-forget: let it land before the next test clears the table.
-  await new Promise((r) => setTimeout(r, 100));
+  await accessSettled();
 });
+
+/**
+ * Wait for the access counts already asked for. countAccess reaches
+ * recordAccess after a dynamic import of a loaded module (microtasks only),
+ * and its UPDATE is then queued on the one PGlite connection ahead of any
+ * query sent after this: a macrotask later, a read sees every count asked
+ * for so far. No wall-clock wait.
+ */
+const accessSettled = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** A knowledge-base chunk embedded by the stand-in. A `doc:` source has no document row: its level reads as unclear. */
 async function chunk(title: string, content: string, opts: { source?: string; purpose?: 'note' | 'document' } = {}) {
@@ -86,7 +95,7 @@ async function lastRecord(): Promise<ContextHookRunRecord> {
 }
 
 async function accessCounts(): Promise<Record<string, number>> {
-  await new Promise((r) => setTimeout(r, 150));
+  await accessSettled();
   const { rows } = await queryRaw('SELECT id, access_count FROM embeddings');
   return Object.fromEntries(rows.map((r) => [r.id as string, Number(r.access_count)]));
 }
@@ -405,13 +414,26 @@ describe('side effects only for what is shown', () => {
       await gate;
       return embed(text);
     });
+    // The hook's own work, which runContextHooks stops waiting for at the deadline.
+    const kinds = await import('./kinds');
+    const runRecall = kinds.KIND_RUNNERS.recall;
+    let late: Promise<unknown> | undefined;
+    vi.spyOn(kinds.KIND_RUNNERS, 'recall').mockImplementation((input, config) => {
+      const work = runRecall(input, config);
+      late = work;
+      return work;
+    });
     const id = await chunk('Contract', 'Contract terms: the website build costs 2400 euro, payable in two parts.', { source: `doc:${randomUUID()}`, purpose: 'document' });
     const { text } = await run('what does the website build cost', { sessionId: 'sess-late' });
     expect(text).not.toContain('<recalled-knowledge>');
     expect(await lastRecord()).toMatchObject({ status: 'error', reason: 'timeout' });
     // The search finishes after the deadline: it must leave nothing behind.
+    // Waited for to its end, so the checks below see whatever it did.
+    expect(late).toBeDefined();
     release();
-    await new Promise((r) => setTimeout(r, 300));
+    // It ends at the deadline's abort (recall starts no search after it), and only then is checked.
+    await expect(late).rejects.toThrow('timeout');
+    await accessSettled();
     expect(sessionProtectionLevel('sess-late')).toBe(1);
     expect((await accessCounts())[id]).toBe(0);
   }, 15_000);

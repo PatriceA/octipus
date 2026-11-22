@@ -60,7 +60,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await new Promise((r) => setTimeout(r, 100));
+  // A fire-and-forget access count is queued on the one PGlite connection within this macrotask; let it land before the next test.
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 const PASSAGE = 'Enterprise hosting costs 99 euro a month, billed yearly with support.';

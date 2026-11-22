@@ -189,10 +189,11 @@ describe('a run', () => {
     await note(userId, 'Pricing archive', 'Old website pricing from 2019: 600 euro.');
     expect((await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { limit: 1 } })).status).toBe(200);
     await run('website pricing');
-    // recordAccess is fire-and-forget.
-    await new Promise((r) => setTimeout(r, 200));
-    const { rows } = await queryRaw(`SELECT access_count FROM embeddings ORDER BY access_count DESC`);
-    expect(rows.map((r) => Number(r.access_count))).toEqual([1, 0]);
+    // recordAccess is fire-and-forget: one UPDATE for every passage shown, polled for until it lands.
+    await vi.waitFor(async () => {
+      const { rows } = await queryRaw(`SELECT access_count FROM embeddings ORDER BY access_count DESC`);
+      expect(rows.map((r) => Number(r.access_count))).toEqual([1, 0]);
+    }, { timeout: 5_000, interval: 20 });
   });
 
   test('injects nothing from recall when nothing matches, and skips a bare acknowledgement', async () => {
