@@ -13,9 +13,8 @@ import {
   type Component,
   type Focusable,
   matchesKey,
-  truncateToWidth,
-  visibleWidth,
 } from '@/tui-kit';
+import { drawBox, fitBoxWidth } from '@/tui-kit/overlay-frame';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export type MCPConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
@@ -80,13 +79,8 @@ export class MCPServerList implements Component, Focusable {
       ? [dim('No MCP servers configured.')]
       : summaries.map((s, i) => renderRow(s, i === this.selected, palette));
 
-    const innerWidth = Math.max(visibleWidth(header), visibleWidth(help), ...rows.map(visibleWidth));
-    const boxWidth = Math.min(width, innerWidth + 4);
-    const inner = boxWidth - 4;
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
-    return [top, middle(header), ...rows.map(middle), middle(help), bottom];
+    const body = [header, ...rows, help];
+    return drawBox([body], fitBoxWidth(body, width), border);
   }
 
   private move(delta: number): void {
@@ -117,12 +111,6 @@ function statusColor(status: MCPConnectionStatus, palette: ReturnType<typeof get
     case 'disconnected': return palette.dim;
     case 'error':        return palette.error;
   }
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }
 
 /**

@@ -25,14 +25,13 @@ import {
   type Component,
   type Focusable,
   matchesKey,
-  truncateToWidth,
-  visibleWidth,
 } from '@/tui-kit';
+import { drawBox } from '@/tui-kit/overlay-frame';
 import { type Position, positionLte } from '../editor/buffer';
 import { findAll, InvalidPatternError, type Match, type SearchOptions } from '../editor/search';
 import type { BufferStore } from '../stores/buffer-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
-import { TextField } from './text-field';
+import { TextField } from '@/tui-kit/text-field';
 
 export interface FindOverlayOptions {
   buffers: BufferStore;
@@ -90,10 +89,7 @@ export class FindOverlay implements Component, Focusable {
     const help = dim('Enter next · Shift+Enter prev · Alt+Enter stay · Esc back');
 
     const lines = [head, queryLine, ...(this.error ? [chalk.hex(palette.error)(this.error)] : []), flagsLine, help];
-    const top    = border('┌' + '─'.repeat(Math.max(0, boxWidth - 2)) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(Math.max(0, boxWidth - 2)) + '┘');
-    return [top, ...lines.map(middle), bottom];
+    return drawBox([lines], boxWidth, border);
   }
 
   // ── Helpers ────────────────────────────────────────────────────
@@ -151,10 +147,4 @@ export class FindOverlay implements Component, Focusable {
   getFlags():   SearchOptions  { return { ...this.flags }; }
   getMatches(): readonly Match[] { return this.matches; }
   getIndex():   number         { return this.index; }
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }

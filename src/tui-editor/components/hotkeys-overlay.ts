@@ -14,9 +14,8 @@ import {
   type Focusable,
   getKeybindings,
   matchesKey,
-  truncateToWidth,
-  visibleWidth,
 } from '@/tui-kit';
+import { drawBox } from '@/tui-kit/overlay-frame';
 import { listEditorKeybindings } from '../keybindings';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
@@ -71,7 +70,6 @@ export class HotkeysOverlay implements Component, Focusable {
     for (const [keys, what] of VIM_KEYS) body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${what}`);
 
     const boxWidth = Math.max(20, width);
-    const inner = boxWidth - 4;
     const help = dim('↑/↓/PgUp/PgDn scroll · Esc close');
 
     // A fixed-size viewport that fills the rows the overlay frame gives the
@@ -85,15 +83,10 @@ export class HotkeysOverlay implements Component, Focusable {
     const window = body.slice(this.scroll, this.scroll + viewport);
     while (window.length < viewport) window.push('');
 
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
     const indicator = body.length > viewport
       ? dim(`  · ${this.scroll + 1}–${Math.min(body.length, this.scroll + viewport)} of ${body.length}`)
       : '';
-    const footer = middle(`${help}${indicator}`);
-
-    return [top, ...window.map(middle), footer, bottom];
+    return drawBox([[...window, `${help}${indicator}`]], boxWidth, border);
   }
 }
 
@@ -116,10 +109,4 @@ function groupBindings(all: ReturnType<typeof listEditorKeybindings>): Array<[ti
   }
   const order = ['app', ...Object.keys(buckets).filter((n) => n !== 'app').sort()];
   return order.filter((n) => buckets[n]).map((n) => [n.toUpperCase(), buckets[n]]);
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }

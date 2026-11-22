@@ -21,9 +21,9 @@ import {
   type Component,
   type Focusable,
   matchesKey,
-  truncateToWidth,
   visibleWidth,
 } from '@/tui-kit';
+import { drawBox } from '@/tui-kit/overlay-frame';
 import { diffLines, diffStats, type Hunk } from '../editor/diff';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
@@ -105,27 +105,14 @@ export class DiffOverlay implements Component, Focusable {
       40,
     );
     const boxWidth = Math.min(width, innerWidth + 4);
-    const inner = boxWidth - 4;
 
     const visibleHunks = this.hunks.slice(this.scroll, this.scroll + this.bodyRows);
     const bodyLines = visibleHunks.map((h) => renderHunk(h, palette, ok, error));
 
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const sep    = border('├' + '─'.repeat(boxWidth - 2) + '┤');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
-
     // A short diff still fills its rows, so the box does not jump as it scrolls.
     while (bodyLines.length < Math.min(this.bodyRows, this.hunks.length)) bodyLines.push('');
-    return [
-      top,
-      ...headerLines.map(middle),
-      ...(this.compact ? [] : [sep]),
-      ...bodyLines.map(middle),
-      ...(this.compact ? [] : [sep]),
-      middle(help),
-      bottom,
-    ];
+    const sections = this.compact ? [[...headerLines, ...bodyLines, help]] : [headerLines, bodyLines, [help]];
+    return drawBox(sections, boxWidth, border);
   }
 
   private scrollBy(delta: number): void {
@@ -149,10 +136,4 @@ function renderHunk(
   if (hunk.op === 'add') return ok(`+ ${text}`);
   if (hunk.op === 'del') return error(`- ${text}`);
   return chalk.hex(palette.dim)(`  ${text}`);
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }

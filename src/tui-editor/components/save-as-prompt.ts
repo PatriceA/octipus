@@ -7,7 +7,7 @@
  */
 import { type Component, type Focusable, displayLine, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@/tui-kit';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
-import { TextField } from './text-field';
+import { TextField } from '@/tui-kit/text-field';
 
 export interface SaveAsPromptOptions {
   label: string;

@@ -5,7 +5,7 @@
  * cursor movement and word deletion. The overlay keeps the keys it handles
  * itself (Enter, Escape, Tab, its toggles) and passes the rest here.
  */
-import { Input, visibleWidth } from '@/tui-kit';
+import { Input, visibleWidth } from '@earendil-works/pi-tui';
 
 export class TextField {
   private readonly input = new Input();

@@ -17,14 +17,13 @@ import {
   matchesKey,
   type SelectItem,
   SelectList,
-  truncateToWidth,
-  visibleWidth,
 } from '@/tui-kit';
+import { drawBox, fitBoxWidth } from '@/tui-kit/overlay-frame';
 import { fuzzyMatch } from '@/tui-kit/editing';
 import { relative } from 'node:path';
 import { chalk, getPalette, getSelectListTheme } from '@/tui-pi/theme/defaults';
 import { indexProjectFiles, type ProjectIndex } from '../project-files';
-import { TextField } from './text-field';
+import { TextField } from '@/tui-kit/text-field';
 
 /** Rows of matches handed to the list; the rest are counted, not shown. */
 export const LIST_LIMIT = 500;
@@ -146,14 +145,7 @@ export class FilePicker implements Component, Focusable {
     const listLines = this.state === 'ready' && this.matched > 0 ? this.list.render(width - 4) : [];
 
     const body = [header, filterLine, ...status, ...listLines, ...counts, ...notes];
-    const innerWidth = Math.max(...body.map(visibleWidth));
-    const boxWidth = Math.min(width, innerWidth + 4);
-    const inner = boxWidth - 4;
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
-
-    return [top, ...body.map(middle), bottom];
+    return drawBox([body], fitBoxWidth(body, width), border);
   }
 
   /** Test aid: read the active filter. */
@@ -172,10 +164,4 @@ function fileItem(root: string, absolutePath: string): SelectItem {
     label: displayLine(rel || absolutePath),
     description: '',
   };
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }

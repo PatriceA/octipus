@@ -13,13 +13,12 @@ import {
   type Component,
   type Focusable,
   matchesKey,
-  truncateToWidth,
-  visibleWidth,
 } from '@/tui-kit';
+import { drawBox } from '@/tui-kit/overlay-frame';
 import { findAll, InvalidPatternError, replaceAll, type SearchOptions } from '../editor/search';
 import type { BufferStore } from '../stores/buffer-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
-import { TextField } from './text-field';
+import { TextField } from '@/tui-kit/text-field';
 
 type Field = 'find' | 'replace';
 
@@ -86,10 +85,7 @@ export class ReplaceOverlay implements Component, Focusable {
     const help = dim('Tab switch · Enter replace all · Esc close');
 
     const lines = [head, findLine, replaceLine, ...(error ? [chalk.hex(palette.error)(error)] : []), flagsLine, help];
-    const top    = border('┌' + '─'.repeat(Math.max(0, boxWidth - 2)) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(Math.max(0, boxWidth - 2)) + '┘');
-    return [top, ...lines.map(middle), bottom];
+    return drawBox([lines], boxWidth, border);
   }
 
   // ── Helpers ────────────────────────────────────────────────────
@@ -114,10 +110,4 @@ export class ReplaceOverlay implements Component, Focusable {
   getReplace(): string        { return this.replace.value; }
   getFlags():   SearchOptions { return { ...this.flags }; }
   getActiveField(): Field     { return this.active; }
-}
-
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
 }
