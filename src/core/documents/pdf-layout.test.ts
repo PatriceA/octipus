@@ -319,6 +319,37 @@ describe('reconstructPageText — tables', () => {
     expect(lines(text)).toEqual(['Invoice number  INV-0042', 'Issued  2026-11-02', 'Due  2026-12-02']);
   });
 
+  test.each(['•', '-', '–', '*', '▪', '☐'])('a list bulleted with %s keeps its lines', (bullet) => {
+    const entries = ['Flour', '2 eggs', '1 cup milk', '50 g butter', '3 tbsp sugar'];
+    const text = reconstructPageText(entries.flatMap((e, k) => [item(bullet, 50, 700 - k * 12), item(e, 68, 700 - k * 12)]));
+    expect(lines(text)).toEqual(entries.map((e) => `${bullet}  ${e}`));
+  });
+
+  test('a numbered list keeps its lines', () => {
+    const entries = ['Preheat the oven', 'Mix 2 eggs', 'Bake 40 min'];
+    const text = reconstructPageText(entries.flatMap((e, k) => [item(`${k + 1}.`, 50, 700 - k * 12), item(e, 75, 700 - k * 12)]));
+    expect(text).not.toContain('|');
+  });
+
+  test('a table of contents is not a table', () => {
+    const toc: Array<[string, string]> = [
+      ['Foreword', 'vii'],
+      ['Preface', 'ix'],
+      ['Introduction', '1'],
+      ['Methods', '14'],
+      ['Results', '37'],
+    ];
+    const plain = reconstructPageText(toc.flatMap(([t, p], k) => row(700 - k * 12, [[t, 50], [p, 400, 'right']])));
+    expect(lines(plain)).toEqual(toc.map(([t, p]) => `${t}  ${p}`));
+    // Dot leaders inside the title item, and as items of their own.
+    const dotted = reconstructPageText(toc.flatMap(([t, p], k) => row(700 - k * 12, [[`${t} . . . . . . . .`, 50], [p, 400, 'right']])));
+    expect(dotted).not.toContain('|');
+    const leaders = reconstructPageText(
+      toc.flatMap(([t, p], k) => row(700 - k * 12, [[t, 50], ['.'.repeat(30 - t.length), 200], [p, 400, 'right']])),
+    );
+    expect(leaders).not.toContain('|');
+  });
+
   test('two rows are not a table', () => {
     const text = reconstructPageText([
       ...row(700, [['Item', 50], ['Colour', 200], ['Qty', 400]]),
@@ -383,6 +414,7 @@ describe('reconstructPageText — tables', () => {
     const big = [
       ...column('L', 50, 760, 60, 45, 6),
       ...column('R', 320, 760, 60, 45, 6),
+      ...row(388, [['Name', 50], ['Count', 200], ['Double', 400, 'right']]),
       ...Array.from({ length: 40 }, (_, k) => row(380 - k * 8, [[`r${k}`, 50], [`${k}`, 200], [`${k * 2}`, 400, 'right']])).flat(),
     ];
     const started = performance.now();

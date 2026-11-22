@@ -384,6 +384,13 @@ function findColumnBands(lines: Line[], charWidth: number, pitch: number): Band[
   return bands.sort((a, b) => a.start - b.start);
 }
 
+/** Dot leaders: a run of dots (spaced or not), an ellipsis, or underscores. */
+const LEADER = /(\.\s?){4,}|…|_{3,}/;
+
+/** A number, an amount, a date or a page number — arabic or roman. */
+const isNumberLike = (s: string): boolean =>
+  /^[(+\-–−]?[$€£¥]?\s?\d[\d.,:/\-–\s]*[%)]?$/.test(s.trim()) || /^(?:[ivxlcdm]{1,6}|[IVXLCDM]{1,6})$/.test(s.trim());
+
 /** Escape a cell for a Markdown table: a pipe would end the cell. */
 const escapeCell = (s: string): string => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 
@@ -485,17 +492,35 @@ function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { mark
   const labels = rows.map((r) => r[0]).filter((cell): cell is TableCell => cell !== null);
   if (labels.filter((cell) => cell.text.trimEnd().endsWith(':')).length * 2 >= labels.length) return null;
 
+  const column = (c: number, from = 0) =>
+    rows.slice(from).map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
+  for (let c = 0; c < columns; c++) {
+    const cells = column(c);
+    // One short token down a whole column is a list marker (•, -, ☐), not data.
+    if (cells.length >= MIN_TABLE_ROWS && cells[0].text.length <= 3 && cells.every((cell) => cell.text === cells[0].text)) {
+      return null;
+    }
+    // Dot leaders are a table of contents.
+    if (cells.filter((cell) => LEADER.test(cell.text)).length * 2 >= cells.length) return null;
+  }
+
+  // The first row has to be a header: in a column whose body is numbers, a
+  // first cell that is a number too (a page number, a list number, a value)
+  // says the first row is just another row — a list or a table of contents.
+  const header = rows[0];
+  const numericBody = (c: number) => {
+    const body = column(c, 1);
+    return body.length > 0 && body.filter((cell) => isNumberLike(cell.text)).length * 2 > body.length;
+  };
+  const numericColumns = Array.from({ length: columns }, (_, c) => c).filter(numericBody);
+  if (numericColumns.some((c) => header[c] !== null && isNumberLike(header[c].text))) return null;
+
   // Two columns are as often a key/value list as a table. Only take them as a
-  // table when the first row looks like a header: no digits in it, while one
-  // column's body is mostly numbers.
+  // table when the first row looks like a header — no digits in it — over a
+  // column of numbers.
   if (columns === 2) {
-    const header = rows[0];
     if (header.some((cell) => cell !== null && /\d/.test(cell.text))) return null;
-    const numeric = (c: number) => {
-      const body = rows.slice(1).map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
-      return body.filter((cell) => /\d/.test(cell.text)).length * 2 > body.length;
-    };
-    if (!numeric(0) && !numeric(1)) return null;
+    if (numericColumns.length === 0) return null;
   }
 
   const toRow = (r: Array<TableCell | null>) => `| ${r.map((cell) => (cell ? escapeCell(cell.text) : '')).join(' | ')} |`;
