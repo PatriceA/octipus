@@ -52,13 +52,16 @@ export class ModeBar implements Component {
     const parts: string[] = [];
     parts.push(chalk.bold.hex(palette.accent)(this.modeBadge(layout.editorMode)));
     parts.push(chalk.hex(palette.dim)(`focus:${layout.focused}`));
+    // The cursor position stays near the start: a long notice of what is waiting must not push it off a narrow bar.
+    if (active) {
+      const cursor = active.buffer.getCursor();
+      parts.push(chalk.hex(palette.dim)(`L${cursor.line + 1}:${cursor.col + 1}`));
+    }
     const attention = this.options.getAttention?.() ?? null;
     if (attention) parts.push(chalk.bold.hex(palette.warn)(`⚑ ${displayLine(attention)}`));
     if (active) {
-      const cursor = active.buffer.getCursor();
       parts.push(chalk.hex(palette.statusFg)(`${displayLine(active.label)}${active.dirty ? ' ●' : ''}`));
       parts.push(chalk.hex(palette.dim)(active.language));
-      parts.push(chalk.hex(palette.dim)(`L${cursor.line + 1}:${cursor.col + 1}`));
       if (active.agentLocked) parts.push(chalk.hex(palette.warn)('agent-lock'));
     }
     return [truncateToWidth(parts.join('  '), width)];

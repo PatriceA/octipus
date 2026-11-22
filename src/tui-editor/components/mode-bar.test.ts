@@ -20,7 +20,16 @@ describe('ModeBar', () => {
     rec.buffer.moveLineEnd();
     rec.buffer.type('!');
     buffers.setAgentLocked(rec.id, true);
-    expect(text()).toBe('EDIT  focus:editor  x.ts ●  typescript  L1:7  agent-lock');
+    expect(text()).toBe('EDIT  focus:editor  L1:7  x.ts ●  typescript  agent-lock');
+  });
+
+  test('what waits for the resolve key is shown after the cursor position, which a narrow bar keeps', () => {
+    const layout = new LayoutStore();
+    const buffers = new BufferStore();
+    buffers.openFile('/p/x.ts', 'hello');
+    const modeBar = new ModeBar(layout, buffers, { getAttention: () => 'agent edit to a-very-long-file-name.ts ready for review — press alt+y to resolve' });
+    const row = strip(modeBar.render(60)[0]);
+    expect(row).toMatch(/^EDIT  focus:editor  L1:1  ⚑ agent edit to a-very-long/);
   });
 
   test('vim mode shows its sub-mode, and the : command while it is typed', () => {
