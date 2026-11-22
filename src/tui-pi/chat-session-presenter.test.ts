@@ -1,7 +1,7 @@
 /** Streaming a long reply stays linear: the live block is redrawn on a budget, and the finished reply takes the rows the last frame did. */
 import { afterEach, expect, test, vi } from 'vitest';
 import { Markdown, type TUI } from '@/tui-kit';
-import { ChatSessionPresenter, liveRedrawInterval } from './chat-session-presenter';
+import { ChatSessionPresenter, liveRedrawInterval, SEEN_MESSAGE_IDS_KEPT } from './chat-session-presenter';
 import { ActivityLine } from './components/activity-line';
 import { MessagesPane } from './components/messages-pane';
 import { StatusBar } from './components/status-bar';
@@ -56,5 +56,18 @@ test('a short reply is drawn on every delta', () => {
   expect(liveRedrawInterval(100)).toBe(0);
   expect(liveRedrawInterval(150_000)).toBeGreaterThan(0);
   expect(liveRedrawInterval(10_000_000)).toBe(250);
+  presenter.dispose();
+});
+
+test('the ids kept to drop repeated progress messages are capped, and a recent repeat is still dropped', () => {
+  const { presenter, messages } = mount();
+  for (let n = 0; n < SEEN_MESSAGE_IDS_KEPT * 5; n++) {
+    presenter.handleEvent({ kind: 'message', role: 'assistant', content: `progress ${n}`, messageId: `m${n}`, progress: true });
+  }
+  const seen = (presenter as unknown as { seenMessageIds: Set<string> }).seenMessageIds;
+  expect(seen.size).toBe(SEEN_MESSAGE_IDS_KEPT);
+  const before = messages.size().kept;
+  presenter.handleEvent({ kind: 'message', role: 'assistant', content: 'progress again', messageId: `m${SEEN_MESSAGE_IDS_KEPT * 5 - 1}`, progress: true });
+  expect(messages.size().kept).toBe(before);
   presenter.dispose();
 });

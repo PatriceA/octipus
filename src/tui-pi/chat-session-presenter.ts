@@ -26,6 +26,9 @@ export function liveRedrawInterval(length: number): number {
   return length < 8192 ? 0 : Math.min(250, Math.round(length / 512));
 }
 
+/** Progress message ids remembered to drop repeats (a reconnect replays them): the newest this many. */
+export const SEEN_MESSAGE_IDS_KEPT = 1024;
+
 export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   lastPlanSummary: string | null = null;
@@ -120,7 +123,11 @@ export class ChatSessionPresenter {
         return true;
       case 'message':
         if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
-        if (event.messageId) this.seenMessageIds.add(event.messageId);
+        if (event.messageId) {
+          this.seenMessageIds.add(event.messageId);
+          // A Set iterates in insertion order: the first is the oldest. A long session no longer grows it without bound.
+          if (this.seenMessageIds.size > SEEN_MESSAGE_IDS_KEPT) this.seenMessageIds.delete(this.seenMessageIds.values().next().value as string);
+        }
         if (event.role === 'assistant' && !event.progress && !turn.stale) { this.clearStream(); this.toolGroup = null; }
         this.pushMessage(event.role, event.content);
         return true;
