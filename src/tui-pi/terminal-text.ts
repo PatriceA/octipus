@@ -32,6 +32,14 @@ const INVISIBLE = /[\p{Default_Ignorable_Code_Point}--[\u200c\u200d]]/gv;
  * measure the same in both.
  */
 const EMOJI_JOINERS = /(?<=\p{Extended_Pictographic})(?:\u200d|\p{Emoji_Modifier})|\u200d(?=\p{Extended_Pictographic})/gu;
+/**
+ * A combining mark with nothing to combine with — at the start of a line, or
+ * left behind when the escape sequence before it was removed. pi-tui counts
+ * it as no cells; a terminal draws it in a cell of its own, and xterm.js does
+ * so after any styling sequence, which every component puts at a row start.
+ * Unicode's convention for showing a mark alone is to put it on a space.
+ */
+const ORPHAN_MARKS = /(^|\n)(\p{M}+)/gu;
 /** What a finished frame row may not contain. ESC and BEL stay: the app's own styling, links and cursor marker use them. */
 const ROW_BREAKERS = /[\x00-\x06\x08\x0a-\x1a\x1c-\x1f\x7f]/g;
 
@@ -45,7 +53,8 @@ export function displayText(text: string): string {
     .replace(CONTROLS, '')
     // Widths: what pi-tui measures is what the terminal draws (terminal-text.width.test.ts).
     .replace(INVISIBLE, '')
-    .replace(EMOJI_JOINERS, '');
+    .replace(EMOJI_JOINERS, '')
+    .replace(ORPHAN_MARKS, '$1\u00a0$2');
 }
 
 /** One-row display text for labels, previews and status segments. */
