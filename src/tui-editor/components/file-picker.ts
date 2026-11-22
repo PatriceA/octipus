@@ -72,7 +72,9 @@ export class FilePicker implements Component, Focusable {
   private setFiles(index: ProjectIndex): void {
     this.allItems = index.files.map((p) => fileItem(this.options.root, p));
     this.state = 'ready';
-    this.note = index.truncated ? `Indexed the first ${index.files.length.toLocaleString('en-US')} files.` : '';
+    const unreadable = index.unreadable ?? [];
+    const missing = unreadable.length ? `${unreadable.length} folder${unreadable.length === 1 ? '' : 's'} could not be read (${relative(this.options.root, unreadable[0]) || unreadable[0]}${unreadable.length > 1 ? ', …' : ''}); their files are not listed.` : '';
+    this.note = [index.truncated ? `Indexed the first ${index.files.length.toLocaleString('en-US')} files.` : '', missing].filter(Boolean).join(' ');
     this.applyFilter();
     const best = this.visible[0];
     if (this.pickWhenReady && best && this.field.value.trim()) this.options.onPick(best.value);

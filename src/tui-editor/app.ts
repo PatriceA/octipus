@@ -34,7 +34,7 @@ import { EditorPane } from './components/editor-pane';
 import { InputPrompt, parseLineTarget } from './components/input-prompt';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
-import { installTreeSitterHighlighter } from './editor/highlight-tree-sitter';
+import { installTreeSitterHighlighter, onHighlighterProblem } from './editor/highlight-tree-sitter';
 import type { VimCommand } from './editor/vim';
 import { installEditorKeybindings } from './keybindings';
 import { AgentReview } from './shell/agent-review';
@@ -103,6 +103,8 @@ export class OctipusEditorApp {
   private readonly disposers: Array<() => void> = [];
   /** What the editor copied last: pasted when the system clipboard cannot be read. */
   private lastCopy: string | null = null;
+  /** Why the MCP status could not be read last, told once until it changes. */
+  private mcpProblem: string | null = null;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
@@ -243,6 +245,8 @@ export class OctipusEditorApp {
       tui.addInputListener((data) => this.handleGlobalKey(data)),
       // Re-parse highlighting after edits; forget the parse of a closed buffer.
       this.buffers.subscribe((state) => this.parses.schedule(state.buffers)),
+      // Why tree-sitter highlighting is not in use (a grammar that did not load), once per reason.
+      onHighlighterProblem((problem) => this.ctx.log(problem)),
       // A closed buffer's waiting prompts and agent edits go with it.
       this.buffers.subscribe(() => { this.pending.prune((id) => this.buffers.byId(id) !== null); this.review.prune(); }),
       this.pending.subscribe(() => this.tui.requestRender()),
@@ -317,9 +321,13 @@ export class OctipusEditorApp {
         connected: all.filter((c) => c.status === 'connected').length,
         total: all.length,
       });
+      this.mcpProblem = null;
       this.tui.requestRender();
-    } catch {
+    } catch (error) {
       this.status.setMcp(null);
+      const problem = error instanceof Error ? error.message : String(error);
+      if (problem !== this.mcpProblem) this.ctx.log(`MCP server status is not available: ${problem}`);
+      this.mcpProblem = problem;
     }
   }
 
@@ -449,7 +457,12 @@ export class OctipusEditorApp {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.parses.dispose();
     this.decisions.dispose(); this.session.dispose(); this.adapter.disconnect();
-    try { if (this.onShutdown) await this.onShutdown(); } catch { /* terminal cleanup is best effort */ }
+    try {
+      if (this.onShutdown) await this.onShutdown();
+    } catch (error) {
+      // The terminal may not be restored: say so where it can still be read.
+      process.stderr.write(`Octipus editor: restoring the terminal failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   }
 
   private refocus(): void {
@@ -473,11 +486,13 @@ function basenameOf(path: string): string {
  */
 function deriveApiBase(gatewayUrl: string | undefined): string {
   if (!gatewayUrl) return 'http://localhost:3005/api';
+  let u: URL;
   try {
-    const u = new URL(gatewayUrl);
-    const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-    return `${protocol}//${u.host}/api`;
-  } catch {
-    return 'http://localhost:3005/api';
+    u = new URL(gatewayUrl);
+  } catch (error) {
+    // Not a URL: the gateway connection would fail too. Say which, rather than talk to localhost instead.
+    throw new Error(`The gateway URL ${JSON.stringify(gatewayUrl)} is not a URL: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  return `${protocol}//${u.host}/api`;
 }

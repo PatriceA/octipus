@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { compileQuery, InvalidPatternError, type SearchOptions } from './editor/search';
-import { indexProjectFiles, SKIP_DIRS } from './project-files';
+import { errorCode, indexProjectFiles, SKIP_DIRS } from './project-files';
 
 export interface ProjectHit {
   /** Absolute path. */
@@ -36,6 +36,8 @@ export interface ProjectSearchDone {
   /** Why the search failed, if it did (an invalid pattern, rg's own error). */
   error?: string;
   cancelled?: boolean;
+  /** Files and folders the fallback search could not read (permission denied, …): their matches are missing. */
+  unreadable?: number;
 }
 
 export interface ProjectSearch {
@@ -130,9 +132,10 @@ export function parseRipgrepLine(root: string, line: string): ProjectHit[] {
   let message: { type?: string; data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number; submatches?: Array<{ start: number; end: number }> } };
   try {
     message = JSON.parse(line);
-  } catch {
-    // Not one of ripgrep's messages: nothing to show for it.
-    return [];
+  } catch (error) {
+    // Not one of ripgrep's messages (a line cut at --max-columns, a warning): nothing to show for it.
+    if (error instanceof SyntaxError) return [];
+    throw error;
   }
   const data = message.data;
   if (message.type !== 'match' || !data?.path?.text || data.lines?.text === undefined || !data.line_number) return [];
@@ -151,14 +154,17 @@ async function walkSearch(root: string, query: string, options: SearchOptions, o
   const re = compileQuery(query, options);
   const index = await indexProjectFiles(root);
   let count = 0;
+  let unreadable = index.unreadable?.length ?? 0;
+  const done = (truncated: boolean): ProjectSearchDone => ({ source: 'walk', truncated, ...(unreadable ? { unreadable } : {}) });
   for (const path of index.files) {
     if (cancelled()) return { source: 'walk', truncated: false, cancelled: true };
     let content: globalThis.Buffer;
     try {
       if ((await stat(path)).size > MAX_FILE_BYTES) continue;
       content = await readFile(path);
-    } catch {
-      // Removed or unreadable since it was indexed: not a hit.
+    } catch (error) {
+      // Removed since it was indexed: not a hit. Unreadable: not a hit either, and counted in the result.
+      if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(errorCode(error) ?? '')) unreadable++;
       continue;
     }
     if (content.includes(0)) continue;
@@ -170,7 +176,7 @@ async function walkSearch(root: string, query: string, options: SearchOptions, o
       let m: RegExpExecArray | null;
       while ((m = re.exec(text)) !== null) {
         if (m[0].length === 0) { re.lastIndex++; continue; }
-        if (count >= MAX_HITS) { if (batch.length) onHits(batch); return { source: 'walk', truncated: true }; }
+        if (count >= MAX_HITS) { if (batch.length) onHits(batch); return done(true); }
         batch.push({ path, line: i, col: m.index, length: m[0].length, text });
         count++;
       }
@@ -179,5 +185,5 @@ async function walkSearch(root: string, query: string, options: SearchOptions, o
     // Let the editor draw between files.
     await new Promise((resolve) => setImmediate(resolve));
   }
-  return { source: 'walk', truncated: false };
+  return done(false);
 }

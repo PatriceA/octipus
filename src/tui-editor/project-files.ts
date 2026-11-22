@@ -24,25 +24,55 @@ export const MAX_INDEXED_FILES = 200_000;
 
 export interface FolderEntry { name: string; path: string; isDir: boolean }
 
-/** One folder's entries for the tree, sorted by name, skipped folders left out. Unreadable entries are left out too. */
-export function listFolder(dir: string): FolderEntry[] {
+/** A folder's entries, or why it could not be read (`error`, with the entries empty). */
+export interface FolderListing { entries: FolderEntry[]; error: string | null }
+
+/** The `code` of a Node system error, or null. */
+export function errorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return null;
+  const code = (error as { code: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+/** Why a file or folder could not be read, as the editor says it. */
+export function fsReason(error: unknown): string {
+  const code = errorCode(error);
+  if (code === 'EACCES' || code === 'EPERM') return 'permission denied';
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Gone, or never a folder: what a listing finds when the file system changed under it. */
+const GONE = new Set(['ENOENT', 'ENOTDIR']);
+/** A symlink to nothing (or to itself): not an entry to show. */
+const DANGLING = new Set(['ENOENT', 'ELOOP']);
+
+/**
+ * One folder's entries for the tree, sorted by name, skipped folders left
+ * out. A folder that is gone lists nothing; one that cannot be read says
+ * why. A dangling symlink is left out; an entry that cannot be examined for
+ * another reason is shown as a file, and opening it reports the reason.
+ */
+export function listFolder(dir: string): FolderListing {
   let names: string[];
   try {
     names = readdirSync(dir).sort();
-  } catch {
-    return [];
+  } catch (error) {
+    if (GONE.has(errorCode(error) ?? '')) return { entries: [], error: null };
+    return { entries: [], error: `cannot read this folder: ${fsReason(error)}` };
   }
   const out: FolderEntry[] = [];
   for (const name of names) {
     if (SKIP_DIRS.has(name)) continue;
     const path = join(dir, name);
+    let isDir = false;
     try {
-      out.push({ name, path, isDir: statSync(path).isDirectory() });
-    } catch {
-      // A dangling symlink or a file removed since readdir: nothing to show.
+      isDir = statSync(path).isDirectory();
+    } catch (error) {
+      if (DANGLING.has(errorCode(error) ?? '')) continue;
     }
+    out.push({ name, path, isDir });
   }
-  return out;
+  return { entries: out, error: null };
 }
 
 export interface ProjectIndex {
@@ -51,6 +81,8 @@ export interface ProjectIndex {
   source: 'git' | 'walk';
   /** True when the index stopped at `MAX_INDEXED_FILES`. */
   truncated: boolean;
+  /** Folders (and linked files) the walk could not read, so their files are missing from the index. */
+  unreadable?: readonly string[];
 }
 
 /** Every file of the project: `git ls-files` in a work tree, a walk otherwise. */
@@ -58,9 +90,10 @@ export async function indexProjectFiles(root: string): Promise<ProjectIndex> {
   const fromGit = await gitFiles(root);
   if (fromGit) return fromGit;
   const files: string[] = [];
-  const truncated = await walk(root, files);
+  const unreadable: string[] = [];
+  const truncated = await walk(root, files, unreadable);
   files.sort();
-  return { files, source: 'walk', truncated };
+  return { files, source: 'walk', truncated, unreadable };
 }
 
 async function gitFiles(root: string): Promise<ProjectIndex | null> {
@@ -78,7 +111,7 @@ async function gitFiles(root: string): Promise<ProjectIndex | null> {
 }
 
 /** Breadth-first so a capped index holds the shallow files; returns whether it stopped at the cap. */
-async function walk(root: string, out: string[]): Promise<boolean> {
+async function walk(root: string, out: string[], unreadable: string[]): Promise<boolean> {
   let level = [root];
   while (level.length > 0) {
     const next: string[] = [];
@@ -86,7 +119,9 @@ async function walk(root: string, out: string[]): Promise<boolean> {
       let entries: Dirent[];
       try {
         entries = await readdir(dir, { withFileTypes: true });
-      } catch {
+      } catch (error) {
+        // Removed since it was listed: nothing to index. Anything else is reported with the index.
+        if (!GONE.has(errorCode(error) ?? '')) unreadable.push(dir);
         continue;
       }
       for (const entry of entries) {
@@ -95,7 +130,13 @@ async function walk(root: string, out: string[]): Promise<boolean> {
         let isDir = entry.isDirectory();
         if (entry.isSymbolicLink()) {
           // Follow a link to a file; not to a folder, which could loop.
-          try { isDir = (await stat(path)).isDirectory(); if (isDir) continue; } catch { continue; }
+          try {
+            isDir = (await stat(path)).isDirectory();
+            if (isDir) continue;
+          } catch (error) {
+            if (!DANGLING.has(errorCode(error) ?? '')) unreadable.push(path);
+            continue;
+          }
         }
         if (isDir) next.push(path);
         else {

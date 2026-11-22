@@ -15,6 +15,7 @@ import { type Component, type Focusable, matchesKey, truncateToWidth } from '@/t
 import { drawBox } from '@/tui-kit/overlay-frame';
 import { TextField } from '@/tui-kit/text-field';
 import { displayText } from '../editor/columns';
+import { errorCode, fsReason } from '../project-files';
 import type { SearchOptions } from '../editor/search';
 import { type ProjectHit, type ProjectSearch, type ProjectSearchDone, searchProject, type SearchProjectOptions } from '../project-search';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
@@ -47,6 +48,8 @@ export class ProjectSearchOverlay implements Component, Focusable {
   private running: ProjectSearch | null = null;
   private maxRows = 30;
   private readonly fileCache = new Map<string, string[] | null>();
+  /** Why a matched file could not be read for its preview (it was there when searched). */
+  private readonly previewErrors = new Map<string, string>();
 
   constructor(private readonly options: ProjectSearchOverlayOptions) {
     this.field = new TextField(options.initialQuery ?? '');
@@ -129,7 +132,9 @@ export class ProjectSearchOverlay implements Component, Focusable {
       : this.state.error ? chalk.hex(palette.error)(this.state.error)
       : this.hits.length === 0 ? dim(`no matches${this.state.cancelled ? ' (cancelled)' : ''}`)
       : dim(`${this.hits.length}${this.state.truncated ? '+' : ''} match${this.hits.length === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'}${this.state.truncated ? ` (the first ${this.hits.length})` : ''} · ${this.state.source === 'rg' ? 'ripgrep' : 'project index'}`);
-    const head = `${accent('Search the project')}  ${status}`;
+    const skipped = this.state !== 'idle' && this.state !== 'searching' && this.state.unreadable
+      ? warn(` · ${this.state.unreadable} file${this.state.unreadable === 1 ? '' : 's'} or folder${this.state.unreadable === 1 ? '' : 's'} could not be read`) : '';
+    const head = `${accent('Search the project')}  ${status}${skipped}`;
     const queryLine = `${dim('q:')} ${this.field.render(Math.max(1, inner - 3), this.focused, dim('(text)'))}`;
     const flagsLine = [
       this.flags.caseSensitive ? warn('[Aa]') : dim('[aa]'),
@@ -170,9 +175,10 @@ export class ProjectSearchOverlay implements Component, Focusable {
     if (!hit) return Array(rows).fill('');
     const lines = this.lines(hit.path);
     const out: string[] = [];
+    const unreadable = this.previewErrors.get(hit.path);
     for (let n = hit.line - PREVIEW_CONTEXT; n <= hit.line + PREVIEW_CONTEXT; n++) {
       const text = n < 0 ? undefined : lines?.[n] ?? (n === hit.line ? hit.text : undefined);
-      if (text === undefined) { out.push(''); continue; }
+      if (text === undefined) { out.push(n === hit.line - PREVIEW_CONTEXT && unreadable ? chalk.hex(palette.warn)(`(no preview: ${unreadable})`) : ''); continue; }
       const number = chalk.hex(palette.dim)(`${String(n + 1).padStart(5)} `);
       if (n !== hit.line) { out.push(number + chalk.hex(palette.dim)(displayText(text))); continue; }
       out.push(number + displayText(text.slice(0, hit.col)) + chalk.bgHex(palette.warn).hex(palette.cursorFg)(displayText(text.slice(hit.col, hit.col + hit.length))) + displayText(text.slice(hit.col + hit.length)));
@@ -185,9 +191,10 @@ export class ProjectSearchOverlay implements Component, Focusable {
       let lines: string[] | null;
       try {
         lines = readFileSync(path, 'utf8').split('\n').map((l) => l.replace(/\r$/, ''));
-      } catch {
-        // Gone since it was searched: the preview shows the matched line alone.
+      } catch (error) {
+        // Gone since it was searched: the preview shows the matched line alone. Anything else is said in the preview.
         lines = null;
+        if (errorCode(error) !== 'ENOENT') this.previewErrors.set(path, fsReason(error));
       }
       this.fileCache.set(path, lines);
     }

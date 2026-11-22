@@ -26,7 +26,7 @@ vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
   sendCommand() {} respondApproval() {} respondPermission() {} disconnect() {} sendChat() {} async connect() {}
 } }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => DEFAULT_PERSISTED_STATE, savePersistedState: () => true }));
-vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: async () => {}, dropSource() {}, installTreeSitterHighlighter() {}, hintLine() {} }));
+vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: async () => {}, dropSource() {}, installTreeSitterHighlighter() {}, hintLine() {}, onHighlighterProblem: () => () => {} }));
 vi.mock('@/mcp/bridge', () => ({ getMCPBridge: () => ({ getAllConnections: () => [] }) }));
 
 /** A title change (OSC 0), a screen clear (CSI 2J), a bell, and a lone ESC. */

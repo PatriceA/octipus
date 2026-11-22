@@ -66,7 +66,9 @@ export function readFileForBuffer(absPath: string): ReadResult {
   let decoded: string;
   try {
     decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
+  } catch (error) {
+    // A fatal decoder throws a TypeError on bytes that are not UTF-8; anything else is not that.
+    if (!(error instanceof TypeError)) throw error;
     return { ok: false, error: `${absPath} is not valid UTF-8; not opened, so saving cannot rewrite it in another encoding.` };
   }
   const bom = decoded.startsWith(BOM);

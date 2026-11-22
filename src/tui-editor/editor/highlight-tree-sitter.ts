@@ -103,6 +103,33 @@ interface SourceState {
 
 const sources = new Map<string, SourceState>();
 
+/**
+ * Why tree-sitter highlighting is not used where it would be: the module or
+ * a grammar did not load, a parse threw. Highlighting falls back to the
+ * line highlighter either way, and each reason is told once to whoever
+ * listens (`onHighlighterProblem`; the editor puts it in the transcript).
+ * Told before anyone listens, it waits for the first listener.
+ */
+const problemListeners = new Set<(problem: string) => void>();
+const toldProblems = new Set<string>();
+const waitingProblems: string[] = [];
+
+function reportProblem(problem: string): void {
+  if (toldProblems.has(problem)) return;
+  toldProblems.add(problem);
+  if (problemListeners.size === 0) { waitingProblems.push(problem); return; }
+  for (const fn of problemListeners) fn(problem);
+}
+
+/** Be told why tree-sitter highlighting is not in use; returns the unsubscriber. */
+export function onHighlighterProblem(fn: (problem: string) => void): () => void {
+  problemListeners.add(fn);
+  for (const problem of waitingProblems.splice(0)) fn(problem);
+  return () => problemListeners.delete(fn);
+}
+
+const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 async function loadModule(): Promise<ParserModule | null> {
   try {
     const m = await import('web-tree-sitter');
@@ -111,9 +138,10 @@ async function loadModule(): Promise<ParserModule | null> {
       ?? (m as unknown as ParserModule).Parser;
     const Language = (m as unknown as { Language?: ParserModule['Language'] }).Language
       ?? (m as unknown as ParserModule).Language;
-    if (!Parser || !Language) return null;
+    if (!Parser || !Language) { reportProblem('Syntax highlighting uses the line highlighter: web-tree-sitter has no Parser or Language export.'); return null; }
     return { Parser, Language };
-  } catch {
+  } catch (error) {
+    reportProblem(`Syntax highlighting uses the line highlighter: web-tree-sitter could not be loaded (${reason(error)}).`);
     return null;
   }
 }
@@ -129,7 +157,8 @@ async function ensureInitialized(): Promise<ParserModule | null> {
         await module.Parser.init({
           locateFile: (file) => (wtsRoot ? join(wtsRoot, file) : file),
         });
-      } catch {
+      } catch (error) {
+        reportProblem(`Syntax highlighting uses the line highlighter: tree-sitter did not start (${reason(error)}).`);
         module = null;
       }
     })();
@@ -154,7 +183,8 @@ async function ensureParser(lang: EditorLang): Promise<WtsParser | null> {
     parser.setLanguage(language);
     parsers.set(lang, parser);
     return parser;
-  } catch {
+  } catch (error) {
+    reportProblem(`The ${lang} grammar could not be loaded (${reason(error)}); ${lang} files use the line highlighter.`);
     return null;
   }
 }
@@ -182,7 +212,8 @@ export async function setSource(key: string, lang: EditorLang, source: string): 
     state.tree = tree;
     state.source = source;
     state.cache = tree ? buildLineCache(source, tree) : null;
-  } catch {
+  } catch (error) {
+    reportProblem(`Parsing a ${lang} buffer failed (${reason(error)}); it uses the line highlighter.`);
     state.cache = null;
   }
 }

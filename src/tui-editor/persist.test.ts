@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { DEFAULT_PERSISTED_STATE, loadPersistedState, pathForProject, savePersistedState } from './persist';
 
 const tmps: string[] = [];
+const problems: string[] = [];
+const report = (problem: string) => { problems.push(problem); };
 function tmp(): string {
   const dir = mkdtempSync(join(tmpdir(), 'octipus-tui-persist-'));
   tmps.push(dir);
@@ -20,7 +22,7 @@ afterEach(() => {
 describe('persist', () => {
   test('missing file returns default state', () => {
     const path = tmp();
-    expect(loadPersistedState(path)).toEqual(DEFAULT_PERSISTED_STATE);
+    expect(loadPersistedState(path, report)).toEqual(DEFAULT_PERSISTED_STATE);
   });
 
   test('round-trip preserves fields', () => {
@@ -34,20 +36,36 @@ describe('persist', () => {
       editorMode: 'vim' as const,
       cursorByPath: { '/a.ts': { line: 4, col: 7 } },
     };
-    expect(savePersistedState(state, path)).toBe(true);
-    expect(loadPersistedState(path)).toEqual({ ...state, drafts: [] });
+    expect(savePersistedState(state, path, report)).toBe(true);
+    expect(loadPersistedState(path, report)).toEqual({ ...state, drafts: [] });
   });
 
-  test('corrupt json falls back to default', () => {
+  test('corrupt json falls back to default, and says why', () => {
     const path = tmp();
     require('node:fs').writeFileSync(path, '{ this is not json', 'utf8');
-    expect(loadPersistedState(path)).toEqual(DEFAULT_PERSISTED_STATE);
+    problems.length = 0;
+    expect(loadPersistedState(path, report)).toEqual(DEFAULT_PERSISTED_STATE);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(`The editor's saved state (${path}) could not be read`);
+  });
+
+  test('a missing file or another version is the default without a word; a failed save says why', () => {
+    const path = tmp();
+    problems.length = 0;
+    loadPersistedState(path, report);
+    require('node:fs').writeFileSync(path, JSON.stringify({ version: 99 }), 'utf8');
+    loadPersistedState(path, report);
+    expect(problems).toEqual([]);
+    // A folder where the file's parent should be: the write cannot happen.
+    require('node:fs').writeFileSync(`${path}-parent`, 'a file', 'utf8');
+    expect(savePersistedState(DEFAULT_PERSISTED_STATE, `${path}-parent/state.json`, report)).toBe(false);
+    expect(problems[0]).toContain('The recovery checkpoint');
   });
 
   test('wrong version falls back to default', () => {
     const path = tmp();
     require('node:fs').writeFileSync(path, JSON.stringify({ version: 99 }), 'utf8');
-    expect(loadPersistedState(path)).toEqual(DEFAULT_PERSISTED_STATE);
+    expect(loadPersistedState(path, report)).toEqual(DEFAULT_PERSISTED_STATE);
   });
 
   test('non-string openPaths entries are filtered', () => {
@@ -57,12 +75,12 @@ describe('persist', () => {
       openPaths: ['/a', 42, null, '/b'],
       activePath: '/a',
     }), 'utf8');
-    expect(loadPersistedState(path).openPaths).toEqual(['/a', '/b']);
+    expect(loadPersistedState(path, report).openPaths).toEqual(['/a', '/b']);
   });
 
   test('save writes atomically (no .tmp left behind)', () => {
     const path = tmp();
-    savePersistedState(DEFAULT_PERSISTED_STATE, path);
+    savePersistedState(DEFAULT_PERSISTED_STATE, path, report);
     const fs = require('node:fs');
     expect(fs.existsSync(path)).toBe(true);
     expect(fs.existsSync(`${path}.tmp`)).toBe(false);
@@ -88,8 +106,8 @@ test('drafts beyond the file-open limit round-trip without silent loss', () => {
   const path = tmp();
   const text = 'x'.repeat(5 * 1024 * 1024 + 1);
   const state = { ...DEFAULT_PERSISTED_STATE, drafts: [{ path: '/large.txt', label: 'large.txt', text }] };
-  expect(savePersistedState(state, path)).toBe(true);
-  expect(loadPersistedState(path).drafts?.[0].text).toBe(text);
+  expect(savePersistedState(state, path, report)).toBe(true);
+  expect(loadPersistedState(path, report).drafts?.[0].text).toBe(text);
   // POSIX only — Windows has no mode bits for `chmod` to set (see the spill
   // and cli-session suites for the same note).
   if (process.platform !== 'win32') {

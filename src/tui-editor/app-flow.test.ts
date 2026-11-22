@@ -24,7 +24,7 @@ vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
 } }));
 vi.mock('./workspace-fs-bridge', () => ({ readFileForBuffer: f.read, writeFileForBuffer: f.save, checkDisk: f.disk }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => f.state, savePersistedState: f.savedState }));
-vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: f.parse, dropSource: f.drop, installTreeSitterHighlighter() {}, hintLine() {} }));
+vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: f.parse, dropSource: f.drop, installTreeSitterHighlighter() {}, hintLine() {}, onHighlighterProblem: () => () => {} }));
 vi.mock('@/mcp/bridge', () => ({ getMCPBridge: () => ({ getAllConnections: () => [] }) }));
 let app: OctipusEditorApp;
 let key: (data: string) => unknown;
@@ -479,4 +479,10 @@ test('accepting an agent edit keeps the unsaved edits; a change over them is a c
   key('\x1by'); modalKey('a');
   expect(rec.buffer.text()).toBe('MINE\nb\nc\nd\nAGENT\nf\nG');
   expect(app.buffers.byId(rec.id)?.dirty).toBe(true);
+});
+
+// An unparsable gateway URL used to send API calls to localhost:3005 without a word.
+test('a gateway URL that is not a URL is refused with the reason, not replaced by localhost', () => {
+  const tui = { terminal: { rows: 28, columns: 120 }, addChild() {}, addInputListener: () => () => {}, setFocus() {}, requestRender() {}, start() {}, hasOverlay: () => false, showOverlay: () => ({ focus() {}, hide() {} }) } as unknown as TUI;
+  expect(() => new OctipusEditorApp(tui, { exit, gatewayUrl: 'not a url' })).toThrow('The gateway URL "not a url" is not a URL');
 });

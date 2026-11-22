@@ -21,6 +21,8 @@ interface Entry {
   depth: number;
   isDir: boolean;
   parent?: string;
+  /** A row that says a folder could not be read: shown, never opened, renamed or deleted. */
+  note?: true;
 }
 
 export interface FileTreeOptions {
@@ -69,7 +71,7 @@ export class FileTree implements Component, Focusable {
     if (matchesKey(data, 'end'))   { this.selected = Math.max(0, this.entries.length - 1); this.scrollIntoView(); return; }
     if (matchesKey(data, 'enter')) {
       const entry = this.entries[this.selected];
-      if (!entry) return;
+      if (!entry || entry.note) return;
       if (entry.isDir) this.toggle(entry);
       else this.options.onOpen(entry.path);
       return;
@@ -103,7 +105,7 @@ export class FileTree implements Component, Focusable {
     }
     if (matchesKey(data, 'r') && this.focused) { this.refresh(); return; }
     const entry = this.entries[this.selected];
-    if (!entry) return;
+    if (!entry || entry.note) return;
     if (matchesKey(data, 'n')) { this.options.onNewFile?.(entry.isDir ? entry.path : entry.parent ?? this.options.root); return; }
     // The root itself is not renamed or deleted from here.
     if (entry.path === this.options.root) return;
@@ -123,6 +125,7 @@ export class FileTree implements Component, Focusable {
     const entry = this.entries[index];
     if (!entry) return { handled: true };
     this.selected = index;
+    if (entry.note) return { handled: true };
     if (entry.isDir) this.toggle(entry);
     else this.options.onOpen(entry.path);
     return { handled: true };
@@ -183,7 +186,9 @@ function walk(root: string, expanded: Set<string>): Entry[] {
 }
 
 function visit(dir: string, depth: number, out: Entry[], expanded: Set<string>): void {
-  for (const entry of listFolder(dir)) {
+  const listing = listFolder(dir);
+  if (listing.error) out.push({ path: dir, label: `⚠ ${listing.error}`, depth, isDir: false, parent: dir, note: true });
+  for (const entry of listing.entries) {
     if (out.length >= MAX_ENTRIES) return;
     out.push({ path: entry.path, label: entry.name, depth, isDir: entry.isDir, parent: dir });
     // Lazy expansion — only descend into directories the user has opened.

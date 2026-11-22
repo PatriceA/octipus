@@ -99,6 +99,8 @@ Project search runs `rg --json` with the tree's skip list as globs and `--hidden
 
 `installTreeSitterHighlighter()` installs a lazy tree-sitter adapter. `setSource(bufferId, language, text)` parses one buffer and caches tokens by line; `hintLine(bufferId, row)` precedes each lookup and `dropSource` frees a closed buffer. Parsers are shared per language; parses are per buffer, so two files of a language do not evict each other. The app parses a buffer when it opens and again 150 ms after its last edit; a parse that finishes after a newer one is discarded. Each parse is a full parse: incremental parsing would need the old tree edited with the edit's byte offsets first, and an unedited old tree reuses nodes at wrong offsets. Until a re-parse lands, a line whose text differs from the parse is drawn by the line-based highlighter. Missing grammars fall back to it too. Tokens are taken from the stored line (tabs are expanded per piece afterwards), so lines with tabs hit the cache. The packages and grammar assets are resolved from the source installation's dependencies.
 
+Errors are not swallowed: a catch handles a specific expected code (a file removed since it was listed, a dangling symlink, a ripgrep line that is not JSON) or reports the error — in the tree (`listFolder`'s `error`), the picker (`ProjectIndex.unreadable`), the search box (`ProjectSearchDone.unreadable`), or the transcript once per reason (checkpoint failures through `persist.ts`'s `report`, tree-sitter failures through `onHighlighterProblem`, the MCP status).
+
 The file editor is deliberately smaller in scope than an IDE; it has no language server, debugger or full Vim compatibility.
 
 ## Verification

@@ -7,6 +7,16 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: failures it used to swallow are now said.** A folder that
+  cannot be read shows `⚠ cannot read this folder: …` in the tree and is named
+  in the file picker; the fallback project search says how many files it could
+  not read, and its preview why one could not be shown; a corrupt saved state
+  or a failing recovery checkpoint, a tree-sitter module or grammar that did
+  not load (highlighting falls back to the line highlighter), and an
+  unavailable MCP status are written to the transcript once each; a gateway
+  URL that is not a URL is refused instead of replaced by `localhost:3005`. A
+  file removed since it was listed, or a dangling symlink, is still skipped
+  quietly.
 - **Terminal editor: a paste into a tab under agent review says it was not
   pasted.** It used to vanish silently; the bottom bar now says the review has
   to be finished first.
