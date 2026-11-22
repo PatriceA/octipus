@@ -6,6 +6,11 @@
  * markers (`+` / `-` / ` `) coloured by the palette. Scrolls
  * independently so large diffs stay reviewable on a single screen.
  *
+ * The box is as tall as the rows the overlay is given (`setMaxRows`, from
+ * the overlay frame), never taller: the diff body shrinks so the header,
+ * the keys and the borders stay on screen. Below 8 rows the stats line and
+ * the separators go first.
+ *
  * Keys:
  *   a / Enter / Ctrl+] — accept (apply the agent edit to the buffer)
  *   r / Esc / Ctrl+[   — reject (release the lock, leave buffer alone)
@@ -33,6 +38,10 @@ export interface DiffOverlayOptions {
 }
 
 const DEFAULT_BODY_ROWS = 18;
+/** Top border, header, stats, two separators, keys, bottom border. */
+const CHROME_ROWS = 7;
+/** Top border, header, keys, bottom border. */
+const COMPACT_CHROME_ROWS = 4;
 
 export class DiffOverlay implements Component, Focusable {
   focused = false;
@@ -40,6 +49,7 @@ export class DiffOverlay implements Component, Focusable {
   readonly stats: { adds: number; dels: number };
   private scroll = 0;
   private bodyRows: number;
+  private compact = false;
 
   constructor(private readonly options: DiffOverlayOptions) {
     this.hunks = diffLines(options.before, options.after);
@@ -48,6 +58,14 @@ export class DiffOverlay implements Component, Focusable {
   }
 
   invalidate(): void { /* hunks computed once at construction */ }
+
+  /** Fit the box into `rows` terminal rows. */
+  setMaxRows(rows: number): void {
+    if (!Number.isFinite(rows)) return;
+    this.compact = rows < CHROME_ROWS + 1;
+    this.bodyRows = Math.max(1, Math.min(this.options.height ?? Number.POSITIVE_INFINITY, rows - (this.compact ? COMPACT_CHROME_ROWS : CHROME_ROWS)));
+    this.scrollBy(0);
+  }
 
   handleInput(data: string): void {
     if (matchesKey(data, 'a') || matchesKey(data, 'enter') || matchesKey(data, 'ctrl+]')) {
@@ -78,7 +96,7 @@ export class DiffOverlay implements Component, Focusable {
     const stats = `${ok(`+${this.stats.adds}`)} ${error(`-${this.stats.dels}`)}`;
     const help = dim('a/Enter accept · r/Esc reject · ↑↓/PgUp/PgDn scroll');
 
-    const headerLines = [header, stats];
+    const headerLines = this.compact ? [`${header} ${stats}`] : [header, stats];
 
     const innerWidth = Math.max(
       visibleWidth(header),
@@ -97,12 +115,14 @@ export class DiffOverlay implements Component, Focusable {
     const sep    = border('├' + '─'.repeat(boxWidth - 2) + '┤');
     const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
 
+    // A short diff still fills its rows, so the box does not jump as it scrolls.
+    while (bodyLines.length < Math.min(this.bodyRows, this.hunks.length)) bodyLines.push('');
     return [
       top,
       ...headerLines.map(middle),
-      sep,
+      ...(this.compact ? [] : [sep]),
       ...bodyLines.map(middle),
-      sep,
+      ...(this.compact ? [] : [sep]),
       middle(help),
       bottom,
     ];

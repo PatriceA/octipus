@@ -14,6 +14,41 @@ function setup(before: string, after: string) {
 
 function strip(line: string): string { return line.replace(/\x1b\[[0-9;]*m/g, ''); }
 
+describe('DiffOverlay on a short terminal (docs/plans/tui-modernization.md §5.2)', () => {
+  const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n');
+  for (const rows of [24, 16, 10, 6]) {
+    test(`fits ${rows} rows with its keys and borders on screen`, async () => {
+      const { FramedOverlay } = await import('@/tui-pi/overlays/registry');
+      const ctx = setup(long, long.replace(/line/g, 'LINE'));
+      const lines = new FramedOverlay(ctx.overlay, () => rows).render(80).map(strip);
+      expect(lines.length).toBeLessThanOrEqual(rows);
+      expect(lines[0].startsWith('┌')).toBe(true);
+      expect(lines.at(-1)?.startsWith('└')).toBe(true);
+      expect(lines.at(-2)).toContain('accept');
+      expect(lines[1]).toContain('Agent edit: foo.ts');
+    });
+  }
+
+  test('PageDown on a short terminal shows the next line after the last one shown: none are skipped unseen', async () => {
+    const { FramedOverlay } = await import('@/tui-pi/overlays/registry');
+    const ctx = setup(long, long.replace(/line/g, 'LINE'));
+    const framed = new FramedOverlay(ctx.overlay, () => 16);
+    const shown = () => framed.render(80).map(strip).filter((l) => /[-+] (line|LINE) \d+/.test(l)).map((l) => l.replace(/^│ ?|│$/g, '').trim());
+    const firstPage = shown();
+    ctx.overlay.handleInput('\x1b[6~'); // PageDown
+    const secondPage = shown();
+    const all = ctx.overlay.hunks.map((h) => `${h.op === 'add' ? '+' : '-'} ${h.text}`);
+    expect(all.indexOf(secondPage[0])).toBe(all.indexOf(firstPage.at(-1) ?? '') + 1);
+  });
+
+  test('scrolling stops at the last page of the rows it was given', () => {
+    const ctx = setup(long, '');
+    ctx.overlay.setMaxRows(17); // 10 body rows
+    ctx.overlay.handleInput('\x1b[F'); // End
+    expect(ctx.overlay.getScroll()).toBe(ctx.overlay.hunks.length - 10);
+  });
+});
+
 describe('DiffOverlay', () => {
   test('computes hunks and stats up front', () => {
     const ctx = setup('a\nb\nc', 'a\nB\nc');
