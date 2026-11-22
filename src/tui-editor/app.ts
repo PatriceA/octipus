@@ -95,6 +95,7 @@ export class OctipusEditorApp {
   private exiting = false;
   private readonly exit: (code: number) => void;
   private mcpPoll: ReturnType<typeof setInterval> | null = null;
+  private mcpBridge: typeof import('@/mcp/bridge') | null = null;
   private readonly onShutdown?: () => Promise<void>;
   /** Everything to release on shutdown: store subscriptions, input listeners, the adapter listener. */
   private readonly disposers: Array<() => void> = [];
@@ -188,6 +189,7 @@ export class OctipusEditorApp {
       apiClient,
       openFile: (path) => this.files.openFile(path),
       runCommand: (text) => this.handleChatSubmit(text),
+      onMcpBridgeLoaded: (bridge) => this.watchMcpStatus(bridge),
     });
     this.commands = this.commandHost();
     this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
@@ -248,12 +250,28 @@ export class OctipusEditorApp {
     this.disposers.push(...this.persistence.hydrate());
 
     this.disposers.push(this.adapter.on((event) => this.handleEvent(event)));
+  }
 
-    // Poll MCP bridge for status — the bridge emits events but the
-    // surface area is small enough that a 10s poll keeps the wiring
-    // trivial. Failures are silent (no MCP installed / not loaded yet).
-    void this.refreshMcpStatus();
-    this.mcpPoll = setInterval(() => { void this.refreshMcpStatus(); }, 10_000);
+  /**
+   * Show this process's MCP connections in the status row, once the MCP
+   * list (`/mcp`) has loaded the bridge.
+   *
+   * The poll used to import `@/mcp/bridge` from the constructor. That module
+   * pulls in some 200 server modules (the database schema, the vault, the
+   * shell sandbox) and took about a second on the main thread, so the first
+   * frame waited for it: time to first frame 1.6–1.9 s, against about 0.5 s
+   * for the chat. And until the MCP list connects a server the bridge in
+   * this process has none, so the count it reported was always 0 of 0, which
+   * the status row does not show. Starting when the list loads the bridge
+   * shows the same thing at every moment, without the cost.
+   */
+  private watchMcpStatus(bridge: typeof import('@/mcp/bridge')): void {
+    if (this.mcpPoll || this.exiting) return;
+    this.mcpBridge = bridge;
+    // The bridge emits events but the surface area is small enough that a
+    // 10s poll keeps the wiring trivial.
+    this.refreshMcpStatus();
+    this.mcpPoll = setInterval(() => this.refreshMcpStatus(), 10_000);
     this.mcpPoll.unref?.();
   }
 
@@ -296,20 +314,21 @@ export class OctipusEditorApp {
     };
   }
 
-  private async refreshMcpStatus(): Promise<void> {
+  private refreshMcpStatus(): void {
+    if (!this.mcpBridge) return;
     try {
-      const { getMCPBridge } = await import('@/mcp/bridge');
-      const bridge = getMCPBridge();
-      const all = bridge.getAllConnections();
+      const all = this.mcpBridge.getMCPBridge().getAllConnections();
       this.status.setMcp({
         connected: all.filter((c) => c.status === 'connected').length,
         total: all.length,
       });
-      this.tui.requestRender();
-    } catch {
+    } catch (error) {
       this.status.setMcp(null);
+      this.modeBar.setNotice(`MCP status unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error');
     }
+    this.tui.requestRender();
   }
+
 
   async start(): Promise<void> {
     // Install the tree-sitter highlighter eagerly. The setHighlighter
