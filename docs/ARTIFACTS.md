@@ -183,7 +183,7 @@ new artifacts with these; use `kind: "toolbox"` + `tool_id` instead.
 | `http`       | `{ url, method, headers?, body?, jsonpath? }`                 | `headers` may use `${vault.<key>}` placeholders. |
 | `rss`        | `{ url }`                                                     | Normalized to `{ items: [{title, link, pubDate, summary}] }`. |
 | `mcp`        | `{ server, tool, params }`                                    | Routed through the MCP bridge. |
-| `skill_query`| `{ skill, prompt }`                                           | Spends model tokens. Gated by workspace rate-limit. |
+| `skill_query`| `{ skill, prompt }`                                           | **Not enabled.** Accepted when a source is added, but every refresh fails with "skill_query refresh not yet enabled": there is no budgeted, permission-checked way yet to run a model on a schedule for an artifact. |
 
 ## Templates
 
