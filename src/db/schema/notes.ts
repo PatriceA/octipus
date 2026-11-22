@@ -68,6 +68,9 @@ export const notes = pgTable('notes', {
   tagsIdx: index('notes_tags_idx').using('gin', table.tags),
   // Active-notes hot path (mirrors the memories_active partial-index pattern).
   activeIdx: index('notes_active_idx').on(table.userId, table.updatedAt).where(sql`${table.archivedAt} IS NULL`),
+  // Archived notes by the source_id of their chunks: the searches leave those
+  // chunks out with an anti-join on it (migration 0201).
+  archivedSourceIdx: index('notes_archived_source_idx').on(sql`('note:' || ${table.id}::text)`).where(sql`${table.archivedAt} IS NOT NULL`),
 }));
 
 export type Note = typeof notes.$inferSelect;
