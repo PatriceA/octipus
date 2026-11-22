@@ -23,6 +23,13 @@ labels reflect blast radius, not contract guarantees.
   file, an escape sequence in a captured log — is drawn as its control picture
   (`␍`, `␛`) instead of being sent to the terminal, where it corrupted the
   screen. The file itself is unchanged.
+- **Terminal chat and editor: a crash no longer leaves your shell broken.**
+  The terminal was restored only on Ctrl+C and SIGTERM. After an uncaught
+  error, an unhandled promise rejection, a plain `process.exit` or a hangup
+  the shell stayed in raw mode with mouse reporting on and no cursor — every
+  click printed an escape sequence and typing did not echo. Every exit path
+  now turns mouse reporting off, shows the cursor and leaves raw mode first,
+  then prints the error and exits non-zero.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).

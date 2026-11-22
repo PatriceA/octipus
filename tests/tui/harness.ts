@@ -14,6 +14,8 @@ export class TuiHarness {
   readonly screen: InstanceType<typeof Terminal>;
   readonly commands: any[] = [];
   readonly clipboardRequests: string[] = [];
+  /** Every byte the program wrote, in order: modes and cursor visibility that the screen model does not expose. */
+  readonly output: Buffer[] = [];
   readonly server: WebSocketServer;
   readonly proc: ChildProcessWithoutNullStreams;
   readonly exited: Promise<number | null>;
@@ -22,7 +24,7 @@ export class TuiHarness {
   private error = '';
   private stopped = false;
 
-  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number) {
+  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[]) {
     this.server = server;
     mkdirSync(this.project);
     // The TUI signs in with the stored CLI login and nothing else; without
@@ -53,7 +55,7 @@ export class TuiHarness {
       socket.on('close', () => this.sockets.delete(socket));
     });
     this.proc = spawn('python3', [resolve('tests/tui/pty.py'), String(cols), String(rows), process.execPath,
-      '--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', this.project], {
+      '--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', this.project, ...args], {
       cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: this.home, API_PORT: String(port), TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: undefined },
     });
@@ -61,16 +63,17 @@ export class TuiHarness {
       const message = JSON.parse(line);
       if (message.data) {
         const data = Buffer.from(message.data, 'base64');
+        this.output.push(data);
         this.writes = this.writes.then(() => new Promise<void>(resolve => this.screen.write(data, resolve)));
       }
     });
     this.proc.stderr.on('data', data => { this.error += data; });
     this.exited = new Promise(resolve => this.proc.once('exit', resolve));
   }
-  static async start(entry: string, cols = 100, rows = 28): Promise<TuiHarness> {
+  static async start(entry: string, cols = 100, rows = 28, args: string[] = []): Promise<TuiHarness> {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-    return new TuiHarness(entry, server, cols, rows);
+    return new TuiHarness(entry, server, cols, rows, args);
   }
   send(input: string): void { this.proc.stdin.write(JSON.stringify({ input }) + '\n'); }
   resize(cols: number, rows: number): void {
@@ -84,6 +87,8 @@ export class TuiHarness {
     const b = this.screen.buffer.active;
     return Array.from({ length: this.screen.rows }, (_, row) => b.getLine(b.viewportY + row)?.translateToString(true) ?? '').join('\n');
   }
+  /** Everything written so far, decoded; wait for `text()` first so it is complete up to the screen. */
+  rawOutput(): string { return Buffer.concat(this.output).toString('utf8'); }
   async waitFor(needle: string, absent = false): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < 8000) {

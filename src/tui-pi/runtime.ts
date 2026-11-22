@@ -38,6 +38,35 @@ export function getApiPort(): string {
   return '3005';
 }
 
+/** The part of `process` the exit guards use; a fake stands in for it in tests. */
+export interface GuardedProcess {
+  on(event: 'uncaughtException' | 'unhandledRejection' | 'exit' | 'SIGHUP', listener: (value: unknown) => void): unknown;
+  exit(code: number): void;
+  stderr: { write(text: string): unknown };
+}
+
+/**
+ * Put the terminal back on every way out, not only SIGINT and SIGTERM.
+ *
+ * Without this a crash left the user's shell in raw mode with mouse reporting
+ * on and the cursor hidden: every click printed an escape sequence and typing
+ * did not echo. `restore` must be synchronous and idempotent — on `exit` only
+ * synchronous work runs. The error is printed after the restore, so it lands
+ * on a working terminal instead of inside the frame.
+ */
+export function installExitGuards(restore: () => void, proc: GuardedProcess = process): void {
+  const fatal = (kind: string) => (error: unknown) => {
+    restore();
+    proc.stderr.write(`\n${kind}: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    proc.exit(1);
+  };
+  proc.on('uncaughtException', fatal('Uncaught exception'));
+  proc.on('unhandledRejection', fatal('Unhandled rejection'));
+  proc.on('exit', () => restore());
+  // The terminal went away (window closed, SSH dropped): restore what can be, exit as a hangup.
+  proc.on('SIGHUP', () => { restore(); proc.exit(129); });
+}
+
 export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const port = getApiPort();
   const gatewayUrl = options.gatewayUrl || `ws://localhost:${port}/gateway`;
@@ -58,11 +87,23 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
 
   if (options.title) terminal.setTitle(options.title);
 
+  // tui.stop() shows the cursor, then the terminal turns off mouse reporting,
+  // bracketed paste and the keyboard protocol, and leaves raw mode.
+  let restored = false;
+  const restore = (): void => {
+    if (restored) return;
+    restored = true;
+    try { tui.stop(); } catch (error) {
+      process.stderr.write(`Could not restore the terminal: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+  installExitGuards(restore);
+
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { tui.stop(); } catch { /* terminal already torn down */ }
+    restore();
     try { await terminal.drainInput(800, 50); } catch { /* drain failure is non-fatal */ }
   };
 
