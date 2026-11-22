@@ -36,6 +36,8 @@ export class Buffer {
   private selection: Selection | null = null;
   private undoStack: Snapshot[] = [];
   private redoStack: Snapshot[] = [];
+  /** The column Up/Down aim for, valid while the cursor is still where the last vertical move left it. */
+  private goal: { col: number; at: Position } | null = null;
   /** Increments on every mutation; the renderer uses this to memoize. */
   public version = 0;
 
@@ -92,6 +94,14 @@ export class Buffer {
     if (next.line < 0) next.line = 0;
     if (next.line >= this.lines.length) next.line = this.lines.length - 1;
     const lineLen = this.lines[next.line].length;
+    if (dLine !== 0 && dCol === 0) {
+      // A vertical move stays in its column: a shorter line clamps to its end,
+      // and the column comes back on the next line long enough to hold it.
+      const col = this.goal && positionEq(this.goal.at, this.cursor) ? this.goal.col : this.cursor.col;
+      this.setCursor({ line: next.line, col: Math.min(col, lineLen) }, extendSelection);
+      this.goal = { col, at: { ...this.cursor } };
+      return;
+    }
     if (next.col < 0) {
       // Wrap to previous line's end.
       if (next.line > 0) {

@@ -229,3 +229,36 @@ describe('helpers', () => {
     expect(positionLte({ line: 2, col: 0 }, { line: 1, col: 99 })).toBe(false);
   });
 });
+
+describe('vertical movement', () => {
+  test('Down onto a shorter line lands on that line, at its end', () => {
+    const b = new Buffer('a long first line\nab\nthird line here');
+    b.setCursor({ line: 0, col: 10 });
+    b.moveCursor(1, 0);
+    expect(b.getCursor()).toEqual({ line: 1, col: 2 });
+  });
+
+  test('Up onto a shorter line lands on that line, at its end', () => {
+    const b = new Buffer('ab\na long second line');
+    b.setCursor({ line: 1, col: 10 });
+    b.moveCursor(-1, 0);
+    expect(b.getCursor()).toEqual({ line: 0, col: 2 });
+  });
+
+  test('the column returns after passing through a shorter line', () => {
+    const b = new Buffer('a long first line\nab\nthird line here');
+    b.setCursor({ line: 0, col: 10 });
+    b.moveCursor(1, 0);
+    b.moveCursor(1, 0);
+    expect(b.getCursor()).toEqual({ line: 2, col: 10 });
+  });
+
+  test('a horizontal move or an edit in between forgets the remembered column', () => {
+    const b = new Buffer('a long first line\nab\nthird line here');
+    b.setCursor({ line: 0, col: 10 });
+    b.moveCursor(1, 0);
+    b.moveCursor(0, -1);
+    b.moveCursor(1, 0);
+    expect(b.getCursor()).toEqual({ line: 2, col: 1 });
+  });
+});
