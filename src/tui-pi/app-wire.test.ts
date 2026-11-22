@@ -200,3 +200,45 @@ test('a turn another tab started ends on its chat.error, which is shown here', a
   expect(t.chats()).toEqual(['wait for it']);
   await t.app.stop();
 });
+
+/** Where each needle first appears in the transcript, in order; -1 when missing. */
+const order = (screen: string, ...needles: string[]) => needles.map(needle => screen.indexOf(needle));
+
+test('the next queued message goes below the reply it waited for, in the transcript and the export', async () => {
+  const t = await mount();
+  t.submit('first question');
+  const sid = t.sid();
+  t.socket.event(wire.rootSpawned(sid, 'root-1'));
+  t.socket.event(wire.delta(sid, 'root-1', 'Streaming the first'));
+  t.submit('second question');
+  // The real order: the root's worker_completed, then the reply, then the stats.
+  t.socket.event(wire.rootCompleted(sid, 'root-1'));
+  expect(t.chats()).toEqual(['first question']);
+  t.socket.event(wire.chatResponse(sid, 'First answer.', t.lastTurnId()));
+  t.socket.event(wire.sessionStats(sid));
+  expect(t.chats()).toEqual(['first question', 'second question']);
+  const [question, answer, next] = order(t.screen(), 'first question', 'First answer.', 'second question');
+  expect(question).toBeGreaterThan(-1);
+  expect(answer).toBeGreaterThan(question);
+  expect(next).toBeGreaterThan(answer);
+  // The same order in what /export writes.
+  const { transcriptMarkdown } = await import('./transcript-export');
+  const entries = (t.app as unknown as { messages: { entries(): Parameters<typeof transcriptMarkdown>[0] } }).messages.entries();
+  const markdown = transcriptMarkdown(entries, sid, new Date());
+  const [q, a, n] = order(markdown, 'first question', 'First answer.', 'second question');
+  expect(a).toBeGreaterThan(q);
+  expect(n).toBeGreaterThan(a);
+  await t.app.stop();
+});
+
+test('a failed turn shows its error before the next queued message', async () => {
+  const t = await mount();
+  t.submit('will fail');
+  const sid = t.sid();
+  t.submit('after the failure');
+  t.socket.receive(errorFrame('CHAT_ERROR', 'model failed', { sessionId: sid, turnId: t.lastTurnId() }));
+  const [failure, next] = order(t.screen(), 'model failed', 'after the failure');
+  expect(failure).toBeGreaterThan(-1);
+  expect(next).toBeGreaterThan(failure);
+  await t.app.stop();
+});

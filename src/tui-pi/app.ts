@@ -104,6 +104,12 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
 const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
+/** How long after the root agent finished the turn waits for its answer before it ends anyway. */
+const ANSWER_GRACE_MS = 5000;
+
+/** What `trackTurn` decided: the presenter's part, and how the turn ended if it did. */
+interface TurnVerdict extends TurnContext { end?: 'reply' | 'error' | 'stopped' }
+
 /** Turn ids of turns this client gave up on, kept to recognise their late answers. */
 const ENDED_TURNS_KEPT = 32;
 
@@ -177,6 +183,8 @@ export class OctipusTuiApp {
   private turn: RunningTurn | null = null;
   /** Turns of this client that ended before their answer came (stopped, disconnected): that answer is stale. */
   private readonly endedTurnIds: string[] = [];
+  /** Ends the turn when its root finished but no answer came (`awaitAnswer`). */
+  private answerTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the last Escape was pressed, for the double Escape that clears the draft. */
   private lastEscape = 0;
   /** What was submitted from the composer, newest first (Ctrl+R). */
@@ -431,6 +439,7 @@ export class OctipusTuiApp {
   private forgetTurn(): void {
     const id = this.turn?.turnId;
     this.turn = null;
+    if (this.answerTimer) { clearTimeout(this.answerTimer); this.answerTimer = null; }
     if (!id) return;
     this.endedTurnIds.push(id);
     if (this.endedTurnIds.length > ENDED_TURNS_KEPT) this.endedTurnIds.shift();
@@ -458,10 +467,13 @@ export class OctipusTuiApp {
   /**
    * Track the running turn from the gateway's events. Only what is tied to
    * this turn ends it: its reply or failure (by `turnId`), its root agent
-   * finishing or stopped, this session's stop. Returns what the presenter
-   * must know: a stale answer must not wipe the live reply of the next turn.
+   * stopped, this session's stop. Returns what the presenter must know (a
+   * stale answer must not wipe the live reply of the next turn) and how the
+   * turn ended, if it did: `handleEvent` ends it only AFTER the event is in
+   * the transcript, so the next queued message goes below the reply it
+   * waited for.
    */
-  private trackTurn(event: AgentSessionEvent): TurnContext {
+  private trackTurn(event: AgentSessionEvent): TurnVerdict {
     switch (event.kind) {
       case 'agent.start':
         // Only the root agent is the turn; a worker it spawned never takes its place as what Esc stops.
@@ -476,7 +488,7 @@ export class OctipusTuiApp {
         return {};
       case 'session.stopped':
         if (!this.turn) return {};
-        if (event.stopped || event.droppedQueued) { this.endTurn('stopped'); return {}; }
+        if (event.stopped || event.droppedQueued) return { end: 'stopped' };
         // The message is still on its way into the session's queue: nothing
         // of it runs yet, so stop its root the moment it starts.
         if (this.turn.stopping && !this.turn.rootAgentId) {
@@ -487,8 +499,7 @@ export class OctipusTuiApp {
       case 'message': {
         if (event.role !== 'assistant' || event.progress || event.messageId) return {};
         const whose = this.answerOf(event.turnId);
-        if (whose === 'current') this.endTurn();
-        return { stale: whose === 'stale' };
+        return { stale: whose === 'stale', ...(whose === 'current' ? { end: 'reply' as const } : {}) };
       }
       case 'chat.error': {
         const whose = this.answerOf(event.turnId);
@@ -496,27 +507,27 @@ export class OctipusTuiApp {
         // This client's own send reported it with an `error` frame already;
         // a turn another tab started is told here.
         if (this.turn.turnId === null && !event.cancelled) this.pushMessage('system', `Error: The turn failed: ${event.message}`);
-        this.endTurn(this.turn.stopping || event.cancelled ? 'stopped' : 'error');
-        return {};
+        return { end: this.turn.stopping || event.cancelled ? 'stopped' : 'error' };
       }
       case 'agent.end':
         // A positive match only: an agent the server does not mark as the
-        // root (every worker) never ends the turn, whatever its id.
-        if (this.turn && event.root && (this.turn.rootAgentId === null || event.nodeId === this.turn.rootAgentId)) this.endTurn();
+        // root (every worker) never ends the turn, whatever its id. Even the
+        // root finishing does not end it: its answer (`chat.response`,
+        // `chat.error`) follows, and the turn ends on that — ending here sent
+        // the next queued message above the reply it waited for. If no
+        // answer comes, the turn ends after a grace period.
+        if (this.turn && event.root && (this.turn.rootAgentId === null || event.nodeId === this.turn.rootAgentId)) this.awaitAnswer(this.turn);
         return {};
       case 'agent.stopped':
         // The root by id, or — before its id is known — an agent the server
         // marks as a root (the adapter already dropped other sessions').
-        if (this.turn && (event.agentId === this.turn.rootAgentId || (event.root === true && this.turn.rootAgentId === null))) this.endTurn('stopped');
+        if (this.turn && (event.agentId === this.turn.rootAgentId || (event.root === true && this.turn.rootAgentId === null))) return { end: 'stopped' };
         return {};
       case 'error':
         // Only an error frame answering this turn's send ends it; a rate
         // limit, an expired approval, dropped events or a late CHAT_ERROR of a
         // stopped turn are shown and nothing more.
-        if (this.turn?.turnId && event.turnId === this.turn.turnId) {
-          this.endTurn(this.turn.stopping ? 'stopped' : 'error');
-          return { endsTurn: true };
-        }
+        if (this.turn?.turnId && event.turnId === this.turn.turnId) return { endsTurn: true, end: this.turn.stopping ? 'stopped' : 'error' };
         return {};
       case 'delivery':
         if (!this.turn?.turnId || event.turnId !== this.turn.turnId) return {};
@@ -525,7 +536,7 @@ export class OctipusTuiApp {
         if (event.outcome === 'steered') this.turn.turnId = null;
         if (event.outcome === 'refused') {
           this.pushMessage('system', `Error: Message not delivered: ${event.reason ?? 'the gateway refused it'}.`);
-          this.endTurn('error');
+          return { end: 'error' };
         }
         return {};
       case 'status':
@@ -535,6 +546,16 @@ export class OctipusTuiApp {
       default:
         return {};
     }
+  }
+
+  /** The root finished; its answer is on the way. End the turn anyway if it never comes (events dropped). */
+  private awaitAnswer(turn: RunningTurn): void {
+    if (this.answerTimer) clearTimeout(this.answerTimer);
+    this.answerTimer = setTimeout(() => {
+      this.answerTimer = null;
+      if (this.turn === turn) this.endTurn();
+    }, ANSWER_GRACE_MS);
+    this.answerTimer.unref?.();
   }
 
   private quit(): void {
@@ -616,6 +637,7 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
+    this.forgetTurn();
     this.decisions.dispose();
     this.queue.dispose();
     this.session.dispose();
@@ -663,6 +685,12 @@ export class OctipusTuiApp {
       void this.voice?.say(event.content).catch(() => {});
     }
     const turn = this.trackTurn(event);
+    this.present(event, turn);
+    // After the event is shown: the next queued message goes below the reply.
+    if (turn.end) this.endTurn(turn.end);
+  }
+
+  private present(event: AgentSessionEvent, turn: TurnContext): void {
     if (this.session.handleEvent(event, turn)) return;
     switch (event.kind) {
       case 'status':

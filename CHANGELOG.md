@@ -624,6 +624,12 @@ labels reflect blast radius, not contract guarantees.
   session's stop, and shows a late answer without touching the next turn.
   `agent.stopped` now carries the session on its envelope and `root` in its
   payload.
+- **Terminal chat: a queued message goes below the reply it waited for.** The
+  next queued message was sent, and shown, before the reply of the turn it
+  waited on — the root agent finishing arrives just ahead of its reply — so the
+  transcript, `/export` and the exit summary read user, user, reply. The turn
+  now ends on its answer, after it is shown (or 5 s after the root finished if
+  no answer comes).
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

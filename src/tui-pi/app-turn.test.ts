@@ -141,7 +141,7 @@ test('slash commands run during a turn instead of queueing', async () => {
   await t.app.stop();
 });
 
-test('the turn a subagent finishing does not end; the root finishing does', async () => {
+test('the turn a subagent finishing does not end; the root finishing waits for its answer', async () => {
   const t = mount();
   t.submit('fan out');
   gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
@@ -150,6 +150,22 @@ test('the turn a subagent finishing does not end; the root finishing does', asyn
   gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'child-1', role: 'research', root: false });
   expect(t.chats()).toEqual(['fan out']);
   gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general', root: true });
+  expect(t.chats()).toEqual(['fan out']);
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Fanned out.', turnId: t.turnId() });
   expect(t.chats()).toEqual(['fan out', 'later']);
+  await t.app.stop();
+});
+
+test('a root that finished without an answer ends the turn after a grace period', async () => {
+  vi.useFakeTimers();
+  const t = mount();
+  t.submit('lost answer');
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
+  t.submit('next');
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general', root: true });
+  vi.advanceTimersByTime(4000);
+  expect(t.chats()).toEqual(['lost answer']);
+  vi.advanceTimersByTime(2000);
+  expect(t.chats()).toEqual(['lost answer', 'next']);
   await t.app.stop();
 });
