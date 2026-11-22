@@ -66,7 +66,8 @@ export interface StructuralChunk {
   parentIndex: number | null;
 }
 
-const SOFT_MAX_CHARS = 1000;
+/** The most characters of a chunk, its heading line included. */
+export const SOFT_MAX_CHARS = 1000;
 
 export function chunkMarkdown(markdown: string): StructuralChunk[] {
   const chunks: StructuralChunk[] = [];
@@ -118,7 +119,8 @@ export function chunkMarkdown(markdown: string): StructuralChunk[] {
     // glued to the FIRST piece (the section node); overflow pieces nest
     // under it as plain body so retrieval still finds the heading.
     const headingLine = `${'#'.repeat(cur.level)} ${cur.title}`;
-    const pieces = softSplit(trimmed);
+    // The first piece carries the heading line, so it leaves room for it.
+    const pieces = softSplit(trimmed, Math.max(SOFT_MAX_CHARS / 2, SOFT_MAX_CHARS - headingLine.length - 2));
     const firstIndex = chunks.length;
     chunks.push({
       content: `${headingLine}\n\n${pieces[0]}`,
@@ -177,20 +179,56 @@ export function chunkMarkdown(markdown: string): StructuralChunk[] {
   return chunks;
 }
 
-function softSplit(text: string): string[] {
-  if (text.length <= SOFT_MAX_CHARS) return [text];
+function softSplit(text: string, firstMax = SOFT_MAX_CHARS): string[] {
+  return splitParagraphs(text, SOFT_MAX_CHARS, firstMax);
+}
+
+/**
+ * `text` in pieces of at most `max` characters (the first at most
+ * `firstMax`), whole paragraphs together where they fit. A paragraph longer
+ * than a piece (extracted PDF text, a pasted log: no blank line in
+ * thousands of characters) is split at sentence ends, then at whitespace,
+ * then anywhere: it used to stay one chunk of any length, which an embedding
+ * model truncates and a search returns whole.
+ */
+export function splitParagraphs(text: string, max: number, firstMax = max): string[] {
   const out: string[] = [];
-  const paragraphs = text.split(/\n\n+/);
+  const limit = () => (out.length === 0 ? firstMax : max);
   let current = '';
-  for (const para of paragraphs) {
-    if (current.length + para.length + 2 > SOFT_MAX_CHARS && current.length > 0) {
-      out.push(current.trim());
-      current = para;
-    } else {
+  const pushCurrent = () => {
+    if (current.trim()) out.push(current.trim());
+    current = '';
+  };
+  for (const para of text.split(/\n\n+/)) {
+    if (current.length > 0 && current.length + para.length + 2 > limit()) pushCurrent();
+    if (para.length <= limit()) {
       current += (current ? '\n\n' : '') + para;
+      continue;
+    }
+    pushCurrent();
+    for (const piece of splitLong(para, max, limit())) {
+      if (current) pushCurrent();
+      current = piece;
     }
   }
-  if (current.trim()) out.push(current.trim());
+  pushCurrent();
+  return out;
+}
+
+/** One paragraph longer than `max` in pieces of at most `max` (the first at most `firstMax`): at sentence ends, then whitespace, then anywhere. */
+function splitLong(para: string, max: number, firstMax: number): string[] {
+  const out: string[] = [];
+  let rest = para.trim();
+  while (rest.length > (out.length === 0 ? firstMax : max)) {
+    const room = out.length === 0 ? firstMax : max;
+    const window = rest.slice(0, room + 1);
+    const sentence = Math.max(...['. ', '? ', '! ', '; ', '\n'].map((m) => window.lastIndexOf(m, room - 1)));
+    const space = window.lastIndexOf(' ', room);
+    const cut = sentence > room * 0.5 ? sentence + 1 : space > room * 0.5 ? space : room;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) out.push(rest);
   return out;
 }
 

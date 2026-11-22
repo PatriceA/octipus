@@ -8,7 +8,7 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
 import { requireCapability } from '@/core/capabilities/gates';
 import { type KnowledgeOwner, type KnowledgeScope, ownerPredicate, PRODUCT_DOCS_SOURCE, scopePredicate } from './knowledge-scope';
-import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
+import { chunkMarkdown, looksLikeMarkdown, SOFT_MAX_CHARS, splitParagraphs, type StructuralChunk } from './markdown-chunker';
 import { type CleanupOptions, type CleanupResult, runCleanup } from './retention-service';
 
 /**
@@ -121,7 +121,8 @@ export interface AnyTermSearch {
   embeddingError: string | null;
 }
 
-const MAX_CHUNK_SIZE = 1000; // chars per chunk
+/** Characters per chunk, at most: the flat chunker's and the structural one's (`SOFT_MAX_CHARS`). */
+export const MAX_CHUNK_SIZE = SOFT_MAX_CHARS;
 
 /**
  * The most query lexemes the any-term keyword leg ORs together. Its cost
@@ -1565,22 +1566,7 @@ export class EmbeddingService {
 
   chunkText(text: string, maxSize = MAX_CHUNK_SIZE): string[] {
     if (text.length <= maxSize) return [text];
-
-    const chunks: string[] = [];
-    const paragraphs = text.split(/\n\n+/);
-    let current = '';
-
-    for (const para of paragraphs) {
-      if (current.length + para.length + 2 > maxSize && current.length > 0) {
-        chunks.push(current.trim());
-        current = para;
-      } else {
-        current += (current ? '\n\n' : '') + para;
-      }
-    }
-
-    if (current.trim()) chunks.push(current.trim());
-    return chunks;
+    return splitParagraphs(text, maxSize);
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService, keywordLegLexemes, MAX_KEYWORD_LEXEMES, sha256Hex } from './embeddings';
+import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService, keywordLegLexemes, MAX_CHUNK_SIZE, MAX_KEYWORD_LEXEMES, sha256Hex } from './embeddings';
 
 /**
  * Unit tests for the loudest new fail-loud path: when the embedding provider
@@ -334,5 +334,14 @@ describe('keywordLegLexemes — which lexemes the any-term keyword leg ORs', () 
 
   test('duplicates count once', () => {
     expect(keywordLegLexemes(['websit', 'websit', 'cost'])).toEqual(['websit', 'cost']);
+  });
+});
+
+describe('chunkText', () => {
+  test('a paragraph longer than a chunk is split; no chunk exceeds MAX_CHUNK_SIZE', () => {
+    const text = 'Extracted PDF text without blank lines runs on. '.repeat(120);
+    const chunks = new EmbeddingService('some-embedding-model').chunkText(text);
+    expect(chunks.length).toBeGreaterThan(5);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(MAX_CHUNK_SIZE);
   });
 });

@@ -39,10 +39,13 @@ one hybrid search.
   BM25 ranking via `ts_rank_cd`.
 - **Hybrid search:** Reciprocal Rank Fusion (RRF, `k=60`,
   `alpha=0.6`) merges BM25 and vector result lists.
-- **Chunk size:** 1000 characters per chunk for flat content; the
-  structural Markdown chunker emits one chunk per heading + one per
-  body block and threads the `section_path` so retrieval can pull
-  the matching clause plus its ancestor headings.
+- **Chunk size:** at most 1000 characters per chunk, whole paragraphs
+  together where they fit; a paragraph longer than that is split at
+  sentence ends, then at whitespace. The structural Markdown chunker
+  emits one chunk per heading + one per body block (the heading line
+  counts toward the 1000) and threads the `section_path` so retrieval
+  can pull the matching clause plus its ancestor headings. Rows indexed
+  before the split of long paragraphs can be longer.
 - **Batched embedding:** chunks are embedded `EMBED_BATCH_SIZE` (64) at a
   time via `EmbeddingService.embedBatch`, not one HTTP call per chunk.
   Failures are still accounted per chunk: a failed batch marks only its
