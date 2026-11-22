@@ -16,7 +16,7 @@
 import xterm from '@xterm/headless';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import { afterAll, describe, expect, test } from 'vitest';
-import { displayText } from './terminal-text';
+import { displayLine, displayText } from './terminal-text';
 
 const { Terminal } = xterm;
 const terminal = new Terminal({ cols: 200, rows: 2, allowProposedApi: true });
@@ -112,6 +112,14 @@ describe('what displayText changes for width', () => {
 
   test('a combining mark with nothing to combine with is put on a no-break space', () => {
     expect(displayText('\u0301\u0302x\n\u0301y\nz\u0301')).toBe('\u00a0\u0301\u0302x\n\u00a0\u0301y\nz\u0301');
+  });
+
+  test('one-row text keeps the base it gave a leading combining mark', async () => {
+    for (const text of ['\u0301\u0302x', 'a\n\u0301b', '  \n\u0301\u0302 x ']) {
+      const line = displayLine(text);
+      expect(await cells(`\x1b[31m│ \x1b[39m${line}`)).toBe(visibleWidth(`│ ${line}`));
+    }
+    expect(displayLine('\n\u0301x')).toBe('\u00a0\u0301x');
   });
 
   test('half of a surrogate pair becomes a replacement character; whole pairs are kept', () => {

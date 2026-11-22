@@ -66,7 +66,8 @@ export function displayText(text: string): string {
 
 /** One-row display text for labels, previews and status segments. */
 export function displayLine(text: string): string {
-  return displayText(text).replace(/\s*\n\s*/g, ' ').trim();
+  // Trimming can take the no-break space a leading mark was given; give it back.
+  return displayText(text).replace(/\s*\n\s*/g, ' ').trim().replace(ORPHAN_MARKS, '$1\u00a0$2');
 }
 
 /** Last line of defence for a rendered row that already carries the app's own styling. */
