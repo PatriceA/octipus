@@ -50,11 +50,13 @@ export function graphemes(text: string): Array<{ index: number; segment: string 
  * A control byte in a file (the `\r` of a stray CR, an ESC in a captured log)
  * is shown as its one-cell control picture. Written raw it would be obeyed by
  * the terminal: the cursor moves, later rows land in the wrong place and the
- * frame is corrupted until the next full repaint. One character maps to one
- * character, so buffer columns are unchanged.
+ * frame is corrupted until the next full repaint. A C1 control (U+0080 to
+ * U+009F: NEL, CSI…) has no picture and is shown as U+FFFD; terminals obey
+ * those too (U+009B starts an escape sequence like ESC [). One character maps
+ * to one character, so buffer columns are unchanged.
  */
 export function visibleControls(text: string): string {
-  return text.replace(/[\x00-\x08\x0a-\x1f\x7f]/g, c => String.fromCharCode(c === '\x7f' ? 0x2421 : 0x2400 + c.charCodeAt(0)));
+  return text.replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/g, c => c === '\x7f' ? '\u2421' : c > '\x7f' ? '\ufffd' : String.fromCharCode(0x2400 + c.charCodeAt(0)));
 }
 
 /**

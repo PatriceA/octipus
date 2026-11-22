@@ -179,13 +179,15 @@ test('bracketed multiline paste inserts content without escape sequences', () =>
 });
 
 test('control bytes in a file are shown, never sent to the terminal', () => {
-  const { editor, rec } = setup('crlf line\r\nclear \x1b[2J screen\nbell \x07 del \x7f end');
+  const { editor, rec } = setup('crlf line\r\nclear \x1b[2J screen\nbell \x07 del \x7f end\nnel \x85 csi \x9b2J end');
   const raw = editor.render(40);
   // Only the editor's own colour codes may carry an escape byte.
-  for (const line of raw) expect(line.replace(/\x1b\[[0-9;]*m|\x1b_pi:c\x07/g, '')).not.toMatch(/[\x00-\x1f\x7f]/);
+  for (const line of raw) expect(line.replace(/\x1b\[[0-9;]*m|\x1b_pi:c\x07/g, '')).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   const lines = raw.map(strip);
   expect(lines[0]).toContain('crlf line\u240d');
   expect(lines[1]).toContain('clear \u241b[2J screen');
   expect(lines[2]).toContain('bell \u2407 del \u2421 end');
+  // C1 controls: U+009B is CSI to a terminal, as ESC [ is.
+  expect(lines[3]).toContain('nel \ufffd csi \ufffd2J end');
   expect(rec.buffer.text()).toContain('\x1b[2J'); // the file itself is untouched
 });
