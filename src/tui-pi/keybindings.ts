@@ -56,6 +56,7 @@ declare module '@/tui-kit' {
     'app.transcript.dump': true;
     'app.queue.edit': true;
     'app.tools.toggle': true;
+    'app.history.search': true;
   }
 }
 
@@ -87,6 +88,7 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.transcript.dump': { defaultKeys: 'alt+o', description: 'Show the transcript in the terminal scrollback (any key returns)' },
   'app.queue.edit':      { defaultKeys: 'alt+e', description: 'Take the newest queued message back into the composer' },
   'app.tools.toggle':    { defaultKeys: 'ctrl+o', description: 'Expand or collapse tool calls and thinking in the transcript' },
+  'app.history.search':  { defaultKeys: 'ctrl+r', description: 'Search what you sent before and put it back in the composer' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFAULT_USER_PATH = join(homedir(), '.octipus', 'keybindings.json');

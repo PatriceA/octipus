@@ -30,6 +30,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   tui({ name: 'copy', description: 'Copy the last response or the loaded transcript to the clipboard', argumentHint: '[last|transcript]' }),
   tui({ name: 'export', description: 'Write the transcript to a Markdown file', argumentHint: '[path]' }),
   tui({ name: 'scrollback', description: 'Show the transcript in the terminal scrollback; any key returns' }),
+  tui({ name: 'search', description: 'Search the transcript (also Ctrl+F); Enter / Shift+Enter move, Esc returns' }),
   tui({ name: 'exit',     description: 'Quit the TUI' }),
   tui({ name: 'quit',     description: 'Quit the TUI' }),
   tui({ name: 'project',  description: 'Show or set the active project path',

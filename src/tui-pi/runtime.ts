@@ -6,6 +6,7 @@ import {
   TuiAltScreen, TuiMainScreen,
 } from '@/tui-kit';
 import { defaultClipboardEnvironment } from '@/tui-kit/clipboard';
+import { installTranscriptSearch, type TranscriptSearch } from '@/tui-kit/transcript-search';
 import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
 import { type MouseMode, resolveTerminalSettings, type ScreenMode } from './settings';
@@ -47,6 +48,8 @@ export interface Runtime {
    * its search and selection), wait for a key, and come back.
    */
   dumpToScrollback: (text: string) => Promise<void>;
+  /** The transcript search on the alternate screen (`/search`, Ctrl+F, Ctrl+Shift+F); absent inline and for the editor. */
+  search?: TranscriptSearch;
 }
 
 /**
@@ -108,6 +111,16 @@ function withoutViewportKeys(user: KeybindingsConfig): KeybindingsConfig {
   return { ...Object.fromEntries(ids.map(id => [`tui.altScreen.${id}`, []])), ...user };
 }
 
+/**
+ * The chat searches its transcript with Ctrl+F as well as pi-tui's
+ * Ctrl+Shift+F: without the kitty keyboard protocol or modifyOtherKeys a
+ * terminal sends the same byte for both, so Ctrl+Shift+F alone was often
+ * unreachable. Ctrl+F stops moving the composer's cursor right (Right does).
+ */
+function withChatSearchKeys(user: KeybindingsConfig): KeybindingsConfig {
+  return { 'tui.altScreen.search': ['ctrl+shift+f', 'ctrl+f'], ...user };
+}
+
 export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const port = getApiPort();
   const gatewayUrl = options.gatewayUrl || `ws://localhost:${port}/gateway`;
@@ -134,6 +147,7 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const copy = (text: string) => copyToClipboard(text, defaultClipboardEnvironment(data => terminal.write(data)));
 
   let tui: TUI;
+  let search: TranscriptSearch | undefined;
   if (screen === 'alt') {
     const selectionText = options.selectionText ?? ((text: string) => text);
     const alt = new class extends TuiAltScreen {
@@ -155,13 +169,14 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
       },
     });
     tui = alt;
+    if (!options.ownsScrolling) search = installTranscriptSearch(alt);
   } else {
     tui = new TuiMainScreen(terminal, options.showHardwareCursor ?? false);
     // Only the inline screen hands raw mouse reports to the app; the alternate screen parses them itself.
     if (mouse === 'app') tui.addInputListener(mouseReportFilter(tui));
   }
   const userBindings = loadOctipusKeybindings();
-  const keybindings = installOctipusKeybindings(options.ownsScrolling ? withoutViewportKeys(userBindings) : userBindings);
+  const keybindings = installOctipusKeybindings(options.ownsScrolling ? withoutViewportKeys(userBindings) : withChatSearchKeys(userBindings));
 
   if (options.title) terminal.setTitle(options.title);
 
@@ -208,5 +223,5 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   let exitHandler = (_signal: 'SIGINT' | 'SIGTERM') => { void shutdown().then(() => process.exit(0)); };
   process.on('SIGINT', () => exitHandler('SIGINT'));
   process.on('SIGTERM', () => exitHandler('SIGTERM'));
-  return { tui, screen, mouse, gatewayUrl, keybindings, shutdown, copy, dumpToScrollback, setExitHandler: handler => { exitHandler = handler; } };
+  return { tui, screen, mouse, gatewayUrl, keybindings, shutdown, copy, dumpToScrollback, search, setExitHandler: handler => { exitHandler = handler; } };
 }

@@ -58,10 +58,22 @@ describe('CommandPalette', () => {
     expect(ctx.palette.getFilter()).toBe('help');
   });
 
-  test('non-printable chars do not extend filter', () => {
+  test('control bytes do not extend the filter; a space separates words that must all match', () => {
     const ctx = makePalette();
-    ctx.palette.handleInput(' ');
+    ctx.palette.handleInput('\x07');
     expect(ctx.palette.getFilter()).toBe('');
+    for (const c of 'con ctx') ctx.palette.handleInput(c);
+    expect(ctx.palette.getFilter()).toBe('con ctx');
+    ctx.palette.handleInput('\r');
+    expect(ctx.selected).toBe('compact');
+  });
+
+  test('the preview says what the highlighted command does and where it runs', () => {
+    const palette = new CommandPalette({ onCommand: () => {}, onCancel: () => {} });
+    for (const c of 'export') palette.handleInput(c);
+    const text = palette.render(80).map(strip).join('\n');
+    expect(text).toContain('Write the transcript to a Markdown file');
+    expect(text).toContain('Runs in this terminal.');
   });
 
   test('Enter selects the highlighted item', () => {

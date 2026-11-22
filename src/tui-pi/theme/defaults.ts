@@ -10,6 +10,7 @@
  */
 import { Chalk } from 'chalk';
 import type { EditorTheme, MarkdownTheme, SelectListTheme } from '@/tui-kit';
+import type { FuzzyListTheme } from '@/tui-kit/fuzzy-list';
 
 const chalk = new Chalk({ level: 3 });
 
@@ -88,6 +89,15 @@ export function getSelectListTheme(): SelectListTheme {
     description: (text) => chalk.hex(p.dim)(text),
     scrollInfo: (text) => chalk.hex(p.dim)(text),
     noMatch: (text) => chalk.hex(p.dim)(text),
+  };
+}
+
+export function getFuzzyListTheme(): FuzzyListTheme {
+  return {
+    border: (text) => chalk.hex(active.border)(text),
+    title: (text) => chalk.bold.hex(active.accent)(text),
+    selected: (text) => chalk.bold.hex(active.accent)(text),
+    dim: (text) => chalk.hex(active.dim)(text),
   };
 }
 

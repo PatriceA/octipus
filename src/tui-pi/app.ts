@@ -10,6 +10,9 @@ import { writeFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
 import { QueuedMessages } from './components/queued-messages';
+import { FuzzyList } from '@/tui-kit/fuzzy-list';
+import type { TranscriptSearch } from '@/tui-kit/transcript-search';
+import { getFuzzyListTheme } from './theme/defaults';
 /**
  * OctipusTuiApp.
  *
@@ -63,7 +66,12 @@ export interface OctipusTuiAppOptions {
   dumpToScrollback?: (text: string) => Promise<void>;
   /** The mouse mode the runtime set up; it decides the welcome hint and whether Up/Down scroll. */
   mouse?: MouseMode;
+  /** The alternate screen's transcript search (`runtime.search`), for `/search`. */
+  search?: TranscriptSearch;
 }
+
+/** Input history kept for Ctrl+R: the newest first, no repeats. */
+const HISTORY_MAX = 500;
 
 function newSessionId(): string {
   return randomUUID();
@@ -80,7 +88,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
 /** Two Escapes within this long, with no turn running, clear the draft. */
@@ -142,6 +150,11 @@ export class OctipusTuiApp {
   private turn: RunningTurn | null = null;
   /** When the last Escape was pressed, for the double Escape that clears the draft. */
   private lastEscape = 0;
+  /** What was submitted from the composer, newest first (Ctrl+R). */
+  private inputHistory: string[] = [];
+  /** The picker open now (history, sessions, models, skills), if any. */
+  private pickerHandle: OverlayHandle | null = null;
+  private readonly search?: TranscriptSearch;
   private imageBusy = false;
   private imageCounter = 0;
 
@@ -163,6 +176,7 @@ export class OctipusTuiApp {
     this.copy = options.copy;
     this.dumpToScrollback = options.dumpToScrollback;
     this.mouse = options.mouse ?? 'app';
+    this.search = options.search;
     this.sessionUsed = options.sessionId !== undefined;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
@@ -224,6 +238,7 @@ export class OctipusTuiApp {
       }
       if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
       if (kb.matches(data, 'app.queue.edit') && this.queue.size) { this.editQueued(); return { consume: true }; }
+      if (kb.matches(data, 'app.history.search')) { this.openHistoryPicker(); return { consume: true }; }
       if (kb.matches(data, 'app.tools.toggle')) {
         this.messages.setDetail(!this.messages.getDetail());
         this.tui.requestRender();
@@ -392,7 +407,7 @@ export class OctipusTuiApp {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
     rows.push(['Esc', 'Stop the running turn; with none running, twice clears the draft'], ['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
-    if (this.transcript) rows.push(['Ctrl+Shift+F', 'Search the transcript'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
+    if (this.transcript) rows.push(['Ctrl+F / Ctrl+Shift+F', 'Search the transcript: Enter / Shift+Enter next / previous, Esc returns to where you were'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
     const w = Math.max(...rows.map(([k]) => k.length));
     return `Hotkeys (override in ~/.octipus/keybindings.json):\n${rows.map(([k, d]) => `  ${k.padEnd(w)}  ${d}`).join('\n')}`;
   }
@@ -563,6 +578,7 @@ export class OctipusTuiApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleSubmit(rawText: string): void {
+    this.remember(rawText);
     if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, text => this.pushMessage('system', text), this.copy)) return;
     const text = rawText.trim();
     if (!text) return;
@@ -787,6 +803,37 @@ export class OctipusTuiApp {
     this.loginHandle = handle;
   }
 
+  private remember(text: string): void {
+    const entry = text.trim();
+    if (!entry) return;
+    this.inputHistory = [entry, ...this.inputHistory.filter(item => item !== entry)].slice(0, HISTORY_MAX);
+  }
+
+  /** Open a picker; one at a time. `onChoose` runs after it closed. */
+  private openPicker<T>(title: string, items: Array<{ value: T; label: string; description?: string }>, onChoose: (value: T) => void, preview?: (value: T) => string, emptyText?: string): FuzzyList<T> | null {
+    if (this.pickerHandle) return null;
+    const close = () => {
+      this.pickerHandle?.hide();
+      this.pickerHandle = null;
+      this.tui.setFocus(this.composer);
+      this.tui.requestRender();
+    };
+    const list = new FuzzyList<T>({
+      title, items, emptyText, theme: getFuzzyListTheme(),
+      preview: preview ? item => preview(item.value) : undefined,
+      onSelect: item => { close(); onChoose(item.value); },
+      onCancel: close,
+    });
+    this.pickerHandle = this.overlays.showPicker(list);
+    return list;
+  }
+
+  /** Ctrl+R: find something sent before and put it back in the composer. */
+  private openHistoryPicker(): void {
+    const items = this.inputHistory.map(text => ({ value: text, label: text.split('\n')[0] ?? text, description: text.includes('\n') ? `+${text.split('\n').length - 1} lines` : undefined }));
+    this.openPicker('Input history', items, text => { this.composer.setText(text); }, text => text, 'Nothing sent yet in this run');
+  }
+
   private openCommandPalette(): void {
     if (this.paletteHandle) return;
     this.paletteHandle = this.overlays.showCommandPalette({
@@ -832,6 +879,10 @@ export class OctipusTuiApp {
         return;
       case 'scrollback':
         void this.dumpTranscript();
+        return;
+      case 'search':
+        if (!this.search) { this.pushMessage('system', 'Transcript search needs the alternate screen; it is not available with --inline.'); return; }
+        if (!this.search.isOpen()) this.search.toggle();
         return;
       case 'resume': {
         const n = Number(value);
