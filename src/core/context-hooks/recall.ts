@@ -172,10 +172,12 @@ export function qualifyHit(hit: { cosine: number | null; matchedLexemes: readonl
 
 /**
  * The relative cut: hits more than `maxGap` below the best one are dropped.
- * It is about cosine, so only hits that qualified by similarity alone are cut,
- * and only they set the best: a passage that covers the message or names its
- * identifier stays whatever its cosine, and its cosine does not raise the bar
- * for the others. Order is kept; it only ever removes.
+ * It is about cosine, so the best is the highest cosine among hits that
+ * qualified on similarity, and only hits that qualified on similarity alone
+ * are cut: a passage that covers the message or names its identifier stays
+ * whatever its cosine. (Such a passage that did not also qualify on
+ * similarity has a cosine below `minSimilarity`, so below the best.) Order
+ * is kept; it only ever removes.
  */
 export function relativeCut<T extends { cosine: number | null; qualifiedBy: readonly QualifiedBy[] }>(hits: readonly T[], maxGap: number): T[] {
   const bySimilarity = hits.filter((h) => h.qualifiedBy.includes('similarity') && h.cosine !== null);

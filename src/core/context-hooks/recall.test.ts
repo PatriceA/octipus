@@ -103,16 +103,18 @@ describe('relativeCut', () => {
     expect(out.map((x) => x.id)).toEqual(['a', 'b']);
   });
 
-  test('a keyword-qualified passage is neither cut nor sets the bar', () => {
+  test('a keyword-qualified passage is not cut, however far below the best', () => {
+    // Reachable states only (minSimilarity 0.45): a passage qualified on keywords alone has a cosine below the bar.
     const out = relativeCut([
-      h('kw', 0.95, ['coverage']),
+      h('top', 0.8, ['similarity']),
+      h('kw', 0.3, ['coverage']),
       h('a', 0.5, ['similarity']),
       h('id', 0.1, ['identifier']),
       h('none', null, ['coverage']),
-      h('both', 0.3, ['similarity', 'coverage']),
+      h('both', 0.46, ['similarity', 'coverage']),
     ], 0.15);
-    // Best by similarity is 0.5 (not the keyword hit's 0.95): 'a' stays; 'both' is below the cut but qualified on keywords too.
-    expect(out.map((x) => x.id)).toEqual(['kw', 'a', 'id', 'none', 'both']);
+    // Best by similarity is 0.8: 'a' is cut; 'both' is below the cut too but qualified on keywords as well.
+    expect(out.map((x) => x.id)).toEqual(['top', 'kw', 'id', 'none', 'both']);
   });
 
   test('only removes', () => {
