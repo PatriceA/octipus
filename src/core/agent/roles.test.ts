@@ -248,6 +248,10 @@ describe('OUTPUT_FORMATTING_RULES', () => {
     expect(OUTPUT_FORMATTING_RULES).toMatch(/triple-backtick fenced blocks ONLY for multi-line/i);
   });
 
+  test('does not forbid an interactive answer where the prompt offers one', () => {
+    expect(OUTPUT_FORMATTING_RULES).toContain('or an `octi-ui` interactive answer where one is offered');
+  });
+
   test('strip also removes formatting block when adjacent to preamble', () => {
     const inner = 'ROLE_TEXT';
     const composed = SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + inner;

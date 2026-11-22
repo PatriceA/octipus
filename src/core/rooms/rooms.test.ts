@@ -452,6 +452,28 @@ describe('posting and turns', () => {
     expect(fx.turns[1].label).toEqual({ suspicious: true, private: false, secret: false });
   });
 
+  test('a post that answers a view of the room is addressed, and its values reach the turn as a note', async () => {
+    const { storeInlineUiBlocks } = await import('@/core/inline-ui/extract');
+    const view = JSON.stringify({ data: { day: 'tue' }, root: { id: 'ok', component: 'Button', label: 'OK', action: { event: { name: 'day_chosen', context: { day: { '@path': '/day' } } } } } });
+    const [blockId] = (await storeInlineUiBlocks(`\`\`\`octi-ui title="Day"\n${view}\n\`\`\``, { sessionId: generalId, requesterId: editorId, contentStorageOff: false })).stored;
+    const { getRunContext } = await import('@/core/run-context');
+    let notes: readonly string[] | undefined;
+    fx.during.push(() => { notes = getRunContext()?.inlineUiNotes; });
+    const res = await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, {
+      content: 'Tuesday', inlineUi: { action: { blockId, name: 'day_chosen', componentId: 'ok', context: { day: 'tue' } } },
+    });
+    expect(res.status, await res.clone().text()).toBe(201);
+    const body = await res.json();
+    expect(body.queuedPosition).toBeDefined();
+    await settle(generalId);
+    expect(notes).toEqual([`(system note: the user answered interactive answer ${blockId} — event "day_chosen", values: {"day":"tue"})`]);
+    const refused = await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${generalId}/messages`, {
+      content: 'Tuesday', inlineUi: { action: { blockId, name: 'day_chosen', componentId: 'ok', context: { day: 'tue', extra: 1 } } },
+    });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error).toMatch(/not declared: extra/);
+  });
+
   test('no room agent survives its turn', async () => {
     const { getAgentManager } = await import('@/core/agent-manager');
     const manager = getAgentManager();

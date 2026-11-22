@@ -6,7 +6,7 @@ import { canActInSession } from '@/core/rooms/access';
 import { mentionsOctipus } from '@/core/rooms/service';
 import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
-import { resolveInlineUiTurnNotes, type InlineUiTurnNotes } from '@/core/inline-ui/turn-input';
+import { InlineUiActionRefused, recordInlineUiAction, resolveInlineUiTurnNotes, type InlineUiTurnNotes } from '@/core/inline-ui/turn-input';
 import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
 import { handleRoomFrame, isRoomFrame } from './room-handlers';
@@ -140,12 +140,14 @@ export async function steerRunningRootAgent(sessionId: string, content: string, 
     const metadata = {
       ...(notes ? { promptContext: notes } : {}),
       ...(inlineUi?.provenanceId ? { inlineUiProvenance: { id: inlineUi.provenanceId } } : {}),
+      ...(inlineUi?.action ? { inlineUiAction: inlineUi.action.record } : {}),
     };
     await messageRepository.create({ sessionId, role: 'user', content, ...(Object.keys(metadata).length ? { metadata } : {}) });
     await sessionRepository.incrementMessageCount(sessionId);
   } catch (err) {
     coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
   }
+  if (inlineUi?.action) await recordInlineUiAction(sessionId, inlineUi.action);
   return { steered: true };
 }
 
@@ -351,7 +353,17 @@ async function handleChatSend(
     // `steer`). Keeps one live root agent per session; the user can redirect
     // work mid-flight. A root that cannot take input mid-turn (a buffered
     // CLI) gets the message as its next turn instead.
-    const inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
+    // An answer from a view that fails a check refuses the whole send, before
+    // anything is steered, queued or stored: the client says why.
+    let inlineUiNotes: InlineUiTurnNotes;
+    try {
+      inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
+    } catch (err) {
+      if (!(err instanceof InlineUiActionRefused)) throw err;
+      coreLogger.info({ sessionId: message.sessionId, reason: err.message }, 'Interactive answer refused at send');
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'INVALID_MESSAGE', message: `The interactive answer was not sent: ${err.message}` });
+      return;
+    }
     let queuedBecause: string | undefined;
     if (mode === 'auto' || mode === 'steer') {
       const steer: SteerAttempt = message.attachments?.length || message.fileRefs?.length
@@ -368,6 +380,7 @@ async function handleChatSend(
             // Said aloud: a voice conversation on this chat speaks what the running turn answers next.
             ...(message.spoken ? { spoken: true } : {}),
             ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
+            ...(inlineUiNotes.action ? { inlineUiAction: inlineUiNotes.action.record } : {}),
           },
         });
         deliver('steered');
@@ -508,7 +521,7 @@ async function handleChatSend(
     const result = await rootAgent.handleMessage(
       message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
       undefined, undefined, undefined,
-      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
+      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId, action: inlineUiNotes.action },
       // A message whose reply is read aloud: this turn answers in speech.
       reservation || message.spoken ? { ...(reservation ? { queueReservation: reservation } : {}), ...(message.spoken ? { spoken: true } : {}) } : undefined,
     );

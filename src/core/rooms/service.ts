@@ -19,6 +19,7 @@
  */
 import { type CompanionIdentity, isCompanionAppearance, isCompanionIdentity, withoutCompanionMentions } from '@/shared/companion';
 import { companionIdentity, mentionsOwnCompanion } from './companion';
+import type { InlineUiAcceptedAction, InlineUiActionInput } from '@/core/inline-ui/turn-input';
 import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -223,11 +224,21 @@ export interface RoomMessageView {
     unprompted?: boolean;
     /** Posted by a remote member's own agent (federation §7.4): `authorName` reads "anna's agent [B:…]". */
     agent?: boolean;
+    /** The post answers a view of the room (docs/plans/inline-ui-views-spec.md §4): the bubble shows the values. */
+    inlineUiAction?: { blockId: string; name: string; context: Record<string, unknown> };
   };
+}
+
+function inlineUiActionOf(value: unknown): { blockId: string; name: string; context: Record<string, unknown> } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { blockId, name, context } = value as Record<string, unknown>;
+  return typeof blockId === 'string' && typeof name === 'string' && typeof context === 'object' && context !== null && !Array.isArray(context)
+    ? { blockId, name, context: context as Record<string, unknown> } : undefined;
 }
 
 export function messageView(row: Message, authorName: string | null): RoomMessageView {
   const meta = (row.metadata ?? {}) as Record<string, unknown>;
+  const inlineUiAction = inlineUiActionOf(meta.inlineUiAction);
   return {
     id: row.id,
     roomId: row.sessionId,
@@ -246,6 +257,7 @@ export function messageView(row: Message, authorName: string | null): RoomMessag
       ...(typeof meta.requesterId === 'string' ? { requesterId: meta.requesterId } : {}),
       ...(meta.unprompted === true ? { unprompted: true } : {}),
       ...(meta.agent === true ? { agent: true } : {}),
+      ...(inlineUiAction ? { inlineUiAction } : {}),
     },
   };
 }
@@ -379,6 +391,12 @@ export async function postRoomMessage(
      * named beside it in every room turn's transcript.
      */
     guardFlags?: string[];
+    /**
+     * The post answers a view of the room (docs/plans/inline-ui-views-spec.md
+     * §4): checked against the stored view (a failed check refuses the post),
+     * kept on the row, and the post is addressed to Octipus.
+     */
+    inlineUiAction?: InlineUiActionInput;
   },
   opts: { workspaceId?: string; allowAgent?: boolean } = {},
 ): Promise<{ message: RoomMessageView; access: RoomAccess; addressed: boolean }> {
@@ -391,9 +409,10 @@ export async function postRoomMessage(
   if ((input.agent || input.guardFlags) && !access.remote) {
     throw new SpaceError('invalid_input', 'Only a post from another install carries an agent label or input guard flags');
   }
+  const answer = input.inlineUiAction ? await roomInlineUiAnswer(roomId, input.inlineUiAction) : undefined;
   const companion = !access.remote && (input.addressed || content.includes('@'))
     ? await companionIdentity(actor.userId) : undefined;
-  const addressed = input.addressed === true || mentionsOctipus(content)
+  const addressed = input.addressed === true || !!answer || mentionsOctipus(content)
     || (!!companion && await mentionsOwnCompanion(content, companion, access.room.workspaceId));
   if (addressed && opts.allowAgent === false) throw new SpaceError('forbidden_role', 'API token missing required scope "api:chat"');
   const { messageRepository } = await import('@/db/repositories/message-repository');
@@ -408,6 +427,7 @@ export async function postRoomMessage(
       ...(input.bridged ? { bridged: input.bridged } : {}),
       ...(input.agent ? { agent: true } : {}),
       ...(input.guardFlags && input.guardFlags.length > 0 ? { guardFlags: input.guardFlags } : {}),
+      ...(answer ? { inlineUiAction: answer.record } : {}),
       addressed,
       ...(addressed && companion ? { companion } : {}),
     },
@@ -416,6 +436,7 @@ export async function postRoomMessage(
     ? await createRemotePost(roomId, access.remote.instanceId, input.agent === true, { ...values, createdAt: new Date() })
     : await messageRepository.create(values);
   await sessionRepository.incrementMessageCount(roomId);
+  if (answer) await (await import('@/core/inline-ui/turn-input')).recordInlineUiAction(roomId, answer);
   // The poster has read everything up to their own post.
   await setReadPosition(roomId, actor.userId, row.id);
   const [view] = await views([row]);
@@ -423,6 +444,17 @@ export async function postRoomMessage(
   await notifyRoomMentions(access.room, actor.userId, row.id, addressed && companion ? withoutCompanionMentions(content, companion.name) : content, row.createdAt).catch((err: unknown) =>
     coreLogger.error({ err, roomId, messageId: row.id }, 'Room mention notifications failed'));
   return { message: view, access, addressed };
+}
+
+/** A view answer of a room post, checked against the room's blocks; a failed check is the post's refusal. */
+async function roomInlineUiAnswer(roomId: string, action: InlineUiActionInput): Promise<InlineUiAcceptedAction> {
+  const { checkInlineUiAction, InlineUiActionRefused } = await import('@/core/inline-ui/turn-input');
+  try {
+    return await checkInlineUiAction(roomId, action);
+  } catch (err) {
+    if (err instanceof InlineUiActionRefused) throw new SpaceError('invalid_input', `The interactive answer was not sent: ${err.message}`);
+    throw err;
+  }
 }
 
 async function setReadPosition(roomId: string, userId: string, messageId: string): Promise<void> {

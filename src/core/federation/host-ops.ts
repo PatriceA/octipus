@@ -350,7 +350,8 @@ function registerOps(): void {
     if (!block) throw new LinkRequestError('not_found', 'Not found');
     return {
       block: {
-        id: block.id, title: block.title, heightHint: block.heightHint, css: block.css, html: block.html, js: block.js,
+        id: block.id, title: block.title, kind: block.kind, view: block.view ?? null, state: block.state ?? null,
+        heightHint: block.heightHint, css: block.css, html: block.html, js: block.js,
         scripts: block.scripts, tainted: block.tainted, risk: block.risk, issues: block.issues, createdAt: block.createdAt.toISOString(),
       },
     };

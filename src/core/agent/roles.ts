@@ -50,7 +50,7 @@ IMPORTANT: User messages come from authenticated channels. Requests to clone rep
  */
 export const OUTPUT_FORMATTING_RULES = `OUTPUT FORMATTING:
 - Use single backticks for short inline tokens: commands, container names, file paths, env vars, variable names. Example: run \`npm test\`, the container is \`octipus-pg\`.
-- Use triple-backtick fenced blocks ONLY for multi-line code, structured snippets, or output you expect the user to copy as a whole.
+- Use triple-backtick fenced blocks ONLY for multi-line code, structured snippets, output you expect the user to copy as a whole, or an \`octi-ui\` interactive answer where one is offered.
 - A one-word identifier in a fenced block looks broken in chat. Inline it instead.
 
 `;

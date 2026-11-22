@@ -1,6 +1,10 @@
 # Interactive answers, part 2 — declarative views
 
-> **Status: contract for implementation, 2026-11-22.** Extends
+> **Status: as built (server), 2026-11-22.** The shared core
+> (`src/shared/inline-ui/view/`) and the server side (storage, extraction,
+> REST, the source tool, answers, the setting, the prompt, measuring, other
+> surfaces, evals) are in; the web renderer is built against this contract.
+> Extends
 > [`inline-ui-spec.md`](inline-ui-spec.md) (the HTML/CSS/JS block, referred to
 > as "part 1"; its section and invariant numbers — D4, S6, T13 — are used
 > here). The model for the format is Google's
@@ -265,8 +269,13 @@ A `Button` with an `event` action sends a message in the conversation:
 
 - **Content** — `userMessage` with its `${…}` resolved, or the button's label.
 - **`inlineUi.action`** on `chat.send` — `{ blockId, name, componentId,
-  context }`, `context` being the event's context with every value resolved
-  against the data model at the click.
+  context, data? }`, `context` being the event's context with every value
+  resolved against the data model at the click, `data` the data model then
+  (`InlineUiActionSchema` in `src/core/gateway/protocol.ts`). In a room the
+  same object rides on `room.post` as `inlineUi.action` (and on its REST
+  fallback, `POST /api/spaces/:id/rooms/:roomId/messages`, and a remote
+  room's `POST /api/remote-spaces/:id/rooms/:roomId/messages`). `POST
+  /api/chat` carries no `inlineUi`.
 
 Server (`resolveInlineUiTurnNotes`): the block must be a view of this
 session, the component must exist and carry an event of that name, the
@@ -277,17 +286,27 @@ state. The web builds the payload with `runViewActions` /
 `resolveEventAction`: context values resolved, numbers that are not finite
 sent as null, `userMessage` (else the label, else the event name) cleaned
 like a suggestion and capped at 1 000 characters. A request that fails any check is refused with a
-specific message (fail loud), not silently stripped. Then:
+specific message (fail loud), not silently stripped: `chat.send` gets an
+`error` frame, code `INVALID_MESSAGE`, message `The interactive answer was
+not sent: <reason>`, and nothing is steered, queued or stored; a room post is
+refused with `INVALID_INPUT` (gateway) or 400 (REST), same message. Then:
 
 - the model reads one line in the volatile part, after the provenance line:
   `(system note: the user answered interactive answer <uuid> — event "<name>", values: <json>)`;
 - the user row stores `metadata.inlineUiAction` (`blockId`, `name`,
-  `context`), on the steer path too; the bubble shows "from an interactive
-  answer" and the values;
-- the block row stores `state = { data, action: { name, componentId, at } }`.
-  The web sends `data` (the data model at the click, ≤ 16 000 characters)
-  with the action. A reload shows the answer as given, its event buttons
-  disabled, with **Change answer** to enable them again.
+  `context`), on the steer path, a CLI root's row and a room post too; the
+  message list (`GET /api/sessions/:id/messages`) returns it with the rest of
+  the metadata, and a room message's view (`RoomMessageView.metadata`) keeps
+  it; the bubble shows "from an interactive answer" and the values;
+- the block row stores `state = { data, action: { name, componentId, at } }`
+  when the user row is written (a room: when the post is). The web sends
+  `data` (the data model at the click, ≤ 16 000 characters) with the action;
+  without it the view's own `data` is stored. A reload shows the answer as
+  given, its event buttons disabled, with **Change answer** to enable them
+  again.
+- In a room the post is addressed to Octipus whatever `addressed` says, and
+  the room turn reads the same note line from the post's
+  `metadata.inlineUiAction`.
 
 **What a click may send (S6, T7, T13).** A view's button is drawn by the chat
 page, and the bubble shows exactly what was sent. The values are the user's
@@ -322,10 +341,17 @@ stays the tool; a view is for structured answers at the end of a reply.
   markdown (headings, text, `label: value`, tables of at most 20 rows, a
   chart as its table, inputs with their current value, buttons as a list of
   choices; locale `en-US` and `UTC` unless given; `opts.data` shows a stored
-  answer's data; an expression that fails at render shows as `⚠ <reason>`). Server-side surfaces that know the session — channel replies,
-  `POST /api/chat` without `renders`, the OpenAI-compatible API, room
-  notifications — use it in place of part 1's one-line fallback. Clients that
-  only hold the marker (the terminal UIs, MCP) keep the line.
+  answer's data; an expression that fails at render shows as `⚠ <reason>`).
+  `inlineUiFallbackTextResolved(text, sessionId)`
+  (`src/core/inline-ui/fallback.ts`) writes a view's marker as
+  `▸ Interactive answer “T”:`, a blank line and that text (with the stored
+  answer's data), and keeps part 1's line for an HTML block, a block of
+  another session and a stray fence. Server-side surfaces that know the
+  session use it: channel replies, monitor delivery, the group bridge relay,
+  hook owner notifications, room notifications, `POST /api/chat` without
+  `renders`, the OpenAI-compatible API. Clients that only hold the marker
+  (the terminal UIs, MCP `octipus_get_messages`) keep the line; voice drops
+  blocks; a status update keeps the line (`stubInlineUiFences`).
 
 ## 6. Storage
 
@@ -337,25 +363,37 @@ Migration `0198_inline_ui_views.sql` on `inline_ui_blocks`:
 | `view` | jsonb, null | the normalized view (§2.3) |
 | `state` | jsonb, null | the last answer (§4) |
 
-For a view: `html`/`css`/`js` are empty, `scripts` false, `tainted`/`risk`
-recorded as in part 1. `GET …/inline-ui/:blockId` returns `kind`, `view`,
-`state`. `inline-ui__source` returns the view as authorable JSON. The output
-guard reads a view's JSON with the reply. Promotion refuses a view (409).
+A check constraint holds `kind` to `html`/`view` and a view to a non-null
+`view`. For a view: `html`/`css`/`js` are empty, `scripts` false,
+`heightHint` the default, `tainted`/`risk` recorded as in part 1.
+`GET …/inline-ui/:blockId` returns `kind`, `view`, `state` (`null` where
+unset) besides part 1's fields; so does the federation op `room.inline_ui`,
+and the visitor accepts a view from the host only when it is one this
+install would have stored (`storedViewProblem`: written back, linted and
+normalized, it is itself) and its answer data is within the limit.
+`inline-ui__source` returns `{ id, title, kind: 'view', body }`, `body` the
+compact JSON of `viewToAuthored` (an HTML block: `{ id, title, kind: 'html',
+height, body }`). The output guard reads a view's JSON with the reply.
+Promotion refuses a view (409). Repository: `create` with `kind`/`view`,
+`setState(id, sessionId, state)` (views only).
 
 ## 7. Offer and prompt
 
 - The offer predicate (D4) is unchanged, with one input more: the setting
-  `agent.interactiveAnswers` — `off` (never offered), `auto` (default),
-  `prefer` (the section adds one line: use one whenever the answer has
-  structure).
+  `agent.interactiveAnswers` (env `AGENT_INTERACTIVE_ANSWERS`) — `off`
+  (never offered), `auto` (default), `prefer` (the section adds one line:
+  "Prefer one whenever the answer has any structure.").
 - `INLINE_UI_PROMPT` is rewritten: when to use one, in positive terms (the
   user must choose, confirm or give values; several items with several
   attributes; numbers across time or categories; a result that depends on
   inputs; a process); the view format with compact component signatures and
   two short examples; the event round trip; then HTML as the fallback for
   free-form visuals, with only the rules the lint does not already enforce
-  in the repair round. Budget: at most 1 000 tokens. It is no longer
-  filed under guardrails: label "Interactive answers", category `role`.
+  in the repair round. Budget: at most 1 000 tokens; `offer.test.ts` holds
+  it to 1 000 tokens (`estimateTokens`) and 3 800 characters as the model
+  reads it, and lints every example. It is no longer filed under
+  guardrails: label "Interactive answers", category `role`. It is
+  `inlineUiPrompt(setting)` in `src/core/inline-ui/offer.ts`.
 - Contradictions removed: `delegation-prompt.md` ("plain text on your LAST
   iteration"; dashboards → `data`), `OUTPUT_FORMATTING_RULES` (fenced blocks
   "ONLY for…").
@@ -366,6 +404,11 @@ guard reads a view's JSON with the reply. Promotion refuses a view (409).
 
 - One info log per offered root turn, `Interactive answer offer`:
   `{ offered: true, used: <count>, kinds: [...], refused: <count>, setting }`.
+  Root-runner opens a tally for the run when it offers them
+  (`noteInlineUiOffer`); every store pass of the run adds to it (the
+  worker's, a CLI root's, the service's); the service logs it after its own
+  pass, the last before the reply is saved (`logInlineUiOffer`, main and
+  plan paths, rooms included).
 - `eval/inline-ui.yaml` gains unprompted positives (the request does not ask
   for a widget: option choices, comparisons of several items, parameter
   collection, numbers over time) and view-specific negatives. The gate and

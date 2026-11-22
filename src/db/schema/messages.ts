@@ -58,6 +58,11 @@ export interface MessageMetadata {
   directReply?: boolean;
   /** A user message sent from an interactive answer's suggestion (docs/plans/inline-ui-spec.md §6): its chip. */
   inlineUiProvenance?: { id: string };
+  /**
+   * A user message that answers a view's Button (docs/plans/inline-ui-views-spec.md §4):
+   * the block, the event and its values, as checked by the server. The bubble shows them.
+   */
+  inlineUiAction?: { blockId: string; name: string; context: Record<string, unknown> };
   channelMessageId?: string;
   attachments?: AttachmentData[];
   tokenCount?: number;

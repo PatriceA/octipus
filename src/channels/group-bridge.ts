@@ -51,6 +51,7 @@ import { sessions } from '@/db/schema/sessions';
 import { can, requireCan, SpaceError } from '@/security/space-access';
 import { channelLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
+import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
 import { getUMI } from './interface';
 
 type Db = ReturnType<typeof getDb>;
@@ -535,7 +536,9 @@ async function relay(row: Message): Promise<void> {
   if (!(await isGroupChannelActive(target.group))) return;
   const { displayNames } = await import('@/core/session-history');
   const name = row.authorUserId ? (await displayNames([row.authorUserId])).get(row.authorUserId) ?? null : null;
-  const text = relayText(row, name);
+  // A view reads as its text in the thread (relayText keeps the plain line for the rest).
+  const resolved = row.role === 'assistant' ? { ...row, content: await inlineUiFallbackTextResolved(row.content, row.sessionId) } : row;
+  const text = relayText(resolved, name);
   if (!text) return;
   await getUMI().send(target.group.channelType as ChannelType, target.group.channelId, { content: text, threadId: target.threadId });
 }

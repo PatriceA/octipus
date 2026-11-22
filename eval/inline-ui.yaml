@@ -3,7 +3,11 @@ description: >
   Whether the root agent writes an interactive answer (an `octi-ui` block,
   stored and replaced by a `[[octi-ui:<id>|<title>]]` marker) when a control,
   a calculation, a visual or a step-through helps more than text — and only
-  then (docs/plans/inline-ui-spec.md §5.10). Every case declares
+  then (docs/plans/inline-ui-spec.md §5.10). Either kind counts: an HTML
+  block or a declarative view (docs/plans/inline-ui-views-spec.md). The
+  `unprompted` positives never ask for a widget, a chart or a form: they
+  measure whether the agent chooses one when the answer has structure
+  (views spec §8). Every case declares
   `renders: [inline_ui]`, as the web chat does, except the one that checks
   that a client which does not declare it is never offered the format.
   Integration mode only (`npm run eval -- --suite inline-ui --integration`):
@@ -270,6 +274,178 @@ tests:
         description: No raw fence reached the user
     tags: [inline-ui, positive]
 
+  # ── Unprompted positives: the request never asks for a widget, a chart or a form,
+  #    but its answer has structure (docs/plans/inline-ui-views-spec.md §8) ──
+  - id: iu-pos-unprompted-laptops
+    description: Choosing between items with several attributes
+    input: "Which of these three laptops should I get? A: 14-inch, 16 GB RAM, 1.3 kg, 1,100 EUR. B: 15-inch, 32 GB RAM, 1.8 kg, 1,450 EUR. C: 13-inch, 16 GB RAM, 1.1 kg, 1,300 EUR. I travel a lot and write code."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-offsite-dates
+    description: Picking among options the user must choose from
+    input: "Help me pick dates for the team offsite. The options are 12-14 March, 19-21 March or 2-4 April, and it has to suit eight people."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-signups
+    description: Numbers over time
+    input: "Here are our monthly signups this year: Jan 420, Feb 380, Mar 510, Apr 640, May 600, Jun 720, Jul 810, Aug 790. How are we doing?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-backup-job
+    description: Collecting the parameters a task needs
+    input: "I want to set up a backup job for my laptop."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-hosting-plans
+    description: Comparing several items on several attributes
+    input: "Compare these four hosting plans: Basic 5 USD/month, 1 vCPU, 1 GB RAM, 25 GB SSD; Standard 12 USD, 2 vCPU, 2 GB, 60 GB; Pro 24 USD, 4 vCPU, 8 GB, 160 GB; Business 48 USD, 8 vCPU, 16 GB, 320 GB."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-server-cost
+    description: A cost that depends on inputs
+    input: "How much would it cost per month to run between 3 and 10 servers at 0.12 USD an hour, depending on how many I run and how many hours a day they are on?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-ticket-categories
+    description: Numbers across categories
+    input: "Our support tickets last quarter by category: billing 120, login 340, performance 95, feature requests 210, other 60. Where should we focus?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-meal-plan
+    description: A choice the user must make, with a preference to state
+    input: "I'm choosing a meal plan for next week: vegetarian, high-protein or budget. I train four times a week and can spend about 60 EUR. Which one should I take?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-migration-steps
+    description: A process
+    input: "Walk me through migrating our web app from Heroku to Fly.io."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
+  - id: iu-pos-unprompted-mortgage-budget
+    description: A result that depends on the user's figures
+    input: "What monthly mortgage payment can I afford? I earn 4,200 EUR net a month and have 800 EUR of other fixed costs."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: matches_regex
+        value: "\\[\\[octi-ui:[0-9a-f-]{36}\\|"
+        description: An interactive answer was stored and shown
+      - type: not_contains
+        value: "could not be shown"
+        description: No block was refused
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence reached the user
+    tags: [inline-ui, positive, unprompted]
+
   # ── Negatives: text, code, a list, a value or a table answers it ──
   - id: iu-neg-fact
     description: A fact
@@ -410,6 +586,63 @@ tests:
         value: "```octi-ui"
         description: No raw fence either
     tags: [inline-ui, negative]
+
+  # ── View negatives: a structure cue that a view would over-serve ──
+  - id: iu-neg-view-yes-no
+    description: A yes/no fact is not a form
+    input: "Is 2028 a leap year?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative, view]
+
+  - id: iu-neg-view-few-names
+    description: A few short items are not a table
+    input: "Suggest three names for a grey cat."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative, view]
+
+  - id: iu-neg-view-short-steps
+    description: A short process asked as text is not Steps
+    input: "In two lines, how do I boil an egg?"
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative, view]
+
+  - id: iu-neg-view-message-draft
+    description: Text to copy is not a form
+    input: "Draft a two-line Slack message telling the team the deploy is done."
+    context:
+      renders: [inline_ui]
+    assertions:
+      - type: not_contains
+        value: "[[octi-ui:"
+        description: No interactive answer
+      - type: not_contains
+        value: "```octi-ui"
+        description: No raw fence either
+    tags: [inline-ui, negative, view]
 
   # ── Not offered: a client that does not declare it ──
   - id: iu-not-offered-without-renders

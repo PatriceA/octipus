@@ -34,7 +34,9 @@ import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
-import { inlineUiGuardText, type InlineUiStoreContext, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { type InlineUiAcceptedAction, inlineUiActionLine } from '@/core/inline-ui/turn-input';
+import type { JsonObject } from '@/shared/inline-ui';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -251,9 +253,11 @@ export class AgentService {
     trigger?: AgentTrigger,
     /**
      * Interactive answers (docs/plans/inline-ui-spec.md): what the client
-     * renders, and model-facing notes already checked against the session.
+     * renders, and model-facing notes already checked against the session;
+     * `action` is a view's answer the message carries, already checked
+     * (`resolveInlineUiTurnNotes`), stored with the user row.
      */
-    inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
+    inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string; action?: InlineUiAcceptedAction },
     internal?: {
       companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number;
       /**
@@ -326,6 +330,7 @@ export class AgentService {
           ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
           ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
           ...(inlineUi?.provenanceId ? { inlineUiProvenance: inlineUi.provenanceId } : {}),
+          ...(inlineUi?.action ? { inlineUiAction: inlineUi.action } : {}),
           ...(internal?.spoken ? { spoken: true } : {}),
         },
         () => withProviderUsageContext({ userId }, () =>
@@ -464,8 +469,12 @@ export class AgentService {
         const session = await sessionRepository.findById(roomId);
         if (!session || session.kind !== 'room') throw new RoomTurnDropped('The room is gone');
         const runId = generateRunId();
+        // A post that answers a view: its values reach the model as for a chat
+        // message (checked when it was posted, postRoomMessage).
+        const answer = posted.metadata?.inlineUiAction;
+        const inlineUiNotes = answer ? [inlineUiActionLine({ blockId: answer.blockId, name: answer.name, context: answer.context as JsonObject })] : [];
         const result = await runWithContext(
-          { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
+          { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room', ...(inlineUiNotes.length ? { inlineUiNotes } : {}) },
           () => withProviderUsageContext({ userId: requesterId, ...(remoteInstanceId ? { accountingMetadata: { remoteInstance: remoteInstanceId } } : {}) }, async () => {
             const noModel = await this.noModelAnswer(requesterId);
             if (noModel) throw new Error(noModel.response);
@@ -1270,9 +1279,15 @@ export class AgentService {
     }
   }
 
-  /** Store the `octi-ui` fences of a reply and return it with marker lines (src/core/inline-ui/extract.ts). */
+  /**
+   * Store the `octi-ui` fences of a reply and return it with marker lines
+   * (src/core/inline-ui/extract.ts). The turn's last store pass, so an
+   * offered turn's `Interactive answer offer` line is logged here.
+   */
   private async withInlineUiStored(text: string, ctx: InlineUiStoreContext): Promise<string> {
-    return (await storeInlineUiBlocks(text, ctx)).text;
+    const stored = (await storeInlineUiBlocks(text, ctx)).text;
+    logInlineUiOffer(getRunContext()?.runId, ctx.sessionId);
+    return stored;
   }
 
   /** A room turn whose room was cleared while it ran: dropped, so the room's `room.turn` says why. */

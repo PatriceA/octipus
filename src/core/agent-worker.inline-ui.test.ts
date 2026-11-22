@@ -74,3 +74,23 @@ test('no repair where interactive answers are not offered, or for a child', asyn
     expect(seen).toHaveLength(1);
   }
 });
+
+const BROKEN_VIEW = 'Pick one:\n```octi-ui title="Plan"\n{"root":{"component":"Button","label":"Go","action":{"event":{"name":"Go Now"}}}}\n```';
+const FIXED_VIEW = 'Pick one:\n```octi-ui title="Plan"\n{"root":{"component":"Button","label":"Go","action":{"event":{"name":"go_now"}}}}\n```';
+
+test('a view that does not validate goes back once too, with what the lint says', async () => {
+  const { run, seen } = drive(new AgentWorker(ctx(), cfg), [BROKEN_VIEW, FIXED_VIEW]);
+  expect(await run()).toBe(FIXED_VIEW);
+  expect(seen).toHaveLength(2);
+  const [draft, ask] = seen[1].slice(-2);
+  expect(draft).toEqual({ role: 'assistant', content: BROKEN_VIEW });
+  expect(ask.content).toContain('Interactive answer "Plan"');
+  expect(ask.content).toContain('Go Now');
+  expect(ask.content).toContain('corrected octi-ui block');
+});
+
+test('a view that validates is not sent back', async () => {
+  const { run, seen } = drive(new AgentWorker(ctx(), cfg), [FIXED_VIEW]);
+  expect(await run()).toBe(FIXED_VIEW);
+  expect(seen).toHaveLength(1);
+});

@@ -2,6 +2,7 @@ import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { isAuthenticated, type Principal, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
+import { inlineUiActionBody } from './inline-ui';
 
 /**
  * Spaces this install's users joined on other installs
@@ -245,13 +246,18 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
         content: ctx.body.content,
         ...(ctx.body.addressed !== undefined ? { addressed: ctx.body.addressed } : {}),
         ...(ctx.body.clientId ? { clientId: ctx.body.clientId } : {}),
+        ...(ctx.body.inlineUi ? { inlineUi: ctx.body.inlineUi } : {}),
       });
     } finally {
       closeHostConn(row, conn);
     }
   }), {
     params: t.Object({ id: t.String(), roomId: uuid() }),
-    body: t.Object({ content: t.String({ minLength: 1, maxLength: 20_000 }), addressed: t.Optional(t.Boolean()), clientId: t.Optional(t.String({ minLength: 1, maxLength: 64 })) }),
+    body: t.Object({
+      content: t.String({ minLength: 1, maxLength: 20_000 }), addressed: t.Optional(t.Boolean()), clientId: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
+      // A view's answer, checked by the host (docs/plans/inline-ui-views-spec.md §4).
+      inlineUi: t.Optional(t.Object({ action: inlineUiActionBody }, { additionalProperties: false })),
+    }),
     ...tag,
   })
 

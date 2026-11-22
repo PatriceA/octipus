@@ -1,6 +1,8 @@
 /**
  * Interactive answers (docs/plans/inline-ui-spec.md §5.7): the source of a
- * block, for the web client that renders the marker line of a reply. Readable
+ * block, for the web client that renders the marker line of a reply — an
+ * HTML block's css/html/js, or a view's normalized JSON and its last answer
+ * (`kind`, `view`, `state`; docs/plans/inline-ui-views-spec.md §6). Readable
  * by whoever may read the conversation (`inlineUiReader`); anything else is a
  * 404 with no hint whether the block exists. Never cached: a block outlives
  * neither its session nor the reader's access.
@@ -8,7 +10,8 @@
  * `promote` saves a block of the caller's own chat as a live artifact (§7):
  * a static copy that reaches no network, in the workspace the request acts
  * in, private or for the workspace. Not for an answer made after reading
- * untrusted content, and not while an admin acts as the user.
+ * untrusted content, not for a view (it has no page to copy), and not while
+ * an admin acts as the user.
  */
 import { Elysia, t } from '@/api/http';
 import { buildArtifactAppUrl } from '@/core/artifacts/host';
@@ -28,6 +31,19 @@ import { coreLogger } from '@/utils/logger';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * A view's answer in a REST body (a room post; docs/plans/inline-ui-views-spec.md
+ * §4): the shape of `InlineUiActionSchema` on the gateway. The values are
+ * checked against the stored view by `checkInlineUiAction`.
+ */
+export const inlineUiActionBody = t.Object({
+  blockId: t.String({ format: 'uuid' }),
+  name: t.String({ minLength: 1, maxLength: 64 }),
+  componentId: t.String({ minLength: 1, maxLength: 64 }),
+  context: t.Record(t.String(), t.Unknown()),
+  data: t.Optional(t.Record(t.String(), t.Unknown())),
+}, { additionalProperties: false });
+
 export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
   .get('/:id/inline-ui/:blockId', async ({ user, principal, params, set }) => {
     set.headers['cache-control'] = 'no-store';
@@ -46,6 +62,9 @@ export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
         id: block.id,
         sessionId: block.sessionId,
         title: block.title,
+        kind: block.kind,
+        view: block.view ?? null,
+        state: block.state ?? null,
         heightHint: block.heightHint,
         css: block.css,
         html: block.html,
@@ -81,6 +100,10 @@ export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
       if (!session || !(await canActInSession(session, principal.userId, 'chat'))) return notFound();
       const block = await inlineUiRepository.getInSession(params.blockId.toLowerCase(), session.id);
       if (!block) return notFound();
+      if (block.kind === 'view') {
+        set.status = 409;
+        return { error: 'This answer is a view of components, not a page: it cannot be saved as an artifact.' };
+      }
       if (block.tainted) {
         set.status = 409;
         return { error: 'This answer was made after reading content from outside, so it cannot be saved as an artifact.' };

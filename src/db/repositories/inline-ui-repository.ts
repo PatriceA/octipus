@@ -1,6 +1,7 @@
 import { and, asc, count, eq, gt, inArray } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { inlineUiBlocks, type InlineUiBlock, type NewInlineUiBlock } from '../schema/inline-ui-blocks';
+import type { InlineUiViewState } from '@/shared/inline-ui/view/types';
 
 /**
  * Store of interactive-answer sources (docs/plans/inline-ui-spec.md §5.1).
@@ -40,8 +41,21 @@ export class InlineUiRepository {
       .where(and(inArray(inlineUiBlocks.id, ids), eq(inlineUiBlocks.sessionId, sessionId)));
   }
 
+  /**
+   * Record the last answer sent from a view of one session (spec §4). False
+   * when the session holds no view with that id: an HTML block never takes a
+   * state.
+   */
+  async setState(id: string, sessionId: string, state: InlineUiViewState): Promise<boolean> {
+    // i2: by session id the caller was authorized for (the turn's own session)
+    const rows = await this.db.update(inlineUiBlocks).set({ state })
+      .where(and(eq(inlineUiBlocks.id, id), eq(inlineUiBlocks.sessionId, sessionId), eq(inlineUiBlocks.kind, 'view')))
+      .returning({ id: inlineUiBlocks.id });
+    return rows.length > 0;
+  }
+
   /** Metadata of a session's blocks, oldest first, written after `since` (the session's last clear). */
-  async listForSession(sessionId: string, since?: Date): Promise<Array<Omit<InlineUiBlock, 'css' | 'html' | 'js'>>> {
+  async listForSession(sessionId: string, since?: Date): Promise<Array<Omit<InlineUiBlock, 'css' | 'html' | 'js' | 'view'>>> {
     // i2: by session id the caller was authorized for (inlineUiAccess)
     return this.db.select({
       id: inlineUiBlocks.id,
@@ -50,6 +64,8 @@ export class InlineUiRepository {
       agentId: inlineUiBlocks.agentId,
       requesterId: inlineUiBlocks.requesterId,
       title: inlineUiBlocks.title,
+      kind: inlineUiBlocks.kind,
+      state: inlineUiBlocks.state,
       heightHint: inlineUiBlocks.heightHint,
       scripts: inlineUiBlocks.scripts,
       tainted: inlineUiBlocks.tainted,
