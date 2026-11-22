@@ -182,7 +182,7 @@ async function directResponseInternal(
       // The space turn context is this turn's only, never stored (§6.5, §6.7).
       const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
         metadata: { promptContext: omitSpaceTurnContext(promptContext).trim() } }, history.generation);
-      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
+      if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, ended: 'cleared' } };
       await sessionRepository.incrementMessageCount(sessionId);
       requestAt = userRow.createdAt;
     }
@@ -224,7 +224,7 @@ async function directResponseInternal(
     const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
     const finalContent = showSources ? appendSources(result.content, sources) : result.content;
 
-    if (!await persistAnswer(finalContent)) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, tokens } };
+    if (!await persistAnswer(finalContent)) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, tokens, ended: 'cleared' } };
 
     await cache.set(sessionId, message, recentContext, {
       response: finalContent,
@@ -264,7 +264,7 @@ async function directResponseInternal(
     await persistAnswer(errorMsg);
     return {
       response: errorMsg,
-      metadata: { model: modelName, latencyMs: Date.now() - startTime },
+      metadata: { model: modelName, latencyMs: Date.now() - startTime, ended: 'failed' },
     };
   }
 }

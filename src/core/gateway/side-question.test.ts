@@ -83,6 +83,36 @@ describe('a side question', () => {
   });
 });
 
+describe('the side question\'s record', () => {
+  test('counts only its own tool calls (none), not the running root turn\'s in the same session', async () => {
+    const { noteToolUse, resetToolUse } = await import('@/core/context-hooks/tool-usage');
+    const turn = { ...TURN, usageKey: 'sess-side-usage', startUse: { knowledge: 0, notes: 0 } };
+    fx.hooks.mockResolvedValue({ text: BLOCK, blocks: [BLOCK], labelledBlocks: [], repeatable: [], turn });
+    fx.direct.mockImplementation(async () => {
+      // The root turn of the session searches meanwhile.
+      noteToolUse('sess-side-usage', 'knowledge', 'search_knowledge');
+      return { response: '99 euro a month.', metadata: {} };
+    });
+    try {
+      await answerSideQuestion('sess-side-usage', USER, 'what do we charge enterprise customers for hosting?');
+      expect(turn.usageKey).toBe('agent:side-question:turn-side');
+      const { toolUseSnapshot } = await import('@/core/context-hooks/tool-usage');
+      expect(toolUseSnapshot(turn.usageKey)).toEqual({ knowledge: 0, notes: 0 });
+    } finally {
+      resetToolUse();
+    }
+  });
+
+  test('a conversation cleared while it ran is recorded as cleared, a failed call as failed', async () => {
+    fx.direct.mockResolvedValue({ response: 'Conversation was cleared while this turn was running.', metadata: { ended: 'cleared' } });
+    await answerSideQuestion('sess-side', USER, 'what do we charge enterprise customers for hosting?');
+    expect(fx.finish).toHaveBeenLastCalledWith(TURN, { outcome: 'cleared' });
+    fx.direct.mockResolvedValue({ response: "Sorry, I'm having trouble connecting to the language model (m).", metadata: { ended: 'failed' } });
+    await answerSideQuestion('sess-side', USER, 'what do we charge enterprise customers for hosting?');
+    expect(fx.finish).toHaveBeenLastCalledWith(TURN, { outcome: 'failed' });
+  });
+});
+
 describe('a side question whose context raises the session to a local-only level', () => {
   // What recall's commit does when it shows a level 3 passage.
   const showsConfidential = (sessionId: string) => fx.hooks.mockImplementation(async () => {

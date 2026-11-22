@@ -639,7 +639,7 @@ export async function answerSideQuestion(sessionId: string, userId: string, cont
   const { directResponse } = await import('@/core/agent/direct-response');
   const { ModelSelector } = await import('@/core/agent/model-selector');
   const { resolvePersonaForUser } = await import('@/core/personas/resolver');
-  const { contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+  const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
 
   const persona = await resolvePersonaForUser(userId).catch(() => null);
   const personaName = persona?.name || 'Octipus';
@@ -659,6 +659,9 @@ export async function answerSideQuestion(sessionId: string, userId: string, cont
       query: content, role: 'general', ...(channel ? { channel } : {}), session, followUp: true,
     });
     turn = hooks.turn;
+    // The side question makes no tool calls: its record counts none, not the
+    // calls of the root turn running in the same session meanwhile.
+    bindTurnToAgent(turn, `side-question:${turn?.id ?? ''}`);
     // The model is chosen after the hooks, as a root turn's is: a passage
     // they showed can raise the session to a level whose content stays on
     // local models. The reply then runs on a local model, or the refusal
@@ -680,7 +683,9 @@ export async function answerSideQuestion(sessionId: string, userId: string, cont
       'simple',
       [], hooks.text, model, scope.space, scope.sponsor,
     );
-    void finishContextTurn(turn, { response: result.response, outcome: 'success' });
+    // A reply that is not an answer (the conversation was cleared, the call failed) is not a success.
+    const outcome = result.metadata.ended ?? 'success';
+    void finishContextTurn(turn, { ...(outcome === 'success' ? { response: result.response } : {}), outcome });
     return `${personaName} — side question: ${result.response}`;
   } catch (err) {
     void finishContextTurn(turn, { outcome: 'failed' });
