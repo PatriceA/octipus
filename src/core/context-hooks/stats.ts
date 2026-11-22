@@ -18,15 +18,15 @@ import { getDb } from '@/db/postgres';
 import { type ContextHookRunRecord, type ContextTurnRow, contextTurns } from '@/db/schema/context-hooks';
 import { getConfig } from '@/config';
 import type {
-  ContextHookStats, ContextHookUse, Rate, RecallCalibrationWarning, RecallEvalCase, RecallEvalResult, RecallQualifiedBy,
+  ContextHookStats, ContextHookUse, Rate, RecallCalibrationWarning, RecallEvalCase, RecallEvalResult, RecallQualifiedBy, RecallSweepResult,
 } from '@/shared/context-hooks';
 import { coreLogger } from '@/utils/logger';
-import { KIND_CONFIG, type RecallConfig, selectRecallPassages } from './kinds';
-import { calibrationMessage, calibrationSample, calibrationVerdict } from './measure';
+import { choosePassages, KIND_CONFIG, type RecallConfig, type RecallSearch, type RecallSelection, searchRecall, selectRecallPassages } from './kinds';
+import { calibrationMessage, calibrationSample, calibrationVerdict, MAX_SWEEP_THRESHOLDS, recommendThreshold, SWEEP_THRESHOLDS } from './measure';
 import { listContextHooks } from './store';
 import { CONTEXT_HOOK_EVENTS } from './types';
 
-export type { ContextHookStats, RecallEvalCase, RecallEvalResult } from '@/shared/context-hooks';
+export type { ContextHookStats, RecallEvalCase, RecallEvalResult, RecallSweepResult } from '@/shared/context-hooks';
 
 const MAX_ROWS = 5_000;
 
@@ -209,12 +209,8 @@ async function memoryStatus(userId: string): Promise<ContextHookStats['memory']>
 
 // ── Eval ────────────────────────────────────────────────────────────────────
 
-export async function evaluateRecall(
-  userId: string,
-  workspaceId: string | null,
-  cases: RecallEvalCase[],
-  overrides: Partial<Pick<RecallConfig, 'limit' | 'minSimilarity'>> = {},
-): Promise<RecallEvalResult> {
+/** The Knowledge recall hook's settings with `overrides`, and the budget a turn would give it. */
+async function evalSettings(userId: string, overrides: Partial<Pick<RecallConfig, 'limit' | 'minSimilarity'>>): Promise<{ config: RecallConfig; budget: number }> {
   // Recall searches the knowledge base: nothing to evaluate without an embedding model.
   await requireCapability('embedding');
   const builtin = (await listContextHooks(userId)).find((h) => h.builtin === 'knowledge-recall');
@@ -222,31 +218,88 @@ export async function evaluateRecall(
   // The hook's own selection, within the budget a turn would give it: what is
   // reported is exactly what would be injected.
   const budget = Math.min(config.tokenBudget, getConfig().contextHooks?.maxTokens ?? config.tokenBudget);
-  const out: RecallEvalResult['cases'] = [];
-  for (const c of cases) {
-    const { passages } = await selectRecallPassages({ userId, workspaceId, query: c.question }, config, budget);
-    const hits = passages.map((p) => p.hit);
-    const wanted = c.expect.map((e) => e.trim().toLowerCase()).filter(Boolean);
-    const index = wanted.length === 0 ? -1 : hits.findIndex((h) => {
-      const hay = [h.metadata?.title ?? '', h.metadata?.filePath ?? '', h.sourceId, h.id, h.content].join('\n').toLowerCase();
-      return wanted.some((w) => hay.includes(w));
-    });
-    const rank = index >= 0 ? index + 1 : null;
-    out.push({
-      question: c.question,
-      expect: c.expect,
-      hits: passages.map((p) => ({ title: p.item.title, sourceId: p.item.sourceId, score: p.item.score })),
-      rank,
-      pass: wanted.length === 0 ? hits.length === 0 : rank !== null,
-    });
-  }
+  return { config, budget };
+}
+
+/** One case scored against what recall would inject for it. */
+function scoreCase(c: RecallEvalCase, passages: RecallSelection['passages']): RecallEvalResult['cases'][number] {
+  const hits = passages.map((p) => p.hit);
+  const wanted = c.expect.map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const index = wanted.length === 0 ? -1 : hits.findIndex((h) => {
+    const hay = [h.metadata?.title ?? '', h.metadata?.filePath ?? '', h.sourceId, h.id, h.content].join('\n').toLowerCase();
+    return wanted.some((w) => hay.includes(w));
+  });
+  const rank = index >= 0 ? index + 1 : null;
+  return {
+    question: c.question,
+    expect: c.expect,
+    hits: passages.map((p) => ({ title: p.item.title, sourceId: p.item.sourceId, score: p.item.score })),
+    rank,
+    pass: wanted.length === 0 ? hits.length === 0 : rank !== null,
+  };
+}
+
+/** Found, mean reciprocal rank and abstained over scored cases. */
+function summarize(out: RecallEvalResult['cases']): Pick<RecallEvalResult, 'found' | 'mrr' | 'abstained'> {
   const answerable = out.filter((c) => c.expect.some((e) => e.trim()));
   const empty = out.filter((c) => !c.expect.some((e) => e.trim()));
   return {
-    config: { limit: config.limit, minSimilarity: config.minSimilarity },
-    cases: out,
     found: rate(answerable.filter((c) => c.rank !== null).length, answerable.length),
     mrr: answerable.length ? Number((answerable.reduce((s, c) => s + (c.rank ? 1 / c.rank : 0), 0) / answerable.length).toFixed(3)) : 0,
     abstained: rate(empty.filter((c) => c.hits.length === 0).length, empty.length),
+  };
+}
+
+export async function evaluateRecall(
+  userId: string,
+  workspaceId: string | null,
+  cases: RecallEvalCase[],
+  overrides: Partial<Pick<RecallConfig, 'limit' | 'minSimilarity'>> = {},
+): Promise<RecallEvalResult> {
+  const { config, budget } = await evalSettings(userId, overrides);
+  const out: RecallEvalResult['cases'] = [];
+  for (const c of cases) {
+    const { passages } = await selectRecallPassages({ userId, workspaceId, query: c.question }, config, budget);
+    out.push(scoreCase(c, passages));
+  }
+  return { config: { limit: config.limit, minSimilarity: config.minSimilarity }, cases: out, ...summarize(out) };
+}
+
+/**
+ * The eval at each of `thresholds` (`SWEEP_THRESHOLDS` by default), with the
+ * value `recommendThreshold` picks. Each question is searched, and so
+ * embedded, once: what depends on `minSimilarity` is the selection from the
+ * candidates (`choosePassages`), run per threshold without I/O. The hook's
+ * other settings are kept. No recommendation when a question could not be
+ * embedded (the bar was not applied to it) or the cases lack one of the two
+ * kinds of question.
+ */
+export async function sweepRecall(
+  userId: string,
+  workspaceId: string | null,
+  cases: RecallEvalCase[],
+  options: { thresholds?: readonly number[]; limit?: number } = {},
+): Promise<RecallSweepResult> {
+  const thresholds = [...new Set(options.thresholds ?? SWEEP_THRESHOLDS)].sort((a, b) => a - b);
+  if (!thresholds.length || thresholds.length > MAX_SWEEP_THRESHOLDS || thresholds.some((t) => !(t >= 0 && t <= 1))) {
+    throw new Error(`thresholds: 1 to ${MAX_SWEEP_THRESHOLDS} values between 0 and 1`);
+  }
+  const { config, budget } = await evalSettings(userId, options.limit !== undefined ? { limit: options.limit } : {});
+  const searched: Array<RecallSearch | null> = [];
+  for (const c of cases) searched.push(await searchRecall({ userId, workspaceId, query: c.question }, config));
+  const degraded = searched.filter((s) => s?.search.embeddingError).length;
+  const rows = thresholds.map((minSimilarity) => {
+    const at = { ...config, minSimilarity };
+    const out = cases.map((c, i) => {
+      const s = searched[i];
+      return scoreCase(c, s ? choosePassages(s, at, budget).passages : []);
+    });
+    const { found, abstained, mrr } = summarize(out);
+    return { minSimilarity, found, abstained, mrr };
+  });
+  const { recommended, reason } = degraded ? { recommended: null, reason: 'embedding_failed' as const } : recommendThreshold(rows);
+  return {
+    config: { limit: config.limit, keywordCoverage: config.keywordCoverage, maxGap: config.maxGap, minSimilarity: config.minSimilarity },
+    rows, recommended, ...(reason ? { reason } : {}), degraded,
   };
 }

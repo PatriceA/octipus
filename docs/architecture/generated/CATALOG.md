@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-770 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -184,6 +184,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/context-hooks/:id` | `src/api/routes/context-hooks.ts` |
 | PATCH | `/api/context-hooks/:id` | `src/api/routes/context-hooks.ts` |
 | POST | `/api/context-hooks/eval` | `src/api/routes/context-hooks.ts` |
+| POST | `/api/context-hooks/eval/sweep` | `src/api/routes/context-hooks.ts` |
 | GET | `/api/context-hooks/stats` | `src/api/routes/context-hooks.ts` |
 | GET | `/api/devices` | `src/api/routes/devices.ts` |
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
@@ -856,10 +857,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 250 |
 | `core` | `services` | 4 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 86 |
+| `core` | `shared` | 87 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 261 |
+| `core` | `utils` | 262 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |

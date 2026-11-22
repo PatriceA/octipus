@@ -19,7 +19,7 @@ import { basename } from 'node:path';
 import { and, count, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { RepeatableGroup } from '@/core/agent/repeated-context';
-import type { AnyTermCandidate, EmbeddingPurpose } from '@/core/rag/embeddings';
+import type { AnyTermCandidate, AnyTermSearch, EmbeddingPurpose } from '@/core/rag/embeddings';
 import { agentKnowledgeScope, PRODUCT_DOCS_SOURCE } from '@/core/rag/knowledge-scope';
 import { getDb } from '@/db/postgres';
 import { isCapabilityOn } from '@/core/capabilities/gates';
@@ -157,22 +157,26 @@ export interface RecallSelection {
   group?: RepeatableGroup;
 }
 
+/** What recall searched for a message, before any threshold is applied: one search, any number of selections. */
+export interface RecallSearch {
+  /** What was searched (`buildRecallQuery`). */
+  query: string;
+  search: AnyTermSearch;
+}
+
 /**
- * The passages recall injects for this message within `tokenBudget`, and the
- * block they make. Shared by the hook and the eval. No side effect: no access
- * is counted and no protection level raised (the hook's commit step does).
+ * The search behind recall for this message, or null when the message is
+ * not searched (`skipsShortMessage`). The candidates and their cosines do not
+ * depend on `minSimilarity`, `keywordCoverage` or `maxGap`: the sweep
+ * searches once per question and selects at every threshold.
  */
-export async function selectRecallPassages(
+export async function searchRecall(
   input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage'>,
-  config: RecallConfig,
-  tokenBudget: number,
-): Promise<RecallSelection> {
-  const none = (status: RecallSelection['status'], reason: string, degraded?: 'embedding_failed'): RecallSelection =>
-    ({ status, reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
+  config: Pick<RecallConfig, 'limit'>,
+): Promise<RecallSearch | null> {
   // A short message is searched only as a follow-up of the previous one, and
   // a bare acknowledgement never (`skipsShortMessage`).
-  if (skipsShortMessage(input.query, input.previousMessage)) return none('skipped', 'short_message');
-
+  if (skipsShortMessage(input.query, input.previousMessage)) return null;
   const { getEmbeddingService } = await import('@/core/rag/embeddings');
   const knowledge = agentKnowledgeScope({ userId: input.userId, workspaceId: input.workspaceId, space: input.space });
   const query = buildRecallQuery(input);
@@ -180,11 +184,20 @@ export async function selectRecallPassages(
   // candidates that do not qualify are dropped below. Repository artefacts
   // stay out (`allowedRepoIds: []`), as for a search with no repo visibility.
   const search = await getEmbeddingService().hybridSearchAnyTerm(knowledge, query, config.limit * 5, { alpha: 0.6, scope: { allowedRepoIds: [] } });
-  let degraded: 'embedding_failed' | undefined;
   if (search.embeddingError) {
-    degraded = 'embedding_failed';
     coreLogger.warn({ userId: input.userId, error: search.embeddingError }, 'recall: the query could not be embedded — keyword rules only for this turn');
   }
+  return { query, search };
+}
+
+/**
+ * The passages recall injects from `searched` within `tokenBudget`, and the
+ * block they make. No I/O and no side effect.
+ */
+export function choosePassages({ query, search }: RecallSearch, config: RecallConfig, tokenBudget: number): RecallSelection {
+  const degraded: 'embedding_failed' | undefined = search.embeddingError ? 'embedding_failed' : undefined;
+  const none = (reason: string): RecallSelection =>
+    ({ status: 'abstained', reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
   const ctx: QualifyContext = {
     distinctive: distinctiveLexemes(search.queryLexemes),
     identifiers: messageIdentifiers(query),
@@ -204,7 +217,7 @@ export async function selectRecallPassages(
     qualified.push({ ...r, qualifiedBy });
   }
   const hits = relativeCut(qualified, config.maxGap).slice(0, config.limit);
-  if (hits.length === 0) return none('abstained', 'nothing_relevant', degraded);
+  if (hits.length === 0) return none('nothing_relevant');
 
   const terms = queryTerms(query);
   let used = estimateTokens(RECALL_HEAD + RECALL_TAIL);
@@ -222,13 +235,28 @@ export async function selectRecallPassages(
       item: { id: hit.id, sourceId: hit.sourceId, title, score: Number((hit.cosine ?? 0).toFixed(3)), qualifiedBy },
     });
   }
-  if (passages.length === 0) return none('abstained', 'over_budget', degraded);
+  if (passages.length === 0) return none('over_budget');
   const parts = passages.map((p) => p.block);
   const text = RECALL_HEAD + parts.join('') + RECALL_TAIL;
   return {
     status: 'injected', ...(degraded ? { degraded } : {}), passages, query, text, tokens: estimateTokens(text),
     group: { head: RECALL_HEAD, tail: RECALL_TAIL, parts },
   };
+}
+
+/**
+ * The passages recall injects for this message within `tokenBudget`, and the
+ * block they make. Shared by the hook and the eval. No side effect: no access
+ * is counted and no protection level raised (the hook's commit step does).
+ */
+export async function selectRecallPassages(
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage'>,
+  config: RecallConfig,
+  tokenBudget: number,
+): Promise<RecallSelection> {
+  const searched = await searchRecall(input, config);
+  if (!searched) return { status: 'skipped', reason: 'short_message', passages: [], query: '', text: '', tokens: 0 };
+  return choosePassages(searched, config, tokenBudget);
 }
 
 async function runRecall(input: ContextHookInput, raw: Record<string, unknown>): Promise<ContextHookResult> {

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Elysia } from '@/api/http';
+import { fakeEmbedder, vectorLiteral } from '@/test-helpers/fake-embedding';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -412,5 +413,78 @@ describe('the recall eval', () => {
     await note(otherId, 'Pricing', 'Website pricing: 900 euro.');
     const { body } = await send(userApp, 'POST', '/api/context-hooks/eval', { cases: [{ question: 'website pricing', expect: ['Pricing'] }] });
     expect(body.cases[0].hits).toEqual([]);
+  });
+});
+
+describe('the threshold sweep', () => {
+  // The vector leg through the deterministic stand-in: these words mean the same.
+  const embed = fakeEmbedder({ aliases: { charge: 'price', costs: 'price', pricing: 'price' } });
+  async function chunk(owner: string, title: string, content: string) {
+    await queryRaw(
+      `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+       VALUES ($1, $2, 'fake', $3, 'note', $4, 'fake/512', $5, $6)`,
+      [`note:${randomUUID()}`, content, vectorLiteral(embed(content)), randomUUID(), owner, JSON.stringify({ title })],
+    );
+  }
+  const cases = [
+    // Cosine about 0.71 with Pricing.
+    { question: 'What do we charge for a website?', expect: ['Pricing'] },
+    // About 0.26 with Holidays: found only under a low bar.
+    { question: 'When is the studio shut over winter?', expect: ['Holidays'] },
+    // Nothing in common with either.
+    { question: 'Who painted the Mona Lisa?', expect: [] },
+    // About 0.26 with Holidays too: shown under a low bar, which it should not be.
+    { question: 'Which studio microphone should I buy?' },
+  ];
+
+  test('runs the cases at every threshold, each question embedded once, and recommends one', async () => {
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    const embedding = vi.spyOn(getEmbeddingService(), 'generateEmbedding').mockImplementation(async (text: string) => embed(text));
+    try {
+      await chunk(userId, 'Pricing', 'Pricing: a website costs 2400 euro.');
+      await chunk(userId, 'Holidays', 'The studio closes from 24 December to 2 January for the holidays.');
+      // Another user's passage that would answer the microphone question.
+      await chunk(otherId, 'Microphones', 'Which studio microphone to buy: the one we use is on the shelf.');
+      await send(userApp, 'PATCH', '/api/context-hooks/builtin:knowledge-recall', { config: { limit: 3, maxGap: 0.5 } });
+
+      const { status, body } = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+      expect(status).toBe(200);
+      expect(embedding).toHaveBeenCalledTimes(cases.length);
+      expect(body.config).toEqual({ limit: 3, keywordCoverage: 0.6, maxGap: 0.5, minSimilarity: 0.45 });
+      expect(body.degraded).toBe(0);
+      const at = (t: number) => body.rows.find((r: { minSimilarity: number }) => r.minSimilarity === t);
+      expect(body.rows.map((r: { minSimilarity: number }) => r.minSimilarity)).toEqual([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]);
+      expect(at(0.25)).toMatchObject({ found: { n: 2, of: 2 }, abstained: { n: 1, of: 2 }, mrr: 1 });
+      expect(at(0.45)).toMatchObject({ found: { n: 1, of: 2 }, abstained: { n: 2, of: 2 }, mrr: 0.5 });
+      expect(at(0.8)).toMatchObject({ found: { n: 0, of: 2 }, abstained: { n: 2, of: 2 } });
+      // 0.20 to 0.70 all score 1.5; the tie goes to the highest.
+      expect(body.recommended).toBe(0.7);
+
+      // Thresholds of one's own; a single run's response is unchanged beside it.
+      const own = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases, thresholds: [0.5, 0.2] });
+      expect(own.body.rows.map((r: { minSimilarity: number }) => r.minSimilarity)).toEqual([0.2, 0.5]);
+      expect((await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases, thresholds: [1.5] })).status).toBe(422);
+      const single = await send(userApp, 'POST', '/api/context-hooks/eval', { cases: cases.slice(0, 1) });
+      expect(Object.keys(single.body).sort()).toEqual(['abstained', 'cases', 'config', 'found', 'mrr']);
+
+      // Only answerable questions: no recommendation, and why.
+      const oneKind = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases: cases.slice(0, 2) });
+      expect(oneKind.body).toMatchObject({ recommended: null, reason: 'needs_both_kinds' });
+
+      // Another user's sweep searches their own knowledge only, at their own settings.
+      const theirs = await send(otherApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+      expect(theirs.body.config.limit).toBe(4);
+      expect(theirs.body.rows.every((r: { found: { n: number } }) => r.found.n === 0)).toBe(true);
+      expect((await send(anonApp, 'POST', '/api/context-hooks/eval/sweep', { cases })).status).toBe(401);
+    } finally {
+      embedding.mockRestore();
+    }
+  });
+
+  test('a question that cannot be embedded: the rows are shown, no value is recommended', async () => {
+    await chunk(userId, 'Pricing', 'Pricing: a website costs 2400 euro.');
+    const { body } = await send(userApp, 'POST', '/api/context-hooks/eval/sweep', { cases });
+    expect(body).toMatchObject({ recommended: null, reason: 'embedding_failed', degraded: 4 });
+    expect(body.rows).toHaveLength(13);
   });
 });

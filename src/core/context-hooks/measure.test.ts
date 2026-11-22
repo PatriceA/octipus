@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  CALIBRATION_MIN_RUNS, calibrationMessage, calibrationSample, calibrationVerdict, citedItems, namesTitle, passageUsed, usedPassages,
+  CALIBRATION_MIN_RUNS, calibrationMessage, calibrationSample, calibrationVerdict, citedItems, namesTitle, passageUsed, recommendThreshold,
+  SWEEP_THRESHOLDS, usedPassages,
 } from './measure';
 
 describe('passageUsed', () => {
@@ -138,5 +139,32 @@ describe('calibration', () => {
   test('the message points at the sweep', () => {
     expect(calibrationMessage('Knowledge recall', 'injects_nearly_always', 39, 40)).toMatch(/98% of the 40 messages.*too low.*threshold sweep/s);
     expect(calibrationMessage('Knowledge recall', 'injects_almost_never', 1, 40)).toMatch(/3% of the 40 messages.*too high.*threshold sweep/s);
+  });
+});
+
+describe('the sweep\'s recommendation', () => {
+  const row = (minSimilarity: number, found: number, abstained: number) => ({ minSimilarity, found: { n: found, of: 4 }, abstained: { n: abstained, of: 2 } });
+
+  test('the range it tries', () => {
+    expect(SWEEP_THRESHOLDS).toEqual([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]);
+  });
+
+  test('the highest found-rate plus abstained-rate', () => {
+    // 0.3: 4/4 + 0/2 = 1; 0.4: 3/4 + 2/2 = 1.75; 0.5: 2/4 + 2/2 = 1.5.
+    expect(recommendThreshold([row(0.3, 4, 0), row(0.4, 3, 2), row(0.5, 2, 2)])).toEqual({ recommended: 0.4 });
+  });
+
+  test('a tie goes to the higher threshold', () => {
+    expect(recommendThreshold([row(0.3, 4, 1), row(0.4, 4, 1), row(0.5, 2, 1)])).toEqual({ recommended: 0.4 });
+    // Found falls by as much as abstained rises (in share): equal, the higher one.
+    expect(recommendThreshold([row(0.3, 4, 0), row(0.4, 2, 1)])).toEqual({ recommended: 0.4 });
+  });
+
+  test('none without both kinds of question', () => {
+    const onlyAnswerable = [{ minSimilarity: 0.3, found: { n: 2, of: 2 }, abstained: { n: 0, of: 0 } }];
+    const onlyEmpty = [{ minSimilarity: 0.3, found: { n: 0, of: 0 }, abstained: { n: 2, of: 2 } }];
+    expect(recommendThreshold(onlyAnswerable)).toEqual({ recommended: null, reason: 'needs_both_kinds' });
+    expect(recommendThreshold(onlyEmpty)).toEqual({ recommended: null, reason: 'needs_both_kinds' });
+    expect(recommendThreshold([])).toEqual({ recommended: null, reason: 'needs_both_kinds' });
   });
 });

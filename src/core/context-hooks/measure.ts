@@ -205,3 +205,34 @@ export function calibrationMessage(hook: string, verdict: 'injects_nearly_always
     ? `${hook} showed passages on ${pct}% of the ${searched} messages it searched. Its minSimilarity may be too low for your embedding model, so passages that do not help cost tokens on every turn. Run the threshold sweep below with your own questions and apply the value it recommends.`
     : `${hook} showed passages on ${pct}% of the ${searched} messages it searched. If your notes and documents cover what you ask, its minSimilarity is likely too high for your embedding model. Run the threshold sweep below with your own questions and apply the value it recommends.`;
 }
+
+// ── The threshold sweep ─────────────────────────────────────────────────────
+
+/** The `minSimilarity` values the sweep tries unless asked for others: 0.20 to 0.80 in steps of 0.05. */
+export const SWEEP_THRESHOLDS: readonly number[] = Array.from({ length: 13 }, (_, i) => Number((0.2 + i * 0.05).toFixed(2)));
+/** The most values one sweep may try. */
+export const MAX_SWEEP_THRESHOLDS = 21;
+
+export interface SweepRow {
+  minSimilarity: number;
+  found: { n: number; of: number };
+  abstained: { n: number; of: number };
+}
+
+/**
+ * The value the sweep recommends: the one with the highest found-rate plus
+ * abstained-rate (each answerable question finding its source counts as much,
+ * in share, as each question that should find nothing being shown nothing);
+ * on a tie the higher threshold, which shows less for the same score. None
+ * without both kinds of question: with only answerable ones the lowest bar
+ * always wins, with only should-find-nothing ones the highest.
+ */
+export function recommendThreshold(rows: readonly SweepRow[]): { recommended: number | null; reason?: 'needs_both_kinds' } {
+  if (!rows.length || rows[0].found.of === 0 || rows[0].abstained.of === 0) return { recommended: null, reason: 'needs_both_kinds' };
+  let best: { t: number; score: number } | null = null;
+  for (const row of rows) {
+    const score = row.found.n / row.found.of + row.abstained.n / row.abstained.of;
+    if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && row.minSimilarity > best.t)) best = { t: row.minSimilarity, score };
+  }
+  return { recommended: best?.t ?? null };
+}
