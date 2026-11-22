@@ -339,7 +339,7 @@ OCTIPUS_TUI_ICONS=ascii octi edit
 OCTIPUS_TUI_ICONS=emoji octi tui
 ```
 
-Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own are `app.file.saveAs` and `app.vim.toggle`). The editor's `/reload` reloads those bindings; `/hotkeys` (`F5`) displays them, with vim mode's keys and commands.
+Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own include `app.file.saveAs`, `app.vim.toggle` and `app.pending.open`, the key that resolves a waiting prompt). The editor's `/reload` reloads those bindings; `/hotkeys` (`F5`) displays them, with vim mode's keys and commands.
 
 If either surface stops on an error, or the terminal closes under it, it first turns mouse reporting off, shows the cursor and leaves raw mode, then prints the error and exits with a non-zero status, so the shell you return to works normally.
 
