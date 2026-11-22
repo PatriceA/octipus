@@ -270,7 +270,7 @@ filesystem or shell isolation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/chat` | Send a chat message. Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
+| POST | `/api/chat` | Send a chat message. Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced unless the body declares `renders: ["inline_ui"]` — a view by its text, an HTML block by a plain line; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
 ## Documents
@@ -474,7 +474,7 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
 | POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |
-| POST | `/api/spaces/:id/rooms/:roomId/messages` | commenter+ | `{content, addressed?, clientId?}`: REST fallback of `room.post` → `{messageId, queuedPosition?, notQueued?}`; `/…` → `{commandResult}` |
+| POST | `/api/spaces/:id/rooms/:roomId/messages` | commenter+ | `{content, addressed?, clientId?, inlineUi?: {action}}` (`action` answers a view of the room: `{blockId, name, componentId, context, data?}`, checked against it, 400 when it fails; the post is addressed): REST fallback of `room.post` → `{messageId, queuedPosition?, notQueued?}`; `/…` → `{commandResult}` |
 | PATCH | `/api/spaces/:id/rooms/:roomId` | room creator, owner | `{title?, visibility?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/members` | room access | A private room's members, or the space's for an open one |
 | GET | `/api/spaces/:id/rooms/:roomId/mode` | room access | `{mode, quietHoursStart, quietHoursEnd, timezone, maxUnpromptedPerDay, minMinutesBetween, feedback: {up, down}}` |

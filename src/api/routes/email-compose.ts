@@ -85,16 +85,19 @@ export const emailComposeRoutes = new Elysia({ prefix: '/email' })
       if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
       let snoozed: SnoozeView;
       let warning: string | undefined;
+      let handled = body.ids;
       try {
         snoozed = await snooze(user.id, provider, body);
       } catch (err) {
         // Some messages could not be moved: those stay in the inbox; the rest is snoozed.
         if (!(err instanceof SnoozePartialError)) throw err;
-        snoozed = (err as SnoozePartialError & { snoozed: SnoozeView }).snoozed;
+        snoozed = err.snoozed;
+        handled = err.snoozedIds;
         warning = err.message;
       }
-      // The owner dealt with it for now: the heartbeat's inbox watch leaves it alone.
-      for (const messageId of body.ids) {
+      // The owner dealt with what was snoozed, for now: the heartbeat's inbox
+      // watch leaves it alone. What stayed in the inbox is still watched.
+      for (const messageId of handled) {
         markEmailHandled({ userId: user.id, provider, messageId, outcome: 'other', note: 'Snoozed in the inbox page' })
           .catch((err: unknown) => apiLogger.warn({ err, userId: user.id }, 'email: could not record a handled message'));
       }

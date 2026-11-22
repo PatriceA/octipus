@@ -306,6 +306,60 @@ labels reflect blast radius, not contract guarantees.
   their separate emoji (👨‍👩‍👧 as 👨👩👧, 👍🏽 as 👍), and invisible format
   characters (variation selectors, soft hyphens, bidi controls) are removed
   from displayed text. `/copy` still copies the original.
+- **Interactive answers as views: forms, tables and charts that answer back**
+  ([spec](docs/plans/inline-ui-views-spec.md), [reference](docs/INLINE-UI.md)).
+  - An interactive answer can now be a *view*: JSON naming ready-made
+    components (choices, text fields, sliders, sortable tables, charts,
+    stats, steps) that the web app draws itself. No generated code runs, so
+    it never waits for a click, and a button sends the user's answer back to
+    the agent as their message, with the values. The answer is kept on the
+    message (`metadata.inlineUiAction`) and on the block (`state`). HTML
+    blocks stay for free-form visuals.
+  - The root prompt's section is rewritten to say when to use one (a choice,
+    several items with several attributes, numbers over time, a result that
+    depends on inputs, a process) and is no longer filed under guardrails in
+    the Context inspector. The delegation guide and the output-formatting
+    rules no longer contradict it.
+  - **New setting** `agent.interactiveAnswers` (`AGENT_INTERACTIVE_ANSWERS`):
+    `auto` (default), `prefer`, `off`.
+  - Channel replies, monitors, the group bridge, hook notifications, room
+    notifications, `/api/chat` without `renders` and the OpenAI-compatible
+    API show a view as text instead of the one-line placeholder.
+  - **Wire and API:** `chat.send` / `room.post` take `inlineUi.action`
+    (`{ blockId, name, componentId, context, data? }`); an answer that fails a
+    check is refused (`INVALID_MESSAGE`; rooms `INVALID_INPUT` / 400); a
+    `data` over 16 000 characters is not a refusal (the view's own data is
+    stored). A room post that answers a view needs the `api:chat` token
+    scope, as an addressed post does.
+    `GET /api/sessions/:id/inline-ui/:blockId` adds `kind`, `view`, `state`;
+    promoting a view answers 409. `inline-ui__source` adds `kind`.
+  - **Migration** `0198_inline_ui_views` adds `kind` (default `html`), `view`
+    and `state` to `inline_ui_blocks`.
+  - **Logs:** one `Interactive answer offer` line per root turn that was
+    offered interactive answers (`used`, `kinds`, `refused`, `setting`).
+  - `eval/inline-ui.yaml` gains ten unprompted positives and four view
+    negatives (live-model suite; not yet run).
+- **Fix:** the calendar list kept for two minutes is dropped when an account
+  is connected, disconnected or made the default, so events and edits no
+  longer use the new default's token on the old default's calendars.
+- **Fix:** "All events" of an all-day series now applies a changed last day to
+  every occurrence (Google and Microsoft) instead of answering success and
+  dropping it; a Microsoft all-day occurrence is no longer refused as moved to
+  another day in zones ahead of UTC.
+- **Fix:** an existing event that does not repeat can be given a repeat rule
+  (`PATCH /api/calendar/events/:id` with `recurrence`).
+- **Fix:** listing accounts, "Make default" and disconnecting no longer write
+  back a refresh token and expiry superseded by a refresh made a moment
+  earlier.
+- **Fix:** routes declaring a `format: 'uuid'` field (email unsnooze and
+  dismiss, note proposals filtered by note) refused every request with 422:
+  the format was never registered with the validator.
+- **Fix:** files uploaded for a mail and never sent are now dropped from
+  server memory once their hour is up (a periodic sweep), not only when the
+  same user uploads or sends again.
+- **Fix:** a snooze that moves only some messages of a conversation marks only
+  those as handled; the ones left in the inbox stay in the heartbeat's inbox
+  watch.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).

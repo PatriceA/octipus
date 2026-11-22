@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { InlineUiView, InlineUiViewState } from '@/shared/inline-ui/view/types';
 import { sessions } from './sessions';
 import { users } from './users';
 
@@ -6,8 +7,9 @@ import { users } from './users';
  * Interactive answers ("inline UI", docs/plans/inline-ui-spec.md): the source
  * of an `octi-ui` block the root agent wrote in a reply. The reply itself keeps
  * a marker line, `[[octi-ui:<id>|<title>]]`; the web fetches the source by id
- * and renders it in a sandboxed frame. Session content: deleted with the
- * session.
+ * and renders it — an HTML block in a sandboxed frame, a view
+ * (docs/plans/inline-ui-views-spec.md) as native components. Session content:
+ * deleted with the session.
  */
 export const inlineUiBlocks = pgTable('inline_ui_blocks', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -18,6 +20,12 @@ export const inlineUiBlocks = pgTable('inline_ui_blocks', {
   /** Who asked (a room's requester; the owner in a personal chat). */
   requesterId: uuid('requester_id').references(() => users.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
+  /** `html`: css/html/js below. `view`: a declarative view in `view`; css/html/js are empty. */
+  kind: text('kind').$type<'html' | 'view'>().notNull().default('html'),
+  /** The normalized view (`lintInlineUiView(…, { closed: true }).view`); null for an HTML block. */
+  view: jsonb('view').$type<InlineUiView>(),
+  /** A view's last answer: the data model at the click and the event (spec §4); null until answered. */
+  state: jsonb('state').$type<InlineUiViewState>(),
   heightHint: integer('height_hint').notNull().default(320),
   css: text('css').notNull().default(''),
   html: text('html').notNull().default(''),

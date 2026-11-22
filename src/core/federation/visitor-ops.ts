@@ -489,6 +489,14 @@ export interface PostedAnswer {
   notQueued?: string;
 }
 
+/** A post forwarded to the host; `inlineUi` answers a view of the room, checked by the host. */
+export interface RemotePostInput {
+  content: string;
+  addressed?: boolean;
+  clientId?: string;
+  inlineUi?: { action: { blockId: string; name: string; componentId: string; context: Record<string, unknown>; data?: Record<string, unknown> } };
+}
+
 /** `${host}\n${conn}` → the post waiting for its answer on that connection. */
 const postWaiters = new Map<string, PostWaiter>();
 /** `${host}\n${conn}` → the previous post on it: one at a time per connection, so an answer is never mistaken for another's. */
@@ -505,7 +513,7 @@ const postChains = new Map<string, Promise<unknown>>();
  * (`agent:<session>`) is another connection.
  */
 export function postThroughConn(
-  row: RemoteSpace, conn: string, roomId: string, input: { content: string; addressed?: boolean; clientId?: string },
+  row: RemoteSpace, conn: string, roomId: string, input: RemotePostInput,
 ): Promise<PostedAnswer> {
   const key = `${row.hostInstanceId}\n${conn}`;
   const previous = postChains.get(key) ?? Promise.resolve();
@@ -516,7 +524,7 @@ export function postThroughConn(
 }
 
 async function postOnce(
-  row: RemoteSpace, conn: string, key: string, roomId: string, input: { content: string; addressed?: boolean; clientId?: string },
+  row: RemoteSpace, conn: string, key: string, roomId: string, input: RemotePostInput,
 ): Promise<PostedAnswer> {
   requireVisiting();
   ensureHostWired(row.hostInstanceId);
@@ -527,7 +535,10 @@ async function postOnce(
   }, POST_ANSWER_MS);
   timer.unref();
   try {
-    const frame = { type: 'room.post', roomId, content: input.content, ...(input.addressed !== undefined ? { addressed: input.addressed } : {}), clientId };
+    const frame = {
+      type: 'room.post', roomId, content: input.content, ...(input.addressed !== undefined ? { addressed: input.addressed } : {}), clientId,
+      ...(input.inlineUi ? { inlineUi: input.inlineUi } : {}),
+    };
     log.debug({ type: 'room.post', size: input.content.length, remoteSpaceId: row.id, roomId, conn }, 'Forwarding a post to the host');
     await visitorPool().request(hostOf(row), 'gateway.frame', { frame }, { as: row.memberHandle, conn });
     return await answer;

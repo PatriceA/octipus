@@ -1,5 +1,6 @@
 import type { CompanionIdentity } from '../../src/shared/companion';
 import type { Browser, Page, Route, WebSocketRoute } from '@playwright/test';
+import { lintInlineUiView } from '../../src/shared/inline-ui/view';
 import { json, stubAllDefaults } from './fixtures/api-stubs';
 import { expect, expectNoConsoleErrors, installConsoleWatchdog, STUB_TOKEN, STUB_USER, test } from './fixtures/auth';
 
@@ -72,6 +73,10 @@ class Relay {
   /** Every client frame after `auth`, with its sender. */
   readonly frames: Array<{ userId: string; message: Record<string, any> }> = [];
   running: { requesterId: string; messageId: string } | null = null;
+  /** A view's stored answer by block id, as `roomInlineUiAnswer` keeps it. */
+  readonly viewStates = new Map<string, Record<string, unknown>>();
+  /** The answer check fails (the view changed): a post with `inlineUi.action` is refused. */
+  refuseActions = false;
   queued: Array<{ requesterId: string; messageId: string }> = [];
 
   constructor() {
@@ -182,11 +187,15 @@ class Relay {
     return msg;
   }
 
-  post(userId: string, roomId: string, body: { content: string; addressed?: boolean; clientId?: string }) {
-    const addressed = !!body.addressed || /@octipus\b/i.test(body.content);
+  post(userId: string, roomId: string, body: { content: string; addressed?: boolean; clientId?: string; inlineUi?: { action: Record<string, any> } }) {
+    const action = body.inlineUi?.action;
+    const addressed = !!body.addressed || !!action || /@octipus\b/i.test(body.content);
+    if (action) {
+      this.viewStates.set(action.blockId, { data: action.data ?? {}, action: { name: action.name, componentId: action.componentId, at: stamp() } });
+    }
     const msg = this.store({
       roomId, role: 'user', content: body.content, authorUserId: userId, authorName: this.name(userId), agentId: null,
-      metadata: { addressed, ...(body.clientId ? { clientId: body.clientId } : {}) },
+      metadata: { addressed, ...(body.clientId ? { clientId: body.clientId } : {}), ...(action ? { inlineUiAction: { blockId: action.blockId, name: action.name, context: action.context } } : {}) },
     });
     if (!addressed) return { messageId: msg.id, clientId: body.clientId };
     const request = { requesterId: userId, messageId: msg.id };
@@ -277,6 +286,10 @@ class Relay {
           this.to(conn, { type: 'error', code: 'FORBIDDEN', message: 'Your role cannot post here' });
           return;
         }
+        if (m.inlineUi && this.refuseActions) {
+          this.to(conn, { type: 'error', code: 'INVALID_INPUT', message: 'The interactive answer was not sent: the view changed' });
+          return;
+        }
         const outcome = this.post(userId, m.roomId, m as { content: string; addressed?: boolean; clientId?: string });
         this.to(conn, { type: 'room.posted', roomId: m.roomId, ...outcome });
         return;
@@ -347,7 +360,9 @@ class Relay {
       return json(route, 200, { messages: this.messages.filter((x) => x.roomId === roomId), hasMore: false });
     }
     if (rest === '/messages' && method === 'POST') {
-      const outcome = this.post(userId, roomId, req.postDataJSON());
+      const body = req.postDataJSON();
+      if (body.inlineUi && this.refuseActions) return json(route, 400, { error: 'The interactive answer was not sent: the view changed' });
+      const outcome = this.post(userId, roomId, body);
       return json(route, 201, outcome);
     }
     if (rest === '/members') {
@@ -532,6 +547,79 @@ test('an interactive answer in a room: every member sees it, its script waits fo
   expectNoConsoleErrors(consoleErrors);
 });
 
+const ROOM_VIEW_BLOCK = '7a1e0000-0000-4000-8000-0000000000b2';
+const ROOM_VIEW = (() => {
+  const result = lintInlineUiView(JSON.stringify({
+    data: { plan: null },
+    root: { component: 'Column', children: [
+      { component: 'ChoicePicker', label: 'Plan', value: { '@path': '/plan' }, options: [{ label: 'Basic', value: 'basic' }, { label: 'Pro', value: 'pro' }] },
+      { id: 'go', component: 'Button', label: 'Continue', action: { event: { name: 'plan_chosen', context: { plan: { '@path': '/plan' } }, userMessage: 'We take ${plan}' } } },
+    ] },
+  }), { closed: true });
+  if (!result.view) throw new Error(result.issues.map((i) => i.message).join('; '));
+  return result.view;
+})();
+
+/** Both members' pages read the room's view block with its stored answer from the relay. */
+async function roomWithView(browser: Browser, relay: Relay, consoleErrors: string[]) {
+  const alice = await memberPage(browser, relay, ALICE, consoleErrors);
+  const ben = await memberPage(browser, relay, BEN, consoleErrors);
+  for (const page of [alice, ben]) {
+    await page.route(`**/api/sessions/${GENERAL}/inline-ui/${ROOM_VIEW_BLOCK}`, (route) => json(route, 200, {
+      block: {
+        id: ROOM_VIEW_BLOCK, title: 'Pick a plan', heightHint: 120, tainted: false, risk: 'normal', issues: [], shared: true, scripts: false,
+        css: '', html: '', js: '', kind: 'view', view: ROOM_VIEW, state: relay.viewStates.get(ROOM_VIEW_BLOCK) ?? null,
+      },
+    }));
+  }
+  relay.running = { requesterId: BEN.id, messageId: 'm-ask' };
+  relay.answer(GENERAL, `Which plan?\n[[octi-ui:${ROOM_VIEW_BLOCK}|Pick a plan]]`);
+  await openRoom(alice);
+  await openRoom(ben);
+  const blockOf = (page: Page) => page.getByTestId('inline-ui-block').filter({ hasText: 'Pick a plan' });
+  return { alice, ben, blockOf };
+}
+
+test('a view answered in a room posts inlineUi.action; members see its values and the block answered', async ({ browser, consoleErrors }) => {
+  const relay = new Relay();
+  const { alice, ben, blockOf } = await roomWithView(browser, relay, consoleErrors);
+  await expect(blockOf(ben).getByRole('button', { name: 'Continue' })).toBeVisible();
+  const block = blockOf(alice);
+  await block.getByLabel('Pro').check();
+  await block.getByRole('button', { name: 'Continue' }).click();
+  await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+
+  const posted = relay.frames.filter((f) => f.userId === ALICE.id && f.message.type === 'room.post').at(-1)!;
+  expect(posted.message).toMatchObject({
+    content: 'We take pro', addressed: true,
+    inlineUi: { action: { blockId: ROOM_VIEW_BLOCK, name: 'plan_chosen', componentId: 'go', context: { plan: 'pro' }, data: { plan: 'pro' } } },
+  });
+  // The bubbles carry the values, for the poster and the other member.
+  for (const page of [alice, ben]) {
+    const bubble = page.locator('[data-role="user"][data-author="e2etest"]').filter({ hasText: 'We take pro' });
+    await expect(bubble.getByTestId('from-inline-ui')).toBeVisible();
+    await expect(bubble.getByTestId('inline-ui-action-values')).toContainText('plan: pro');
+  }
+  // Ben's block is fetched again and shows the answer.
+  await expect(blockOf(ben).getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+  await expect(blockOf(ben).getByLabel('Pro')).toBeChecked();
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test('a view answer the room refuses says why on the block and opens it again', async ({ browser, consoleErrors }) => {
+  const relay = new Relay();
+  relay.refuseActions = true;
+  const { alice, blockOf } = await roomWithView(browser, relay, consoleErrors);
+  const block = blockOf(alice);
+  await block.getByLabel('Basic').check();
+  await block.getByRole('button', { name: 'Continue' }).click();
+  await expect(block.getByTestId('inline-ui-view-error')).toContainText('the view changed');
+  await expect(block).not.toContainText('Answer sent');
+  await expect(block.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  await expect(alice.locator('[data-role="user"]').filter({ hasText: 'We take basic' })).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
 test('a viewer reads the room but cannot post or ask', async ({ browser, consoleErrors }) => {
   const relay = new Relay();
   relay.roles.set(BEN.id, 'viewer');
@@ -613,7 +701,8 @@ test('rooms list unread badges; an editor creates a private room; space memory',
   await alice.getByLabel('private — only the members I pick').check();
   await alice.getByLabel(/^ben/).check();
   await alice.getByRole('button', { name: 'create room' }).click();
-  expect(relay.created).toEqual([{ title: 'Launch plan', visibility: 'private', memberIds: [BEN.id] }]);
+  // The click only dispatches the submit: the POST reaches the relay later.
+  await expect.poll(() => relay.created).toEqual([{ title: 'Launch plan', visibility: 'private', memberIds: [BEN.id] }]);
   await expect(alice.getByTestId('room-title')).toHaveText('Launch plan');
   await expect(alice.getByTestId('room-link').filter({ hasText: 'Launch plan' })).toHaveAttribute('aria-current', 'page');
 

@@ -23,9 +23,10 @@ import MessageTimeline, {
 } from '@/components/chat/message-timeline';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 import PromptInput, { type Attachment, type PromptInputHandle } from '@/components/chat/prompt-input';
-import { type InlineUiBlockData, type InlineUiHost, InlineUiProvider } from '@/components/chat/inline-ui/context';
+import { type InlineUiBlockData, type InlineUiHost, InlineUiProvider, type InlineUiSendAction, refreshInlineUiBlock } from '@/components/chat/inline-ui/context';
 import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
 import type { InlineUiReport } from '../../../src/shared/inline-ui/bridge';
+import type { InlineUiViewAction } from '../../../src/shared/inline-ui/view';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
@@ -271,11 +272,13 @@ export default function ChatPage() {
   /** isLoading before the last send: a steered message joins a run, it doesn't start one. */
   const loadingBeforeSendRef = useRef(false);
   /**
-   * The session of this tab's last `chat.send` until an event of that session
+   * The session of this tab's last `chat.send` until its `chat.delivery`
    * shows the server took it. A send refused before its turn starts gets an
    * `error` frame only (no `chat.error`); this is where it is reported.
    */
   const pendingSendRef = useRef<string | null>(null);
+  /** A view's answer in that send: told when the server refuses it, so the block says why and opens again. */
+  const pendingActionRef = useRef<{ sid: string; refused: (message: string) => void } | null>(null);
   /** Sessions this tab created: the only ones an event may open while no session is. */
   const ownSessionsRef = useRef<Set<string>>(new Set());
   // Durable cursors avoid reloading every event for every agent on the 10s
@@ -379,7 +382,7 @@ export default function ChatPage() {
     const revision = (messageLoadsRef.current.get(sessionId) ?? 0) + 1;
     messageLoadsRef.current.set(sessionId, revision);
     try {
-      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string }; attachments?: unknown } | null }> }>(
+      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string }; inlineUiAction?: Pick<InlineUiViewAction, 'blockId' | 'name' | 'context'>; attachments?: unknown } | null }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`, { retryRateLimit: false }
       );
       const msgs = data?.messages?.length
@@ -391,7 +394,9 @@ export default function ChatPage() {
             // A turn refused by a spend budget keeps its card after a reload.
             ...(m.metadata?.limit && { metadata: { limit: m.metadata.limit } }),
             // Sent from an interactive answer's suggestion: its chip.
-            ...(m.metadata?.inlineUiProvenance && { fromInlineUi: true }),
+            ...((m.metadata?.inlineUiProvenance || m.metadata?.inlineUiAction) && { fromInlineUi: true }),
+            // An answer from a view's button: its values under the bubble.
+            ...(m.metadata?.inlineUiAction && { inlineUiAction: m.metadata.inlineUiAction }),
             // The answer's images and speech (generate_image, speak).
             ...withMedia(mediaFromAttachments(m.metadata?.attachments)),
           }))
@@ -718,6 +723,12 @@ export default function ChatPage() {
       // More was missed than the server kept (or this tab saw nothing of the
       // session live): reload the transcript.
       void loadSessionMessages(message.sessionId);
+    } else if (message.type === 'chat.delivery') {
+      // The server took this tab's send (steered, queued, started): a later
+      // error frame is not its refusal. Other events of the session are not
+      // this answer — a running turn's stream can arrive before the refusal.
+      if (message.sessionId === pendingSendRef.current) pendingSendRef.current = null;
+      if (message.sessionId === pendingActionRef.current?.sid) pendingActionRef.current = null;
     } else if (message.type === 'error') {
       handleSendRefused(message.code, message.message);
     }
@@ -753,6 +764,10 @@ export default function ChatPage() {
     const sid = pendingSendRef.current;
     if (!sid || !REFUSED_SEND_CODES.has(code)) return;
     pendingSendRef.current = null;
+    if (pendingActionRef.current?.sid === sid) {
+      pendingActionRef.current.refused(text);
+      pendingActionRef.current = null;
+    }
     if (sid === activeSessionId) {
       setIsLoading(loadingBeforeSendRef.current);
       if (!loadingBeforeSendRef.current) setStatusMessage(null);
@@ -1023,8 +1038,6 @@ export default function ChatPage() {
     const eventSessionId = event.sessionId;
     const sid = eventSessionId || activeSessionId;
     const payload = (event.payload ?? {}) as Record<string, any>;
-    // An event of the session this tab just sent in: the server took the send.
-    if (eventSessionId && eventSessionId === pendingSendRef.current) pendingSendRef.current = null;
 
     switch (event.type) {
       case 'chat.response': {
@@ -1069,6 +1082,8 @@ export default function ChatPage() {
         // delivery (`webchat:<you>`): show it in its session.
         const target = sid;
         if (!target || typeof payload.content !== 'string') break;
+        // Another tab answered a view: the block shows that answer, fetched again.
+        if (typeof payload.inlineUiAction?.blockId === 'string') refreshInlineUiBlock(target, payload.inlineUiAction.blockId);
         updateSessionState(target, (prev) => ({
           ...prev,
           messages: prev.messages.some((m) => m.id === `gw-${event.id}`) ? prev.messages : [...prev.messages, {
@@ -1076,6 +1091,9 @@ export default function ChatPage() {
             role: payload.role === 'user' ? 'user' : 'assistant',
             content: payload.content,
             timestamp: new Date(event.timestamp),
+            // Another tab's message from an interactive answer keeps its chip there too.
+            ...((payload.inlineUiProvenance || payload.inlineUiAction) ? { fromInlineUi: true } : {}),
+            ...(payload.inlineUiAction ? { inlineUiAction: payload.inlineUiAction } : {}),
           }],
         }));
         break;
@@ -1674,7 +1692,17 @@ export default function ChatPage() {
   };
 
   // Send message
-  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { spoken?: boolean; inlineUiProvenance?: string; attachmentProtectionLevel?: 1 | 2 | 3 | 4 }) => {
+  /**
+   * `inlineUiAction`: a view's answer (docs/plans/inline-ui-views-spec.md §4).
+   * It goes over the gateway only — the REST fallback has no `inlineUi` — and
+   * `sent` / `notSent` / `refused` tell the block what became of it.
+   */
+  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: {
+    spoken?: boolean;
+    inlineUiProvenance?: string;
+    attachmentProtectionLevel?: 1 | 2 | 3 | 4;
+    inlineUiAction?: { action: InlineUiSendAction; sent: () => void; notSent: (reason: string) => void; refused: (reason: string) => void };
+  }) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
     let fileRefs: Array<{ path: string; version?: string; protectionLevel?: 1 | 2 | 3 | 4 }> | undefined = attachedFiles.length ? attachedFiles : undefined;
@@ -1718,11 +1746,13 @@ export default function ChatPage() {
       content: userInput,
       timestamp: new Date(),
       ...(options?.inlineUiProvenance ? { fromInlineUi: true } : {}),
+      ...(options?.inlineUiAction ? { inlineUiAction: { blockId: options.inlineUiAction.action.blockId, name: options.inlineUiAction.action.name, context: options.inlineUiAction.action.context } } : {}),
     };
     // What happened to this session's interactive answers since the last
     // message rides along with this one (ids and enums only).
     const inlineUiReports = inlineUiReportsRef.current.get(sid) ?? [];
     inlineUiReportsRef.current.delete(sid);
+    const inlineUiAction = options?.inlineUiAction?.action;
 
     updateSessionState(sid, (prev) => ({
       ...prev,
@@ -1745,10 +1775,11 @@ export default function ChatPage() {
       ...(options?.spoken ? { spoken: true } : {}),
       // This client renders interactive answers (D14).
       renders: ['inline_ui'],
-      ...(inlineUiReports.length || options?.inlineUiProvenance
+      ...(inlineUiReports.length || options?.inlineUiProvenance || inlineUiAction
         ? { inlineUi: {
           ...(inlineUiReports.length ? { reports: inlineUiReports } : {}),
           ...(options?.inlineUiProvenance ? { provenance: { inlineUiId: options.inlineUiProvenance } } : {}),
+          ...(inlineUiAction ? { action: { blockId: inlineUiAction.blockId, name: inlineUiAction.name, componentId: inlineUiAction.componentId, context: inlineUiAction.context, ...(inlineUiAction.data ? { data: inlineUiAction.data } : {}) } } : {}),
         } }
         : {}),
     };
@@ -1768,6 +1799,7 @@ export default function ChatPage() {
           timestamp: new Date(),
         }],
       }));
+      options?.inlineUiAction?.notSent(`Your answer was not sent: ${refusal}`);
       return;
     }
 
@@ -1788,6 +1820,10 @@ export default function ChatPage() {
     };
     if (gatewayStatus !== 'too_many_tabs' && (chatSend() || ((await gateway.whenConnected(10_000)) && chatSend()))) {
       if (fileRefs) setAttachedFiles([]);
+      if (options?.inlineUiAction) {
+        pendingActionRef.current = { sid, refused: options.inlineUiAction.refused };
+        options.inlineUiAction.sent();
+      }
       return;
     }
 
@@ -1798,6 +1834,14 @@ export default function ChatPage() {
     // action that needs approval is refused, not asked — this tab could not
     // hear the request, and the model is told so in the tool result.
     if (inlineUiReports.length) inlineUiReportsRef.current.set(sid, [...inlineUiReports, ...(inlineUiReportsRef.current.get(sid) ?? [])]);
+    // A view's answer cannot go over REST: it stays on the block, editable, and says so.
+    if (options?.inlineUiAction) {
+      const failedSid = sid;
+      updateSessionState(failedSid, (prev) => ({ ...prev, messages: prev.messages.filter((m) => m !== userMessage) }));
+      setIsLoading(loadingBeforeSendRef.current);
+      options.inlineUiAction.notSent('Not connected — your answer was not sent.');
+      return;
+    }
     try {
       const result = await api.post<{
         response: string;
@@ -2032,6 +2076,13 @@ export default function ChatPage() {
       },
       sendSuggestion: impersonating ? undefined : (text, blockId) => { void sendMessageRef.current(text, undefined, { inlineUiProvenance: blockId }); },
       editSuggestion: impersonating ? undefined : (text, blockId) => composerRef.current?.insertDraft(text, { inlineUiId: blockId }),
+      // A view's answer: sent at once (steering a running turn, like a suggestion's Send).
+      sendAction: impersonating ? undefined : (action, onRefused) => new Promise<void>((resolve, reject) => {
+        sendMessageRef.current(action.text, undefined, {
+          inlineUiProvenance: action.blockId,
+          inlineUiAction: { action, sent: resolve, notSent: (reason) => reject(new Error(reason)), refused: onRefused },
+        }).catch(reject);
+      }),
       busy: isLoading,
       // Only while the `artifacts` module is on (docs/MODULES.md).
       saveAsArtifact: !artifactsOn ? undefined : async (blockId, input) => {

@@ -5,3 +5,4 @@ export * from './lint';
 export * from './theme';
 export * from './frames';
 export * from './bridge';
+export * from './view';

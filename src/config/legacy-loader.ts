@@ -139,6 +139,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       // in real .env files, and dropping them would silently reset a tuned
       // install to defaults rather than fail loudly.
       promptTier: (env('AGENT_PROMPT_TIER', 'ORCHESTRATOR_MODE') as 'auto' | 'full' | 'lite') || 'auto',
+      interactiveAnswers: (process.env.AGENT_INTERACTIVE_ANSWERS as 'off' | 'auto' | 'prefer' | undefined) || 'auto',
       liteMaxIterations: parseInt(env('AGENT_LITE_MAX_ITERATIONS', 'ORCHESTRATOR_LITE_MAX_ITERATIONS') || '20', 10),
       smallModelMaxParams: parseInt(env('AGENT_SMALL_MODEL_MAX_PARAMS', 'ORCHESTRATOR_ROUTER_MAX_PARAMS') || '10000000000', 10),
       liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '30000000000', 10),

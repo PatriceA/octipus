@@ -2,6 +2,7 @@ import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { isAuthenticated, type Principal, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
+import { inlineUiActionBody } from './inline-ui';
 
 /**
  * Spaces this install's users joined on other installs
@@ -231,12 +232,17 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
     const row = await ownRemoteSpace(user.id, ctx.params.id);
     // A post that asks the host's agent drives it: the token needs the chat
     // scope, as for a room here (`rooms.ts`) and the gateway's `remote.frame`
-    // (`frameScopeError`).
+    // (`frameScopeError`). A view answer is addressed whatever `addressed` says.
     const content = ctx.body.content.trim();
     const { mentionsOctipus } = await import('@/core/rooms/service');
-    if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+    if ((ctx.body.inlineUi || (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)))) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
       ctx.set.status = 403;
       return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
+    }
+    // Answering a view is the member's own message: never while an admin acts as them (as in `rooms.ts`).
+    if (ctx.body.inlineUi && ctx.principal.actorUserId) {
+      ctx.set.status = 403;
+      return { error: 'Interactive answers do not answer while acting as another user.' };
     }
     // One host-side connection per user for REST posts, closed after each.
     const conn = `rest:${user.id}`;
@@ -245,13 +251,18 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
         content: ctx.body.content,
         ...(ctx.body.addressed !== undefined ? { addressed: ctx.body.addressed } : {}),
         ...(ctx.body.clientId ? { clientId: ctx.body.clientId } : {}),
+        ...(ctx.body.inlineUi ? { inlineUi: ctx.body.inlineUi } : {}),
       });
     } finally {
       closeHostConn(row, conn);
     }
   }), {
     params: t.Object({ id: t.String(), roomId: uuid() }),
-    body: t.Object({ content: t.String({ minLength: 1, maxLength: 20_000 }), addressed: t.Optional(t.Boolean()), clientId: t.Optional(t.String({ minLength: 1, maxLength: 64 })) }),
+    body: t.Object({
+      content: t.String({ minLength: 1, maxLength: 20_000 }), addressed: t.Optional(t.Boolean()), clientId: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
+      // A view's answer, checked by the host (docs/plans/inline-ui-views-spec.md §4).
+      inlineUi: t.Optional(t.Object({ action: inlineUiActionBody }, { additionalProperties: false })),
+    }),
     ...tag,
   })
 

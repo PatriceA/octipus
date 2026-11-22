@@ -300,6 +300,13 @@ export const agentConfigSchema = z.object({
    */
   promptTier: z.enum(['auto', 'full', 'lite']).default('auto'),
   /**
+   * Interactive answers in the root's replies (docs/INLINE-UI.md): `auto`
+   * (default) offers them where the reply is read in the web app, `prefer`
+   * also asks the root to use one whenever an answer has structure, `off`
+   * never offers them (no prompt section, no `inline-ui` tool).
+   */
+  interactiveAnswers: z.enum(['off', 'auto', 'prefer']).default('auto'),
+  /**
    * Iteration cap for the lite root loop — the hard bound that replaced router
    * mode for small models. It was 3 when lite could only delegate once and
    * relay; the lite root now does the work itself, and 3 iterations is not

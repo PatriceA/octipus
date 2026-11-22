@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { postAndQueue } from '@/core/gateway/room-handlers';
+import { inlineUiActionBody } from './inline-ui';
 import { runRoomCommand } from '@/core/rooms/commands';
 import { getRoomMode, rateUnpromptedPost, setRoomMode } from '@/core/rooms/listen';
 import {
@@ -99,7 +100,8 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
       const content = ctx.body.content.trim();
       // WS6: a post that asks the agent drives it (tools, spend) like a chat
       // message, so an API token needs `api:chat` for it, as on /api/chat.
-      if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+      // A view answer is addressed whatever `addressed` says (postRoomMessage).
+      if ((ctx.body.inlineUi || (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)))) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
         ctx.set.status = 403;
         return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
       }
@@ -108,7 +110,13 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
         await requireRoom(actor, ctx.params.id, ctx.params.roomId);
         return { commandResult: await runRoomCommand(ctx.params.roomId, actor.userId, content) };
       }
-      const outcome = await postAndQueue(actor.userId, ctx.params.roomId, ctx.body, { workspaceId: ctx.params.id, allowAgent: requireScope(ctx.principal, API_SCOPES.CHAT) });
+      const { inlineUi, ...post } = ctx.body;
+      // Answering a view is the member's own message: never while an admin acts as them.
+      if (inlineUi && ctx.principal.actorUserId) {
+        ctx.set.status = 403;
+        return { error: 'Interactive answers do not answer while acting as another user.' };
+      }
+      const outcome = await postAndQueue(actor.userId, ctx.params.roomId, { ...post, ...(inlineUi ? { inlineUiAction: inlineUi.action } : {}) }, { workspaceId: ctx.params.id, allowAgent: requireScope(ctx.principal, API_SCOPES.CHAT) });
       ctx.set.status = 201;
       return outcome;
     }),
@@ -118,6 +126,8 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
         content: t.String({ minLength: 1, maxLength: 100_000 }),
         addressed: t.Optional(t.Boolean()),
         clientId: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
+        // A view's answer (docs/plans/inline-ui-views-spec.md §4), as on `room.post`.
+        inlineUi: t.Optional(t.Object({ action: inlineUiActionBody }, { additionalProperties: false })),
       }, { additionalProperties: false }),
       detail: { tags: ['rooms'] },
     },

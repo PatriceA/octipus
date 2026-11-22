@@ -23,6 +23,7 @@ import type { CliImageAttachment } from './cli-adapters';
 import { configuredCliBinary } from './cli-executable';
 import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON, approvalWaitReason } from './approval-wait';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { recordInlineUiAction } from '@/core/inline-ui/turn-input';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 import { usageContextOf } from '@/core/agent/context';
@@ -665,13 +666,21 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (isRootAgent(this.context) && !this.context.metadata?.room) {
       // A brief the service composed (the plan run) is not the owner's words.
       const synthetic = getRunContext()?.syntheticUserMessage;
+      // Sent from an interactive answer (a suggestion's chip, a view's answer), as on the API root.
+      const provenance = getRunContext()?.inlineUiProvenance;
+      const inlineUiAction = getRunContext()?.inlineUiAction;
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-        metadata:{trigger:this.context.trigger,...(synthetic?{synthetic}:{})},
+        metadata: {
+          trigger: this.context.trigger, ...(synthetic ? { synthetic } : {}),
+          ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
+          ...(inlineUiAction ? { inlineUiAction: inlineUiAction.record } : {}),
+        },
       }, this.generation);
+      if (inlineUiAction) await recordInlineUiAction(this.context.sessionId, inlineUiAction);
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       await sessionRepository.incrementMessageCount(this.context.sessionId);
     }

@@ -6,7 +6,7 @@ import { canActInSession } from '@/core/rooms/access';
 import { mentionsOctipus } from '@/core/rooms/service';
 import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
-import { resolveInlineUiTurnNotes, type InlineUiTurnNotes } from '@/core/inline-ui/turn-input';
+import { InlineUiActionRefused, inlineUiGuardInput, recordInlineUiAction, resolveInlineUiTurnNotes, type InlineUiTurnNotes } from '@/core/inline-ui/turn-input';
 import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
 import { handleRoomFrame, isRoomFrame } from './room-handlers';
@@ -116,8 +116,9 @@ export async function steerRunningRootAgent(sessionId: string, content: string, 
   // Guard the injected content exactly as handleMessage guards a normal turn —
   // a steer must not be a hole around the input guard. On block, refuse so
   // the caller falls through to the normal path, which surfaces the block.
+  // A view answer's values reach the model too: they pass the same guard.
   const { guardInput } = await import('@/core/agent/input-guard');
-  if (guardInput(content).action === 'block') {
+  if (guardInput(inlineUiGuardInput(content, inlineUi?.action?.record.context)).action === 'block') {
     coreLogger.warn({ sessionId }, 'Input guard blocked a steering message — routing through normal path');
     return refuse('The input guard blocked this message.');
   }
@@ -140,8 +141,15 @@ export async function steerRunningRootAgent(sessionId: string, content: string, 
     const metadata = {
       ...(notes ? { promptContext: notes } : {}),
       ...(inlineUi?.provenanceId ? { inlineUiProvenance: { id: inlineUi.provenanceId } } : {}),
+      ...(inlineUi?.action ? { inlineUiAction: inlineUi.action.record } : {}),
     };
     await messageRepository.create({ sessionId, role: 'user', content, ...(Object.keys(metadata).length ? { metadata } : {}) });
+    // The answer is part of the conversation once its message is (as in the worker).
+    // Best-effort like the row: the model already has the answer, so a failure is no failed send.
+    if (inlineUi?.action) {
+      await recordInlineUiAction(sessionId, inlineUi.action).catch((err: unknown) =>
+        coreLogger.error({ err, sessionId, blockId: inlineUi.action?.record.blockId }, 'failed to store the steered interactive answer state'));
+    }
     await sessionRepository.incrementMessageCount(sessionId);
   } catch (err) {
     coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
@@ -311,22 +319,25 @@ const CHAT_FRAMES: ReadonlySet<string> = new Set([
 /**
  * WS6 on the gateway: why a connection signed in with a scoped API token may
  * not send `message`, or null. A frame that drives the agent needs
- * `api:chat` — a room post too when it asks Octipus (the `addressed` toggle
- * or an @octipus mention), as on `POST /api/spaces/:id/rooms/:roomId/messages`.
+ * `api:chat` — a room post too when it asks Octipus (the `addressed` toggle,
+ * an @octipus mention or a view answer), as on `POST /api/spaces/:id/rooms/:roomId/messages`.
  * Everything else is what REST lets any token do (reads, subscriptions,
  * documents, room posts that do not ask the agent).
  */
 export function frameScopeError(context: Pick<ConnectionContext, 'scopes'>, message: ClientMessage): string | null {
   if (scopesSatisfy(context.scopes, API_SCOPES.CHAT)) return null;
   // A frame for a space on another install: judged as the frame it carries.
+  // A post that answers a view (`inlineUi`) is addressed to Octipus whatever
+  // `addressed` says (postRoomMessage): it drives the agent too.
   if (message.type === 'remote.frame') {
-    const inner = message.frame as { type: string; content?: unknown; addressed?: unknown };
-    const asks = inner.type === 'room.post' && typeof inner.content === 'string' && !inner.content.trim().startsWith('/')
-      && (inner.addressed === true || mentionsOctipus(inner.content));
+    const inner = message.frame as { type: string; content?: unknown; addressed?: unknown; inlineUi?: unknown };
+    const asks = inner.type === 'room.post' && (inner.inlineUi != null || (typeof inner.content === 'string' && !inner.content.trim().startsWith('/')
+      && (inner.addressed === true || mentionsOctipus(inner.content))));
     return asks ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;
   }
   const drives = CHAT_FRAMES.has(message.type)
-    || (message.type === 'room.post' && !message.content.trim().startsWith('/') && (message.addressed === true || mentionsOctipus(message.content)));
+    || (message.type === 'room.post' && (message.inlineUi !== undefined
+      || (!message.content.trim().startsWith('/') && (message.addressed === true || mentionsOctipus(message.content)))));
   return drives ? `API token missing required scope "${API_SCOPES.CHAT}"` : null;
 }
 
@@ -360,7 +371,17 @@ async function handleChatSend(
     // `steer`). Keeps one live root agent per session; the user can redirect
     // work mid-flight. A root that cannot take input mid-turn (a buffered
     // CLI) gets the message as its next turn instead.
-    const inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
+    // An answer from a view that fails a check refuses the whole send, before
+    // anything is steered, queued or stored: the client says why.
+    let inlineUiNotes: InlineUiTurnNotes;
+    try {
+      inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
+    } catch (err) {
+      if (!(err instanceof InlineUiActionRefused)) throw err;
+      coreLogger.info({ sessionId: message.sessionId, reason: err.message }, 'Interactive answer refused at send');
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'INVALID_MESSAGE', message: `The interactive answer was not sent: ${err.message}` });
+      return;
+    }
     let queuedBecause: string | undefined;
     if (mode === 'auto' || mode === 'steer') {
       const steer: SteerAttempt = message.attachments?.length || message.fileRefs?.length
@@ -377,6 +398,7 @@ async function handleChatSend(
             // Said aloud: a voice conversation on this chat speaks what the running turn answers next.
             ...(message.spoken ? { spoken: true } : {}),
             ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
+            ...(inlineUiNotes.action ? { inlineUiAction: inlineUiNotes.action.record } : {}),
           },
         });
         deliver('steered');
@@ -517,7 +539,7 @@ async function handleChatSend(
     const result = await rootAgent.handleMessage(
       message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
       undefined, undefined, undefined,
-      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
+      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId, action: inlineUiNotes.action },
       // A message whose reply is read aloud: this turn answers in speech.
       reservation || message.spoken ? { ...(reservation ? { queueReservation: reservation } : {}), ...(message.spoken ? { spoken: true } : {}) } : undefined,
     );

@@ -10,6 +10,8 @@
  * parse is refused as a whole (`bad_answer`, 502), never patched up.
  */
 import { z } from 'zod';
+import { storedViewProblem } from '@/core/inline-ui/stored-view';
+import { validateViewData } from '@/shared/inline-ui';
 import type { FederationRequestType } from './protocol';
 
 const uuid = z.string().uuid();
@@ -74,13 +76,28 @@ export const hostAnswerSchemas = {
   'room.page': z.object({ messages: z.array(hostRoomMessageSchema).max(200), hasMore: z.boolean() }).passthrough(),
   'room.mute': z.object({ muted: z.boolean() }).passthrough(),
   // Sizes leave room for the host's limits (src/shared/inline-ui/limits.ts) and JSON escaping.
+  // A view (docs/plans/inline-ui-views-spec.md) is rendered by this install's
+  // own components: it must be a view this install would have stored, and its
+  // answer data within the same limit. A host without views sends no `kind`.
   'room.inline_ui': z.object({
     block: z.object({
       id: uuid, title: text(200), heightHint: z.number().int().min(0).max(100_000),
+      kind: z.enum(['html', 'view']).optional(),
+      view: z.unknown().optional(),
+      state: z.object({
+        data: z.record(z.string(), z.unknown()),
+        action: z.object({ name: text(64), componentId: text(64), at: when }).passthrough(),
+      }).passthrough().nullable().optional(),
       css: text(20_000), html: text(60_000), js: text(30_000),
       scripts: z.boolean(), tainted: z.boolean(), risk: z.enum(['normal', 'high']),
       issues: z.array(text(64)).max(50), createdAt: when,
-    }).passthrough(),
+    }).passthrough().superRefine((block, ctx) => {
+      if (block.kind !== 'view') return;
+      const problem = storedViewProblem(block.view);
+      if (problem) ctx.addIssue({ code: 'custom', path: ['view'], message: problem });
+      const dataProblem = block.state ? validateViewData(block.state.data) : null;
+      if (dataProblem) ctx.addIssue({ code: 'custom', path: ['state', 'data'], message: dataProblem });
+    }),
   }).passthrough(),
   'note.list': z.object({
     notes: z.array(z.object({ id: uuid, title: text(500), slug: text(500), updatedAt: when }).passthrough()).max(5_000),

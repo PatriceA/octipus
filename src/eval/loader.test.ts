@@ -34,6 +34,15 @@ describe('eval suite loader', () => {
     expect(shown.test('A plain answer with 12 in it.')).toBe(false);
     expect(iu!.tests.find((t) => t.id === 'iu-not-offered-without-renders')?.context).toBeUndefined();
     expect(iu!.tests[0].context).toEqual({ renders: ['inline_ui'] });
+    // The unprompted positives measure a choice the request never asks for (views spec §8).
+    const unprompted = iu!.tests.filter((t) => t.tags?.includes('unprompted'));
+    expect(unprompted.length).toBeGreaterThanOrEqual(10);
+    for (const t of unprompted) {
+      expect(t.tags, t.id).toEqual(expect.arrayContaining(['inline-ui', 'positive']));
+      expect(t.input, t.id).not.toMatch(/widget|chart|form\b|calculator|interactive|table|slider|button/i);
+      expect(String(t.assertions[0].value), t.id).toBe(String(iu!.tests[0].assertions[0].value));
+    }
+    expect(iu!.tests.filter((t) => t.tags?.includes('negative') && t.tags.includes('view'))).toHaveLength(4);
   });
 
   test('the end-state suites load with their fixtures, scopes and failure classes', async () => {

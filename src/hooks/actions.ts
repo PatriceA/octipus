@@ -8,7 +8,7 @@ import {
 import { getAgentManager } from '@/core/agent-manager';
 import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
-import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
+import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
 import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
@@ -593,7 +593,7 @@ async function executeSpawnAgent(
     // - notifyOwner is true (explicit owner notification)
     // A read-only turn's answer stays in its session: send_to_user is its only way out.
     if (!readOnly && (config.notifyRoot || config.notifyOwner) && userId && result.response) {
-      notifyOwnerWithResult(userId, result.response).catch((err) => {
+      notifyOwnerWithResult(userId, result.response, sessionId).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });
     }
@@ -668,7 +668,7 @@ async function executeSpawnAgent(
     withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message)), { owner: userId }).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
-          await notifyOwnerWithResult(userId, result);
+          await notifyOwnerWithResult(userId, result, sessionId);
         } catch (err) {
           coreLogger.error({ error: err, agentId: agent.getContext().id }, 'Failed to notify owner with agent result');
         }
@@ -975,13 +975,13 @@ async function executeTool(
 /**
  * Send agent result to the owner's linked channels (Telegram, etc.)
  */
-async function notifyOwnerWithResult(userId: string, result: string): Promise<void> {
+async function notifyOwnerWithResult(userId: string, result: string, sessionId: string): Promise<void> {
   const scope = await loadNotifyScope(userId);
   const targets = ownerTargets(scope);
   if (targets.length === 0) return;
 
   // Interactive answers render only in the web app; then truncate very long results for messaging.
-  const text = inlineUiFallbackText(result);
+  const text = await inlineUiFallbackTextResolved(result, sessionId);
   const truncated = text.length > 3000 ? text.slice(0, 3000) + '\n\n…(truncated)' : text;
 
   const { deliverDurably } = await import('@/channels/delivery-queue');

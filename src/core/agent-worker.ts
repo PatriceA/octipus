@@ -72,6 +72,7 @@ import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
+import { recordInlineUiAction } from '@/core/inline-ui/turn-input';
 import { getRunContext } from '@/core/run-context';
 import { measureRootRequest, recordAgentComposition, recordLatestComposition, takeStagedRootPrompt, withoutText } from '@/core/agent/prompt-composition';
 import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
@@ -760,6 +761,7 @@ export class AgentWorker extends BaseAgentWorker {
       // read afresh each turn and never stored with it.
       const storedContext = omitSpaceTurnContext(promptContext).trim();
       const provenance = getRunContext()?.inlineUiProvenance;
+      const inlineUiAction = getRunContext()?.inlineUiAction;
       const synthetic = getRunContext()?.syntheticUserMessage;
       const metadata = {
         trigger:this.context.trigger,
@@ -767,6 +769,7 @@ export class AgentWorker extends BaseAgentWorker {
         ...(storedContext ? { promptContext: storedContext } : {}),
         ...(composition ? { promptComposition: withoutText(composition) } : {}),
         ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
+        ...(inlineUiAction ? { inlineUiAction: inlineUiAction.record } : {}),
         // Rebuilt into the turn when the conversation is reloaded (session-history).
         ...(userMedia.length ? { attachments: userMedia.map((m) => ({ type: m.kind, path: m.path, mimeType: m.mimeType, source: m.source })) } : {}),
       };
@@ -778,6 +781,8 @@ export class AgentWorker extends BaseAgentWorker {
         metadata: Object.keys(metadata).length ? metadata : undefined,
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
+      // The answer is part of the conversation once its message is: the block shows it from now on.
+      if (inlineUiAction) await recordInlineUiAction(this.context.sessionId, inlineUiAction);
       if (composition) recordLatestComposition(this.context.sessionId, { agentId: this.context.id, messageId: row.id, composition });
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       if(row.metadata?.visibility!=='internal')await sessionRepository.incrementMessageCount(this.context.sessionId);

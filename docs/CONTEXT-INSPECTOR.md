@@ -21,8 +21,8 @@ actually read.
 
   | Category | What is in it |
   | --- | --- |
-  | Guardrails & formatting | Security preamble, output formatting, vault guidance, interactive-answer rules, a security alert when the input guard flagged the message |
-  | Role & persona | The role prompt (`general` for the root, or the Companion supervisor prompt) and your persona |
+  | Guardrails & formatting | Security preamble, output formatting, vault guidance, a security alert when the input guard flagged the message |
+  | Role & persona | The role prompt (`general` for the root, or the Companion supervisor prompt), your persona, and the interactive-answers section when the turn offers them |
   | Delegation | The delegation policy and, on the full tier, the delegation guide |
   | Workspace | Dev-mode project (with the first 500 characters of `AGENTS.md`), the repo map, the workspace folder listing, a shared-space notice |
   | Tool definitions | The JSON schema of every tool advertised to the model (largest ten listed, the rest folded), the MCP servers section, tool groups left out for a small model |

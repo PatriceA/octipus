@@ -1,8 +1,14 @@
 /**
- * When the root agent is told it can write interactive answers (spec D4).
- * Pure, so the matrix is unit-tested; root-runner supplies the inputs.
+ * When the root agent is told it can write interactive answers (spec D4), and
+ * what it is told. The predicate is pure, so the matrix is unit-tested;
+ * root-runner supplies the inputs.
  */
 import type { AudienceKind } from '@/core/agent/audience';
+import { inlineUiViewCatalogPrompt } from '@/shared/inline-ui';
+
+/** `agent.interactiveAnswers`: `off` never offers them, `prefer` asks for one whenever an answer has structure. */
+export const INTERACTIVE_ANSWER_SETTINGS = ['off', 'auto', 'prefer'] as const;
+export type InteractiveAnswersSetting = (typeof INTERACTIVE_ANSWER_SETTINGS)[number];
 
 export interface InlineUiOfferInput {
   root: boolean;
@@ -12,10 +18,12 @@ export interface InlineUiOfferInput {
   small: boolean;
   /** A stored DENY on tool `inline-ui` (the kill switch, spec §10.4). */
   denied: boolean;
+  /** The operator's `agent.interactiveAnswers`. */
+  setting: InteractiveAnswersSetting;
 }
 
 export function inlineUiOffered(input: InlineUiOfferInput): boolean {
-  if (!input.root || input.small || input.denied) return false;
+  if (!input.root || input.small || input.denied || input.setting === 'off') return false;
   switch (input.audience) {
     // Members read a room in the web app, whoever's turn it was (a bridged
     // platform thread gets the plain fallback line).
@@ -33,29 +41,58 @@ export function inlineUiOffered(input: InlineUiOfferInput): boolean {
   }
 }
 
-/** The section of the root prompt that teaches the format (≈ 550 tokens). */
-export const INLINE_UI_PROMPT = [
-  '',
-  '',
-  '## Interactive answers',
-  'This conversation is shown in the Octipus web app, which can render an interactive answer inside your reply: a small self-contained HTML/CSS/JS widget — a calculator, a chart of given or retrieved numbers, a diagram, a stepper through a mechanism, a comparison with controls.',
-  'Use one only when a control, a calculation, a visual or a step-through helps more than text; at most one per reply unless asked. Not for prose, code, short lists, a single value, a plain table (use markdown), or anything to keep, share or refresh.',
-  // Live artifacts are a module (docs/MODULES.md): this line goes while it is off.
-  'Something to keep, share or refresh is a live artifact instead. <!-- module:artifacts -->',
-  'For a requested calculator, converter, interactive chart or stepper, deliver the working widget inline by default. Create a standalone HTML file only when the user explicitly requests a file or app. If a suitable file already exists, reuse its logic in the inline block; telling the user to open that file or offering to put it inline later does not deliver the requested answer.',
-  'Write it in your final reply — never in a message that also calls tools — as a fenced block:',
-  '```octi-ui title="Loan calculator" height=360',
-  '<style>/* styles */</style>',
-  '<div><!-- markup --></div>',
-  '<script>/* behaviour */</script>',
-  '```',
-  'Rules:',
-  '- Self-contained; aim for under 12 KB (limits: 24 000 characters of markup, 6 000 of CSS, 12 000 of script). If the code itself contains a line of three backticks, fence the block with four.',
-  '- No network: no fetch, no remote images, fonts, stylesheets or scripts, no CDN libraries. Draw with inline SVG or <canvas>.',
-  '- No storage, forms, password or file inputs, iframes, or inline event attributes (onclick=…): attach listeners with addEventListener in the <script>, and use <button type="button">.',
-  '- Links appear as chips the user clicks (https only). octi.prompt(text) suggests a follow-up message the user can send; octi.openLink(url) offers a link. Call them only from a click handler.',
-  '- Label inputs, keep keyboard access, put results in an element with role="status". Validate numbers (valueAsNumber, Number.isFinite, bounds, no division by zero); never show NaN or Infinity. Say which values are samples, user input, retrieved or calculated. Insert untrusted text with textContent.',
-  '- The frame is dark: use var(--octi-on-surface), var(--octi-on-surface-variant), var(--octi-surface-container), var(--octi-outline), var(--octi-link) and transparent backgrounds; width 100%, min-width: 0, and wrap at phone width.',
-  '- Add a sentence of context; do not repeat the widget\'s content as text.',
-  '- Earlier interactive answers appear in this conversation as [[octi-ui:<id>|<title>]]. To change one, call inline-ui__source with its id, then write a new block.',
-].join('\n');
+/**
+ * The two examples of the prompt. Each must lint clean (offer.test.ts): a
+ * model copies an example more faithfully than any rule.
+ */
+export const INLINE_UI_PROMPT_EXAMPLES = [
+  {
+    title: 'Pick a plan',
+    body: '{"data":{"plan":"pro"},"root":{"component":"Column","children":[\n'
+      + '{"component":"ChoicePicker","label":"Plan","value":{"@path":"/plan"},"options":[{"label":"Basic","value":"basic"},{"label":"Pro","value":"pro"}]},\n'
+      + '{"component":"Button","label":"Confirm","variant":"primary","action":{"event":{"name":"plan_chosen","context":{"plan":{"@path":"/plan"}}}}}]}}',
+  },
+  {
+    title: 'Storage cost',
+    body: '{"data":{"tb":5},"computed":{"cost":"tb * 23"},"root":{"component":"Column","children":[\n'
+      + '{"component":"Slider","label":"Terabytes","value":{"@path":"/tb"},"min":1,"max":50},\n'
+      + '{"component":"Stat","label":"Per month","value":{"@expr":"formatCurrency(cost, \'USD\')"}}]}}',
+  },
+] as const;
+
+const fence = (e: { title: string; body: string }): string => `\`\`\`octi-ui title="${e.title}"\n${e.body}\n\`\`\``;
+
+/**
+ * The section of the root prompt that teaches the format (at most 1 000
+ * tokens; offer.test.ts holds a ceiling on its length). It says when to use
+ * one in positive terms first: written as a list of restrictions, filed under
+ * guardrails, the part-1 section was almost never chosen unprompted
+ * (docs/plans/inline-ui-views-spec.md §1). The lint and the repair round tell
+ * the model the rest, so only the rules that prevent most repairs are here.
+ */
+export function inlineUiPrompt(setting: InteractiveAnswersSetting): string {
+  return [
+    '',
+    '',
+    '## Interactive answers',
+    'The web app renders interactive answers in your reply. Use one when the answer has structure:',
+    '- the user must choose, confirm or give several values: a form whose Button sends you the answer;',
+    '- several items with several attributes (tool results, search hits, files, tasks, plans): a sortable Table, selectable when they should pick;',
+    '- numbers over time or across categories: a Chart;',
+    '- a result that depends on inputs (cost, sizing, schedule, conversion): inputs and computed values;',
+    '- a process: Steps.',
+    'Prose, code, one fact or a few short items stay text.',
+    // Live artifacts are a module (docs/MODULES.md): this line goes while it is off.
+    'Something to keep, share or refresh is a live artifact instead. <!-- module:artifacts -->',
+    ...(setting === 'prefer' ? ['Prefer one whenever the answer has any structure.'] : []),
+    'Deliver a requested calculator, chart or form inline, unless a file is asked for.',
+    'Write it in your final reply, never in a message that also calls tools: one sentence of context, then the block, not its content again.',
+    'The fence body is JSON: "data", "computed" (named formulas), "root".',
+    inlineUiViewCatalogPrompt(),
+    'Expressions: names, + - * / == < > && || ?:, sum min max round formatCurrency(x,\'EUR\'); "Total ${expr}" in strings.',
+    'A Button event sends you the user\'s answer with its context values.',
+    ...INLINE_UI_PROMPT_EXAMPLES.map(fence),
+    'Free-form visuals these cannot express (a custom diagram, an animation, a game) take HTML in the same fence: <style>, <div>, <script>; no network or CDN, addEventListener (not onclick= or forms), var(--octi-on-surface) colours, octi.prompt(text) and octi.openLink(url) on click.',
+    'Earlier answers show as [[octi-ui:<id>|<title>]]; to change one, get it from inline-ui__source and write a new block.',
+  ].join('\n');
+}

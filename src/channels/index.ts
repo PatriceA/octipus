@@ -3,7 +3,7 @@ export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMes
 import { isCapabilityOn } from '@/core/capabilities/gates';
 import { isModuleOn } from '@/core/modules/registry';
 import { coreLogger } from '@/utils/logger';
-import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
+import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
 
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
@@ -48,9 +48,9 @@ export function imageConverter(platform = process.platform, find: (bin: string) 
  * Summarize a response for external channels (Telegram, Slack, etc.).
  * Strips code blocks, thinking sections, and long outputs — sends a concise summary.
  */
-function summarizeForChannel(response: string): string {
-  // Interactive answers render only in the web app: a plain line here.
-  let text = inlineUiFallbackText(response);
+async function summarizeForChannel(response: string, sessionId: string | undefined): Promise<string> {
+  // Interactive answers render only in the web app: a view as text, an HTML block as a plain line.
+  let text = await inlineUiFallbackTextResolved(response, sessionId);
 
   // Remove <think>...</think> or <thinking>...</thinking> blocks
   text = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
@@ -1342,7 +1342,7 @@ export async function initializeChannels(): Promise<void> {
           ? sharedRefusalText(result.metadata.limit, message.userName ?? 'this member')
           : null;
         const content = refusal ?? (isExternalChannel
-          ? summarizeForChannel(result.response)
+          ? await summarizeForChannel(result.response, resolvedSessionId)
           : result.response);
 
         // Images and speech the turn made go with the reply. A voice note

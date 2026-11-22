@@ -1387,6 +1387,13 @@
       "when": 1795348800000,
       "tag": "0197_skill_proposal_consolidation",
       "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "7",
+      "when": 1795392000000,
+      "tag": "0198_inline_ui_views",
+      "breakpoints": true
     }
   ]
 }

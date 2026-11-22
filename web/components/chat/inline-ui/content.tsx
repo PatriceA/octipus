@@ -16,10 +16,12 @@ import {
   splitInlineUiSegments,
 } from '../../../../src/shared/inline-ui/fence';
 import { clampInlineUiHeight } from '../../../../src/shared/inline-ui/limits';
+import { healPartialJson, type InlineUiView as InlineUiViewDoc, isInlineUiViewBody, lintInlineUiView } from '../../../../src/shared/inline-ui/view';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { useInlineUiHost } from './context';
 import { InlineUiBlock } from './block';
 import { InlineUiFrame } from './frame';
+import { InlineUiView } from './view/view';
 
 export function AssistantContent({ content, untrusted, onOpenFile }: { content: string; untrusted?: boolean; onOpenFile?: (path: string) => void }) {
   const host = useInlineUiHost();
@@ -31,7 +33,7 @@ export function AssistantContent({ content, untrusted, onOpenFile }: { content: 
       {segments.map((segment, i) =>
         segment.kind === 'text'
           ? <Markdown key={`t${i}`} content={segment.text} untrusted={untrusted} onOpenFile={onOpenFile} />
-          : <InlineUiBlock key={`b${i}:${segment.id}`} id={segment.id} title={segment.title} />,
+          : <InlineUiBlock key={`b${i}:${segment.id}`} id={segment.id} title={segment.title} untrusted={untrusted} />,
       )}
     </>
   );
@@ -47,7 +49,9 @@ export function StreamingContent({ text, untrusted, onOpenFile }: { text: string
     const before = text.slice(cursor, fence.start);
     if (before.trim()) parts.push(<Markdown key={`t${cursor}`} content={before} untrusted={untrusted} onOpenFile={onOpenFile} />);
     parts.push(host
-      ? <InlineUiPreview key={`f${fence.start}`} title={fence.title} body={fence.body} height={fence.height} />
+      ? isInlineUiViewBody(fence.body)
+        ? <InlineUiViewPreview key={`f${fence.start}`} title={fence.title} body={fence.body} untrusted={untrusted} />
+        : <InlineUiPreview key={`f${fence.start}`} title={fence.title} body={fence.body} height={fence.height} />
       : <p key={`f${fence.start}`} className="text-sm text-on-surface-variant">{inlineUiFallbackLine(fence.title)}</p>);
     cursor = fence.end;
   }
@@ -87,6 +91,38 @@ function InlineUiPreview({ title, body, height }: { title: string; body: string;
         onMessage={(m) => { if (m.type === 'height') setMeasured(m.height); }}
         onFlood={() => undefined}
       />
+    </div>
+  );
+}
+
+/**
+ * The view written so far (views spec §5): the JSON healed, linted as if
+ * closed, and drawn with its inputs off when it validates; otherwise only the
+ * line. A chunk that does not validate (a component name half written) keeps
+ * the last good render. Checked at the same 300 ms cadence as the HTML preview.
+ */
+function previewView(body: string): InlineUiViewDoc | null {
+  const healed = healPartialJson(body);
+  return healed === null ? null : lintInlineUiView(healed, { closed: true }).view ?? null;
+}
+
+function InlineUiViewPreview({ title, body, untrusted }: { title: string; body: string; untrusted?: boolean }) {
+  const latest = useRef(body);
+  useEffect(() => { latest.current = body; });
+  const [view, setView] = useState<InlineUiViewDoc | null>(() => previewView(body));
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const next = previewView(latest.current);
+      if (next) setView(next);
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="my-1 rounded-lg border border-dashed border-outline-variant/50 overflow-hidden" data-testid="inline-ui-preview">
+      <p className="px-3 py-1 text-[11px] text-on-surface-variant border-b border-outline-variant/30">Building “{title}”…</p>
+      {view && <InlineUiView view={view} preview disabled untrusted={untrusted} />}
     </div>
   );
 }

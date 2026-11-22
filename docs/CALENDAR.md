@@ -125,7 +125,9 @@ A repeating event is listed as its occurrences. Moving, editing or deleting one
 asks: **This event** or **All events**.
 
 - *All events* moves every occurrence by as much as you moved this one. It
-  cannot move them all to another day: change the repeat days instead. Its
+  cannot move them all to another day: change the repeat days instead. For an
+  all-day series, a changed last day makes every occurrence that much longer
+  or shorter. Its
   repeat rule can be changed in the dialog unless it is one the page does not
   make (for example "the second Tuesday"); such a rule is kept as it is.
 - *This and following events* is not offered: neither provider has a single
@@ -156,11 +158,11 @@ All under `/api/calendar`. Refused with 403 in a shared workspace.
 
 | Method and path | What |
 |---|---|
-| `GET /calendars` | Your calendars (`provider`, `id`, `name`, `color`, `primary`, `readOnly`, `shared`, `owner`, `visible`), your preferences, and `microsoftSharedAccess` (`false`: reconnect to open shared calendars). `?fresh=true` asks the providers again; the list is otherwise kept for two minutes |
+| `GET /calendars` | Your calendars (`provider`, `id`, `name`, `color`, `primary`, `readOnly`, `shared`, `owner`, `visible`), your preferences, and `microsoftSharedAccess` (`false`: reconnect to open shared calendars). `?fresh=true` asks the providers again; the list is otherwise kept for two minutes, and dropped as soon as an account is connected, disconnected or made the default |
 | `PUT /preferences` | `{ visible?: ["google:<id>", …], hideDeclined?: boolean }`. Only the given fields change |
 | `GET /events` | `from`, `to` (at most 93 days). Events of the visible calendars, each with `calendarId`, `calendarName`, `color`, `readOnly`, `responseStatus`, `meetingUrl`, `recurring`, `seriesId`, `showAs`, `webUrl`. The providers' pages are followed up to 2500 events per calendar; `truncated` beyond that. `partial` with `failedCalendars` when a calendar could not be read |
 | `POST /events` | Create: `provider`, `calendarId?`, `title`, `start`, `end`, `allDay`, `location?`, `description?`, `attendees?`, `reminderMinutes?` (null: none), `recurrence?` (`{ frequency, interval?, byDay?, until? \| count? }`), `timeZone?` (IANA; required with `recurrence`), `confirm: true` |
-| `PATCH /events/:id` | Change: the same body. Fields left out are not changed; `attendees` is the complete new guest list. `scope: "all"` changes the whole series of an occurrence (`recurrence` only then); `notifyAttendees: true` once the reader agreed |
+| `PATCH /events/:id` | Change: the same body. Fields left out are not changed; `attendees` is the complete new guest list. `scope: "all"` changes the whole series of an occurrence; `recurrence` changes a whole series' rule (with `scope: "all"`) or makes an event that does not repeat yet a series; `notifyAttendees: true` once the reader agreed |
 | `GET /events/:id/details` | `provider`, `calendarId?`: the whole description as text (`descriptionHasFormatting`), guests with answers, `reminderMinutes`, the series' `recurrence` (`"custom"` when the page cannot show it) and `seriesId` |
 | `DELETE /events/:id` | Body `{ provider, calendarId?, confirm: true, notifyAttendees?, scope? }`; `scope: "all"` deletes the whole series |
 | `POST /freebusy` | `{ provider, attendees (≤ 20), from, to (≤ 8 days) }`: `busy` per guest, `failed` per guest who could not be read, `own` busy time from the visible calendars, `ownPartial` |
@@ -184,4 +186,3 @@ are encoded as one path segment.
 - Moving an event to another calendar.
 - Rooms and resources as guests; working hours other than 9:00–17:00 for
   **Find a time**.
-- Several accounts of the same provider.

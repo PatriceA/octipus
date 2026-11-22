@@ -10,14 +10,16 @@
  * private data, an impersonating admin, a block that was open when the tab
  * froze, or an engine where navigation containment is not verified.
  */
-import { Code2, ExternalLink, Loader2, Play, RotateCcw, Save, Send, Sparkles, TriangleAlert, X } from 'lucide-react';
+import { Code2, ExternalLink, Loader2, Play, RotateCcw, Save, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { clampInlineUiHeight, INLINE_UI_LIMITS } from '../../../../src/shared/inline-ui/limits';
 import type { InlineUiErrorClass, InlineUiHostMessage, InlineUiOutcome } from '../../../../src/shared/inline-ui/bridge';
 import { cn } from '@/lib/utils';
-import { type InlineUiBlockData, type InlineUiHost, forgetInlineUiBlock, useInlineUiBlockFetch, useInlineUiHost } from './context';
+import { type InlineUiBlockData, type InlineUiHost, forgetInlineUiBlock, useInlineUiBlockFetch, useInlineUiBlockRevision, useInlineUiHost } from './context';
 import { InlineUiFrame } from './frame';
 import { SaveAsArtifactDialog } from './save-dialog';
+import { type Suggestion, SuggestionStrip } from './strip';
+import { LoadedViewBlock } from './view-block';
 
 // ── Freeze guard (T6) ─────────────────────────────────────────────────────
 // A block's marker is set while its frame is mounted and removed when it
@@ -126,19 +128,21 @@ const REMOVED_TEXT: Record<string, string> = {
   'remote-resource': 'remote images or media',
 };
 
-interface Suggestion { text: string; at: number }
 
-export function InlineUiBlock({ id, title }: { id: string; title: string }) {
+/** `untrusted`: the reply comes from another install; a view's markdown loads no images and links nothing here. */
+export function InlineUiBlock({ id, title, untrusted }: { id: string; title: string; untrusted?: boolean }) {
   const host = useInlineUiHost();
   const [attempt, setAttempt] = useState(0);
   const pending = useInlineUiBlockFetch(host, id, attempt);
-  const [data, setData] = useState<{ block: InlineUiBlockData } | { error: 'not_found' | 'failed' } | null>(null);
+  // Moves on when the block changed elsewhere (a view answered in another tab): the view is drawn again from the new fetch.
+  const revision = useInlineUiBlockRevision(host, id);
+  const [data, setData] = useState<{ block: InlineUiBlockData; revision: number } | { error: 'not_found' | 'failed' } | null>(null);
 
   useEffect(() => {
     if (!pending) return;
     let cancelled = false;
     pending.then(
-      (block) => { if (!cancelled) setData({ block }); },
+      (block) => { if (!cancelled) setData({ block, revision }); },
       (err: unknown) => {
         if (cancelled) return;
         const status = (err as { status?: number })?.status;
@@ -146,7 +150,7 @@ export function InlineUiBlock({ id, title }: { id: string; title: string }) {
       },
     );
     return () => { cancelled = true; };
-  }, [pending]);
+  }, [pending, revision]);
 
   if (!host) return <p className="text-sm text-on-surface-variant">▸ Interactive answer “{title}”</p>;
 
@@ -169,7 +173,9 @@ export function InlineUiBlock({ id, title }: { id: string; title: string }) {
               <button type="button" className="underline" onClick={() => { forgetInlineUiBlock(host, id); setData(null); setAttempt((n) => n + 1); }}>Retry</button></>}
         </div>
       )}
-      {data && 'block' in data && <LoadedBlock block={data.block} host={host} />}
+      {data && 'block' in data && (data.block.kind === 'view' && data.block.view
+        ? <LoadedViewBlock key={data.revision} block={data.block} view={data.block.view} host={host} untrusted={untrusted} />
+        : <LoadedBlock block={data.block} host={host} />)}
     </section>
   );
 }
@@ -443,33 +449,6 @@ function LinkChip({ url, at, onDismiss, settled }: { url: string; at: number; on
         onClick={(e) => { if (!settled(at)) e.preventDefault(); }}
       >{url}</a>
       <button type="button" onClick={onDismiss} className="ml-auto p-0.5" aria-label="Dismiss link"><X className="h-3.5 w-3.5" aria-hidden /></button>
-    </div>
-  );
-}
-
-function SuggestionStrip({ title, suggestion, busy, settled, onSend, onEdit, onDismiss }: {
-  title: string;
-  suggestion: Suggestion;
-  busy: boolean;
-  settled: (since: number) => boolean;
-  onSend?: () => void;
-  onEdit?: () => void;
-  onDismiss: () => void;
-}) {
-  const guard = (fn?: () => void) => () => { if (settled(suggestion.at)) fn?.(); };
-  return (
-    <div className="px-3 py-2 border-t border-outline-variant/30 text-xs space-y-1.5" data-testid="inline-ui-suggestion" role="group" aria-label="Suggested message">
-      <p className="text-on-surface-variant">Suggested by “{title}” — {suggestion.text.length} characters:</p>
-      <div className="max-h-32 overflow-auto rounded bg-surface-container px-2 py-1.5 whitespace-pre-wrap break-words text-on-surface">{suggestion.text}</div>
-      <div className="flex flex-wrap gap-2">
-        {onSend && (
-          <button type="button" onClick={guard(onSend)} className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-on-primary">
-            <Send className="h-3.5 w-3.5" aria-hidden /> {busy ? 'Send as guidance' : 'Send'}
-          </button>
-        )}
-        {onEdit && <button type="button" onClick={guard(onEdit)} className="rounded-md border border-outline px-2 py-1">Edit in composer</button>}
-        <button type="button" onClick={onDismiss} className="rounded-md px-2 py-1 text-on-surface-variant">Dismiss</button>
-      </div>
     </div>
   );
 }

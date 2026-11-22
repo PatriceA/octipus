@@ -17,6 +17,7 @@
  * posts is the server's `created_at`, and `clientId` is echoed for the
  * client to reconcile its copy.
  */
+import type { InlineUiActionInput } from '@/core/inline-ui/turn-input';
 import { API_SCOPES, scopesSatisfy } from '@/security/scopes';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
@@ -174,7 +175,9 @@ async function roomPost(hub: GatewayHub, connectionId: string, context: Connecti
     });
     return;
   }
-  const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, { content, addressed: message.addressed, clientId: message.clientId }, { allowAgent: scopesSatisfy(context.scopes, API_SCOPES.CHAT) });
+  const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, {
+    content, addressed: message.addressed, clientId: message.clientId, ...(message.inlineUi ? { inlineUiAction: message.inlineUi.action } : {}),
+  }, { allowAgent: scopesSatisfy(context.scopes, API_SCOPES.CHAT) });
   void _stored; // members (the poster included) receive it as `room.message`
   hub.connectionManager.sendToConnection(connectionId, { type: 'room.posted', roomId: message.roomId, ...outcome });
 }
@@ -195,8 +198,9 @@ async function remoteRoomPost(
     sendError(hub, connectionId, 'FORBIDDEN', 'Room commands are for members of this install');
     return;
   }
-  const { guardInput } = await import('@/core/agent/input-guard');
-  const guard = guardInput(content);
+  // A view answer's values reach the host model's prompt: they pass the guard with the content.
+  const [{ guardInput }, { inlineUiGuardInput }] = await Promise.all([import('@/core/agent/input-guard'), import('@/core/inline-ui/turn-input')]);
+  const guard = guardInput(inlineUiGuardInput(content, message.inlineUi?.action.context));
   if (guard.action === 'block') {
     coreLogger.warn({ connectionId, userId: context.userId, flags: guard.flags }, 'Input guard refused a post from another install');
     sendError(hub, connectionId, 'POST_REFUSED', guard.blockReason ?? 'This post was refused');
@@ -206,6 +210,7 @@ async function remoteRoomPost(
   const agent = typeof federation?.conn === 'string' && federation.conn.startsWith('agent:');
   const { message: _stored, ...outcome } = await postAndQueue(context.userId, message.roomId, {
     content, addressed: message.addressed, clientId: message.clientId, ...(agent ? { agent: true } : {}),
+    ...(message.inlineUi ? { inlineUiAction: message.inlineUi.action } : {}),
     // Let through with a warning: the flags stay with the post, and every
     // room turn's transcript names them beside it.
     ...(guard.action === 'warn' ? { guardFlags: guard.flags } : {}),
@@ -222,7 +227,7 @@ async function remoteRoomPost(
 export async function postAndQueue(
   userId: string,
   roomId: string,
-  input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean; guardFlags?: string[] },
+  input: { content: string; addressed?: boolean; clientId?: string; agent?: boolean; guardFlags?: string[]; inlineUiAction?: InlineUiActionInput },
   opts: { workspaceId?: string; allowAgent?: boolean } = {},
 ): Promise<{ messageId: string; clientId?: string; queuedPosition?: number; notQueued?: string; message: unknown }> {
   const { postRoomMessage } = await import('@/core/rooms/service');

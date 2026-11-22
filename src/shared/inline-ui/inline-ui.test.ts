@@ -95,6 +95,15 @@ describe('markers', () => {
     expect(inlineUiFallbackText('a\n```octi-ui title="Draft"\n<p>x</p>\n```\nb')).toContain('“Draft”');
     expect(inlineUiSpeechText(`Hi\n${inlineUiMarker(ID, 'Calc')}`)).toBe('Hi\n');
   });
+
+  it('replaces every marker, wherever it stands, with what the callback returns', async () => {
+    const { replaceInlineUiMarkers } = await import('./fence');
+    const seen: Array<{ id: string; title: string }> = [];
+    const out = replaceInlineUiMarkers(`a ${inlineUiMarker(ID, 'One')}\n[[octi-ui:${ID}]]`, (m) => { seen.push(m); return `<${m.title}>`; });
+    expect(out).toBe('a <One>\n<Interactive answer>');
+    expect(seen).toEqual([{ id: ID, title: 'One' }, { id: ID, title: 'Interactive answer' }]);
+    expect(replaceInlineUiMarkers('no markers', () => 'x')).toBe('no markers');
+  });
 });
 
 describe('body split and lint', () => {

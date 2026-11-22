@@ -258,11 +258,15 @@ export function inlineUiFallbackLine(title: string): string {
  * never extracted (a streamed draft) becomes the same line.
  */
 export function inlineUiFallbackText(text: string): string {
-  let out = text.includes('[[octi-ui:')
-    ? text.replace(MARKER_GLOBAL_RE, (_m, _id: string, title?: string) => inlineUiFallbackLine(title ?? ''))
-    : text;
+  let out = replaceInlineUiMarkers(text, (m) => inlineUiFallbackLine(m.title));
   if (mentionsInlineUiLang(out)) out = replaceInlineUiFences(out, (f) => inlineUiFallbackLine(f.title));
   return out;
+}
+
+/** Replace every marker in a text (wherever it stands) with what `replace` returns for it. */
+export function replaceInlineUiMarkers(text: string, replace: (marker: InlineUiMarker) => string): string {
+  if (!text.includes('[[octi-ui:')) return text;
+  return text.replace(MARKER_GLOBAL_RE, (_m, id: string, title?: string) => replace({ id, title: sanitizeInlineUiTitle(title ?? '') }));
 }
 
 /** Text for speech: markers and fences are dropped instead of described. */

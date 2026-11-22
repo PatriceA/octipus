@@ -42,6 +42,8 @@ export interface RunContext {
   readonly inlineUiNotes?: readonly string[];
   /** The interactive answer this turn's message was sent from (stored on the user row for its chip). */
   readonly inlineUiProvenance?: string;
+  /** A view's answer this turn's message carries, checked against the session: stored on the user row and as the block's state. */
+  readonly inlineUiAction?: import('@/core/inline-ui/turn-input').InlineUiAcceptedAction;
   /**
    * The root's user message this run is not the owner's words but text the
    * service composed for the agent (`'plan'`: the planner's brief run on

@@ -34,7 +34,9 @@ import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
-import { inlineUiGuardText, type InlineUiStoreContext, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
+import { type InlineUiAcceptedAction, inlineUiActionLine, inlineUiGuardInput } from '@/core/inline-ui/turn-input';
+import type { JsonObject } from '@/shared/inline-ui';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -96,6 +98,8 @@ interface TurnInput {
   postedMessageId?: string;
   /** A room turn: fires when the turn is stopped (`/stop`, removal, approval timeout). */
   signal?: AbortSignal;
+  /** A room turn whose post answers a view: the answer's values, guarded with the message. */
+  inlineUiContext?: Record<string, unknown>;
 }
 
 /** A room turn that failed; its message is for the requester only. */
@@ -251,9 +255,11 @@ export class AgentService {
     trigger?: AgentTrigger,
     /**
      * Interactive answers (docs/plans/inline-ui-spec.md): what the client
-     * renders, and model-facing notes already checked against the session.
+     * renders, and model-facing notes already checked against the session;
+     * `action` is a view's answer the message carries, already checked
+     * (`resolveInlineUiTurnNotes`), stored with the user row.
      */
-    inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
+    inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string; action?: InlineUiAcceptedAction },
     internal?: {
       companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number;
       /**
@@ -326,6 +332,7 @@ export class AgentService {
           ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
           ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
           ...(inlineUi?.provenanceId ? { inlineUiProvenance: inlineUi.provenanceId } : {}),
+          ...(inlineUi?.action ? { inlineUiAction: inlineUi.action } : {}),
           ...(internal?.spoken ? { spoken: true } : {}),
         },
         () => withProviderUsageContext({ userId }, () =>
@@ -464,14 +471,21 @@ export class AgentService {
         const session = await sessionRepository.findById(roomId);
         if (!session || session.kind !== 'room') throw new RoomTurnDropped('The room is gone');
         const runId = generateRunId();
+        // A post that answers a view: its values reach the model as for a chat
+        // message (checked when it was posted, postRoomMessage).
+        const answer = posted.metadata?.inlineUiAction;
+        const inlineUiNotes = answer ? [inlineUiActionLine({ blockId: answer.blockId, name: answer.name, context: answer.context as JsonObject })] : [];
         const result = await runWithContext(
-          { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room' },
+          { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room', ...(inlineUiNotes.length ? { inlineUiNotes } : {}) },
           () => withProviderUsageContext({ userId: requesterId, ...(remoteInstanceId ? { accountingMetadata: { remoteInstance: remoteInstanceId } } : {}) }, async () => {
             const noModel = await this.noModelAnswer(requesterId);
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
             signal.throwIfAborted();
-            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged });
+            return this.runTurn({
+              session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged,
+              ...(answer ? { inlineUiContext: answer.context } : {}),
+            });
           }),
         );
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
@@ -790,8 +804,9 @@ export class AgentService {
         }
       }
 
-      // Input guard
-      const inputGuard = guardInput(message);
+      // Input guard: a view answer's values reach the prompt too (the
+      // system-note line), so they pass the guard with the message.
+      const inputGuard = guardInput(inlineUiGuardInput(message, input.inlineUiContext ?? getRunContext()?.inlineUiAction?.record.context));
       if (inputGuard.action === 'block') {
         coreLogger.warn({ flags: inputGuard.flags, sessionId }, 'Input guard blocked message');
         const blockResponse = `I can't process this request: ${inputGuard.blockReason}`;
@@ -1270,9 +1285,15 @@ export class AgentService {
     }
   }
 
-  /** Store the `octi-ui` fences of a reply and return it with marker lines (src/core/inline-ui/extract.ts). */
+  /**
+   * Store the `octi-ui` fences of a reply and return it with marker lines
+   * (src/core/inline-ui/extract.ts). The turn's last store pass, so an
+   * offered turn's `Interactive answer offer` line is logged here.
+   */
   private async withInlineUiStored(text: string, ctx: InlineUiStoreContext): Promise<string> {
-    return (await storeInlineUiBlocks(text, ctx)).text;
+    const stored = (await storeInlineUiBlocks(text, ctx)).text;
+    logInlineUiOffer(getRunContext()?.runId, ctx.sessionId);
+    return stored;
   }
 
   /** A room turn whose room was cleared while it ran: dropped, so the room's `room.turn` says why. */

@@ -86,7 +86,9 @@ only its owners can do it.
 
 - **Attachments:** up to 20 files and 25 MB per mail, picked or dropped on the
   compose panel. They are held in the server's memory for an hour, for their
-  uploader only, until the mail is sent. A forward takes the original's files
+  uploader only, until the mail is sent; files left behind (the tab closed,
+  the mail never sent) are dropped from memory within minutes of their hour
+  running out. A forward takes the original's files
   along (removable); the server fetches them from the mailbox at send time.
 - **Formatting:** a toolbar adds `**bold**`, `_italic_`, links, lists and
   quotes as signs in the text; the server builds the HTML part from those
@@ -100,7 +102,9 @@ only its owners can do it.
   has counts as back. After 12 failed wakes (about a day and a half) it is
   no longer tried: the folder says so and offers **Try again** or **Leave in
   archive**. A snooze that could move only some messages keeps those and
-  says the rest stayed in the inbox.
+  says the rest stayed in the inbox. Only the snoozed messages count as dealt
+  with for the heartbeat's inbox watch; the ones left in the inbox are still
+  watched.
 - An IMAP / POP3 mailbox sends plain text without attachments and has no
   snooze: Octipus changes nothing on its server.
 
