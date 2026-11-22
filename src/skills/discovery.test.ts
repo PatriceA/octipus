@@ -502,3 +502,21 @@ test('an archived assigned skill is not discovered by any set', async () => {
   expect(ids).not.toContain('archived-always');
   expect(ids).not.toContain('archived-stale');
 });
+
+// An assignment made under a LANE name ('build', what the assignment UI
+// lists) is matched for the roles resolving to it — fetchActiveSkillIdsForTopic
+// did, but the hybrid sets matched the role name only, so a database skill
+// assigned to 'build' never reached a 'coding' worker.
+test('a skill assigned under the lane name is discovered for a role of that lane', async () => {
+  const db = getDb();
+  await db.insert(skills).values({ id: 'lane-assigned', name: 'lane-assigned', description: 'd', triggers: ['lanetrigger'], isSystem: true, descriptionEmbedding: VEC_B });
+  await db.insert(skillTopicAssignments).values({ skillId: 'lane-assigned', topic: 'build', isActive: true });
+  try {
+    currentEmbedding = VEC_C;
+    const { discoverSkillIds } = await import('./discovery');
+    expect(await discoverSkillIds({ topic: 'coding', message: 'use the lanetrigger', minSimilarity: 0.5 })).toContain('lane-assigned');
+  } finally {
+    await db.delete(skillTopicAssignments).where(eq(skillTopicAssignments.skillId, 'lane-assigned'));
+    await db.delete(skills).where(eq(skills.id, 'lane-assigned'));
+  }
+});

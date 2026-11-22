@@ -6,7 +6,8 @@
  * failures degrade to empty sets with loud error logs.
  *
  * Algorithm: union four candidate sets, all filtered to active assignments
- * for `opts.topic` and to skills that are not archived:
+ * for `opts.topic` (or the lane it resolves to, as fetchActiveSkillIdsForTopic)
+ * and to skills that are not archived:
  *   1. always-inject rows
  *   2. trigger substring match (case-insensitive) against opts.message
  *   3. vector similarity (top-k filtered by minSimilarity), if embedding
@@ -71,7 +72,11 @@ function isNoEmbeddingModelError(err: unknown): boolean {
   return message.includes('No model mapped to topic "embedding"');
 }
 
-/** Active topic-assignment ids for a topic. */
+/** The names an assignment for `topic` may be stored under: the role, and the lane it resolves to. */
+function topicNames(topic: string): string[] {
+  return [...new Set([topic, canonicalTopic(topic)])];
+}
+
 /**
  * Assignments for a role, and for the LANE that role resolves to.
  *
@@ -85,7 +90,7 @@ function isNoEmbeddingModelError(err: unknown): boolean {
  */
 export async function fetchActiveSkillIdsForTopic(topic: string): Promise<string[]> {
   const db = getDb();
-  const names = [...new Set([topic, canonicalTopic(topic)])];
+  const names = topicNames(topic);
   const rows = await db
     .select({ skillId: skillTopicAssignments.skillId })
     .from(skillTopicAssignments)
@@ -109,7 +114,7 @@ async function fetchAlwaysInjectIds(topic: string): Promise<string[]> {
     .innerJoin(skillTopicAssignments, eq(skillTopicAssignments.skillId, skills.id))
     .where(
       and(
-        eq(skillTopicAssignments.topic, topic),
+        inArray(skillTopicAssignments.topic, topicNames(topic)),
         eq(skillTopicAssignments.isActive, true),
         eq(skills.alwaysInject, true),
         isNull(skills.archivedAt),
@@ -131,7 +136,7 @@ async function fetchTriggerMatchIds(topic: string, message: string): Promise<str
     .innerJoin(skillTopicAssignments, eq(skillTopicAssignments.skillId, skills.id))
     .where(
       and(
-        eq(skillTopicAssignments.topic, topic),
+        inArray(skillTopicAssignments.topic, topicNames(topic)),
         eq(skillTopicAssignments.isActive, true),
         isNull(skills.archivedAt),
       ),
@@ -192,7 +197,7 @@ async function fetchVectorMatchIds(
     .innerJoin(skillTopicAssignments, eq(skillTopicAssignments.skillId, skills.id))
     .where(
       and(
-        eq(skillTopicAssignments.topic, topic),
+        inArray(skillTopicAssignments.topic, topicNames(topic)),
         eq(skillTopicAssignments.isActive, true),
         isNull(skills.archivedAt),
         isNotNull(skills.descriptionEmbedding),
@@ -215,7 +220,7 @@ async function fetchStaleFallbackIds(topic: string): Promise<string[]> {
     .innerJoin(skillTopicAssignments, eq(skillTopicAssignments.skillId, skills.id))
     .where(
       and(
-        eq(skillTopicAssignments.topic, topic),
+        inArray(skillTopicAssignments.topic, topicNames(topic)),
         eq(skillTopicAssignments.isActive, true),
         isNull(skills.archivedAt),
         isNull(skills.descriptionEmbedding),
