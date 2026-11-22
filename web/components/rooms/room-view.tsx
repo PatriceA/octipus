@@ -335,6 +335,9 @@ export function RoomView({ source, spaceId, room, myId, access, canManage, onRem
     isLive: (id) => liveInlineUiRef.current.has(id),
     impersonating: false,
     sendSuggestion: canPost ? (text) => postRef.current(text, true) : undefined,
+    // A view's answer is my own post addressed to Octipus, as a suggestion is. `room.post` has no
+    // `inlineUi` field, so the answer's values travel as its text only.
+    sendAction: canPost ? (action) => postRef.current(action.text, true) : undefined,
   }), [roomId, remote, source, canPost]);
 
   const cancelQueued = (messageId: string) => {

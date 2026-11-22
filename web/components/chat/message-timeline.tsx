@@ -21,6 +21,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
+import { type InlineUiViewAction, type JsonObject, valueToText } from '../../../src/shared/inline-ui/view';
 import { CompanionAvatar, type CompanionState } from '@/components/companion/companion-avatar';
 import DiffView from '@/components/chat/diff-view';
 import { TurnMediaList } from '@/components/chat/turn-media';
@@ -64,6 +65,8 @@ export interface ChatMessageData {
   pending?: boolean;
   /** Sent from an interactive answer's suggestion (its chip). */
   fromInlineUi?: boolean;
+  /** An answer from a view's button (`metadata.inlineUiAction`): its values show under the chip. */
+  inlineUiAction?: Pick<InlineUiViewAction, 'blockId' | 'name' | 'context'>;
   /** A reply received in this open tab, never reconstructed from history. */
   arrivedLiveAt?: number;
   /**
@@ -260,6 +263,30 @@ function AssistantMessageFrame({ name, appearance, state, animated, streaming = 
   </div>;
 }
 
+/** Longest value a chip shows; the full value is in its tooltip. */
+const ACTION_VALUE_CHARS = 40;
+const ACTION_VALUES_SHOWN = 8;
+
+/** The values a view's answer sent, as compact `key: value` chips: what the user sees is what went out (S6). */
+function InlineUiActionValues({ context }: { context: JsonObject }) {
+  const entries = Object.entries(context);
+  if (entries.length === 0) return null;
+  return (
+    <ul className="flex flex-wrap justify-end gap-1 max-w-[min(32rem,85vw)] px-1" aria-label="Values sent" data-testid="inline-ui-action-values">
+      {entries.slice(0, ACTION_VALUES_SHOWN).map(([key, value]) => {
+        const full = valueToText(value);
+        const shown = full.length > ACTION_VALUE_CHARS ? `${full.slice(0, ACTION_VALUE_CHARS - 1)}…` : full;
+        return (
+          <li key={key} title={`${key}: ${full}`} className="max-w-full truncate rounded-full border border-outline-variant/50 bg-surface-container px-2 py-0.5 text-[10px] text-on-surface-variant">
+            <span className="text-on-surface">{key}</span>: {shown}
+          </li>
+        );
+      })}
+      {entries.length > ACTION_VALUES_SHOWN && <li className="text-[10px] text-on-surface-variant">+{entries.length - ACTION_VALUES_SHOWN} more</li>}
+    </ul>
+  );
+}
+
 function MessageBubble({ message, sessionId, untrusted, onOpenFile, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; sessionId?: string; untrusted?: boolean; onOpenFile?: (path: string) => void; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
@@ -336,6 +363,7 @@ function MessageBubble({ message, sessionId, untrusted, onOpenFile, companionNam
           {message.fromInlineUi && (
             <span className="text-[10px] text-on-surface-variant px-1" data-testid="from-inline-ui">from an interactive answer</span>
           )}
+          {message.inlineUiAction && <InlineUiActionValues context={message.inlineUiAction.context} />}
           <div className={cn('bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs', message.pending && 'opacity-60')}>
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>

@@ -9,6 +9,7 @@
  */
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { InlineUiReport } from '../../../../src/shared/inline-ui/bridge';
+import type { InlineUiView, InlineUiViewAction, InlineUiViewState, JsonObject } from '../../../../src/shared/inline-ui/view';
 
 export interface InlineUiBlockData {
   id: string;
@@ -23,6 +24,19 @@ export interface InlineUiBlockData {
   issues: string[];
   /** Read by more people than the one who asked (a room). */
   shared?: boolean;
+  /** `view`: a declarative view (docs/plans/inline-ui-views-spec.md). A server from before views omits it: HTML. */
+  kind?: 'html' | 'view';
+  /** The normalized view, for `kind: 'view'`. */
+  view?: InlineUiView | null;
+  /** A view's last answer, if one was sent. */
+  state?: InlineUiViewState | null;
+}
+
+/** An answer from a view's button (spec §4): `inlineUi.action` plus the data model at the click and the message text. */
+export interface InlineUiSendAction extends InlineUiViewAction {
+  data: JsonObject;
+  /** The message as the conversation shows it: the event's `userMessage`, or the button's label. */
+  text: string;
 }
 
 export interface InlineUiHost {
@@ -41,6 +55,12 @@ export interface InlineUiHost {
   sendSuggestion?: (text: string, blockId: string) => void;
   /** Put a suggested message in the composer, after what is there. */
   editSuggestion?: (text: string, blockId: string) => void;
+  /**
+   * Send a view's answer as the user's own message. Resolves once it went
+   * out, rejects with the reason it could not; a refusal the server sends
+   * afterwards arrives through `onRefused`.
+   */
+  sendAction?: (action: InlineUiSendAction, onRefused: (message: string) => void) => void | Promise<void>;
   /** A turn is running: Send steers it (labelled so). */
   busy?: boolean;
   /** Keep the block as a live artifact (P3): a static copy in the user's workspace. */
