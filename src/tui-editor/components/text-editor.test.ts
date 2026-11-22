@@ -92,6 +92,24 @@ test('cursor after tab and wide glyph uses terminal cells', async () => {
   expect(visibleWidth(line.split(CURSOR_MARKER)[0])).toBe(8); // gutter 2 + tab 4 + CJK 2
 });
 
+test('Ctrl+Z undoes a typed word at once, and a paste as one step', () => {
+  const { editor, rec } = setup('');
+  for (const c of 'hello') editor.handleInput(c);
+  editor.handleInput('\x1b[200~ big\npaste\x1b[201~');
+  editor.handleInput('\x1a');
+  expect(rec.buffer.text()).toBe('hello');
+  editor.handleInput('\x1a');
+  expect(rec.buffer.text()).toBe('');
+});
+
+test('Backspace after an emoji leaves no half character on screen', () => {
+  const { editor, rec } = setup('ok👍🏽');
+  rec.buffer.moveLineEnd();
+  editor.handleInput('\x7f');
+  expect(rec.buffer.text()).toBe('ok');
+  expect(strip(editor.render(20)[0])).not.toContain('�');
+});
+
 test('bracketed multiline paste inserts content without escape sequences', () => {
   const { editor, rec } = setup('');
   editor.handleInput('\x1b[200~hello\r\n'); editor.handleInput('world\x1b[201~');

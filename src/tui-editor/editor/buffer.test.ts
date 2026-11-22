@@ -4,7 +4,7 @@
  * Locks down the cursor / selection / insert / delete / undo
  * semantics so the renderer can safely assume them.
  */
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { Buffer, positionEq, positionLte } from './buffer';
 
 describe('construction', () => {
@@ -260,5 +260,137 @@ describe('vertical movement', () => {
     b.moveCursor(0, -1);
     b.moveCursor(1, 0);
     expect(b.getCursor()).toEqual({ line: 2, col: 1 });
+  });
+});
+
+describe('graphemes (docs/plans/tui-modernization.md §5.2)', () => {
+  const family = '👨‍👩‍👧';
+  test('Backspace after an emoji removes all of it, not half a surrogate pair', () => {
+    const b = new Buffer('a😀');
+    b.moveLineEnd();
+    b.deleteBackward();
+    expect(b.text()).toBe('a');
+    expect(b.getCursor()).toEqual({ line: 0, col: 1 });
+  });
+
+  test('Left and Right step over a whole grapheme: ZWJ family, flag, combining accent', () => {
+    for (const g of [family, '🇫🇷', 'é', '👍🏽']) {
+      const b = new Buffer(`x${g}y`);
+      b.setCursor({ line: 0, col: 1 });
+      b.moveCursor(0, 1);
+      expect(b.getCursor().col).toBe(1 + g.length);
+      b.moveCursor(0, -1);
+      expect(b.getCursor().col).toBe(1);
+    }
+  });
+
+  test('Delete removes the grapheme under the cursor', () => {
+    const b = new Buffer(`${family}!`);
+    b.deleteForward();
+    expect(b.text()).toBe('!');
+  });
+
+  test('a cursor placed inside a grapheme snaps to its start', () => {
+    const b = new Buffer('a😀b');
+    b.setCursor({ line: 0, col: 2 });
+    expect(b.getCursor().col).toBe(1);
+  });
+
+  test('a selection extended by Right covers whole graphemes', () => {
+    const b = new Buffer('😀😀');
+    b.moveCursor(0, 1, true);
+    const range = b.selectionRange();
+    expect(range && b.textInRange(range[0], range[1])).toBe('😀');
+  });
+
+  test('Up and Down keep the drawn cell across tabs and wide characters', () => {
+    const b = new Buffer('abcdefgh\n\tx\n界界界');
+    b.setCursor({ line: 0, col: 5 });
+    b.moveCursor(1, 0); // the tab covers cells 0-3, x is at cell 4
+    expect(b.getCursor()).toEqual({ line: 1, col: 2 });
+    b.moveCursor(1, 0); // cell 5 falls inside the third 界 (cells 4-5)
+    expect(b.getCursor()).toEqual({ line: 2, col: 2 });
+  });
+});
+
+describe('grouped undo (docs/plans/tui-modernization.md §5.2)', () => {
+  test('a typing burst is one undo step', () => {
+    const b = new Buffer('');
+    for (const c of 'hello') b.type(c);
+    b.undo();
+    expect(b.text()).toBe('');
+    b.redo();
+    expect(b.text()).toBe('hello');
+  });
+
+  test('a cursor move, a newline or a different kind of edit ends the burst', () => {
+    const b = new Buffer('');
+    for (const c of 'ab') b.type(c);
+    b.moveCursor(0, -1); b.moveCursor(0, 1);
+    for (const c of 'cd') b.type(c);
+    b.type('\n');
+    b.type('e');
+    b.deleteBackward(1, true);
+    b.deleteBackward(1, true);
+    expect(b.text()).toBe('abcd');
+    b.undo(); expect(b.text()).toBe('abcd\ne');
+    b.undo(); expect(b.text()).toBe('abcd\n');
+    b.undo(); expect(b.text()).toBe('abcd');
+    b.undo(); expect(b.text()).toBe('ab');
+    b.undo(); expect(b.text()).toBe('');
+  });
+
+  test('a pause ends a typing burst', () => {
+    const b = new Buffer('');
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    b.type('a');
+    clock.mockReturnValue(now + 5000);
+    b.type('b');
+    clock.mockRestore();
+    b.undo();
+    expect(b.text()).toBe('a');
+  });
+
+  test('a transaction of more edits than the undo limit is still one step', () => {
+    const b = new Buffer('x '.repeat(500));
+    b.transact(() => {
+      for (let i = 0; i < 500; i++) b.replaceRange({ line: 0, col: i * 2 }, { line: 0, col: i * 2 + 1 }, 'y');
+    });
+    expect(b.text()).toBe('y '.repeat(500));
+    expect(b.undo()).toBe(true);
+    expect(b.text()).toBe('x '.repeat(500));
+    expect(b.canUndo()).toBe(false);
+  });
+
+  test('Backspace at the start of the file records nothing and keeps redo', () => {
+    const b = new Buffer('');
+    b.insert('a');
+    b.undo();
+    expect(b.canRedo()).toBe(true);
+    const version = b.textVersion;
+    b.deleteBackward();
+    expect(b.textVersion).toBe(version);
+    expect(b.canUndo()).toBe(false);
+    expect(b.redo()).toBe(true);
+    expect(b.text()).toBe('a');
+  });
+
+  test('undo puts the cursor and selection back where the edit started', () => {
+    const b = new Buffer('one two');
+    b.select({ line: 0, col: 0 }, { line: 0, col: 3 });
+    b.insert('1');
+    expect(b.text()).toBe('1 two');
+    b.undo();
+    expect(b.text()).toBe('one two');
+    expect(b.selectionRange()).toEqual([{ line: 0, col: 0 }, { line: 0, col: 3 }]);
+  });
+
+  test('a multi-line edit undoes and redoes exactly', () => {
+    const b = new Buffer('alpha\nbeta\ngamma');
+    b.replaceRange({ line: 0, col: 2 }, { line: 2, col: 3 }, 'X\nY');
+    expect(b.text()).toBe('alX\nYma');
+    b.undo(); expect(b.text()).toBe('alpha\nbeta\ngamma');
+    b.redo(); expect(b.text()).toBe('alX\nYma');
   });
 });

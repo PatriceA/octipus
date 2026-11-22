@@ -12,6 +12,7 @@ import { sliceByColumn, type Component, CURSOR_MARKER, type Focusable, matchesKe
  * CURSOR_MARKER mechanism so IME candidate windows land in the right
  * spot for CJK input methods.
  */
+import { cellOf, cellWidth, displayText, nextBoundary, visibleControls } from '../editor/columns';
 import { highlight, type TokenKind } from '../editor/highlight';
 import { hintLineIndex } from '../editor/highlight-tree-sitter';
 import type { BufferRecord, BufferStore } from '../stores/buffer-store';
@@ -32,18 +33,6 @@ export interface TextEditorOptions {
   layout?: LayoutStore;
 }
 
-const TAB_WIDTH = 4;
-/**
- * A control byte in a file (the `\r` of a CRLF file, an ESC in a captured log)
- * is shown as its one-cell control picture. Written raw it would be obeyed by
- * the terminal: the cursor moves, later rows land in the wrong place and the
- * frame is corrupted until the next full repaint. One character maps to one
- * character, so buffer columns are unchanged.
- */
-function visibleControls(text: string): string {
-  return text.replace(/[\x00-\x08\x0a-\x1f\x7f]/g, c => String.fromCharCode(c === '\x7f' ? 0x2421 : 0x2400 + c.charCodeAt(0)));
-}
-const displayCells = (text: string): string => visibleControls(text.replace(/\t/g, ' '.repeat(TAB_WIDTH)));
 
 export class TextEditor implements Component, Focusable {
   focused = false;
@@ -116,15 +105,15 @@ export class TextEditor implements Component, Focusable {
     else if (matchesKey(data, 'end')  || matchesKey(data, 'ctrl+e'))      { buf.moveLineEnd(); }
     else if (matchesKey(data, 'ctrl+left')  || matchesKey(data, 'alt+left'))  { buf.moveWordLeft(); }
     else if (matchesKey(data, 'ctrl+right') || matchesKey(data, 'alt+right')) { buf.moveWordRight(); }
-    else if (matchesKey(data, 'backspace')) { buf.deleteBackward(); mutated = true; }
-    else if (matchesKey(data, 'delete'))    { buf.deleteForward();  mutated = true; }
-    else if (matchesKey(data, 'enter'))     { buf.insert('\n');     mutated = true; }
+    else if (matchesKey(data, 'backspace')) { buf.deleteBackward(1, true); mutated = true; }
+    else if (matchesKey(data, 'delete'))    { buf.deleteForward(1, true);  mutated = true; }
+    else if (matchesKey(data, 'enter'))     { buf.type('\n');     mutated = true; }
     else if (matchesKey(data, 'tab'))       { buf.insert('  ');     mutated = true; }
     else if (matchesKey(data, 'ctrl+z'))    { mutated = buf.undo(); }
     else if (matchesKey(data, 'ctrl+y'))    { mutated = buf.redo(); }
     else if (matchesKey(data, 'ctrl+s'))    { this.options.onSave?.(active); return; }
-    else if (data.length === 1 && data >= ' ' && data !== '\x7f')          { buf.insert(data); mutated = true; }
-    else if (data.length > 1 && !data.startsWith('\x1b'))                  { buf.insert(data); mutated = true; }
+    else if (data.length === 1 && data >= ' ' && data !== '\x7f')          { buf.type(data); mutated = true; }
+    else if (data.length > 1 && !data.startsWith('\x1b'))                  { buf.type(data); mutated = true; }
     else { return; }
 
     if (mutated) this.buffers.markDirty(active.id, true);
@@ -151,15 +140,15 @@ export class TextEditor implements Component, Focusable {
     const innerW = Math.max(1, width - gutterW);
 
     const cursorLine = buf.getLine(cursor.line);
-    const cursorCell = visibleWidth(displayCells(cursorLine.slice(0, cursor.col)));
-    const atCursor = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(cursorLine.slice(cursor.col))][0]?.segment ?? ' ';
-    const cursorWidth = Math.min(innerW, Math.max(1, visibleWidth(atCursor)));
+    const cursorCell = cellOf(cursorLine, cursor.col);
+    const atCursor = cursorLine.slice(cursor.col, nextBoundary(cursorLine, cursor.col)) || ' ';
+    const cursorWidth = Math.min(innerW, Math.max(1, cellWidth(atCursor, cursorCell)));
     if (cursorCell < this.scrollLeft) this.scrollLeft = cursorCell;
     if (cursorCell + cursorWidth > this.scrollLeft + innerW) this.scrollLeft = cursorCell + cursorWidth - innerW;
     const lines: string[] = [];
     const end = Math.min(totalLines, this.scrollTop + this.height);
     for (let i = this.scrollTop; i < end; i++) {
-      const lineText = displayCells(buf.getLine(i));
+      const lineText = displayText(buf.getLine(i));
       const isCursorLine = i === cursor.line;
       const gutter = formatGutter(i + 1, gutterW, palette, isCursorLine);
       // Tell the tree-sitter highlighter which row we're about to paint so
