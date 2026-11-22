@@ -12,16 +12,21 @@ import { type PdfTextItem, reconstructPageText } from './pdf-layout';
 /** [text, x, y] drawn in 10pt Helvetica. */
 type Run = [string, number, number];
 
-/** A one-page PDF (US Letter) drawing each run with its own text object. */
-function buildPdf(runs: Run[]): Uint8Array {
-  const esc = (s: string) => s.replace(/[\\()]/g, (c) => `\\${c}`);
-  const content = runs.map(([s, x, y]) => `BT /F1 10 Tf ${x} ${y} Td (${esc(s)}) Tj ET`).join('\n');
+const esc = (s: string) => s.replace(/[\\()]/g, (c) => `\\${c}`);
+
+/** Each run drawn with its own text object. */
+const runsContent = (runs: Run[]): string =>
+  runs.map(([s, x, y]) => `BT /F1 10 Tf ${x} ${y} Td (${esc(s)}) Tj ET`).join('\n');
+
+/** A one-page PDF (US Letter) with this content stream; /F1 is Helvetica, /F2 Courier. */
+function buildPdf(content: string): Uint8Array {
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
   ];
   let out = '%PDF-1.4\n';
   const offsets: number[] = [];
@@ -36,9 +41,10 @@ function buildPdf(runs: Run[]): Uint8Array {
   return new Uint8Array(Buffer.from(out, 'latin1'));
 }
 
-async function extract(runs: Run[]): Promise<string> {
+async function extract(runs: Run[] | string): Promise<string> {
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const task = pdfjsLib.getDocument({ data: buildPdf(runs), verbosity: 0 });
+  const stream = typeof runs === 'string' ? runs : runsContent(runs);
+  const task = pdfjsLib.getDocument({ data: buildPdf(stream), verbosity: 0 });
   const pdf = await task.promise;
   const page = await pdf.getPage(1);
   const content = await page.getTextContent();
@@ -57,6 +63,15 @@ describe('reconstructPageText on pdfjs output', () => {
       ['in stock', 320, 700],
     ]);
     expect(text).toBe('Widget  in stock');
+  });
+
+  test('a word space at a font change is kept, though pdfjs reports it as a narrow filler', async () => {
+    // pdfjs puts the space between two fonts in a " " item about 1pt wide:
+    // narrower than the word-gap test, so dropping it glued the words.
+    expect(await extract('BT /F1 10 Tf 50 700 Td [(foo) -110] TJ /F2 10 Tf (bar) Tj ET')).toBe('foo bar');
+    expect(
+      await extract('BT /F2 10 Tf 50 700 Td [(code) -105] TJ /F1 10 Tf [(word) -160] TJ /F2 10 Tf (more) Tj ET'),
+    ).toBe('code word more');
   });
 
   test('a two-column page under a title reads title, left column, right column', async () => {

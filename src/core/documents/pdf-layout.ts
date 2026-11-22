@@ -59,6 +59,8 @@ interface Positioned {
   y: number;
   width: number;
   height: number;
+  /** pdfjs reported a whitespace item just before this one (in its own order). */
+  spaceBefore?: boolean;
 }
 
 /** One baseline's items, sorted left to right. `y` is the baseline it was grouped on. */
@@ -174,7 +176,12 @@ function renderItems(items: Positioned[]): string {
       // any reader downstream will read as a separation rather than a word
       // break.
       text += `  ${items[j].str}`;
-    } else if (gap > charWidth * 0.3 && !prev.str.endsWith(' ') && !items[j].str.startsWith(' ')) {
+    } else if (
+      (gap > charWidth * 0.3 || (items[j].spaceBefore === true && gap > -charWidth * 0.3)) &&
+      !prev.str.endsWith(' ') &&
+      !items[j].str.startsWith(' ')
+    ) {
+      // A word gap, or a narrow one pdfjs said was a space (see `spaceBefore`).
       text += ` ${items[j].str}`;
     } else {
       // Fragments of one word, split by a font or kerning change.
@@ -582,13 +589,21 @@ function renderSequence(lines: Line[], pitch: number, charWidth: number): string
  * column and tables as Markdown tables. Returns '' for an empty page.
  */
 export function reconstructPageText(items: PdfTextItem[]): string {
-  const positioned: Positioned[] = items
-    // Whitespace-only items carry no text, only a width: pdfjs inserts one
-    // across a gap between two runs, as wide as the gap itself, so keeping it
-    // closed every column gutter and cell gap on a real PDF. The gap test
-    // below puts the right amount of space back.
-    .filter((i) => typeof i.str === 'string' && i.str.trim().length > 0 && Array.isArray(i.transform))
-    .map((i) => ({
+  // Whitespace-only items are not text: pdfjs inserts one across a gap between
+  // two runs, as wide as the gap itself, so measuring it as text closed every
+  // column gutter and cell gap on a real PDF. It is still a statement that a
+  // space sits there: at a font change pdfjs reports an ordinary word space
+  // this way, about a point wide — narrower than the word-gap test — so the
+  // item it precedes keeps `spaceBefore` and the gap test honours it.
+  const positioned: Positioned[] = [];
+  let pendingSpace = false;
+  for (const i of items) {
+    if (typeof i.str !== 'string' || !Array.isArray(i.transform)) continue;
+    if (i.str.trim().length === 0) {
+      if (i.str.length > 0) pendingSpace = true;
+      continue;
+    }
+    positioned.push({
       str: i.str,
       // pdfjs transform is [scaleX, skewX, skewY, scaleY, translateX, translateY].
       x: i.transform[4] ?? 0,
@@ -597,7 +612,10 @@ export function reconstructPageText(items: PdfTextItem[]): string {
       // Height can be absent on some producers; the vertical scale is the
       // honest fallback, and 1 keeps the tolerances non-zero either way.
       height: i.height || Math.abs(i.transform[3]) || 1,
-    }));
+      spaceBefore: pendingSpace,
+    });
+    pendingSpace = false;
+  }
 
   if (positioned.length === 0) return '';
 

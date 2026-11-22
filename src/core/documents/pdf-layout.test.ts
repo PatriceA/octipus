@@ -88,6 +88,16 @@ describe('reconstructPageText', () => {
     expect(text).toBe('Octipus');
   });
 
+  test('a narrow whitespace item is a space, not text and not nothing', () => {
+    // At a font change pdfjs reports the word space as a " " item ~1pt wide.
+    const text = reconstructPageText([
+      { str: 'foo', transform: [10, 0, 0, 10, 50, 700], width: 15, height: 10 },
+      { str: ' ', transform: [10, 0, 0, 10, 65, 700], width: 1.1, height: 0 },
+      { str: 'bar', transform: [10, 0, 0, 10, 66.1, 700], width: 18, height: 10 },
+    ]);
+    expect(text).toBe('foo bar');
+  });
+
   test('a heading and body text do not merge just because they are close', () => {
     // A 24pt heading over 10pt body: a fixed baseline tolerance would fold the
     // body line into the heading. The tolerance scales with text height.
