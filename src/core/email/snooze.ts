@@ -201,7 +201,18 @@ export interface SnoozeRequest {
   snippet: string;
 }
 
-export class SnoozePartialError extends Error {}
+/** Some messages were snoozed, the rest stayed in the inbox. */
+export class SnoozePartialError extends Error {
+  constructor(
+    message: string,
+    /** The snooze stored for the messages that moved. */
+    readonly snoozed: SnoozeView,
+    /** The ids, as asked, of the messages that moved (the others are still in the inbox). */
+    readonly snoozedIds: string[],
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Snooze a conversation: archive it now, wake it at `wakeAt`. Mail is never
@@ -232,7 +243,7 @@ export async function snooze(userId: string, provider: EmailProvider, request: S
   }
   coreLogger.info({ userId, provider, messages: moved.length, notMoved: left.length }, 'email: conversation snoozed');
   const view = await viewFor(userId, row);
-  if (left.length) throw Object.assign(new SnoozePartialError(`${moved.length} of ${ids.length} messages were snoozed; the other ${left.length} could not be moved and stay in the inbox.`), { snoozed: view });
+  if (left.length) throw new SnoozePartialError(`${moved.length} of ${ids.length} messages were snoozed; the other ${left.length} could not be moved and stay in the inbox.`, view, ids.filter((id) => !left.includes(id)));
   return view;
 }
 
