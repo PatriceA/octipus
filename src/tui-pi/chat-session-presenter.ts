@@ -15,7 +15,6 @@ export class ChatSessionPresenter {
   private refreshingPlan = false;
   private discoveredPlan = false;
   private connected = false;
-  private planPoll: ReturnType<typeof setInterval> | null = null;
   private activeAgentRole: string | null = null;
   private activeAgentModel: string | undefined;
   private streamText = '';
@@ -28,7 +27,7 @@ export class ChatSessionPresenter {
     private readonly activity: ActivityLine, private readonly subagents: SubagentPanel,
     private readonly pushMessage: (role: 'user' | 'assistant' | 'system', text: string) => void) {}
 
-  dispose(): void { if (this.planPoll) clearInterval(this.planPoll); this.planPoll = null; this.activity.dispose(); }
+  dispose(): void { this.activity.dispose(); }
   reset(): void {
     this.seenMessageIds.clear();
     this.refreshingPlan = false;
@@ -41,13 +40,10 @@ export class ChatSessionPresenter {
   handleEvent(event: AgentSessionEvent): boolean {
     switch (event.kind) {
       case 'status':
-        if (this.planPoll) clearInterval(this.planPoll);
-        this.planPoll = null;
         if (event.status === 'connected') {
           if (!this.connected) this.subagents.reset();
+          // Once on connect; after that the gateway says when the plan changes (`plan.updated`).
           this.adapter.sendCommand('work-plan-status');
-          this.planPoll = setInterval(() => this.adapter.sendCommand('work-plan-status'), 4000);
-          this.planPoll.unref?.();
         } else {
           this.refreshingPlan = false;
           this.lastPlanSummary = 'Unavailable · connection lost';
@@ -57,6 +53,9 @@ export class ChatSessionPresenter {
         this.connected = event.status === 'connected';
         this.status.setStatus(event.status); this.tui.requestRender();
         return false; // surfaces still handle reconnect/history
+      case 'plan.updated':
+        this.adapter.sendCommand('work-plan-status');
+        return true;
       case 'command.result':
         if (event.name === 'work-plan-status') {
           const summary = typeof event.result === 'string' ? event.result : '';

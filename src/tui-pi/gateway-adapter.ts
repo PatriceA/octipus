@@ -68,6 +68,8 @@ export type AgentSessionEvent =
   | { kind: 'agent.stopped';  agentId: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
+  /** The session's work plan was saved; the summary is stale. */
+  | { kind: 'plan.updated';   revision: number }
   | { kind: 'identity';       user: string | null }
   /** No usable CLI login: the client will not connect until one is stored. */
   | { kind: 'login_required'; reason: string }
@@ -325,6 +327,10 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       if (agentId) out.push({ kind: 'agent.stopped', agentId });
       return out;
     }
+
+    case 'session.plan_updated':
+      out.push({ kind: 'plan.updated', revision: pickNumber(payload, 'revision') ?? 0 });
+      return out;
 
     case 'session.stats': {
       out.push({

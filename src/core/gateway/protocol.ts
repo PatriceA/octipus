@@ -168,6 +168,10 @@ export type GatewayEventType =
   // which a client summing the agent.completed events it happened to see is
   // not), plus how full the last prompt left the context window.
   | 'session.stats'
+  // A session's work plan was saved (agent, /plan-feedback, the web's
+  // feedback): payload `{ revision }`, envelope `sessionId`. Clients refresh
+  // their plan summary on it instead of polling (`saveWorkPlan`).
+  | 'session.plan_updated'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'

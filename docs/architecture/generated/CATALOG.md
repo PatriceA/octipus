@@ -807,7 +807,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 247 |
+| `api` | `core` | 248 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -846,7 +846,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 75 |
-| `core` | `db` | 540 |
+| `core` | `db` | 541 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
@@ -859,7 +859,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 84 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 257 |
+| `core` | `utils` | 258 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -966,8 +966,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-editor` | `tui-pi` | 30 |
 | `tui-editor` | `utils` | 2 |
 | `tui-pi` | `core` | 3 |
-| `tui-pi` | `shared` | 2 |
-| `tui-pi` | `tui-kit` | 19 |
+| `tui-pi` | `shared` | 3 |
+| `tui-pi` | `tui-kit` | 28 |
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
@@ -1067,6 +1067,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `room.typing` | yes | — | `*` |
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
+| `session.plan_updated` | yes | `src/core/agent/work-plan-store.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `space.presence` | yes | — | `*` |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.budget_warning` |
