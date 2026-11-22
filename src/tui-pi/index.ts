@@ -1,7 +1,9 @@
 /**
- * Phase 1 entry for the pi-tui-based Octipus shell.
+ * Entry for the Octipus terminal chat.
  *
- *   npx tsx src/tui-pi/index.ts [--project /path | /path] [--session <id>]
+ *   npx tsx src/tui-pi/index.ts [--project /path | /path] [--session <id>] [--inline] [--mouse app|native|off]
+ *
+ * `--inline` and `--mouse` override `~/.octipus/tui.json` (see `settings.ts`).
  *
  * Builds the runtime, mounts OctipusTuiApp, connects to the gateway.
  * `bin/octi tui` and `package.json#scripts.tui` point here.
@@ -9,24 +11,33 @@
 import { resolve } from 'node:path';
 import { OctipusTuiApp } from './app';
 import { createRuntime } from './runtime';
+import { stripTranscriptRails } from './components/messages-pane';
+import { resolveTerminalSettings, type TerminalSettings } from './settings';
 
 export interface LaunchOptions {
   gatewayUrl?: string;
   projectPath?: string;
   /** Resume an existing session instead of starting a blank one (`--session <id>`). */
   sessionId?: string;
+  terminal?: Partial<TerminalSettings>;
 }
 
 export async function launchOctipusTui(options: LaunchOptions = {}): Promise<void> {
   const runtime = createRuntime({
     gatewayUrl: options.gatewayUrl,
     title: 'Octipus',
+    screen: options.terminal?.screen,
+    mouse: options.terminal?.mouse,
+    selectionText: stripTranscriptRails,
   });
   const app = new OctipusTuiApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
     projectPath: options.projectPath,
     sessionId: options.sessionId,
     onShutdown: runtime.shutdown,
+    copy: runtime.copy,
+    dumpToScrollback: runtime.dumpToScrollback,
+    mouse: runtime.mouse,
   });
   await app.start();
 }
@@ -54,8 +65,8 @@ export function parseProjectArg(args: string[]): string | undefined {
     if ((arg === '--project' || arg === '-p') && args[i + 1]) {
       fromFlag = resolve(args[i + 1] as string);
       i++;
-    } else if (arg === '--session') {
-      i++; // its value is a session id, not a path
+    } else if (arg === '--session' || arg === '--mouse') {
+      i++; // its value is a session id or a mouse mode, not a path
     } else if (!arg.startsWith('-') && arg !== '' && fromPositional === undefined) {
       // FIRST bare argument only. Last-one-wins over every positional let a
       // stray `octi tui somefile.txt` silently outrank the launcher's own
@@ -78,5 +89,13 @@ export function parseSessionArg(args: string[]): string | undefined {
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
-  void launchOctipusTui({ projectPath: parseProjectArg(argv), sessionId: parseSessionArg(argv) });
+  let terminal: TerminalSettings;
+  try {
+    terminal = resolveTerminalSettings(argv);
+  } catch (error) {
+    // Before the screen is taken: a plain message on a working terminal.
+    process.stderr.write(`octi tui: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
+  void launchOctipusTui({ projectPath: parseProjectArg(argv), sessionId: parseSessionArg(argv), terminal });
 }

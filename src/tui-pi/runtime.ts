@@ -1,9 +1,14 @@
-/** Node terminal bootstrap: pi-tui, keybindings, connection defaults and shutdown. */
+/** Node terminal bootstrap: the screen, mouse and clipboard, keybindings, connection defaults and shutdown. */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { type KeybindingsManager, ProcessTerminal, TUI } from '@/tui-kit';
+import {
+  type ClipboardResult, copyToClipboard, type KeybindingsConfig, type KeybindingsManager, ProcessTerminal, type TUI,
+  TuiAltScreen, TuiMainScreen,
+} from '@/tui-kit';
+import { defaultClipboardEnvironment } from '@/tui-kit/clipboard';
 import { mouseReportFilter, setMouseCapture } from './terminal-actions';
-import { installOctipusKeybindings } from './keybindings';
+import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
+import { type MouseMode, resolveTerminalSettings, type ScreenMode } from './settings';
 
 export interface RuntimeOptions {
   /** Override the default WebSocket URL (otherwise built from the API port). */
@@ -12,14 +17,36 @@ export interface RuntimeOptions {
   showHardwareCursor?: boolean;
   /** Title set on the terminal window. */
   title?: string;
+  /** `alt` (default): the alternate screen. `inline`: the normal buffer, the terminal keeps its scrollback. */
+  screen?: ScreenMode;
+  /** See `settings.ts`. Default: `~/.octipus/tui.json`, else `app`. */
+  mouse?: MouseMode;
+  /**
+   * The surface draws its own full-height frame and scrolls its own panes
+   * (the editor): the alternate screen's viewport keys (PageUp, Ctrl+Home,
+   * Ctrl+Up…) go to the surface instead of scrolling a viewport it does not use.
+   */
+  ownsScrolling?: boolean;
+  /** Turns a drag selection into the text that is copied (the chat leaves out the transcript's rail). */
+  selectionText?: (text: string) => string;
 }
 
 export interface Runtime {
   tui: TUI;
+  screen: ScreenMode;
+  mouse: MouseMode;
   gatewayUrl: string;
   keybindings: KeybindingsManager;
-  shutdown: () => Promise<void>;
+  /** Restore the terminal, then print `farewell` (if any) to the normal buffer. */
+  shutdown: (farewell?: string) => Promise<void>;
   setExitHandler: (handler: (signal: 'SIGINT' | 'SIGTERM') => void) => void;
+  /** The clipboard chain (`@/tui-kit/clipboard`), writing OSC 52 to this terminal. */
+  copy: (text: string) => Promise<ClipboardResult>;
+  /**
+   * Leave the screen, print `text` into the terminal's own scrollback (for
+   * its search and selection), wait for a key, and come back.
+   */
+  dumpToScrollback: (text: string) => Promise<void>;
 }
 
 /**
@@ -67,49 +94,119 @@ export function installExitGuards(restore: () => void, proc: GuardedProcess = pr
   proc.on('SIGHUP', () => { restore(); proc.exit(129); });
 }
 
+/** Alternate scroll: on the alternate screen, the wheel arrives as Up/Down keys. */
+const ALTERNATE_SCROLL_ON = '\x1b[?1007h';
+const ALTERNATE_SCROLL_OFF = '\x1b[?1007l';
+/** Erase the scrollback. The main-screen renderer sends it on every resize; it took the user's history before launch with it. */
+const ERASE_SCROLLBACK = '\x1b[3J';
+/** What the alternate-screen renderer flashes after a copy; replaced by what actually happened. */
+const COPIED_FLASH = 'Copied!';
+
+/** The viewport keys of the alternate screen, unbound for surfaces that scroll their own panes. */
+function withoutViewportKeys(user: KeybindingsConfig): KeybindingsConfig {
+  const ids = ['pageUp', 'pageDown', 'halfPageUp', 'halfPageDown', 'lineUp', 'lineDown', 'previousPrompt', 'nextPrompt', 'search', 'top', 'bottom'];
+  return { ...Object.fromEntries(ids.map(id => [`tui.altScreen.${id}`, []])), ...user };
+}
+
 export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const port = getApiPort();
   const gatewayUrl = options.gatewayUrl || `ws://localhost:${port}/gateway`;
+  const settings = options.screen !== undefined && options.mouse !== undefined ? { screen: options.screen, mouse: options.mouse } : resolveTerminalSettings([]);
+  const screen = options.screen ?? settings.screen;
+  const mouse = options.mouse ?? settings.mouse;
 
   const terminal = new class extends ProcessTerminal {
-    // Keep wheel events available. Shift+drag remains native terminal selection.
     override start(...args: Parameters<ProcessTerminal['start']>): void {
       super.start(...args);
-      setMouseCapture(this, true);
+      // Inline: wheel reports for the app's own scrolling; Shift+drag stays native selection.
+      if (screen === 'inline' && mouse === 'app') setMouseCapture(this, true);
+      if (screen === 'alt' && mouse === 'native') this.write(ALTERNATE_SCROLL_ON);
     }
     override stop(): void {
-      setMouseCapture(this, false);
+      if (screen === 'inline' && mouse === 'app') setMouseCapture(this, false);
+      if (screen === 'alt' && mouse === 'native') this.write(ALTERNATE_SCROLL_OFF);
       super.stop();
     }
+    override write(data: string): void {
+      super.write(screen === 'inline' ? data.replaceAll(ERASE_SCROLLBACK, '') : data);
+    }
   }();
-  const tui = new TUI(terminal, options.showHardwareCursor ?? false);
-  const keybindings = installOctipusKeybindings();
-  tui.addInputListener(mouseReportFilter(tui));
+  const copy = (text: string) => copyToClipboard(text, defaultClipboardEnvironment(data => terminal.write(data)));
+
+  let tui: TUI;
+  if (screen === 'alt') {
+    const selectionText = options.selectionText ?? ((text: string) => text);
+    const alt = new class extends TuiAltScreen {
+      copyNote: string | null = null;
+      // The renderer flashes a bare "Copied!"; say which way the text went.
+      override flash(message: string, durationMs?: number): void {
+        const shown = message === COPIED_FLASH && this.copyNote ? this.copyNote : message;
+        this.copyNote = null;
+        super.flash(shown, durationMs);
+      }
+    }(terminal, options.showHardwareCursor ?? false, undefined, {
+      mouse: mouse === 'app',
+      scrollToEndIndicator: () => ' ↓ End: latest ',
+      copySelection: async text => {
+        const result = await copy(selectionText(text));
+        if (!result.ok) return result.message;
+        alt.copyNote = result.message;
+        return true;
+      },
+    });
+    tui = alt;
+  } else {
+    tui = new TuiMainScreen(terminal, options.showHardwareCursor ?? false);
+    // Only the inline screen hands raw mouse reports to the app; the alternate screen parses them itself.
+    if (mouse === 'app') tui.addInputListener(mouseReportFilter(tui));
+  }
+  const userBindings = loadOctipusKeybindings();
+  const keybindings = installOctipusKeybindings(options.ownsScrolling ? withoutViewportKeys(userBindings) : userBindings);
 
   if (options.title) terminal.setTitle(options.title);
 
-  // tui.stop() shows the cursor, then the terminal turns off mouse reporting,
-  // bracketed paste and the keyboard protocol, and leaves raw mode.
+  // tui.stop() leaves the alternate screen (or moves below the frame) and
+  // shows the cursor; the terminal turns off mouse reporting, bracketed paste
+  // and the keyboard protocol, and leaves raw mode. `preserveScreen` stops the
+  // alternate-screen renderer from printing the whole document on the way out.
   let restored = false;
   const restore = (): void => {
     if (restored) return;
     restored = true;
-    try { tui.stop(); } catch (error) {
+    try { tui.stop({ preserveScreen: true }); } catch (error) {
       process.stderr.write(`Could not restore the terminal: ${error instanceof Error ? error.message : String(error)}\n`);
     }
   };
   installExitGuards(restore);
 
   let shuttingDown = false;
-  const shutdown = async (): Promise<void> => {
+  const shutdown = async (farewell?: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     restore();
-    try { await terminal.drainInput(800, 50); } catch { /* drain failure is non-fatal */ }
+    if (farewell) process.stdout.write(`${farewell.replace(/\n/g, '\r\n')}\r\n`);
+    try { await terminal.drainInput(800, 50); } catch (error) {
+      process.stderr.write(`Could not drain terminal input: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  const dumpToScrollback = async (text: string): Promise<void> => {
+    tui.stop({ preserveScreen: true });
+    process.stdout.write(`${text.replace(/\r?\n/g, '\r\n')}\r\n\r\n── End of transcript: search or select it here. Press any key to return to Octipus. ──`);
+    await new Promise<void>(done => {
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      process.stdin.once('data', () => done());
+    });
+    // The terminal records the raw state it finds at start and restores it on exit.
+    process.stdin.setRawMode?.(false);
+    process.stdout.write('\r\n');
+    tui.start();
+    tui.requestRender(true);
   };
 
   let exitHandler = (_signal: 'SIGINT' | 'SIGTERM') => { void shutdown().then(() => process.exit(0)); };
   process.on('SIGINT', () => exitHandler('SIGINT'));
   process.on('SIGTERM', () => exitHandler('SIGTERM'));
-  return { tui, gatewayUrl, keybindings, shutdown, setExitHandler: handler => { exitHandler = handler; } };
+  return { tui, screen, mouse, gatewayUrl, keybindings, shutdown, copy, dumpToScrollback, setExitHandler: handler => { exitHandler = handler; } };
 }

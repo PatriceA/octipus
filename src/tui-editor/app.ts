@@ -21,7 +21,7 @@ import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
  */
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@/tui-kit';
+import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI, type TuiMouseEvent } from '@/tui-kit';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
@@ -161,8 +161,16 @@ export class OctipusEditorApp {
     // Status rows on top (up to a third of the screen); the mode bar is the single bottom row.
     this.status.setProject(basenameOf(this.projectPath));
     const status = this.status;
+    // On the alternate screen the renderer parses mouse reports and hands a wheel notch to the
+    // component under the pointer; route it through the same handling as a raw report.
+    const wheel = (up: boolean) => this.handleGlobalKey(up ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M');
     const root = new class extends Container {
       override render(width: number): string[] { status.setMaxRows(Math.max(1, Math.floor(tui.terminal.rows / 3))); return super.render(width).slice(0, tui.terminal.rows); }
+      override handleMouse(event: TuiMouseEvent): ReturnType<Container['handleMouse']> {
+        if (event.type !== 'wheel' || !event.wheelDelta) return super.handleMouse(event);
+        wheel(event.wheelDelta < 0);
+        return { handled: true, target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height } };
+      }
     }();
     root.addChild(this.status);
     root.addChild(this.split);

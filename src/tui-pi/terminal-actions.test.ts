@@ -1,14 +1,17 @@
 import { expect, test, vi } from 'vitest';
-import type { TUI } from '@/tui-kit';
+import { copyToClipboard, type TUI } from '@/tui-kit';
 import { handleTerminalCommand, mouseReportFilter, parseMouseReport, setMouseCapture, wheelDirection } from './terminal-actions';
 import { MessagesPane } from './components/messages-pane';
 import { StatusBar } from './components/status-bar';
 
+/** No clipboard tool and no tmux: the chain ends at OSC 52, written to this fake terminal. */
 function fixture() {
   const write = vi.fn(); const terminal = { write }; const tui = { terminal } as unknown as TUI;
   const messages = new MessagesPane({ maxVisible: 3 }); const status = new StatusBar(); const notify = vi.fn();
-  return { write, terminal, messages, status, notify, run: (command: string) => handleTerminalCommand(command, tui, messages, notify) };
+  const copy = (text: string) => copyToClipboard(text, { platform: 'linux', env: {}, run: async () => 'ENOENT', writeTerminal: write });
+  return { write, terminal, messages, status, notify, run: (command: string) => handleTerminalCommand(command, tui, messages, notify, copy) };
 }
+const settled = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test('wheel tracking is enabled and disabled only by terminal lifecycle', () => {
   const f = fixture();
@@ -20,46 +23,47 @@ test('wheel tracking is enabled and disabled only by terminal lifecycle', () => 
   expect(f.status.render(100).join('')).not.toContain('wheel captured');
 });
 
-test('copy last preserves complete Unicode and Markdown, independent of viewport', () => {
+test('copy last preserves complete Unicode and Markdown, independent of viewport', async () => {
   const f = fixture();
   const text = '**Hello 世界**\n' + 'long response '.repeat(100);
   f.messages.push({ role: 'assistant', content: text, timestamp: new Date() });
   f.messages.push({ role: 'system', content: 'tool finished', timestamp: new Date() });
   f.messages.render(30); f.messages.scrollUp();
   expect(f.run('/copy last')).toBe(true);
+  await settled();
   expect(f.write).toHaveBeenLastCalledWith(`\x1b]52;c;${Buffer.from(text).toString('base64')}\x07`);
-  expect(f.notify).toHaveBeenCalledWith(expect.stringContaining('request sent'));
+  expect(f.notify).toHaveBeenCalledWith(expect.stringContaining('OSC 52'));
 });
 
-test('copy transcript includes loaded roles and current streamed text without reporting its own command', () => {
+test('copy transcript includes loaded roles and current streamed text without reporting its own command', async () => {
   const f = fixture();
   f.messages.push({ role: 'user', content: 'question', timestamp: new Date() });
   f.messages.push({ role: 'assistant', content: 'earlier response', timestamp: new Date() });
   f.messages.setLive('stream so far');
-  f.run('/copy transcript');
+  f.run('/copy transcript'); await settled();
   const text = Buffer.from(f.write.mock.calls[0][0].slice(7, -1), 'base64').toString();
   expect(text).toBe('user:\nquestion\n\nassistant:\nearlier response\n\nassistant:\nstream so far');
-  f.run('/copy');
+  f.run('/copy'); await settled();
   expect(f.write).toHaveBeenLastCalledWith(`\x1b]52;c;${Buffer.from('stream so far').toString('base64')}\x07`);
 });
 
-test('copy hands over the reply as received, not the version cleaned for the screen', () => {
+test('copy hands over the reply as received, not the version cleaned for the screen', async () => {
   const f = fixture();
   const reply = 'make:\n\tcc main.c\r\nwindows line\x1b[1mbold\x1b[0m 👍🏽';
   f.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
   expect(f.messages.render(80).join('\n')).not.toContain('\t');
-  f.run('/copy last');
+  f.run('/copy last'); await settled();
   expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe(reply);
   f.messages.setLive('streamed\tstill raw');
-  f.run('/copy');
+  f.run('/copy'); await settled();
   expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe('streamed\tstill raw');
 });
 
-test('empty, invalid, and oversized copies do not overwrite the clipboard or silently truncate', () => {
+test('empty, invalid, and oversized copies do not overwrite the clipboard or silently truncate', async () => {
   const f = fixture(); f.run('/copy'); f.run('/copy nonsense');
-  f.messages.setLive('🐙'.repeat(20_000)); f.run('/copy');
+  f.messages.setLive('🐙'.repeat(20_000)); f.run('/copy'); await settled();
   expect(f.write).not.toHaveBeenCalled();
-  expect(f.notify).toHaveBeenLastCalledWith(expect.stringContaining('exceeds'));
+  expect(f.notify).toHaveBeenLastCalledWith(expect.stringContaining('Not copied'));
   expect(f.run('/unknown')).toBe(false);
 });
 

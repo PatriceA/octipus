@@ -8,6 +8,17 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import xterm from '@xterm/headless';
 const { Terminal } = xterm;
 
+export interface HarnessOptions {
+  /** Extra environment for the program (a fake clipboard tool on PATH, a DISPLAY). */
+  env?: Record<string, string | undefined>;
+  /** Written to the screen before the program starts: what the user had in the terminal before launch. */
+  preamble?: string;
+  /** Files written under the test HOME before launch, by path relative to it (`.octipus/tui.json`). */
+  files?: Record<string, string>;
+  /** Run the program under another one (`tmux new-session --`): its argv goes in front of the Node command. */
+  wrap?: string[];
+}
+
 export class TuiHarness {
   readonly home = mkdtempSync(join(tmpdir(), 'tui-screen-'));
   readonly project = join(this.home, 'project');
@@ -24,7 +35,7 @@ export class TuiHarness {
   private error = '';
   private stopped = false;
 
-  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[]) {
+  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions) {
     this.server = server;
     mkdirSync(this.project);
     // The TUI signs in with the stored CLI login and nothing else; without
@@ -33,9 +44,12 @@ export class TuiHarness {
     writeFileSync(join(this.home, '.octipus', 'session.json'), JSON.stringify({
       token: 'test-session-token', userId: '11111111-1111-4111-8111-111111111111', username: 'tester', isAdmin: false,
     }));
+    for (const [path, content] of Object.entries(options.files ?? {})) writeFileSync(join(this.home, path), content);
     writeFileSync(join(this.project, 'example.ts'), 'const greeting = "hello";\n' + 'x'.repeat(120) + '\n');
     this.screen = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 100 });
     this.screen.parser.registerOscHandler(52, data => { this.clipboardRequests.push(data); return true; });
+    const preamble = options.preamble;
+    if (preamble) this.writes = new Promise<void>(resolve => this.screen.write(preamble.replace(/\n/g, '\r\n'), resolve));
     const port = (server.address() as { port: number }).port;
     server.on('connection', socket => {
       this.sockets.add(socket);
@@ -54,10 +68,16 @@ export class TuiHarness {
       });
       socket.on('close', () => this.sockets.delete(socket));
     });
-    this.proc = spawn('python3', [resolve('tests/tui/pty.py'), String(cols), String(rows), process.execPath,
+    this.proc = spawn('python3', [resolve('tests/tui/pty.py'), String(cols), String(rows), ...(options.wrap ?? []), process.execPath,
       '--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', this.project, ...args], {
       cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, HOME: this.home, API_PORT: String(port), TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: undefined },
+      // No display, multiplexer or SSH session from the machine running the tests: the
+      // clipboard chain would otherwise reach the developer's real clipboard.
+      env: {
+        ...process.env, HOME: this.home, API_PORT: String(port), TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: undefined,
+        DISPLAY: undefined, WAYLAND_DISPLAY: undefined, TMUX: undefined, SSH_CONNECTION: undefined, SSH_TTY: undefined, WSL_DISTRO_NAME: undefined,
+        ...options.env,
+      },
     });
     createInterface({ input: this.proc.stdout }).on('line', line => {
       const message = JSON.parse(line);
@@ -70,11 +90,19 @@ export class TuiHarness {
     this.proc.stderr.on('data', data => { this.error += data; });
     this.exited = new Promise(resolve => this.proc.once('exit', resolve));
   }
-  static async start(entry: string, cols = 100, rows = 28, args: string[] = []): Promise<TuiHarness> {
+  static async start(entry: string, cols = 100, rows = 28, args: string[] = [], options: HarnessOptions = {}): Promise<TuiHarness> {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-    return new TuiHarness(entry, server, cols, rows, args);
+    return new TuiHarness(entry, server, cols, rows, args, options);
   }
+  /** The terminal's normal buffer — scrollback and screen — as text, whichever buffer is showing. */
+  async normalBuffer(): Promise<string> {
+    await this.writes;
+    const b = this.screen.buffer.normal;
+    return Array.from({ length: b.length }, (_, row) => b.getLine(row)?.translateToString(true) ?? '').join('\n');
+  }
+  /** Which buffer the terminal is showing. */
+  async bufferType(): Promise<'normal' | 'alternate'> { await this.writes; return this.screen.buffer.active.type; }
   send(input: string): void { this.proc.stdin.write(JSON.stringify({ input }) + '\n'); }
   resize(cols: number, rows: number): void {
     this.screen.resize(cols, rows); this.proc.stdin.write(JSON.stringify({ resize: [cols, rows] }) + '\n');

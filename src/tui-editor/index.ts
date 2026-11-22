@@ -20,6 +20,8 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
   const runtime = createRuntime({
     gatewayUrl: options.gatewayUrl,
     title: 'Octipus Editor',
+    // The editor lays out its own panes; PageUp, Ctrl+Home… belong to them, not to a screen viewport.
+    ownsScrolling: true,
   });
   const app = new OctipusEditorApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
