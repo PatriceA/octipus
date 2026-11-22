@@ -278,32 +278,47 @@ exist in code and cannot be reached or seen. Before adding anything, it needs
 the first two groups below fixed. Items marked **[run]** were reproduced; the
 rest are **[code]**.
 
+The first two groups were fixed in Phase 4 (§7); each item names the commit
+and the test that fails without it.
+
 Wrong today
 
 - Columns are UTF-16 units: Backspace after an emoji leaves half a character;
   Left/Right split graphemes. **[run]**
+  Fixed `bda32a8`: `buffer.test.ts` (graphemes), `text-editor.test.ts`, e2e CRLF/emoji.
 - Replace-all records one undo step per match; with more matches than the
   200-step limit, the rest cannot be undone. **[run]**
+  Fixed `bda32a8`: `search.test.ts`, `buffer.test.ts` (grouped undo), `replace-overlay.test.ts`.
 - Backspace at the start of the file marks the buffer dirty and clears redo.
   **[run]**
+  Fixed `bda32a8`, `aea0441`: `buffer.test.ts`, `buffer-store.test.ts`.
 - Dirty is a flag, not a comparison with what was saved; undoing back to the
   saved text still shows unsaved changes.
+  Fixed `aea0441`: `buffer-store.test.ts`.
 - Save is `writeFileSync` straight onto the file: not atomic, no check that
   the file changed on disk since it was opened. Invalid UTF-8 is rewritten on
   save.
+  Fixed `aea0441`: `workspace-fs-bridge.test.ts`, `app-flow.test.ts`, e2e external-change and CRLF.
 - Syntax highlighting is parsed when a file is opened and not after edits; the
   parse cache is per language, so two TypeScript files evict each other.
+  Fixed `aea0441`: `highlight-tree-sitter.test.ts`.
 - The Tab key inserts two spaces; tabs in a file display four wide.
+  Fixed `aea0441`: `text-editor.test.ts`, `buffer-store.test.ts`.
 - Find does not highlight matches in the buffer and hides the cursor while its
   box is open; it always starts from the top of the file.
+  Fixed `44d365a`, `aea0441`: `find-overlay.test.ts`, `text-editor.test.ts`, `app-flow.test.ts`, e2e find.
 - The diff overlay is 25 rows tall and is clipped on terminals of about 29
   rows or fewer.
+  Fixed `95da4df`: `diff-overlay.test.ts`. Since Phase 1 the frame kept the keys on screen; PageDown still skipped the rows it had cut.
 - Double-pressing the workspace or MCP picker key while the first request is
   in flight opens two overlays and loses the handle to one; the request has
   no timeout.
+  Fixed `aea0441`: `app-flow.test.ts`, `api-client.test.ts`.
 - The file picker shows the first 1,000 files alphabetically to depth 6,
   ignores `.gitignore`, and walks the tree synchronously.
+  Fixed `4c5bc11`: `project-files.test.ts`, `file-picker.test.ts`.
 - Subscriptions (stores, input listeners, the adapter) are never released.
+  Fixed `aea0441`: `app-flow.test.ts`.
 
 Present but unreachable or invisible
 
@@ -311,11 +326,14 @@ Present but unreachable or invisible
   command or key to turn it on. In NORMAL mode Ctrl+S is swallowed and there
   is no `:w`. With the kitty keyboard protocol active, Escape may arrive as
   `ESC[27u`, which the vim layer does not recognise **[unverified]**.
+  Fixed `79520b0`, `aea0441`: `text-editor.vim.test.ts` (`ESC[27u` confirmed unrecognised before), `app-flow.test.ts`, e2e vim.
 - Selection: the buffer tracks one, the renderer never draws it. VISUAL mode
   is invisible.
+  Fixed `aea0441`: `text-editor.test.ts`, `text-editor.vim.test.ts`, e2e vim.
 - Merge lock mode, `AgentStore`, the persisted `theme`, `LayoutStore.overlay`:
   code with no caller.
 - Scratch buffers cannot be saved: there is no Save As.
+  Fixed `aea0441`: `app-flow.test.ts`, e2e Save As.
 
 Missing for a usable editor
 
@@ -336,10 +354,13 @@ Structure
 - `app.ts` (728 lines) wires everything: stores, gateway, eight overlays,
   persistence, hotkeys. Eight near-identical overlay open/close pairs.
 - Three hand-written text fields accept one byte at a time (no paste, no
-  emoji, no IME) while pi-tui's `Input` goes unused.
+  emoji, no IME) while pi-tui's `Input` goes unused. Fixed in Phase 4: one
+  `TextField` over `Input`.
 - `walk` and its skip list are duplicated between the tree and the picker.
+  Fixed in Phase 4: `project-files.ts`.
 - Untested: `FileTree`, `TabStrip`, `ModeBar`, the hotkeys and unsaved-changes
-  overlays, `ChatPane`, the API client, the file bridge, two stores.
+  overlays, `ChatPane`, the API client, the file bridge, two stores. Tested
+  in Phase 4.
 
 A question to settle before Phase 4: what the editor is for. It will not
 compete with an IDE, and should not try. Its distinctive job is **reviewing
@@ -519,6 +540,43 @@ Done when: each row of the table in §5.1 reads "Expected".
 
 Done when: every item under "Wrong today" in §5.2 has a failing-then-passing
 test.
+
+**Phase 4 — shipped.** Every item under "Wrong today" and "Present but
+unreachable or invisible" in §5.2 has a test; a sample was run against the
+code before the fix and failed (graphemes, undo, replace-all, `$1`, case
+columns, the diff overlay paging, kitty Escape, Ctrl+S in NORMAL, the
+relative agent path, the MCP double-open, released subscriptions, `start()`).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Grapheme-aware cursor, deletion, selection; one width function | `bda32a8` | `buffer.test.ts`, `text-editor.test.ts`; `editor/columns.ts` is used by both the cursor maths and the renderer |
+| 2. Grouped undo | `bda32a8` | `buffer.test.ts` (burst, pause, transaction past the limit, no-op), `search.test.ts`, `text-editor.test.ts` |
+| 3. Dirty by comparison | `aea0441` | `buffer-store.test.ts` |
+| 4. Atomic save, external change, Save As, line endings, non-UTF-8 | `aea0441` | `workspace-fs-bridge.test.ts` (real files: rename, mode, symlink, hard link, CRLF, BOM, Latin-1), `app-flow.test.ts`, e2e |
+| 5. Re-parse after edits, cache per buffer | `aea0441` | `highlight-tree-sitter.test.ts` (two buffers, re-parse, late parse) |
+| 6. Selection drawn; vim switchable, `:w`, key-layer Escape | `79520b0`, `aea0441` | `text-editor.test.ts`, `text-editor.vim.test.ts`, `hotkeys-overlay.test.ts`, `mode-bar.test.ts`, e2e |
+| 7. Overlay race and timeout, diff height, picker index; Tab indent, shared text field, find highlight/cursor, `$1` | `4c5bc11`, `44d365a`, `95da4df`, `aea0441` | `app-flow.test.ts`, `api-client.test.ts`, `diff-overlay.test.ts`, `project-files.test.ts`, `file-picker.test.ts`, `find-overlay.test.ts`, `replace-overlay.test.ts`, `search.test.ts` |
+| 8. Release on shutdown | `aea0441` | `app-flow.test.ts` |
+| 9. Tests for untested components | `d61a1eb`, `4c5bc11`, `79520b0`, `aea0441` | `file-tree`, `tab-strip`, `mode-bar`, `hotkeys-overlay`, `prompts` (unsaved, external change, Save As), `chat-pane`, `api-client`, `workspace-fs-bridge`, `workspace-store` (with `use-store`) tests |
+
+The two suspicions in §5.2: an `agent.write` with a path relative to the
+project was matched against absolute keys and dropped — fixed, and after
+Accept or Reject the buffer's baseline follows the disk if the agent already
+wrote the file, so Reject leaves the tab unsaved rather than looking in sync
+(`aea0441`, `app-flow.test.ts`). `start()` when `adapter.connect()` rejects:
+since Phase 1 the process-level guard already restored the terminal (as an
+unhandled rejection); `start()` now stops the app and restores the terminal
+itself, and the entry point prints the error and exits 1.
+
+New on the way: `/new` (open a scratch buffer), keys arriving in one chunk
+in vim NORMAL mode (`:w` typed fast) are read one by one, a picker Enter
+typed before the index arrives opens the best match.
+
+Not done: the file is not watched while open (a change is noticed at save
+and after agent edits); parsing is a debounced full parse, not incremental.
+Found and left, outside `src/tui-editor/`: `gateway-adapter.ts` treats
+`str_replace_editor`'s `new_str` (a fragment) as the whole new file, so the
+diff offers to replace the file with the fragment.
 
 ### Phase 5 — Editor as the review surface (L)
 
