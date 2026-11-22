@@ -87,6 +87,8 @@ function toMistralToolId(id: string): string {
 export class MistralProvider implements ModelProvider {
   readonly name = 'mistral';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   private baseUrl: string;
 

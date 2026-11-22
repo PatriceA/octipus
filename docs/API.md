@@ -1040,27 +1040,36 @@ curl https://your-host/v1/chat/completions \
   reported in `completion_tokens` and `total_tokens`, with `prompt_tokens: 0`.
 - **Streaming** (`stream: true`) is OpenAI-style SSE: a role chunk, content
   chunks, a chunk with `finish_reason: "stop"`, then `data: [DONE]`, every
-  chunk with the request's one `chatcmpl-…` id. The content chunks concatenate
-  to exactly the `message.content` the same request returns without `stream`.
-  - **Passthrough** (a registry model id) streams **token-true**: content
-    chunks leave as the provider produces them. Text is held back only while
-    the provider-reply normalisation could still change it: leading whitespace
-    until the first visible character, a reply that opens with `{` (it may be
-    a leaked `{"thought": …}` wrapper that is stripped) in full, and anything
-    from DeepSeek tool-template markup (`｜`) on. If the normalised reply does
-    not continue what was already sent, the stream ends with an OpenAI error
-    frame (`data: {"error": …}`) instead of a finish chunk. Tool-call deltas
-    are never sent as text. Every provider with a real `stream()` (OpenAI,
-    Anthropic, Gemini, Vertex, OpenRouter, Mistral, DeepSeek, Grok, Moonshot,
-    Meta, z.ai, Ollama, the LiteLLM proxy, custom OpenAI-, Anthropic- and
-    Gemini-compatible providers) streams this way; CLI providers, and Ollama
-    with `think: false` or JSON mode, produce their whole reply as one chunk. A stream
-    that fails before its first chunk is completed without streaming; a
-    refusal before it (unknown model, quota, open circuit) keeps its HTTP
-    status and error envelope. A client that disconnects aborts the provider
-    call. `agent.streaming: false` turns this off (the finished reply is
-    chunked). Chunks carry the requested model id; usage is not streamed
-    (`stream_options` is not supported).
+  chunk with the request's one `chatcmpl-…` id. For a stream that completes,
+  the content chunks concatenate to exactly the `message.content` the same
+  model reply is returned as without `stream`.
+  - **Passthrough** (a registry model id) streams **token-true** on the
+    providers whose streamed text is their completed text, unaltered on both
+    paths: OpenAI, OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex and
+    custom OpenAI-compatible providers. Their content chunks leave as the
+    provider produces them, verbatim; tool-call deltas are never sent as text.
+    Every other provider (the LiteLLM proxy, Anthropic, Gemini, DeepSeek,
+    Ollama, custom Anthropic- and Gemini-compatible providers, CLI providers)
+    normalises its streamed and its completed text differently (thinking tags,
+    trimming, a leaked JSON thinking wrapper, DeepSeek template recovery), so
+    its reply is completed and the finished text chunked, as before: streaming
+    it would show text the non-streamed answer filters.
+  - A refusal or provider error before the first chunk (unknown model, quota,
+    an open circuit, an upstream error) returns its HTTP status and error
+    envelope from that one attempt; it is not retried without streaming. A
+    provider that fails midway ends the stream with an OpenAI error frame
+    (`data: {"error": …}`) and `[DONE]`, not a finish chunk.
+  - A client that disconnects mid-reply aborts the provider call. One that
+    disconnects after the reply's text is complete lets the provider's usage
+    chunk be read (up to 2 s) so the call is accounted for; a stream cut off
+    before its usage is recorded with an estimate (prompt plus output so far,
+    `usageEstimated` in `cost_log` metadata). A client that stays connected
+    but stops reading is dropped after `api.streamStallTimeoutMs` (default
+    60 s): the provider call and its rate-limit slot are freed and the stream
+    ends without `[DONE]`.
+  - `agent.streaming: false` turns token-true streaming off (the finished
+    reply is chunked). Chunks carry the requested model id; usage is not
+    streamed (`stream_options` is not supported).
   - **Agent mode** (`octipus/agent`) chunks the turn's **final** answer once
     the turn ends. The answer is not final while the model writes it: the
     output guard decides on the whole text and may replace it, inline-UI blocks

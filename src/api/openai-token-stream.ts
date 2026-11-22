@@ -3,28 +3,20 @@
  * model id): the provider's `stream()` deltas go out as `chat.completion.chunk`
  * frames while the model is still producing them.
  *
- * The streamed text must concatenate to exactly the answer the request ends
- * with, and SSE cannot take text back. The answer is the provider stream after
- * `collectStream`'s normalisation (the same one the root agent's streamed calls
- * get), so text is sent only once that normalisation can no longer change it:
- *
- *   - leading whitespace waits for the first visible character (a reply of
- *     whitespace only normalises to nothing);
- *   - a reply whose first visible character is `{` is held whole: it may be a
- *     leaked `{"thought": …}` wrapper the normaliser strips;
- *   - from the first `｜` (DeepSeek tool-template markup) on, the rest is held.
- *
- * At the end the held text is sent. If the normalised answer does not begin
- * with what was already sent (DeepSeek markup after visible text, which the
- * normaliser turns into tool calls or an error), the stream ends with an error
- * frame instead of a finish chunk: a client gets a failure, never a wrong answer.
+ * The streamed text must concatenate to exactly the `message.content` the same
+ * request returns without `stream`, and SSE cannot take text back. So this
+ * runs only for a provider whose stream is its completion
+ * (`ModelProvider.streamIsComplete`: neither path filters, trims or rewrites
+ * the text), and forwards each content delta unaltered. Every other provider
+ * normalises its streamed and completed text differently (thinking tags,
+ * trimming, JSON-thinking strip): the route completes it and chunks the
+ * finished text, as before.
  *
  * Tool-call deltas are not answer text and are never sent. Usage is not sent:
  * the endpoint does not take `stream_options`.
  */
-import { chunkText, sseData, sseDone } from '@/api/sse';
-import type { CompletionOptions, StreamChunk } from '@/models/litellm-client';
-import { collectStream } from '@/models/stream-collect';
+import { sseData, sseDone } from '@/api/sse';
+import type { StreamChunk } from '@/models/litellm-client';
 import { apiLogger } from '@/utils/logger';
 
 /** One streaming chunk in the `chat.completion.chunk` shape. */
@@ -38,53 +30,8 @@ export function toChunk(id: string, model: string, created: number, delta: Recor
   };
 }
 
-/** Decides which streamed text is already final (see the module comment). */
-export class AnswerReleaseGate {
-  private held = '';
-  private sent = '';
-  private mode: 'leading' | 'open' | 'held' = 'leading';
-
-  /** Takes a provider delta; returns the text that may go to the client now. */
-  push(delta: string): string {
-    if (this.mode === 'held') {
-      this.held += delta;
-      return '';
-    }
-    let text = delta;
-    if (this.mode === 'leading') {
-      this.held += delta;
-      const visible = this.held.trimStart();
-      if (!visible) return '';
-      if (visible.startsWith('{')) {
-        this.mode = 'held';
-        return '';
-      }
-      this.mode = 'open';
-      text = this.held;
-      this.held = '';
-    }
-    if (text.includes('｜')) {
-      this.mode = 'held';
-      this.held += text;
-      return '';
-    }
-    this.sent += text;
-    return text;
-  }
-
-  /** What is left to send of `answer`, or null when `answer` does not continue the text already sent. */
-  rest(answer: string): string | null {
-    return answer.startsWith(this.sent) ? answer.slice(this.sent.length) : null;
-  }
-}
-
-async function* replay(chunks: StreamChunk[]): AsyncGenerator<StreamChunk> {
-  yield* chunks;
-}
-
-function errorFrame(message: string) {
-  return sseData({ error: { message, type: 'server_error', param: null, code: null } });
-}
+/** How long a reply whose client left after its last text keeps reading, for the provider's usage chunk. */
+export const USAGE_DRAIN_MS = 2_000;
 
 export interface PassthroughStream {
   id: string;
@@ -92,56 +39,98 @@ export interface PassthroughStream {
   /** The provider stream, already advanced once: `first` is its first result. */
   chunks: AsyncGenerator<StreamChunk>;
   first: IteratorResult<StreamChunk>;
-  options: CompletionOptions;
-  /** True once the client has gone; nothing more is sent then. */
-  aborted: () => boolean;
-  /** Releases what the request holds (its abort listener); called once, at the end. */
-  release: () => void;
+  /** The provider call's abort, separate from the client's. */
+  provider: AbortController;
+  /** The client's request signal. */
+  client: AbortSignal;
+  /** How long a frame may wait for the client to read it. */
+  stallTimeoutMs: number;
 }
 
 /**
- * SSE frames for a passthrough stream: the role chunk, content deltas as the
- * gate releases them, the held rest, the finish chunk and `[DONE]`. Pulled one
- * frame at a time by the response body, so the provider is read only as fast
- * as the client reads; memory is the chunks of this one answer, as for a
- * non-streamed completion.
+ * SSE frames for a passthrough stream: the role chunk, content deltas as they
+ * arrive, the finish chunk and `[DONE]`. Pulled one frame at a time by the
+ * response body, so the provider is read only as fast as the client reads, and
+ * nothing is buffered beyond the frame in hand.
+ *
+ * Ends cleanly every way a stream can end:
+ *   - the client leaves mid-reply: the provider call is aborted at once;
+ *   - the client leaves once the reply's text is complete: the provider is
+ *     read on, for up to `USAGE_DRAIN_MS`, so its usage chunk (sent after the
+ *     finish reason) reaches the accounting and the call is not billed blind;
+ *   - the client stops reading but stays connected: after `stallTimeoutMs`
+ *     the provider call is dropped and its rate-limit slot released;
+ *   - the provider fails midway: an OpenAI error frame, then `[DONE]`.
  */
 export async function* passthroughSse(s: PassthroughStream): AsyncGenerator<string> {
   const created = Math.floor(Date.now() / 1000);
   const frame = (delta: Record<string, unknown>, finish: string | null = null) => sseData(toChunk(s.id, s.model, created, delta, finish));
+  let finished = false; // the provider sent its finish reason: the text is complete
+  let done = false;
+  let stalled = false;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const onClientGone = () => {
+    if (!finished) { s.provider.abort(s.client.reason); return; }
+    drainTimer = setTimeout(() => s.provider.abort(s.client.reason), USAGE_DRAIN_MS);
+  };
+  if (s.client.aborted) onClientGone();
+  else s.client.addEventListener('abort', onClientGone, { once: true });
+
+  // Every frame waits for the client under the stall timer.
+  async function* emit(text: string): AsyncGenerator<string> {
+    const timer = setTimeout(() => {
+      stalled = true;
+      apiLogger.warn({ model: s.model, stallTimeoutMs: s.stallTimeoutMs }, '/v1/chat/completions stream stalled: the client stopped reading — dropping the provider call');
+      s.provider.abort(new Error('client stopped reading'));
+      // The provider stream is parked at its own yield: returning it releases its rate-limit slot now.
+      void s.chunks.return(undefined);
+    }, s.stallTimeoutMs);
+    try {
+      yield text;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   try {
-    yield frame({ role: 'assistant' });
-    const seen: StreamChunk[] = [];
-    const gate = new AnswerReleaseGate();
+    yield* emit(frame({ role: 'assistant' }));
     for (let next = s.first; !next.done; next = await s.chunks.next()) {
-      seen.push(next.value);
-      const text = next.value.content ? gate.push(next.value.content) : '';
-      if (text) yield frame({ content: text });
+      if (next.value.finishReason) finished = true;
+      if (next.value.content) yield* emit(frame({ content: next.value.content }));
+      if (stalled) return;
     }
-    const answer = (await collectStream(replay(seen), s.options, s.model)).content;
-    const rest = gate.rest(answer);
-    if (rest === null) {
-      apiLogger.error({ model: s.model }, '/v1/chat/completions: the normalised answer does not continue the streamed text — ending the stream with an error');
-      yield errorFrame('The provider\'s reply changed after it began streaming; retry without `stream`.');
-      yield sseDone();
-      return;
-    }
-    for (const piece of chunkText(rest)) yield frame({ content: piece });
-    yield frame({}, 'stop');
-    yield sseDone();
+    done = true;
+    yield* emit(frame({}, 'stop'));
+    yield* emit(sseDone());
   } catch (err) {
-    if (s.aborted()) {
-      apiLogger.info({ model: s.model }, '/v1/chat/completions stream closed by the client');
+    if (s.client.aborted || stalled) {
+      apiLogger.info({ model: s.model, stalled }, '/v1/chat/completions stream ended without its client');
       return;
     }
     apiLogger.error({ err, model: s.model }, '/v1/chat/completions stream failed after it started');
-    yield errorFrame((err as Error)?.message || 'Internal error');
-    yield sseDone();
+    yield* emit(sseData({ error: { message: (err as Error)?.message || 'Internal error', type: 'server_error', param: null, code: null } }));
+    yield* emit(sseDone());
   } finally {
+    s.client.removeEventListener('abort', onClientGone);
     try {
-      await s.chunks.return(undefined);
+      // The client left after the text was complete: read the usage chunk, within the drain bound.
+      if (finished && !done && !stalled) {
+        drainTimer ??= setTimeout(() => s.provider.abort(new Error('usage drain bound reached')), USAGE_DRAIN_MS);
+        await drain(s.chunks);
+      }
     } finally {
-      s.release();
+      clearTimeout(drainTimer);
+      await s.chunks.return(undefined);
+      s.provider.abort();
     }
+  }
+}
+
+async function drain(chunks: AsyncGenerator<StreamChunk>): Promise<void> {
+  try {
+    while (!(await chunks.next()).done) { /* accounting reads the chunks */ }
+  } catch (err) {
+    apiLogger.info({ err }, '/v1/chat/completions: provider stream not drained before its bound');
   }
 }

@@ -43,6 +43,8 @@ function isZaiReasoningModel(modelName: string): boolean {
 export class ZaiProvider implements ModelProvider {
   readonly name = 'zai';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   private baseUrl: string;
 

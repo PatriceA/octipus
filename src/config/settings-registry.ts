@@ -1006,6 +1006,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'RATE_LIMIT_MAX',
   },
+  {
+    key: 'api.streamStallTimeoutMs',
+    category: 'api',
+    valueType: 'number',
+    defaultValue: 60_000,
+    description: 'How long (ms) a streamed /v1/chat/completions reply waits for its client to read the next chunk before the provider call is dropped and its rate-limit slot freed. Min 1000.',
+    isSecret: false,
+  },
 
   // ── Security (runtime-changeable subset) ──
   { key: 'security.executionEnvironments', category: 'security', valueType: 'json', defaultValue: [], isSecret: false, description: 'Owner-approved execution environments, project folders, host identities and persistent approval policy. Manage in Settings → Environments & Access.' },

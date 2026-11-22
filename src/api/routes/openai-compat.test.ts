@@ -23,6 +23,9 @@ let getAllModelsImpl: () => Promise<unknown[]>;
 let completeCalls: unknown[];
 let streamCalls: CompletionOptions[];
 let streamingSetting: boolean | undefined;
+let stallSetting: number | undefined;
+/** What the router resolves the model to: only `streamIsComplete` is read. */
+let resolvedProvider: { name: string; streamIsComplete?: boolean };
 
 vi.mock('@/models/providers', async () => ({
   ...(await vi.importActual<typeof import('@/models/providers')>('@/models/providers')),
@@ -35,6 +38,7 @@ vi.mock('@/models/providers', async () => ({
       streamCalls.push(opts);
       return streamImpl(opts);
     },
+    resolveProvider: async () => resolvedProvider,
   }),
 }));
 vi.mock('@/config', async () => {
@@ -43,7 +47,11 @@ vi.mock('@/config', async () => {
     ...actual,
     getConfig: () => {
       const config = actual.getConfig();
-      return streamingSetting === undefined ? config : { ...config, agent: { ...config.agent, streaming: streamingSetting } };
+      return {
+        ...config,
+        agent: { ...config.agent, ...(streamingSetting === undefined ? {} : { streaming: streamingSetting }) },
+        api: { ...config.api, ...(stallSetting === undefined ? {} : { streamStallTimeoutMs: stallSetting }) },
+      };
     },
   };
 });
@@ -94,11 +102,14 @@ beforeEach(() => {
   completeCalls = [];
   streamCalls = [];
   streamingSetting = undefined;
+  stallSetting = undefined;
+  resolvedProvider = { name: 'cli' };
   completeImpl = async () => {
     throw new Error('completeImpl not set for this test');
   };
   // A provider that does not really stream (the CLI providers): its whole
-  // completion as one chunk.
+  // completion as one chunk. Not `streamIsComplete`, so never called unless a
+  // test resolves to one that is.
   streamImpl = async function* (opts) {
     const result = await completeImpl(opts) as { content: string; finishReason: string };
     yield { content: result.content };
@@ -335,6 +346,10 @@ interface Script {
   toolCall?: { id: string; name: string; arguments: string };
   /** Awaited before piece `i` is sent (streaming only). */
   holdBefore?: Map<number, Promise<void>>;
+  /** Awaited after the finish chunk, before the usage chunk (streaming only). */
+  holdBeforeUsage?: Promise<void>;
+  /** Fails the stream after the pieces. */
+  failAfterPieces?: Error;
 }
 
 /**
@@ -343,7 +358,7 @@ interface Script {
  * the same script as one message. Records what the stream saw.
  */
 function scriptedProvider(script: Script) {
-  const seen = { finished: false, released: false, signal: undefined as AbortSignal | undefined };
+  const seen = { finished: false, released: false, usageRead: false, signal: undefined as AbortSignal | undefined };
   const abortable = (p: Promise<void>, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('aborted')); return; }
     signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
@@ -362,7 +377,10 @@ function scriptedProvider(script: Script) {
         const { id, name, arguments: args } = script.toolCall;
         yield { ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] }, finish_reason: null }] };
       }
+      if (script.failAfterPieces) throw script.failAfterPieces;
       yield { ...base, choices: [{ index: 0, delta: {}, finish_reason: script.toolCall ? 'tool_calls' : 'stop' }] };
+      if (script.holdBeforeUsage) await abortable(script.holdBeforeUsage, signal);
+      seen.usageRead = true;
       yield { ...base, choices: [], usage: { prompt_tokens: 4, completion_tokens: script.pieces.length, total_tokens: 4 + script.pieces.length } };
       seen.finished = true;
     } finally {
@@ -391,6 +409,7 @@ function scriptedProvider(script: Script) {
 function useProvider(provider: InstanceType<typeof OpenAIProvider>) {
   completeImpl = (opts) => provider.complete(opts as CompletionOptions);
   streamImpl = (opts) => provider.stream(opts);
+  resolvedProvider = provider;
 }
 
 type Frame = { id?: string; choices?: Array<{ delta: { role?: string; content?: string; tool_calls?: unknown }; finish_reason: string | null }>; error?: { message: string } } | '[DONE]';
@@ -436,6 +455,15 @@ function postStream(body: Record<string, unknown>, signal?: AbortSignal) {
 }
 
 describe('POST /v1/chat/completions — token-true passthrough streaming', () => {
+  /** The non-streamed answer for a script, then the streamed text for the same script. */
+  async function bothWays(script: Script) {
+    useProvider(scriptedProvider(script).provider);
+    const plain = await (await post(appFor(fullUser), { model: 'scripted-model', messages: [{ role: 'user', content: 'q' }] })).json();
+    useProvider(scriptedProvider(script).provider);
+    const frames = await frameReader(await postStream({})).rest();
+    return { plain: plain.choices[0].message.content as string, frames };
+  }
+
   test('deltas reach the client while the provider is still writing, in protocol order', async () => {
     const last = deferred();
     const { provider, seen } = scriptedProvider({ pieces: ['Octo', 'puses ', 'have ', 'eight ', 'arms.'], holdBefore: new Map([[4, last.promise]]) });
@@ -464,41 +492,43 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     expect(completeCalls).toHaveLength(0);
   });
 
-  test('the concatenated deltas are exactly the non-streamed answer', async () => {
-    const script = { pieces: ['\n ', ' The', ' answer', ' is', ' 42', '.\n'] };
-    useProvider(scriptedProvider(script).provider);
-    const plain = await (await post(appFor(fullUser), { model: 'scripted-model', messages: [{ role: 'user', content: 'q' }] })).json();
-
-    useProvider(scriptedProvider(script).provider);
-    const frames = await frameReader(await postStream({})).rest();
-    expect(plain.choices[0].message.content).toBe('\n  The answer is 42.\n');
-    expect(contentOf(frames)).toBe(plain.choices[0].message.content);
+  // The OpenAI-shaped providers (`streamIsComplete`) alter the text on neither
+  // path, so each case that some other path would normalise streams verbatim
+  // and matches the non-streamed answer byte for byte.
+  test.each([
+    ['plain text', ['The', ' answer', ' is', ' 42', '.']],
+    ['leading and trailing whitespace', ['\n ', ' The answer', '.\n', '  ']],
+    ['a <think> block', ['<think>', 'count them', '</think>', 'Eight.']],
+    ['a <thinking> block', ['<thinking>plan', '</thinking>Answer']],
+    ['a <reasoning> block', ['<reasoning>x', '</reasoning> Eight.']],
+    ['a leaked JSON thinking wrapper', ['{"thought": "count ', 'the arms"}', ' Eight.']],
+    ['whitespace only', [' ', '\n']],
+  ])('%s: the concatenated deltas are exactly the non-streamed answer', async (_case, pieces) => {
+    const { plain, frames } = await bothWays({ pieces });
+    expect(plain).toBe(pieces.join(''));
+    expect(contentOf(frames)).toBe(plain);
+    expect(streamCalls).toHaveLength(1);
   });
 
   test('tool-call deltas are not answer text: only the text the reply carries is streamed', async () => {
-    const script = { pieces: ['Checking ', 'the docs.'], toolCall: { id: 'call_1', name: 'search', arguments: '{"q":"arms"}' } };
-    useProvider(scriptedProvider(script).provider);
-    const plain = await (await post(appFor(fullUser), { model: 'scripted-model', messages: [{ role: 'user', content: 'q' }] })).json();
-
-    useProvider(scriptedProvider(script).provider);
-    const frames = await frameReader(await postStream({})).rest();
+    const { plain, frames } = await bothWays({ pieces: ['Checking ', 'the docs.'], toolCall: { id: 'call_1', name: 'search', arguments: '{"q":"arms"}' } });
     expect(frames.some((f) => f !== '[DONE]' && f.choices?.[0]?.delta.tool_calls !== undefined)).toBe(false);
     expect(contentOf(frames)).toBe('Checking the docs.');
-    expect(contentOf(frames)).toBe(plain.choices[0].message.content);
+    expect(contentOf(frames)).toBe(plain);
   });
 
-  test('a reply that may be a leaked thinking wrapper is held whole, then sent as normalised', async () => {
-    const last = deferred();
-    const { provider } = scriptedProvider({ pieces: ['{"thought": "count ', 'the arms"}', ' Eight.'], holdBefore: new Map([[2, last.promise]]) });
-    useProvider(provider);
-    const frames = frameReader(await postStream({}));
-    await frames.next(); // role
-    const pending = frames.next();
-    // Nothing is sent while the wrapper could still be stripped.
-    expect(await Promise.race([pending.then(() => 'frame'), new Promise((r) => setTimeout(() => r('none'), 50))])).toBe('none');
-    last.resolve();
-    const rest = [(await pending)!, ...(await frames.rest())];
-    expect(contentOf(rest)).toBe('Eight.');
+  test('a provider whose stream is not its completion is completed and chunked, never streamed', async () => {
+    // As the LiteLLM proxy: its completion strips <thinking> and trims, its
+    // stream strips only <think>. Streaming it would show text the
+    // non-streamed answer filters.
+    resolvedProvider = { name: 'litellm' };
+    completeImpl = async () => ({ content: 'Answer', model: 'm', finishReason: 'stop', latencyMs: 1, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+    streamImpl = async function* () { yield { content: '<thinking>plan</thinking>Answer\n' }; };
+    const frames = await frameReader(await postStream({})).rest();
+    expect(contentOf(frames)).toBe('Answer');
+    expect(streamCalls).toHaveLength(0);
+    expect(completeCalls).toHaveLength(1);
+    expect(frames.at(-1)).toBe('[DONE]');
   });
 
   test('two concurrent streams keep their own text and ids', async () => {
@@ -506,6 +536,7 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     const holdB = deferred();
     const provA = scriptedProvider({ pieces: ['alpha-1 ', 'alpha-2 ', 'alpha-3'], holdBefore: new Map([[1, holdA.promise]]) });
     const provB = scriptedProvider({ pieces: ['beta-1 ', 'beta-2 ', 'beta-3'], holdBefore: new Map([[1, holdB.promise]]) });
+    resolvedProvider = provA.provider;
     streamImpl = (opts) => (opts.messages.at(-1)?.content === 'a' ? provA : provB).provider.stream(opts);
 
     const ra = frameReader(await postStream({ messages: [{ role: 'user', content: 'a' }] }));
@@ -524,7 +555,7 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     expect([...idsOf(fa)][0]).not.toBe([...idsOf(fb)][0]);
   });
 
-  test('a client that goes away aborts the provider call and releases the stream', async () => {
+  test('a client that goes away mid-reply aborts the provider call and releases the stream', async () => {
     const never = deferred();
     const { provider, seen } = scriptedProvider({ pieces: ['first ', 'never sent'], holdBefore: new Map([[1, never.promise]]) });
     useProvider(provider);
@@ -537,38 +568,75 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     await frames.reader.cancel();
     await vi.waitFor(() => expect(seen.released).toBe(true));
     expect(seen.signal?.aborted).toBe(true);
-    expect(seen.finished).toBe(false);
+    expect(seen.usageRead).toBe(false);
     expect(streamCalls[0].signal?.aborted).toBe(true);
   });
 
-  test('a finished stream releases its link to the request', async () => {
+  test('a client that leaves once the text is complete still lets the usage chunk be read', async () => {
+    const usage = deferred();
+    const { provider, seen } = scriptedProvider({ pieces: ['all ', 'here'], holdBeforeUsage: usage.promise });
+    useProvider(provider);
+    const client = new AbortController();
+    const frames = frameReader(await postStream({}, client.signal));
+    await frames.next(); // role
+    await frames.next();
+    await frames.next(); // both pieces: the provider now holds its usage chunk, after the finish reason
+    await new Promise((r) => setTimeout(r, 10));
+
+    client.abort();
+    void frames.reader.cancel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen.signal?.aborted).toBe(false); // not cut off: within the drain bound
+    usage.resolve();
+    await vi.waitFor(() => expect(seen.released).toBe(true));
+    expect(seen.usageRead).toBe(true);
+    expect(seen.finished).toBe(true);
+  });
+
+  test('a client that stops reading is dropped after the stall timeout', async () => {
+    stallSetting = 50;
+    const { provider, seen } = scriptedProvider({ pieces: ['one ', 'two ', 'three'] });
+    useProvider(provider);
+    const frames = frameReader(await postStream({}));
+    await frames.next(); // role — then the client reads nothing more
+    await vi.waitFor(() => expect(seen.released).toBe(true), { timeout: 2_000 });
+    expect(streamCalls[0].signal?.aborted).toBe(true);
+    expect(seen.finished).toBe(false);
+    await frames.reader.cancel();
+  });
+
+  test('a finished stream releases its abort link', async () => {
     useProvider(scriptedProvider({ pieces: ['done'] }).provider);
     await frameReader(await postStream({})).rest();
     expect(streamCalls[0].signal?.aborted).toBe(true);
   });
 
-  test('a provider that does not really stream still answers, as one delta', async () => {
-    completeImpl = async () => ({ content: 'whole reply', model: 'm', finishReason: 'stop', latencyMs: 1, usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } });
-    const frames = await frameReader(await postStream({})).rest();
-    expect(contentOf(frames)).toBe('whole reply');
-    expect(frames.at(-1)).toBe('[DONE]');
-  });
-
-  test('a stream that fails before its first chunk completes without streaming', async () => {
-    completeImpl = async () => ({ content: 'from complete()', model: 'm', finishReason: 'stop', latencyMs: 1, usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } });
-    streamImpl = async function* () { throw new Error('stream refused'); };
-    const frames = await frameReader(await postStream({})).rest();
-    expect(contentOf(frames)).toBe('from complete()');
-    expect(completeCalls).toHaveLength(1);
-    expect(frames.at(-2)).toMatchObject({ choices: [{ finish_reason: 'stop' }] });
+  test('a provider error before the first chunk is returned once, with its status: no retry without streaming', async () => {
+    resolvedProvider = { name: 'openai', streamIsComplete: true };
+    streamImpl = async function* () { throw new Error('upstream 503'); };
+    const res = await postStream({});
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatchObject({ type: 'server_error', message: 'upstream 503' });
+    expect(streamCalls).toHaveLength(1);
+    expect(completeCalls).toHaveLength(0);
   });
 
   test('a refusal before the first chunk keeps its HTTP status and envelope', async () => {
-    completeImpl = async () => { throw new Error('No provider for model bogus'); };
+    resolvedProvider = { name: 'openai', streamIsComplete: true };
     streamImpl = async function* () { throw new Error('No provider for model bogus'); };
     const res = await postStream({ model: 'bogus' });
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('model_not_found');
+    expect(completeCalls).toHaveLength(0);
+  });
+
+  test('a provider failing midway ends the stream with an error frame, not a finish chunk', async () => {
+    useProvider(scriptedProvider({ pieces: ['partial '], failAfterPieces: new Error('connection reset') }).provider);
+    const frames = await frameReader(await postStream({})).rest();
+    expect(contentOf(frames)).toBe('partial ');
+    expect(frames.some((f) => f !== '[DONE]' && f.choices?.[0]?.finish_reason === 'stop')).toBe(false);
+    expect(frames.at(-2)).toMatchObject({ error: { message: expect.stringContaining('connection reset') } });
+    expect(frames.at(-1)).toBe('[DONE]');
   });
 
   test('`agent.streaming: false` chunks the finished reply instead', async () => {
@@ -578,15 +646,6 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     expect(contentOf(frames)).toBe('not streamed');
     expect(streamCalls).toHaveLength(0);
     expect(completeCalls).toHaveLength(1);
-  });
-
-  test('text the normaliser would take back ends the stream with an error, never a wrong answer', async () => {
-    useProvider(scriptedProvider({ pieces: ['Sure. ', '<｜tool▁calls▁begin｜>'] }).provider);
-    const frames = await frameReader(await postStream({})).rest();
-    expect(contentOf(frames)).toBe('Sure. ');
-    expect(frames.some((f) => f !== '[DONE]' && f.choices?.[0]?.finish_reason === 'stop')).toBe(false);
-    expect(frames.at(-2)).toMatchObject({ error: { message: expect.any(String) } });
-    expect(frames.at(-1)).toBe('[DONE]');
   });
 });
 

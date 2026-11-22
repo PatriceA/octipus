@@ -38,6 +38,8 @@ function isMoonshotReasoningModel(modelName: string): boolean {
 export class MoonshotProvider implements ModelProvider {
   readonly name = 'moonshot';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   private baseUrl: string;
 

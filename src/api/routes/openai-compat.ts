@@ -40,7 +40,9 @@ import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
  * enforced on completions. Errors use the OpenAI error envelope so SDKs behave.
  *
  * Streaming (`stream: true`): passthrough streams token-true from the
- * provider's `stream()` (`src/api/openai-token-stream.ts`). Agent mode chunks
+ * provider's `stream()` when that stream is its completion
+ * (`ModelProvider.streamIsComplete`, `src/api/openai-token-stream.ts`), and
+ * chunks the completed text otherwise. Agent mode chunks
  * the turn's *final* text: the turn rewrites its answer after the model has
  * written it (the output guard's whole-text verdict, inline-UI markers, relay
  * and scaffolding passes), and SSE cannot take streamed text back.
@@ -254,14 +256,14 @@ export const openaiCompatRoutes = new Elysia()
           stopSequences: normalizeStop(body.stop),
           userId: user.id,
         };
-        // `agent.streaming: false` means no streamed provider calls at all;
-        // the reply is then chunked whole, as below.
-        if (wantStream && getConfig().agent?.streaming !== false) {
+        // Token-true only where the provider's stream is its completion; every
+        // other reply is completed and chunked whole, as below. `agent.streaming:
+        // false` means no streamed provider calls at all.
+        if (wantStream && getConfig().agent?.streaming !== false
+          && (await getProviderRouter().resolveProvider(options.model, options)).streamIsComplete === true) {
           const streamed = await openPassthroughStream(id, model, options, request.signal);
-          if (streamed) {
-            set.headers = { ...set.headers, ...SSE_HEADERS };
-            return streamed;
-          }
+          set.headers = { ...set.headers, ...SSE_HEADERS };
+          return streamed;
         }
         const result = await getProviderRouter().complete(options);
 
@@ -323,32 +325,24 @@ export const openaiCompatRoutes = new Elysia()
 /**
  * Start a token-true passthrough stream. The provider is read up to its first
  * chunk before any byte is sent, so a request it refuses (unknown model, quota,
- * an open circuit) still gets its HTTP status and error envelope. A stream
- * that fails before that first chunk returns null: the caller completes
- * without streaming, as the root agent does (nothing was shown yet). The
- * client going away aborts the provider call.
+ * an open circuit, a provider error) gets its HTTP status and error envelope
+ * from that one attempt: it is not retried without streaming.
  */
-async function openPassthroughStream(id: string, model: string, options: CompletionOptions, clientSignal: AbortSignal) {
-  const controller = new AbortController();
-  const onClientGone = () => controller.abort(clientSignal.reason);
-  if (clientSignal.aborted) onClientGone();
-  else clientSignal.addEventListener('abort', onClientGone, { once: true });
-  const release = () => {
-    clientSignal.removeEventListener('abort', onClientGone);
-    controller.abort();
-  };
-  const opts: CompletionOptions = { ...options, signal: controller.signal };
-  const chunks = getProviderRouter().stream(opts);
+async function openPassthroughStream(id: string, model: string, options: CompletionOptions, client: AbortSignal) {
+  const provider = new AbortController();
+  const stopEarly = () => provider.abort(client.reason);
+  client.addEventListener('abort', stopEarly, { once: true });
+  const chunks = getProviderRouter().stream({ ...options, signal: provider.signal });
   let first: IteratorResult<StreamChunk>;
   try {
     first = await chunks.next();
   } catch (err) {
-    release();
-    if (clientSignal.aborted) throw err;
-    apiLogger.warn({ err, model }, '/v1/chat/completions: stream failed before its first chunk — completing without streaming');
-    return null;
+    provider.abort();
+    throw err;
+  } finally {
+    client.removeEventListener('abort', stopEarly);
   }
-  return passthroughSse({ id, model, chunks, first, options: opts, aborted: () => clientSignal.aborted, release });
+  return passthroughSse({ id, model, chunks, first, provider, client, stallTimeoutMs: getConfig().api.streamStallTimeoutMs });
 }
 
 /** Normalize OpenAI `stop` (string | string[] | undefined) to string[] | undefined. */

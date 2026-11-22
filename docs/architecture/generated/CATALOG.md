@@ -813,7 +813,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
-| `api` | `models` | 44 |
+| `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
 | `api` | `security` | 188 |
 | `api` | `services` | 5 |

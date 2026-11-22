@@ -172,6 +172,12 @@ export const apiConfigSchema = z.object({
    * it per-user via /admin/quotas when running true multi-tenant.
    */
   rateLimitMax: z.number().min(0).default(600),
+  /**
+   * How long a streamed `/v1/chat/completions` reply waits for its client to
+   * read the next chunk before the provider call is dropped and its rate-limit
+   * slot released. A client that stops reading would otherwise hold both.
+   */
+  streamStallTimeoutMs: z.number().min(1000).default(60_000),
 });
 
 // Telegram configuration schema
