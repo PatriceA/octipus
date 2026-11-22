@@ -49,6 +49,9 @@ describe('account selection (pure)', () => {
 
 const aliceId = randomUUID();
 const bobId = randomUUID();
+const carolId = randomUUID();
+const daveId = randomUUID();
+const erinId = randomUUID();
 
 type App = { handle(request: Request, options?: { socketAddress?: string }): Promise<Response> };
 let app: App;
@@ -58,6 +61,8 @@ const sessions: Record<string, string> = {};
 const codes: Record<string, { access_token: string; refresh_token?: string; expires_in: number; scope?: string }> = {};
 const addressOf: Record<string, string | null> = {};
 let refreshes = 0;
+/** Refresh tokens the stand-in rotates, as Microsoft does: the answer carries a new one. */
+const rotating = new Set<string>();
 
 function fakeGoogle(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const url = String(input instanceof Request ? input.url : input);
@@ -66,7 +71,8 @@ function fakeGoogle(input: string | URL | Request, init?: RequestInit): Promise<
     const form = new URLSearchParams(String(init?.body ?? ''));
     if (form.get('grant_type') === 'refresh_token') {
       refreshes++;
-      return json({ access_token: `${form.get('refresh_token')}-refreshed`, expires_in: 3600, token_type: 'bearer' });
+      const used = form.get('refresh_token') ?? '';
+      return json({ access_token: `${used}-refreshed`, expires_in: 3600, token_type: 'bearer', ...(rotating.has(used) ? { refresh_token: `${used}-rotated` } : {}) });
     }
     const tokens = codes[form.get('code') ?? ''];
     return tokens ? json({ ...tokens, token_type: 'bearer' }) : json({ error: 'invalid_grant' }, 400);
@@ -125,10 +131,11 @@ beforeAll(async () => {
   const { initializeVault, getVault } = await import('@/security/vault');
   await initializeVault();
   const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
-  await seedUsers([{ id: aliceId, username: 'alice' }, { id: bobId, username: 'bob' }]);
+  await seedUsers([{ id: aliceId, username: 'alice' }, { id: bobId, username: 'bob' }, { id: carolId, username: 'carol' }, { id: daveId, username: 'dave' }, { id: erinId, username: 'erin' }]);
   const { getSessionManager } = await import('@/security/auth/session');
   sessions.alice = (await getSessionManager().create(aliceId)).token;
   sessions.bob = (await getSessionManager().create(bobId)).token;
+  sessions.carol = (await getSessionManager().create(carolId)).token;
   const { OAUTH_VAULT_NAMES } = await import('@/security/oauth');
   await getVault().setSystemSecret(OAUTH_VAULT_NAMES.google.clientId, 'google-client-id');
   await getVault().setSystemSecret(OAUTH_VAULT_NAMES.google.clientSecret, 'google-client-secret');
@@ -286,6 +293,67 @@ describe('several accounts of one provider', () => {
       expect(await keys()).toEqual(['google m-one', 'google:bob@two.example m-two', 'imap:acc1 m-imap']);
       expect(await visible()).toEqual(['google:bob@one.example', 'google:bob@two.example:bob@two.example', 'microsoft:cal-1']);
     } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('asking an address refreshes a token: what is written next keeps the new refresh token; account changes are told', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(fakeGoogle as typeof fetch);
+    const { getOAuthManager, onAccountsChanged } = await import('@/security/oauth');
+    const changed: string[] = [];
+    const stop = onAccountsChanged((userId, provider) => changed.push(`${userId} ${provider}`));
+    try {
+      const oauth = getOAuthManager();
+      const { getVault } = await import('@/security/vault');
+      const { getDb } = await import('@/db/postgres');
+      const { vault } = await import('@/db/schema/vault');
+      const { eq } = await import('drizzle-orm');
+      const expired = new Date(Date.now() - 60_000).toISOString();
+      /** An entry from before addresses were kept, its token expired, its refresh token one the provider rotates. */
+      const legacy = async (userId: string, rt: string, address: string, extra: Record<string, unknown> = {}) => {
+        rotating.add(rt);
+        addressOf[`${rt}-refreshed`] = address;
+        await getVault().store(userId, 'oauth_google', `${rt}-old-at`, { credentialType: 'oauth_token', tags: ['oauth', 'google'], allowedTools: ['google-workspace'], metadata: { oauthConfig: { provider: 'google', scopes: ['openid'], refreshToken: rt, expiresAt: expired, ...extra } } });
+      };
+      const further = (userId: string, address: string, extra: Record<string, unknown> = {}) => getVault().store(userId, `oauth_google_${address.slice(0, 4)}`, `${address}-at`, {
+        credentialType: 'oauth_token', tags: ['oauth', 'google'], allowedTools: ['google-workspace'],
+        metadata: { oauthConfig: { provider: 'google', scopes: ['openid'], refreshToken: `${address}-rt`, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), account: address, ...extra } },
+      });
+      const stored = async (userId: string) => (await getDb().select({ metadata: vault.metadata }).from(vault).where(eq(vault.userId, userId)))
+        .map((row) => row.metadata?.oauthConfig).filter((c) => c?.provider === 'google');
+      const legacyOf = async (userId: string, rt: string) => (await stored(userId)).find((c) => c?.refreshToken?.startsWith(rt));
+
+      // Listing: the address is asked with a refreshed token and kept, next to the new refresh token and expiry.
+      await legacy(carolId, 'carol-rt', 'carol@home.example');
+      const listed = await oauth.listAccounts(carolId, 'google');
+      expect(listed).toMatchObject([{ account: 'carol@home.example', isDefault: true }]);
+      expect(Date.parse(listed[0].expiresAt ?? '')).toBeGreaterThan(Date.now());
+      const carol = await legacyOf(carolId, 'carol-rt');
+      expect(carol).toMatchObject({ refreshToken: 'carol-rt-rotated', account: 'carol@home.example' });
+      expect(Date.parse(carol?.expiresAt ?? '')).toBeGreaterThan(Date.now());
+      // Connecting a further account is an account change.
+      codes.e1 = { access_token: 'carol-work-at', refresh_token: 'carol-work-rt', expires_in: 3600 };
+      addressOf['carol-work-at'] = 'carol@work.example';
+      expect((await connect('e1', { as: 'carol', addAccount: true })).page).toMatch(/Google Connected/);
+      expect(changed).toContain(`${carolId} google`);
+
+      // Make default: the old default's address is asked (a refresh); only the marks change.
+      await legacy(daveId, 'dave-rt', 'dave@home.example');
+      await further(daveId, 'dave@work.example');
+      await oauth.setDefaultAccount(daveId, 'google', 'dave@work.example');
+      expect(await legacyOf(daveId, 'dave-rt')).toMatchObject({ refreshToken: 'dave-rt-rotated', isDefault: false });
+      expect((await stored(daveId)).find((c) => c?.account === 'dave@work.example')).toMatchObject({ refreshToken: 'dave@work.example-rt', isDefault: true });
+      expect(changed).toContain(`${daveId} google`);
+
+      // Disconnecting the default: the successor's address is asked (a refresh) before it becomes the default.
+      await further(erinId, 'erin@b.example', { isDefault: true });
+      await legacy(erinId, 'erin-rt', 'erin@a.example', { isDefault: false });
+      await oauth.revokeToken(erinId, 'google', 'erin@b.example');
+      expect(await stored(erinId).then((all) => all.filter((c) => c?.refreshToken))).toEqual(expect.arrayContaining([expect.objectContaining({ refreshToken: 'erin-rt-rotated', isDefault: true })]));
+      expect(await oauth.getValidToken(erinId, 'google')).toBe('erin-rt-refreshed');
+      expect(changed).toContain(`${erinId} google`);
+    } finally {
+      stop();
       fetchSpy.mockRestore();
     }
   });
