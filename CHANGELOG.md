@@ -7,6 +7,12 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: very long lines stay responsive.** With soft wrap on, a
+  long line (a minified bundle, a JSON log line) was broken into rows again
+  for every visible row and every cursor or scroll step: a 200 KB line took
+  about 25 seconds to draw and move through. Rows are now cached per line text
+  and width, and a line over 2,000 characters is highlighted and styled only
+  where it is on screen, with or without wrap.
 - **Terminal editor: escape sequences in file names stay text.** A file named
   with ESC, OSC or BEL bytes reached the terminal through the tab strip, the
   unsaved-changes prompt and the rename / Save As fields prefilled with its
