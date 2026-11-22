@@ -39,6 +39,12 @@ export class AgentReview {
   private readonly waiting = new Map<string, PendingEdit>();
   /** The buffer whose review is open. */
   private reviewingId: string | null = null;
+  /**
+   * The agent text of a review whose hunks were (some of them) rejected, by
+   * buffer, while the agent has not written it yet: when the file becomes
+   * that text, the watcher keeps the user's version instead of reloading.
+   */
+  private readonly rejected = new Map<string, string>();
 
   constructor(private readonly ctx: EditorContext, private readonly files: FileOps) {}
 
@@ -48,6 +54,14 @@ export class AgentReview {
   /** Forget the edits of buffers that closed. */
   prune(): void {
     for (const id of [...this.waiting.keys()]) if (!this.ctx.buffers.byId(id)) this.waiting.delete(id);
+    for (const id of [...this.rejected.keys()]) if (!this.ctx.buffers.byId(id)) this.rejected.delete(id);
+  }
+
+  /** The file now holds `diskText`: whether that is the agent text rejected for `bufferId` (then forgotten). */
+  takeRejected(bufferId: string, diskText: string): boolean {
+    if (this.rejected.get(bufferId) !== diskText) return false;
+    this.rejected.delete(bufferId);
+    return true;
   }
 
   /** `agent.write`: the agent changed (or proposes to change) `path`. */
@@ -99,6 +113,7 @@ export class AgentReview {
   /** Hold an edit for the resolve key; nothing is opened over what the user is doing. */
   private wait(edit: PendingEdit): void {
     const id = edit.bufferId;
+    this.rejected.delete(id);
     this.waiting.set(id, edit);
     const label = this.ctx.buffers.byId(id)?.label ?? 'a file';
     this.ctx.pending.add({ key: reviewKey(id), bufferId: id, text: `agent edit to ${label} ready for review`, open: () => this.open(id) });
@@ -153,6 +168,8 @@ export class AgentReview {
     buffers.setAgentLocked(edit.bufferId, false);
     this.reviewingId = null;
     const disk = this.files.syncWithDisk(edit.bufferId, edit.after);
+    if (result.rejected > 0 && disk !== 'agent') this.rejected.set(edit.bufferId, edit.after);
+    else this.rejected.delete(edit.bufferId);
     this.ctx.log(describe(label, result, disk));
     this.ctx.overlays.hide('diff');
     if (!tui.hasOverlay()) this.ctx.refocus();

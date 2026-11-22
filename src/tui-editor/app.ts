@@ -140,7 +140,7 @@ export class OctipusEditorApp {
     this.parses = new HighlightParses(this.buffers, () => this.tui.requestRender());
     this.files = new FileOps(this.ctx, (id) => this.parses.reparse(id));
     this.review = new AgentReview(this.ctx, this.files);
-    this.watcher = new FileWatcher(this.ctx, this.files, (id) => this.review.underReview(id));
+    this.watcher = new FileWatcher(this.ctx, this.files, this.review);
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
     const copy = terminalClipboard(tui);

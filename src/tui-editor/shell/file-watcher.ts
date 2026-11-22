@@ -14,7 +14,10 @@
  * overwrite / cancel prompt waits in `PendingPrompts` (the mode bar shows it)
  * until the resolve key or the next save of that buffer, once for that
  * version of the file. A deleted file is reported once. Buffers under agent
- * review, or with a review waiting, are left to the review.
+ * review, or with a review waiting, are left to the review. When the file
+ * becomes the agent text the user rejected in a review (the agent's write
+ * lands after its edit was reviewed), the buffer is not reloaded: the file
+ * becomes its baseline and the user's text stays, unsaved, with a notice.
  */
 import { statSync } from 'node:fs';
 import { relative } from 'node:path';
@@ -25,6 +28,14 @@ import { externalKey } from './pending-prompts';
 
 export const WATCH_INTERVAL_MS = 1000;
 
+/** What the watcher asks the agent review (`AgentReview`). */
+export interface WatchedReview {
+  /** An agent edit to the buffer is waiting for review or being reviewed: leave it alone. */
+  underReview(bufferId: string): boolean;
+  /** Whether `diskText` is the agent text the user rejected (some hunks of) for this buffer; forgets it when it is. */
+  takeRejected(bufferId: string, diskText: string): boolean;
+}
+
 export class FileWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
   /** The file version (`mtime:size`) already offered or reported per buffer, so it is said once. */
@@ -33,8 +44,8 @@ export class FileWatcher {
   constructor(
     private readonly ctx: EditorContext,
     private readonly files: FileOps,
-    /** Buffers the watcher leaves alone: an agent edit to them is waiting for review. */
-    private readonly underReview: (bufferId: string) => boolean = () => false,
+    /** What the agent review knows about a buffer. */
+    private readonly review: WatchedReview = { underReview: () => false, takeRejected: () => false },
   ) {}
 
   private inSync(id: string): void {
@@ -57,7 +68,7 @@ export class FileWatcher {
   check(): void {
     const { buffers, tui } = this.ctx;
     for (const record of buffers.get().buffers) {
-      if (!record.path || !record.disk || record.agentLocked || this.underReview(record.id)) continue;
+      if (!record.path || !record.disk || record.agentLocked || this.review.underReview(record.id)) continue;
       let version: string;
       try {
         const stat = statSync(record.path);
@@ -87,6 +98,15 @@ export class FileWatcher {
       // The disk now holds what the buffer holds (the agent wrote the text the review accepted): in sync.
       const now = readFileForBuffer(record.path);
       if (now.ok && now.text === record.buffer.text()) { this.inSync(record.id); buffers.markSaved(record.id, now.text, now.disk); continue; }
+      // The agent wrote the version the user rejected in review (agent.write arrives before the write itself):
+      // reloading would undo the review. The file is the new baseline; the user's text stays, unsaved.
+      if (now.ok && this.review.takeRejected(record.id, now.text)) {
+        this.inSync(record.id);
+        buffers.markSaved(record.id, now.text, now.disk);
+        this.ctx.notice(`The agent wrote its version of ${shown}, which you rejected: your version is kept, unsaved (Ctrl+S writes it back).`);
+        tui.requestRender();
+        continue;
+      }
       if (!record.dirty) {
         this.files.reloadFromDisk(record.id);
         this.ctx.notice(`${shown} changed on disk and was reloaded (Ctrl+Z brings the old text back).`, 'info');

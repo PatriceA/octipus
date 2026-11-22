@@ -8,6 +8,7 @@ import { installEditorKeybindings } from '../keybindings';
 import { BufferStore } from '../stores/buffer-store';
 import { LayoutStore } from '../stores/layout-store';
 import type { EditorContext } from './context';
+import { AgentReview } from './agent-review';
 import { FileCommands } from './file-commands';
 import { FileOps } from './file-ops';
 import { FileWatcher } from './file-watcher';
@@ -177,4 +178,32 @@ test('the watcher leaves a buffer under agent review alone and reports a deleted
   rmSync(path);
   watcher.check(); watcher.check();
   expect(notices.filter((n) => n.includes('was deleted on disk'))).toHaveLength(1);
+});
+
+// agent.write arrives before the tool writes the file: the review is done against the old file, and the
+// watcher then saw a clean buffer change on disk and reloaded the agent's text, undoing the rejection.
+test('rejecting an agent edit is not undone when the agent writes the file afterwards: the rejected text becomes the baseline, the user keeps theirs', () => {
+  const path = join(root, 'src', 'a.ts');
+  files.openFile(path);
+  const id = ctx.buffers.active()?.id ?? '';
+  const review = new AgentReview(ctx, files);
+  const watcher = new FileWatcher(ctx, files, review);
+  review.handleWrite(path, 'agent version\n');
+  ctx.pending.openNext();
+  modals.at(-1)?.handleInput?.('r'); // reject every hunk
+  expect(ctx.buffers.byId(id)?.buffer.text()).toBe('alpha\n');
+  expect(ctx.buffers.byId(id)?.dirty).toBe(false);
+  writeFileSync(path, 'agent version\n'); // the tool's write lands now
+  watcher.check();
+  const rec = ctx.buffers.byId(id);
+  expect(rec?.buffer.text()).toBe('alpha\n');
+  expect(rec?.dirty).toBe(true);
+  expect(rec?.savedText).toBe('agent version\n');
+  expect(notices.at(-1)).toContain('which you rejected');
+  // Only that text: a later change on disk reloads the (still clean-against-it) buffer as usual.
+  if (rec) files.saveBuffer(rec.id);
+  expect(readFileSync(path, 'utf8')).toBe('alpha\n');
+  writeFileSync(path, 'agent version\n');
+  watcher.check();
+  expect(ctx.buffers.byId(id)?.buffer.text()).toBe('agent version\n');
 });

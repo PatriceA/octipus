@@ -7,6 +7,12 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: a rejected agent edit stays rejected.** The agent's edit
+  reaches the editor before the tool writes the file, so after you rejected it
+  the watcher saw the file change a moment later and reloaded the agent's
+  version into the clean tab. Now, when the file becomes the text you
+  rejected, the tab keeps your version, unsaved against the new file, and says
+  so.
 - **Terminal editor: accepting an agent edit no longer reverts your unsaved
   changes.** The review compared the buffer with the agent's whole file, which
   was written against the file on disk, so your unsaved edits showed as hunks
