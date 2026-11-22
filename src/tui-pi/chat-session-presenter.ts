@@ -17,6 +17,15 @@ export interface TurnContext {
   endsTurn?: boolean;
 }
 
+/**
+ * How long a streaming reply of `length` characters waits between redraws.
+ * Every redraw renders the whole reply's Markdown again, so a long one is
+ * redrawn less often; a short one, every delta.
+ */
+export function liveRedrawInterval(length: number): number {
+  return length < 8192 ? 0 : Math.min(250, Math.round(length / 512));
+}
+
 export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   lastPlanSummary: string | null = null;
@@ -27,6 +36,9 @@ export class ChatSessionPresenter {
   private activeAgentModel: string | undefined;
   private streamText = '';
   private streamIteration = -1;
+  /** When the live reply was last handed to the pane, and the redraw waiting for its interval. */
+  private liveShownAt = 0;
+  private liveTimer: ReturnType<typeof setTimeout> | null = null;
   /** This turn's tool calls: one transcript item, created by the first call. */
   private toolGroup: ToolGroupItem | null = null;
   private seenMessageIds = new Set<string>();
@@ -35,7 +47,7 @@ export class ChatSessionPresenter {
     private readonly activity: ActivityLine, private readonly subagents: SubagentPanel,
     private readonly pushMessage: (role: 'user' | 'assistant' | 'system', text: string) => void) {}
 
-  dispose(): void { this.activity.dispose(); }
+  dispose(): void { this.activity.dispose(); this.cancelLive(); }
   reset(): void {
     this.seenMessageIds.clear();
     this.refreshingPlan = false;
@@ -104,9 +116,7 @@ export class ChatSessionPresenter {
           this.streamIteration = event.iteration;
         }
         this.streamText += event.delta;
-        // A streaming interactive answer shows as its plain line, not as markup.
-        this.messages.setLive(inlineUiFallbackText(this.streamText));
-        this.tui.requestRender();
+        this.showLive();
         return true;
       case 'message':
         if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
@@ -234,15 +244,42 @@ export class ChatSessionPresenter {
       default: return false;
     }
   }
+  /**
+   * Hand the live reply to the pane now, or — a long reply, redrawn lately —
+   * once its redraw interval is over (`liveRedrawInterval`). The last delta
+   * is always drawn: the timer draws whatever streamed by then.
+   */
+  private showLive(): void {
+    const wait = liveRedrawInterval(this.streamText.length) - (Date.now() - this.liveShownAt);
+    if (wait <= 0) { this.drawLive(); return; }
+    if (this.liveTimer) return;
+    this.liveTimer = setTimeout(() => { this.liveTimer = null; this.drawLive(); }, wait);
+    this.liveTimer.unref?.();
+  }
+
+  private drawLive(): void {
+    this.cancelLive();
+    this.liveShownAt = Date.now();
+    // A streaming interactive answer shows as its plain line, not as markup.
+    this.messages.setLive(this.streamText ? inlineUiFallbackText(this.streamText) : null);
+    this.tui.requestRender();
+  }
+
+  private cancelLive(): void {
+    if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; }
+  }
+
   /** The live text so far becomes a folded thinking item; a later delta of the same iteration starts a new live block. */
   private flushReasoning(): void {
     if (!this.streamText.trim()) return;
     this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
     this.streamText = '';
+    this.cancelLive();
     this.messages.setLive(null);
   }
 
   private clearStream(): void {
+    this.cancelLive();
     this.streamText = '';
     this.streamIteration = -1;
     this.messages.setLive(null);

@@ -651,6 +651,11 @@ labels reflect blast radius, not contract guarantees.
   ones were neither found nor counted.
 - **Terminal chat: reasoning reads before the tool calls it led to.** The
   folded "Thinking" row used to appear below the turn's tool calls.
+- **Terminal chat: long replies stream without eating the CPU.** Each delta
+  re-sanitised and re-rendered the whole reply (a 154 KB reply in 2,000 deltas
+  cost about 3 s of CPU). The text is now sanitised incrementally and a long
+  reply is redrawn on a budget that grows with its length; the finished reply
+  still takes exactly the rows of the last streamed frame.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 
