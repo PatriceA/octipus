@@ -440,7 +440,7 @@ Done when: the invariant suite runs 500 seeds clean in CI.
 | --- | --- | --- |
 | 1. Terminal restored on every exit path | `af30f7e` | `tests/tui/exit-paths.e2e.test.ts` drives the real runtime through an uncaught exception, an unhandled rejection, `process.exit` and SIGHUP from a test-only fixture entry; checks mouse mode, bracketed paste, cursor shown last, raw mode off, error printed after the restore, exit status. `runtime.test.ts` checks the order with a fake process. |
 | 2. Overlays framed in the registry | `d8245e0` | `overlays/registry.test.ts`. Every overlay, the editor's modals included, is wrapped in `FramedOverlay`: `frameRow`, truncation to the overlay width, and (since `c9c73d5`) never taller than the rows pi-tui gives it. |
-| 3. Invariant suite | `46d167e` | `tests/tui/invariants.e2e.test.ts`, chat surface only. Default 8 seeds × 30 steps (~25 s); `TUI_FUZZ_SEEDS`, `TUI_FUZZ_SEED`, `TUI_FUZZ_STEPS`. CI runs the default; the 500-seed run was made locally (below). |
+| 3. Invariant suite | `46d167e` | `tests/tui/invariants.e2e.test.ts`, chat surface only. Default 8 seeds × 30 steps (~25 s); `TUI_FUZZ_SEEDS`, `TUI_FUZZ_SEED`, `TUI_FUZZ_STEPS`. CI runs the default; the 500-seed run was made locally. |
 | 4. Non-wheel mouse reports swallowed, releases matched | `9a2d9e9` | `terminal-actions.test.ts`, `app-flow.test.ts`. No component was seen to misread a report before the change; the path is closed rather than an observed corruption fixed. |
 | 5. Dead code and stale comments | `c588414` | `AgentStore`, `LayoutStore.overlay`, the persisted `theme`, merge lock mode, `void chalk`, orphaned and alt-screen comments, the status bar doc. Vim mode and selection kept. |
 | 6. Width audit | `5df61ea`, `d55d1b2`, `658876e`, `2bd5d76` | `src/tui-kit/terminal-text.width.test.ts`. `displayText` drops invisible format characters, unjoins emoji (ZWJ, skin tones), puts a base-less combining mark on a no-break space and turns half a surrogate pair into U+FFFD. |
@@ -452,7 +452,7 @@ was measured as no cells and drawn as one, wrapping the row (`d55d1b2`), and
 `displayLine`'s trim took the base away again (`2bd5d76`); text cut by UTF-16
 length (the adapter's 80-character previews, a model name) left half a
 surrogate pair, measured as no cells and drawn as one (`658876e`). The last
-two came from a 500-seed run (3 of 500 failed); see below for the rerun.
+two came from a 500-seed run (3 of 500 failed); rerun on `2bd5d76`: 500 of 500 seeds clean (local, about 22 minutes; CI runs the 8-seed default, so the Done-when line is met locally, not in CI).
 Found on the way: `/copy` copied the screen's cleaned text rather than the
 reply (`e18486c`).
 
