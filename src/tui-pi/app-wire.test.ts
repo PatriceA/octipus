@@ -242,3 +242,37 @@ test('a failed turn shows its error before the next queued message', async () =>
   expect(next).toBeGreaterThan(failure);
   await t.app.stop();
 });
+
+test('a message sent while disconnected waits in the visible queue, says why, and goes out on reconnect', async () => {
+  vi.useFakeTimers();
+  const t = await mount();
+  t.socket.drop();
+  t.submit('typed while offline');
+  expect(t.chats()).toEqual([]);
+  expect(t.screen()).toContain('⧗ queued 1 · typed while offline');
+  expect(t.screen()).toContain('not connected: sent when the connection is back');
+  // Not stuck in a turn that never started: Esc does not claim to stop anything.
+  t.key(ESC);
+  expect(t.screen()).not.toContain('Stopping the turn');
+  expect(t.sent('session.stop')).toEqual([]);
+  // The client reconnects with backoff; the held message goes out then.
+  vi.advanceTimersByTime(1000);
+  await Promise.resolve();
+  FakeSocket.latest().open();
+  expect(t.chats()).toEqual(['typed while offline']);
+  expect(t.screen()).not.toContain('⧗ queued');
+  await t.app.stop();
+});
+
+test('a turn cut by a disconnect does not stick, and a command typed offline says it was not sent', async () => {
+  const t = await mount();
+  t.submit('before the drop');
+  t.socket.event(wire.rootSpawned(t.sid(), 'root-1'));
+  t.socket.drop();
+  t.key(ESC);
+  expect(t.screen()).not.toContain('Stopping the turn');
+  expect(t.sent('agent.stop')).toEqual([]);
+  t.submit('/status');
+  expect(t.screen()).toContain('Not connected: /status was not sent');
+  await t.app.stop();
+});

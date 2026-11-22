@@ -4,10 +4,11 @@ import { OctipusTuiApp } from './app';
 import { StatusBar } from './components/status-bar';
 import type { AgentSessionEvent } from './gateway-adapter';
 
-const gateway = vi.hoisted(() => ({ listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn() }));
+const gateway = vi.hoisted(() => ({ listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn((..._args: unknown[]) => true) }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
   sendCommand = gateway.sendCommand;
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null }));

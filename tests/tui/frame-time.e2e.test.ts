@@ -18,9 +18,10 @@ import { installOctipusKeybindings } from '../../src/tui-pi/keybindings';
 const gateway = vi.hoisted(() => ({ listener: (_event: AgentSessionEvent) => {} }));
 vi.mock('../../src/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
-  sendCommand() {}
-  sendChat() {}
+  sendCommand() { return true; }
+  sendChat() { return true; }
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('../../src/core/gateway/cli-session', () => ({ readCliSession: () => null }));

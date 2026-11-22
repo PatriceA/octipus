@@ -29,6 +29,10 @@ export class QueuedMessages<Extra = unknown> implements Component {
   get size(): number { return this.items.length; }
   all(): readonly QueuedMessage<Extra>[] { return this.items; }
   push(item: QueuedMessage<Extra>): void { this.items.push(item); }
+  /** Put a message back at the front (it could not be sent). */
+  unshift(item: QueuedMessage<Extra>): void { this.items.unshift(item); }
+  /** What the queue waits for, for its help row: the running turn, or the connection. */
+  waitingFor: 'turn' | 'connection' = 'turn';
   /** The next message to send, removed from the queue. */
   shift(): QueuedMessage<Extra> | undefined { return this.items.shift(); }
   /** Remove and return one message (to edit it); the newest when no index is given. */
@@ -58,7 +62,9 @@ export class QueuedMessages<Extra = unknown> implements Component {
       return truncateToWidth(chalk.hex(p.accent)(label) + chalk.hex(p.fg)(displayLine(item.text)), width, '…');
     });
     if (this.items.length) {
-      rows.push(truncateToWidth(chalk.hex(p.dim)(`  sent when the turn ends · ${this.editKey()} or click: edit or remove · Esc: stop the turn`), width, ''));
+      rows.push(truncateToWidth(chalk.hex(p.dim)(this.waitingFor === 'connection'
+        ? `  not connected: sent when the connection is back · ${this.editKey()} or click: edit or remove`
+        : `  sent when the turn ends · ${this.editKey()} or click: edit or remove · Esc: stop the turn`), width, ''));
     }
     if (this.hint) rows.push(truncateToWidth(chalk.hex(p.warn)(this.hint), width, ''));
     return rows;

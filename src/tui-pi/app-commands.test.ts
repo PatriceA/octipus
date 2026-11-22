@@ -12,8 +12,8 @@ vi.mock('./image-attachments', () => ({ readClipboardImage: image.read, readImag
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
   uploadAttachments: vi.fn(),
   getSessionId: () => undefined as string | null | undefined,
 }));
@@ -24,6 +24,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   sendChat = gateway.sendChat;
   uploadAttachments = gateway.uploadAttachments;
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));
@@ -209,7 +210,7 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
   await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
     'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }], undefined, expect.any(String)));
   // The reply ends the turn; a message typed before it would wait in the queue.
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.', turnId: gateway.sendChat.mock.calls.at(-1)?.[5] });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.', turnId: gateway.sendChat.mock.calls.at(-1)?.[5] as string });
   t.submit('Next message');
   expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined, undefined, undefined, expect.any(String)]);
   await t.app.stop();

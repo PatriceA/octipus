@@ -395,9 +395,12 @@ export class OctipusTuiApp {
     const turn = this.turn;
     if (!turn) return;
     if (turn.stopping) { this.queue.setHint('Already stopping the turn…'); this.tui.requestRender(); return; }
+    const sent = turn.rootAgentId ? this.adapter.stopAgent(turn.rootAgentId) : this.adapter.stopSession(this.sessionId);
+    if (!sent) {
+      this.pushMessage('system', 'Error: Not connected: the turn could not be stopped. The server may still be running it; press Esc again once connected.');
+      return;
+    }
     turn.stopping = true;
-    if (turn.rootAgentId) this.adapter.stopAgent(turn.rootAgentId);
-    else this.adapter.stopSession(this.sessionId);
     this.pushMessage('system', 'Stopping the turn (Esc)…');
     const queued = this.queue.drain();
     if (queued.length) {
@@ -458,9 +461,28 @@ export class OctipusTuiApp {
   }
 
   private sendNextQueued(): void {
+    this.queue.waitingFor = this.adapter.isConnected() ? 'turn' : 'connection';
     const next = this.queue.shift();
     if (!next) return;
     this.sendNow(next.text, next.extra, 'queue');
+    this.tui.requestRender();
+  }
+
+  /**
+   * Send a gateway command; when it cannot go out (not connected), say so
+   * instead of waiting for an answer that never comes.
+   */
+  private command(name: string, args?: Record<string, string>): boolean {
+    if (this.adapter.sendCommand(name, args)) return true;
+    this.pushMessage('system', `Error: Not connected: /${name} was not sent. Run it again once the status bar says connected.`);
+    return false;
+  }
+
+  /** A message that could not go out: back to the front of the queue, sent when the connection is back. */
+  private holdForConnection(text: string, images: PendingImage[]): void {
+    this.queue.unshift({ text, extra: images });
+    this.queue.waitingFor = 'connection';
+    this.queue.setHint('Not connected: the message waits in the queue and goes out when the connection is back', 4000);
     this.tui.requestRender();
   }
 
@@ -540,8 +562,11 @@ export class OctipusTuiApp {
         }
         return {};
       case 'status':
-        if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
-        else this.forgetTurn();
+        if (event.status === 'connected') { this.queue.waitingFor = 'turn'; if (!this.turn) this.sendNextQueued(); }
+        else {
+          this.forgetTurn();
+          this.queue.waitingFor = 'connection';
+        }
         return {};
       default:
         return {};
@@ -695,7 +720,7 @@ export class OctipusTuiApp {
     switch (event.kind) {
       case 'status':
         // Reconnect bookkeeping (subagent reset, plan poll) lives in the presenter.
-        if (event.status === 'connected' && this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
+        if (event.status === 'connected' && this.resumePending) this.resumePending = !this.adapter.sendCommand('history');
         this.lastStatus = event.status;
         return;
       case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
@@ -809,18 +834,48 @@ export class OctipusTuiApp {
       this.tui.requestRender();
       return;
     }
+    // Not connected: a frame sent now is dropped by the socket. Hold it,
+    // visibly, and send it when the connection is back.
+    if (!this.adapter.isConnected()) {
+      this.queue.push({ text, extra: images });
+      this.queue.waitingFor = 'connection';
+      this.queue.setHint('Not connected: the message goes out when the connection is back', 4000);
+      this.tui.requestRender();
+      return;
+    }
     this.sendNow(text, images);
   }
 
   /** Send a chat message now; it starts the turn this client waits on. `queue` never steers a turn another tab started. */
   private sendNow(text: string, images: PendingImage[], mode?: 'queue'): void {
+    const turnId = randomUUID();
+    if (images.length) {
+      this.startTurn(text, turnId);
+      void this.sendWithImages(text, images, turnId, mode);
+      return;
+    }
+    if (!this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode, turnId)) { this.notSent(text, images); return; }
+    this.startTurn(text, turnId);
+  }
+
+  private startTurn(text: string, turnId: string): void {
     this.pushMessage('user', text);
     this.sessionUsed = true;
-    const turnId = randomUUID();
     this.turn = { rootAgentId: null, stopping: false, turnId };
     this.showState();
-    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), turnId, mode);
-    else this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode, turnId);
+  }
+
+  /**
+   * `sendChat` did not put the message on the wire. Disconnected: it waits in
+   * the queue for the connection. Connected: the client refused it (over the
+   * frame cap, and said so) — it goes back to the composer to shorten.
+   */
+  private notSent(text: string, images: PendingImage[]): void {
+    if (!this.adapter.isConnected()) { this.holdForConnection(text, images); return; }
+    const draft = this.composer.getText();
+    this.composer.setText(draft ? `${text}\n${draft}` : text);
+    this.pendingImages.push(...images);
+    this.tui.requestRender();
   }
 
   /**
@@ -829,11 +884,11 @@ export class OctipusTuiApp {
    * so its size cap does not limit the image. A session the server has not
    * seen yet is created by the upload, and the TUI continues in it.
    */
-  private async sendWithImages(text: string, images: ChatAttachment[], turnId: string, mode?: 'queue'): Promise<void> {
+  private async sendWithImages(text: string, images: PendingImage[], turnId: string, mode?: 'queue'): Promise<void> {
     const from = this.sessionId;
     let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
     try {
-      prepared = await this.adapter.uploadAttachments(from, images, text);
+      prepared = await this.adapter.uploadAttachments(from, images.map(image => image.attachment), text);
     } catch (error) {
       this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
       this.endTurn();
@@ -843,7 +898,11 @@ export class OctipusTuiApp {
     this.sessionId = prepared.sessionId;
     const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
     const refs = prepared.uploaded.map(file => ({ path: file.path }));
-    this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode, turnId);
+    if (this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode, turnId)) return;
+    // The connection went while uploading: the turn never started here.
+    if (this.turn?.turnId === turnId) { this.turn = null; this.showState(); }
+    this.pushMessage('system', 'Not sent yet: the connection went while the image uploaded.');
+    this.notSent(text, images);
   }
 
   private async attachImage(path?: string): Promise<void> {
@@ -1049,7 +1108,8 @@ export class OctipusTuiApp {
     this.sessionId = id;
     this.sessionUsed = true;
     this.session.reset();
-    this.adapter.sendCommand('history');
+    // Not connected: replayed on connect instead.
+    this.resumePending = !this.adapter.sendCommand('history');
   }
 
   /** `/sessions` or `/resume` alone: pick a session to resume; it opens at once and fills when the list arrives. */
@@ -1059,8 +1119,8 @@ export class OctipusTuiApp {
       this.resumeSession(row.id);
     }, sessionPreview, 'Loading sessions…');
     if (!list) return;
+    if (!this.adapter.sendCommand('sessions')) { list.setItems([], 'Not connected: the sessions cannot be listed now.'); return; }
     this.loading = { command: 'sessions', list };
-    this.adapter.sendCommand('sessions');
   }
 
   /** `/skills` alone: pick a skill, then how it is used. */
@@ -1068,12 +1128,12 @@ export class OctipusTuiApp {
     const list = this.openPicker<SkillRow>('Skills', [], skill => {
       this.openPicker('How to use: ' + skill.name, SKILL_MODES.map(entry => ({ value: entry.mode, label: entry.label, description: entry.description })), mode => {
         this.pushMessage('user', `/skills ${skillCommand(skill, mode)}`);
-        this.adapter.sendCommand('skills', { value: skillCommand(skill, mode) });
+        this.command('skills', { value: skillCommand(skill, mode) });
       });
     }, skill => `${skill.name}\nId: ${skill.id}\nNow: ${skill.mode}${skill.available ? '' : '\nNot available to you any more.'}\nEnter chooses Automatic, Always or This session.`, 'Loading skills…');
     if (!list) return;
+    if (!this.adapter.sendCommand('skills')) { list.setItems([], 'Not connected: the skills cannot be listed now.'); return; }
     this.loading = { command: 'skills', list };
-    this.adapter.sendCommand('skills');
   }
 
   /** The list a picker was waiting for arrived (or failed). */
@@ -1221,7 +1281,7 @@ export class OctipusTuiApp {
         return;
       }
       default:
-        this.adapter.sendCommand(name, args);
+        this.command(name, args);
     }
   }
 }

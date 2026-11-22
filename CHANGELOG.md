@@ -630,6 +630,13 @@ labels reflect blast radius, not contract guarantees.
   transcript, `/export` and the exit summary read user, user, reply. The turn
   now ends on its answer, after it is shown (or 5 s after the root finished if
   no answer comes).
+- **Terminal chat: nothing typed while disconnected is lost.** A message sent
+  while the gateway connection was down was dropped by the socket without a
+  word, and the chat then waited forever for its reply. It now waits in the
+  visible queue ("not connected: sent when the connection is back") and goes
+  out on reconnect; a command, a decision's answer or a stop that cannot be
+  sent says so. `GatewayClient`'s send methods return whether the frame went
+  out.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

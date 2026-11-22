@@ -8,10 +8,10 @@ import { installOctipusKeybindings } from './keybindings';
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
-  stopAgent: vi.fn(),
-  stopSession: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
+  stopAgent: vi.fn((..._args: unknown[]) => true),
+  stopSession: vi.fn((..._args: unknown[]) => true),
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
@@ -20,6 +20,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   stopAgent = gateway.stopAgent;
   stopSession = gateway.stopSession;
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));

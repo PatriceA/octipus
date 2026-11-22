@@ -9,8 +9,8 @@ import { parseSkillList, skillCommand } from './pickers';
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
   getSessionId: () => undefined as string | null | undefined,
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
@@ -20,6 +20,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   sendChat = gateway.sendChat;
   stopAgent() {}
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));

@@ -203,18 +203,21 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): void {
-    this.client.sendChat(sessionId, content, projectPath, fileRefs, mode, turnId);
+  /** False when the message did not go out (not connected, or over the frame cap — `onError` said why). */
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): boolean {
+    return this.client.sendChat(sessionId, content, projectPath, fileRefs, mode, turnId);
   }
 
+  isConnected(): boolean { return this.client.getStatus() === 'connected'; }
+
   /** Stop an agent of this user (the running turn's root, for Esc). */
-  stopAgent(agentId: string): void {
-    this.client.stopAgent(agentId);
+  stopAgent(agentId: string): boolean {
+    return this.client.stopAgent(agentId);
   }
 
   /** Stop this user's turn in one session — never their agents elsewhere (Esc before the root is known). */
-  stopSession(sessionId: string): void {
-    this.client.stopSession(sessionId);
+  stopSession(sessionId: string): boolean {
+    return this.client.stopSession(sessionId);
   }
 
   /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
@@ -222,16 +225,16 @@ export class GatewayAdapter {
     return this.client.uploadAttachments(sessionId, attachments, title);
   }
 
-  sendCommand(name: string, args?: Record<string, string>): void {
-    this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
+  sendCommand(name: string, args?: Record<string, string>): boolean {
+    return this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
   }
 
-  respondApproval(requestId: string, approved: boolean, response: string): void {
-    this.client.respondApproval(requestId, approved, response);
+  respondApproval(requestId: string, approved: boolean, response: string): boolean {
+    return this.client.respondApproval(requestId, approved, response);
   }
 
-  respondPermission(requestId: string, approved: boolean): void {
-    this.client.respondPermission(requestId, approved);
+  respondPermission(requestId: string, approved: boolean): boolean {
+    return this.client.respondPermission(requestId, approved);
   }
 
   // ── Internals ───────────────────────────────────────────────────

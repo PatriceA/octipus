@@ -110,6 +110,20 @@ describe('GatewayClient — session-scoped commands and dropped events', () => {
     ]);
   });
 
+  test('every send says whether the frame went out: false while the socket is not open', () => {
+    const { client, sent } = stubClient();
+    expect(client.sendChat('11111111-2222-4333-8444-555555555555', 'hi')).toBe(true);
+    (client as unknown as { ws: { readyState: number } }).ws.readyState = 3; // CLOSED
+    expect(client.sendChat('11111111-2222-4333-8444-555555555555', 'lost')).toBe(false);
+    expect(client.sendCommand('status')).toBe(false);
+    expect(client.stopAgent('a')).toBe(false);
+    expect(client.stopSession('11111111-2222-4333-8444-555555555555')).toBe(false);
+    expect(client.respondPermission('r', true)).toBe(false);
+    expect(client.respondApproval('r', true)).toBe(false);
+    expect(new GatewayClient({}).sendCommand('status')).toBe(false); // never connected
+    expect(sent).toHaveLength(1);
+  });
+
   test('events_dropped reaches the UI as an error instead of vanishing', () => {
     const errors: string[] = [];
     const client = new GatewayClient({ onError: (m) => errors.push(m) });
