@@ -95,6 +95,19 @@ describe('GatewayClient — session-scoped commands and dropped events', () => {
     expect(sent[0]).toEqual({ type: 'command', name: 'history', args: undefined, sessionId: '11111111-2222-4333-8444-555555555555' });
   });
 
+  test('sendChat carries a send mode only when asked, and stopAgent sends agent.stop', () => {
+    const { client, sent } = stubClient();
+    const sid = '11111111-2222-4333-8444-555555555555';
+    client.sendChat(sid, 'plain');
+    client.sendChat(sid, 'after the turn', undefined, undefined, 'queue');
+    client.stopAgent('agent-7');
+    expect(sent).toEqual([
+      { type: 'chat.send', sessionId: sid, content: 'plain' },
+      { type: 'chat.send', sessionId: sid, content: 'after the turn', mode: 'queue' },
+      { type: 'agent.stop', agentId: 'agent-7' },
+    ]);
+  });
+
   test('events_dropped reaches the UI as an error instead of vanishing', () => {
     const errors: string[] = [];
     const client = new GatewayClient({ onError: (m) => errors.push(m) });

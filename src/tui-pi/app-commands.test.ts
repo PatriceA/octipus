@@ -206,6 +206,8 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
   expect(gateway.uploadAttachments).toHaveBeenCalledWith(expect.any(String), [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }], 'What is in [image1]?');
   await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
     'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }]));
+  // The reply ends the turn; a message typed before it would wait in the queue.
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.' });
   t.submit('Next message');
   expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined]);
   await t.app.stop();

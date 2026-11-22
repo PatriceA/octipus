@@ -35,3 +35,16 @@ test('the footer is sticky rows, activity and composer above the status line, an
   expect(renderChatFooter(40, 2, parts)).toEqual([`${CURSOR_MARKER}typing`, 'status line']);
   for (const height of [1, 2, 3, 5, 12]) expect(new ChatFooter(parts, () => height).render(40).length).toBeLessThanOrEqual(height);
 });
+
+test('a click on a sticky row reaches the sticky component in its own row numbers', () => {
+  const clicks: number[] = [];
+  const sticky = { render: () => ['old 1', 'queued 2', 'queued 3'], invalidate() {}, handleMouse: (event: { y: number }) => { clicks.push(event.y); return { handled: true }; } };
+  const parts = { composer: fixed([`${CURSOR_MARKER}typing`]), activity: fixed([]), status: fixed(['status line']), sticky };
+  // 8 rows: the sticky budget is two rows, so the first sticky row is left out.
+  const footer = new ChatFooter(parts, () => 8);
+  expect(footer.render(40)).toEqual(['queued 2', 'queued 3', `${CURSOR_MARKER}typing`, 'status line']);
+  const event = { type: 'click' as const, button: 'left' as const, x: 2, screenX: 2, screenY: 0, width: 40, height: 4, shift: false, alt: false, ctrl: false };
+  expect(footer.handleMouse({ ...event, y: 1 })).toEqual({ handled: true });
+  expect(footer.handleMouse({ ...event, y: 2 })).toBeUndefined();
+  expect(clicks).toEqual([2]);
+});

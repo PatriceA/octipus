@@ -1,5 +1,5 @@
 import { fitStatusRows } from './status-bar';
-import { CURSOR_MARKER, type Component, truncateToWidth, frameRow } from '@/tui-kit';
+import { CURSOR_MARKER, type Component, truncateToWidth, frameRow, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
 
 export function cropComposer(lines: readonly string[], rows: number): string[] {
@@ -18,6 +18,9 @@ export interface ChatFooterParts {
   sticky?: Component;
 }
 
+/** Where the sticky rows ended up in the footer: the first `shown` rows, starting `skipped` rows into the component's own. */
+export interface StickyPlacement { shown: number; skipped: number }
+
 /** One rendered row is one terminal row no wider than the screen, whatever a component was handed. */
 const frameRows = (lines: readonly string[], width: number): string[] => lines.map(line => truncateToWidth(frameRow(line), width, ''));
 
@@ -31,7 +34,7 @@ const frameRows = (lines: readonly string[], width: number): string[] => lines.m
  * one row), then activity, subagents (up to a third), sticky rows, and the
  * rest of the status rows.
  */
-export function renderChatFooter(width: number, height: number, parts: ChatFooterParts, reserve = 0): string[] {
+export function renderChatFooter(width: number, height: number, parts: ChatFooterParts, reserve = 0, placement?: StickyPlacement): string[] {
   if (height <= 0 || width <= 0) return [];
   const status = parts.status?.render(width) ?? [];
   // On very short screens keep only the identity/connection line.
@@ -46,8 +49,15 @@ export function renderChatFooter(width: number, height: number, parts: ChatFoote
   const agents = (parts.subagents?.render(width) ?? []).slice(0, agentBudget);
   const stickyBudget = Math.max(0, Math.min(Math.floor(height / 4), remaining - composer.length - activity.length - agents.length - reserve));
   // The newest sticky rows (the end of the list) are the ones kept.
-  const sticky = stickyBudget > 0 ? (parts.sticky?.render(width) ?? []).slice(-stickyBudget) : [];
-  return frameRows([...sticky, ...activity, ...agents, ...composer, ...statusRows], width).slice(-height);
+  const allSticky = stickyBudget > 0 ? parts.sticky?.render(width) ?? [] : [];
+  const sticky = allSticky.slice(-stickyBudget);
+  const rows = frameRows([...sticky, ...activity, ...agents, ...composer, ...statusRows], width);
+  if (placement) {
+    const cut = Math.max(0, rows.length - height);
+    placement.shown = Math.max(0, sticky.length - cut);
+    placement.skipped = allSticky.length - sticky.length + Math.min(cut, sticky.length);
+  }
+  return rows.slice(-height);
 }
 
 /** The inline frame: exactly `height` rows, the transcript scrolled by the app above the footer. */
@@ -65,8 +75,15 @@ export function renderChatFrame(width: number, height: number, parts: ChatFooter
  * scrolling transcript, sized from the screen's height on every frame.
  */
 export class ChatFooter implements Component {
+  private readonly placement: StickyPlacement = { shown: 0, skipped: 0 };
   constructor(private readonly parts: ChatFooterParts, private readonly screenRows: () => number) {}
-  render(width: number): string[] { return renderChatFooter(width, this.screenRows(), this.parts, 1); }
+  render(width: number): string[] { return renderChatFooter(width, this.screenRows(), this.parts, 1, this.placement); }
+  /** Clicks on the sticky rows reach the sticky component, in its own row numbers. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const sticky = this.parts.sticky;
+    if (!sticky?.handleMouse || event.y >= this.placement.shown) return undefined;
+    return sticky.handleMouse({ ...event, y: event.y + this.placement.skipped });
+  }
   invalidate(): void {
     for (const part of [this.parts.composer, this.parts.activity, this.parts.subagents, this.parts.status, this.parts.sticky]) part?.invalidate();
   }

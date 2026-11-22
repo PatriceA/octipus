@@ -9,6 +9,7 @@ import type { MouseMode } from './settings';
 import { writeFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
+import { QueuedMessages } from './components/queued-messages';
 /**
  * OctipusTuiApp.
  *
@@ -79,7 +80,18 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.quit'] as const;
+
+type PendingImage = { marker: string; attachment: ChatAttachment };
+/** Two Escapes within this long, with no turn running, clear the draft. */
+const DOUBLE_ESCAPE_MS = 1500;
+
+/**
+ * The turn this client is waiting on: from the message it sent (or the root
+ * agent starting, for a turn another tab began) to its reply, an error or
+ * the root agent stopping. `rootAgentId` is what Esc stops.
+ */
+interface RunningTurn { rootAgentId: string | null; stopping: boolean }
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -124,7 +136,12 @@ export class OctipusTuiApp {
   private speakNextReply = false;
   /** Guards the async windows of toggleTalk (init / transcription) against re-entrant key presses. */
   private talkBusy = false;
-  private pendingImages: Array<{ marker: string; attachment: ChatAttachment }> = [];
+  private pendingImages: PendingImage[] = [];
+  /** Messages typed while a turn runs; the first goes out when it ends. */
+  private readonly queue = new QueuedMessages<PendingImage[]>(() => getKeybindings().getKeys('app.queue.edit').map(String).join(' / ') || 'Alt+E');
+  private turn: RunningTurn | null = null;
+  /** When the last Escape was pressed, for the double Escape that clears the draft. */
+  private lastEscape = 0;
   private imageBusy = false;
   private imageCounter = 0;
 
@@ -159,7 +176,9 @@ export class OctipusTuiApp {
     // The bar carries counters that have to stay readable — at the top it
     // scrolled off with the first screenful of output, which is exactly when
     // the numbers start being interesting.
-    const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents };
+    const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents, sticky: this.queue };
+    this.queue.onEdit = index => this.editQueued(index);
+    this.queue.onExpire = () => this.tui.requestRender();
     const rows = () => tui.terminal?.rows ?? 30;
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
@@ -204,6 +223,8 @@ export class OctipusTuiApp {
         return { consume: true };
       }
       if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
+      if (kb.matches(data, 'app.queue.edit') && this.queue.size) { this.editQueued(); return { consume: true }; }
+      if (matchesKey(data, 'escape') && !this.composer.isShowingAutocomplete()) return this.escape();
       if (this.transcript) return this.transcriptKey(this.transcript, data);
       if (this.messages.handleScrollInput(data)) {
         this.tui.requestRender();
@@ -220,6 +241,106 @@ export class OctipusTuiApp {
   async start(): Promise<void> {
     this.tui.start();
     await this.adapter.connect();
+  }
+
+  /**
+   * Escape with no overlay open: stop the running turn; with no turn running,
+   * a second Escape within `DOUBLE_ESCAPE_MS` clears the draft (the first one
+   * says so), so one stray key never loses what was typed.
+   */
+  private escape(): { consume: true } | undefined {
+    const now = Date.now();
+    const again = now - this.lastEscape < DOUBLE_ESCAPE_MS;
+    this.lastEscape = now;
+    if (this.turn) { this.interrupt(); return { consume: true }; }
+    if (!this.composer.getText()) return undefined;
+    if (again) {
+      this.composer.setText('');
+      this.pendingImages = [];
+      this.lastEscape = 0;
+      this.queue.setHint(null);
+    } else {
+      this.queue.setHint('Esc again to clear the draft', DOUBLE_ESCAPE_MS);
+    }
+    this.tui.requestRender();
+    return { consume: true };
+  }
+
+  /**
+   * Stop the running turn: `agent.stop` for its root agent, which also drops
+   * the turns the server queued behind it; the gateway's `/abort` (every
+   * running agent of this user) when the root is not known yet. Messages
+   * queued here come back to the composer instead of starting a new turn.
+   */
+  private interrupt(): void {
+    const turn = this.turn;
+    if (!turn) return;
+    if (turn.stopping) { this.queue.setHint('Already stopping the turn…'); this.tui.requestRender(); return; }
+    turn.stopping = true;
+    if (turn.rootAgentId) this.adapter.stopAgent(turn.rootAgentId);
+    else this.adapter.sendCommand('abort');
+    this.pushMessage('system', 'Stopping the turn (Esc)…');
+    const queued = this.queue.drain();
+    if (queued.length) {
+      const draft = this.composer.getText();
+      this.composer.setText([...queued.map(item => item.text), ...(draft ? [draft] : [])].join('\n'));
+      for (const item of queued) this.pendingImages.push(...item.extra);
+      this.queue.setHint(`${queued.length} queued message${queued.length === 1 ? ' is' : 's are'} back in the composer`, 3000);
+    }
+    this.tui.requestRender();
+  }
+
+  /** Take a queued message (the newest by default) back into the composer, ahead of what is typed there. */
+  private editQueued(index?: number): void {
+    const item = this.queue.take(index);
+    if (!item) return;
+    const draft = this.composer.getText();
+    this.composer.setText(draft ? `${item.text}\n${draft}` : item.text);
+    this.pendingImages.push(...item.extra);
+    this.queue.setHint('Edit and send it again, or clear it with Esc Esc', 3000);
+    this.tui.setFocus(this.composer);
+    this.tui.requestRender();
+  }
+
+  /** The turn is over (reply, error, stop): send the first queued message as the next one. */
+  private endTurn(): void {
+    if (!this.turn) return;
+    this.turn = null;
+    if (this.lastStatus === 'connected') this.sendNextQueued();
+  }
+
+  private sendNextQueued(): void {
+    const next = this.queue.shift();
+    if (!next) return;
+    this.sendNow(next.text, next.extra, 'queue');
+    this.tui.requestRender();
+  }
+
+  /** Track the running turn from the gateway's events. */
+  private trackTurn(event: AgentSessionEvent): void {
+    switch (event.kind) {
+      case 'agent.start':
+        if (event.subagent) return;
+        if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
+        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        return;
+      case 'message':
+        if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
+        return;
+      case 'agent.end':
+        if (this.turn && (event.nodeId === undefined || event.nodeId === this.turn.rootAgentId) && !this.subagents.has(event.nodeId)) this.endTurn();
+        return;
+      case 'agent.stopped':
+        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn();
+        return;
+      case 'error':
+        this.endTurn();
+        return;
+      case 'status':
+        if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
+        else this.turn = null;
+        return;
+    }
   }
 
   private quit(): void {
@@ -265,7 +386,7 @@ export class OctipusTuiApp {
   private hotkeysText(): string {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
-    rows.push(['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
+    rows.push(['Esc', 'Stop the running turn; with none running, twice clears the draft'], ['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
     if (this.transcript) rows.push(['Ctrl+Shift+F', 'Search the transcript'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
     const w = Math.max(...rows.map(([k]) => k.length));
     return `Hotkeys (override in ~/.octipus/keybindings.json):\n${rows.map(([k, d]) => `  ${k.padEnd(w)}  ${d}`).join('\n')}`;
@@ -302,6 +423,7 @@ export class OctipusTuiApp {
     this.exiting = true;
     this.activity.dispose();
     this.decisions.dispose();
+    this.queue.dispose();
     this.session.dispose();
     if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
@@ -346,6 +468,7 @@ export class OctipusTuiApp {
       this.speakNextReply = false;
       void this.voice?.say(event.content).catch(() => {});
     }
+    this.trackTurn(event);
     if (this.session.handleEvent(event)) return;
     switch (event.kind) {
       case 'status':
@@ -427,6 +550,7 @@ export class OctipusTuiApp {
       }
       case 'agent.write':
       case 'agent.edit':
+      case 'agent.stopped':
         return;
     }
   }
@@ -443,16 +567,29 @@ export class OctipusTuiApp {
     // The voice path re-arms it right after calling this.
     this.speakNextReply = false;
 
-    this.pushMessage('user', text);
-
     if (text.startsWith('/')) {
+      this.pushMessage('user', text);
       this.handleCommand(text.slice(1));
       return;
     }
-    this.sessionUsed = true;
-    const images = this.pendingImages.filter(image => text.includes(image.marker)).map(image => image.attachment);
+    const images = this.pendingImages.filter(image => text.includes(image.marker));
     this.pendingImages = [];
-    if (images.length) void this.sendWithImages(text, images);
+    // A turn is running: hold the message, visibly, until it ends.
+    if (this.turn) {
+      this.queue.push({ text, extra: images });
+      this.tui.requestRender();
+      return;
+    }
+    this.sendNow(text, images);
+  }
+
+  /** Send a chat message now; it starts the turn this client waits on. `queue` never steers a turn another tab started. */
+  private sendNow(text: string, images: PendingImage[], mode?: 'queue'): void {
+    this.pushMessage('user', text);
+    this.sessionUsed = true;
+    this.turn = { rootAgentId: null, stopping: false };
+    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), mode);
+    else if (mode) this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode);
     else this.adapter.sendChat(this.sessionId, text, this.projectPath);
   }
 
@@ -462,19 +599,22 @@ export class OctipusTuiApp {
    * so its size cap does not limit the image. A session the server has not
    * seen yet is created by the upload, and the TUI continues in it.
    */
-  private async sendWithImages(text: string, images: ChatAttachment[]): Promise<void> {
+  private async sendWithImages(text: string, images: ChatAttachment[], mode?: 'queue'): Promise<void> {
     const from = this.sessionId;
     let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
     try {
       prepared = await this.adapter.uploadAttachments(from, images, text);
     } catch (error) {
       this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
+      this.endTurn();
       return;
     }
     if (this.sessionId !== from) return; // switched sessions while uploading
     this.sessionId = prepared.sessionId;
     const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
-    this.adapter.sendChat(prepared.sessionId, content, this.projectPath, prepared.uploaded.map(file => ({ path: file.path })));
+    const refs = prepared.uploaded.map(file => ({ path: file.path }));
+    if (mode) this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode);
+    else this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs);
   }
 
   private async attachImage(path?: string): Promise<void> {
@@ -700,6 +840,8 @@ export class OctipusTuiApp {
         }
         this.sessionBeforeResume = this.sessionId;
         this.pendingImages = [];
+        this.turn = null;
+        if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
         this.sessionId = id;
         this.sessionUsed = true;
         this.session.reset();

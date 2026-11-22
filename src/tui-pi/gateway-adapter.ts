@@ -9,6 +9,7 @@
  * `kind` without re-parsing payload shapes.
  */
 import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
+import type { SendMode } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -47,6 +48,8 @@ export type AgentSessionEvent =
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
+  /** An agent was stopped on request (`agent.stop`, Esc). */
+  | { kind: 'agent.stopped';  agentId: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
   | { kind: 'identity';       user: string | null }
@@ -155,8 +158,14 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
-    this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
+    if (mode) this.client.sendChat(sessionId, content, projectPath, fileRefs, mode);
+    else this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  }
+
+  /** Stop an agent of this user (the running turn's root, for Esc). */
+  stopAgent(agentId: string): void {
+    this.client.stopAgent(agentId);
   }
 
   /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
@@ -292,6 +301,12 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         kind: 'message', role: 'system',
         content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
       });
+      return out;
+    }
+
+    case 'agent.stopped': {
+      const agentId = pickString(payload, 'agentId');
+      if (agentId) out.push({ kind: 'agent.stopped', agentId });
       return out;
     }
 
