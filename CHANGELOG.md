@@ -16,7 +16,8 @@ labels reflect blast radius, not contract guarantees.
     planning reply and retry respawns are exempt, with the reason in the docs.
   - A passage is shown when it is similar enough, covers most of the
     message's distinctive words, or contains an identifier from it (an
-    invoice number, a version, an error code); a keyword match no longer
+    invoice number, a version, an error code; not a year, time, amount or
+    date); a keyword match no longer
     bypasses the bar. A follow-up ("Enterprise?", "and for enterprise?") is
     searched together with the previous typed message; an acknowledgement
     ("ok", "thanks", "yes please") is never searched. A long message keeps

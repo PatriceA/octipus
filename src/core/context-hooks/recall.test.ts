@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  buildRecallQuery, carriesSubject, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isAcknowledgement, isDistinctive,
+  buildRecallQuery, carriesSubject, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isAcknowledgement, isDistinctive, isIdentifier,
   lexicalCoverage, MAX_QUERY_CHARS, messageIdentifiers, type QualifiedBy, qualifyHit, queryTerms, relativeCut, searchesWithPreviousMessage,
   skipsShortMessage,
 } from './recall';
@@ -21,9 +21,37 @@ describe('distinctive lexemes', () => {
 });
 
 describe('identifiers', () => {
-  test('tokens of four characters or more with a digit, taken whole from the text', () => {
-    expect(messageIdentifiers('What was on invoice INV-2024-118? And v2.3.1, E1234, 3pm, 12 or (2024).')).toEqual(['inv-2024-118', 'v2.3.1', 'e1234', '2024']);
+  test('references, taken whole from the text; years, times and short numbers are not', () => {
+    expect(messageIdentifiers('What was on invoice INV-2024-118? And v2.3.1, E1234, 3pm, 12 or (2024).')).toEqual(['inv-2024-118', 'v2.3.1', 'e1234']);
     expect(messageIdentifiers('what do we charge for a website')).toEqual([]);
+    // The reproduced case: a year in the question made a shopping list "2024" qualify.
+    expect(messageIdentifiers('What did we decide in the 2024 planning meeting about hiring?')).toEqual([]);
+    expect(messageIdentifiers('Where is PO 4500012345?')).toEqual(['4500012345']);
+  });
+
+  // What a person would call a reference, and what only holds a digit.
+  const accepted = [
+    'INV-2024-118', 'v2.3.1', 'E1234', '4500012345', '123456', 'sha256', 'h264', 'a1b2', 'ERR_404', 'PO-4500', 'OCT-142',
+    'ISO-9001', '2.3.1', '10.0.0.1', 'AB12CD34', 'x86-64-v3', 'KB5034441', 'ticket#9912',
+  ];
+  const rejected = [
+    // years, amounts, short numbers
+    '2024', '1500', '12345', '2,400', '1,500,000', '1.500.000', '1.500', '€1500',
+    // times, dates
+    '10:30', '10:30:15', '10am', '3pm', '2024-03-01', '01/03/2024', '1.3.2024', '1/3/24', '12/25',
+    // ordinals, units, decades
+    '1st', '22nd', '103rd', '1500mb', '100km', '2024s',
+    // short word-digit names
+    'covid-19', 'covid19', 'web3', 'windows11', 'mp3', 'x86', 'v2', 'top-10', 'B2B', 'g20',
+    // starts with a number, holds letters
+    '3-d', '10-k', '24/7',
+  ];
+  test.each(accepted)('%s is an identifier', (token) => {
+    expect(isIdentifier(token)).toBe(true);
+    expect(messageIdentifiers(`about ${token}?`)).toEqual([token.toLowerCase()]);
+  });
+  test.each(rejected)('%s is not an identifier', (token) => {
+    expect(isIdentifier(token)).toBe(false);
   });
 
   test('a passage holds an identifier only as a whole token', () => {

@@ -49,17 +49,86 @@ export function lexicalCoverage(distinctive: readonly string[], matched: readonl
   return { covered, of: distinctive.length, share: distinctive.length ? covered / distinctive.length : 0 };
 }
 
+/** A bare number this long is a reference (an order, an account, a phone number), not an amount or a year. */
+export const MIN_BARE_NUMBER_DIGITS = 6;
+/** A word and a number this short make a name (`covid-19`, `windows11`), not a reference. */
+const MIN_REFERENCE_DIGITS = 3;
+
+const ALL_DIGITS = /^\p{N}+$/u;
+const digitCount = (s: string) => (s.match(/\p{N}/gu) ?? []).length;
+
 /**
- * The identifiers in a message: tokens of four characters or more holding a
- * digit (`INV-2024-118`, `v2.3.1`, `E1234`, `2024`). Taken from the text, not
- * from the lexemes: the English parser splits `INV-2024-118` into `inv`,
- * `-2024` and `-118`, and a passage with `INV-2024-117` shares two of those.
+ * Whether one token (trimmed of surrounding punctuation) is something a
+ * person would call a reference: what a passage holding it is about, whatever
+ * else it says. Holding a digit is not enough: years, times, amounts, dates,
+ * ordinals and names like `covid-19` hold digits and are in passages about
+ * anything.
+ *
+ *   - a number of MIN_BARE_NUMBER_DIGITS digits or more (`4500012345`);
+ *   - letters and digits in one word, four characters or more, with at least
+ *     MIN_REFERENCE_DIGITS digits or letters and digits alternating more than
+ *     once (`E1234`, `sha256`, `a1b2`); not a number with a short unit or
+ *     ordinal after it (`10am`, `1500mb`, `22nd`, `2024s`);
+ *   - groups joined by `-`, `.`, `/`, `_`, `:` or `#`: starting with a letter,
+ *     three groups or more, or MIN_REFERENCE_DIGITS digits or more
+ *     (`INV-2024-118`, `v2.3.1`, `PO-4500`, `ERR_404`); all digits, three
+ *     groups or more (`2.3.1`, `10.0.0.1`), unless it is a date
+ *     (`2024-03-01`, `01/03/2024`, `1.3.2024`), a time (`10:30:15`) or a
+ *     thousands grouping (`1,500,000`, `1.500.000`).
+ *
+ * Accepted and rejected cases are listed in recall.test.ts.
+ */
+export function isIdentifier(token: string): boolean {
+  const t = token.toLowerCase();
+  if (!HAS_DIGIT.test(t)) return false;
+  const groups = t.split(/[-./_:#,]+/u).filter(Boolean);
+  if (groups.length === 0) return false;
+  if (groups.length === 1) {
+    const word = groups[0];
+    if (ALL_DIGITS.test(word)) return word.length >= MIN_BARE_NUMBER_DIGITS;
+    if (!/^[\p{L}\p{N}]+$/u.test(word) || [...word].length < 4) return false;
+    // A number and a short unit or ordinal: 10am, 3pm, 1500mb, 22nd, 2024s.
+    const unit = word.match(/^\p{N}+(\p{L}+)$/u);
+    if (unit && [...unit[1]].length <= 3) return false;
+    const runs = word.match(/\p{N}+|\p{L}+/gu) ?? [];
+    return digitCount(word) >= MIN_REFERENCE_DIGITS || runs.length > 2;
+  }
+  // Separated groups. A comma only ever groups thousands or lists.
+  if (t.includes(',')) return false;
+  if (/^\p{L}/u.test(groups[0])) {
+    return groups.length >= 3 || digitCount(t) >= MIN_REFERENCE_DIGITS;
+  }
+  if (!groups.every((g) => ALL_DIGITS.test(g))) {
+    // Starts with a digit, holds letters: `3-d`, `10-k`, `2fa-code`. A reference only when long and number-heavy.
+    return digitCount(t) >= MIN_BARE_NUMBER_DIGITS;
+  }
+  if (groups.length < 3) return false;
+  if (t.includes(':')) return false;
+  // 1.500.000 (thousands with dots).
+  if (groups[0].length <= 3 && groups.slice(1).every((g) => g.length === 3)) return false;
+  if (groups.length === 3) {
+    const lengths = groups.map((g) => g.length);
+    const year = lengths.indexOf(4);
+    const short = (n: number) => n <= 2;
+    // 2024-03-01, 01/03/2024, 1.3.2024, 1/3/24.
+    if (year === 0 && short(lengths[1]) && short(lengths[2])) return false;
+    if (year === 2 && short(lengths[0]) && short(lengths[1])) return false;
+    if (t.includes('/') && lengths.every((n) => n <= 4)) return false;
+  }
+  return true;
+}
+
+/**
+ * The identifiers in a message (`isIdentifier`), lower case, once each.
+ * Taken from the text, not from the lexemes: the English parser splits
+ * `INV-2024-118` into `inv`, `-2024` and `-118`, and a passage with
+ * `INV-2024-117` shares two of those.
  */
 export function messageIdentifiers(text: string): string[] {
   const out = new Set<string>();
   for (const raw of text.split(/\s+/)) {
     const token = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
-    if ([...token].length >= 4 && HAS_DIGIT.test(token)) out.add(token.toLowerCase());
+    if (isIdentifier(token)) out.add(token.toLowerCase());
   }
   return [...out];
 }

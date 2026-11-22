@@ -85,8 +85,17 @@ rules:
    distinctive words, and at least two of them. When the query has an
    embedding the passage also needs a cosine of at least 0.6 × `minSimilarity`.
 3. **Identifier**: it contains, as a whole token, an identifier from the
-   query: a token of four characters or more holding a digit (an invoice
-   number such as `INV-2024-118`, a version, an error code, a year).
+   query: something a person would call a reference. Letters and digits in
+   one word with at least three digits (`E1234`, `sha256`); groups joined by
+   `-`, `.`, `/`, `_`, `:` or `#` that start with a letter and have three
+   groups or three digits (`INV-2024-118`, `v2.3.1`, `PO-4500`); three digit
+   groups or more (`2.3.1`, `10.0.0.1`); a bare number of six digits or more
+   (`4500012345`). Not a year, a time, an amount, a date, an ordinal or a
+   name like `covid-19`: those hold digits but turn up in passages about
+   anything. A ticket key with two digits (`OCT-42`) is not one either; it
+   shares its shape with `covid-19`. An identifier match needs no cosine:
+   cosine scales differ per embedding model, and the exact reference is the
+   stronger evidence.
 
 "Distinctive" is four characters or more, or holding a digit. It stands in for
 a stopword list, since the keyword index uses the English text-search

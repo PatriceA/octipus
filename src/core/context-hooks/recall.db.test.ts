@@ -151,6 +151,13 @@ describe('which passages qualify', () => {
     expect(record.items[0].score).toBeLessThan(0.45);
   });
 
+  test('a year in the question is not an identifier: a passage holding it does not qualify on it', async () => {
+    await chunk('Shopping list 2024', 'Shopping list 2024: eggs, milk, bread, coffee beans and dish soap.');
+    const { text } = await run('What did we decide in the 2024 planning meeting about hiring?');
+    expect(text).not.toContain('Shopping list');
+    expect(await lastRecord()).toMatchObject({ status: 'abstained', reason: 'nothing_relevant' });
+  });
+
   test('a short message of common words that matches every keyword of an unrelated passage is not injected', async () => {
     // The old rule kept any keyword match whatever its similarity: "try" and "one" are both in this passage.
     await chunk('Logo feedback', 'Try one of the three logo drafts first; the client liked the blue one best, and the bakery wants the final files by Friday.');
