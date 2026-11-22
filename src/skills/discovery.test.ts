@@ -487,3 +487,18 @@ test('topic skill ids and the skill rows a prompt is built from come back in a s
   const { skillRepository } = await import('@/db/repositories/skill-repository');
   expect((await skillRepository.findByIds(['order-c', 'order-a', 'order-b'])).map(row => row.id)).toEqual(['order-a', 'order-b', 'order-c']);
 });
+
+// An archived skill is "hidden from discovery" (skills.archived_at), but the
+// hybrid sets never filtered on it: a curator-archived assigned skill kept
+// being listed in every worker's index for its role.
+test('an archived assigned skill is not discovered by any set', async () => {
+  await seedSkill({ id: 'archived-always', alwaysInject: true, triggers: ['deploy'], embedding: VEC_A });
+  await seedSkill({ id: 'archived-stale', embedding: null });
+  await getDb().update(skills).set({ archivedAt: new Date() }).where(eq(skills.id, 'archived-always'));
+  await getDb().update(skills).set({ archivedAt: new Date() }).where(eq(skills.id, 'archived-stale'));
+  currentEmbedding = VEC_A;
+  const { discoverSkillIds } = await import('./discovery');
+  const ids = await discoverSkillIds({ topic: TEST_TOPIC, message: 'deploy it', minSimilarity: 0.5 });
+  expect(ids).not.toContain('archived-always');
+  expect(ids).not.toContain('archived-stale');
+});

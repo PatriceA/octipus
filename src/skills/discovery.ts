@@ -6,7 +6,7 @@
  * failures degrade to empty sets with loud error logs.
  *
  * Algorithm: union four candidate sets, all filtered to active assignments
- * for `opts.topic`:
+ * for `opts.topic` and to skills that are not archived:
  *   1. always-inject rows
  *   2. trigger substring match (case-insensitive) against opts.message
  *   3. vector similarity (top-k filtered by minSimilarity), if embedding
@@ -112,6 +112,7 @@ async function fetchAlwaysInjectIds(topic: string): Promise<string[]> {
         eq(skillTopicAssignments.topic, topic),
         eq(skillTopicAssignments.isActive, true),
         eq(skills.alwaysInject, true),
+        isNull(skills.archivedAt),
       ),
     );
   return rows.map(r => r.id);
@@ -132,6 +133,7 @@ async function fetchTriggerMatchIds(topic: string, message: string): Promise<str
       and(
         eq(skillTopicAssignments.topic, topic),
         eq(skillTopicAssignments.isActive, true),
+        isNull(skills.archivedAt),
       ),
     );
 
@@ -192,6 +194,7 @@ async function fetchVectorMatchIds(
       and(
         eq(skillTopicAssignments.topic, topic),
         eq(skillTopicAssignments.isActive, true),
+        isNull(skills.archivedAt),
         isNotNull(skills.descriptionEmbedding),
       ),
     )
@@ -214,6 +217,7 @@ async function fetchStaleFallbackIds(topic: string): Promise<string[]> {
       and(
         eq(skillTopicAssignments.topic, topic),
         eq(skillTopicAssignments.isActive, true),
+        isNull(skills.archivedAt),
         isNull(skills.descriptionEmbedding),
       ),
     );
