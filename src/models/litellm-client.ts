@@ -306,6 +306,18 @@ export function createThinkStreamFilter() {
 }
 
 /**
+ * The chunks of an SDK stream, with a failure after the first one (a reset
+ * socket, an error event sent mid-stream) classified like one before it.
+ */
+async function* classifiedChunks<T>(chunks: AsyncIterable<T>, provider: string): AsyncGenerator<T> {
+  try {
+    yield* chunks;
+  } catch (err) {
+    throw classifyError(err, provider);
+  }
+}
+
+/**
  * Client for LiteLLM proxy - provides unified API for all LLM providers
  */
 /** Measured: deepseek-v4.1-flash reasons 1.6k–2.6k tokens before a 300-token JSON answer. */
@@ -773,7 +785,7 @@ export class LiteLLMClient {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     const think = createThinkStreamFilter();
 
-    for await (const chunk of stream) {
+    for await (const chunk of classifiedChunks(stream, 'litellm')) {
       if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 

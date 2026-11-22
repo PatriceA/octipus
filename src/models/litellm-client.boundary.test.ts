@@ -405,6 +405,24 @@ describe('streaming over the wire', () => {
     expect((error as ClassifiedError).retryAfterMs).toBe(3_000);
   });
 
+  test('a connection reset mid-stream delivers what arrived, then a classified network failure', async () => {
+    proxy.enqueue(sse([chatChunk({ content: 'partial ' }), chatChunk({ content: 'answer' })], { then: 'reset' }));
+    const { chunks, error } = await drain(clientWith().streamViaProxy({ model: 'gpt-4o', messages: hi }));
+    expect(chunks.map(c => c.content).join('')).toBe('partial answer');
+    expect(error).toBeInstanceOf(ClassifiedError);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect((error as ClassifiedError).providerHint).toBe('litellm');
+    expect(usageLog).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ incomplete: true }) })]);
+  });
+
+  test('an error event the proxy sends mid-stream is classified', async () => {
+    proxy.enqueue(sse([chatChunk({ content: 'so far' }), { error: { message: 'litellm.InternalServerError: upstream error', type: 'server_error' } }], { done: false }));
+    const { chunks, error } = await drain(clientWith().streamViaProxy({ model: 'gpt-4o', messages: hi }));
+    expect(chunks).toEqual([{ content: 'so far' }]);
+    expect(error).toBeInstanceOf(ClassifiedError);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.PROVIDER_DOWN);
+  });
+
   test('stream() on a direct provider that fails before its first chunk is sent to the proxy under the same model id', async () => {
     registryDouble.add(modelRow({
       provider: 'custom-openai', modelId: 'gateway-only', endpoint: proxy.url, apiKeyRef: 'env:BOUNDARY_GATEWAY_KEY',
