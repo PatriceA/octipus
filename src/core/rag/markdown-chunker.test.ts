@@ -125,4 +125,23 @@ describe('splitParagraphs', () => {
     expect(splitParagraphs(run, 100)).toEqual(['x'.repeat(100), 'x'.repeat(100), 'x'.repeat(50)]);
     expect(splitParagraphs(`short\n\n${run}`, 100, 60)[0]).toBe('short');
   });
+
+  test('a table too long for one piece is split between rows, each piece under its header', () => {
+    const header = '| Item | Note | Qty |\n| --- | --- | ---: |';
+    // "approx. 5" holds a sentence end: cutting there split a row in two.
+    const rows = Array.from({ length: 30 }, (_, i) => `| part ${i} | approx. ${i} units in stock | ${i} |`);
+    const table = `${header}\n${rows.join('\n')}`;
+    const pieces = splitParagraphs(`Inventory:\n\n${table}`, 300);
+    const tablePieces = pieces.filter((p) => p.includes('| part '));
+    expect(tablePieces.length).toBeGreaterThan(1);
+    for (const piece of tablePieces) {
+      const body = piece.slice(piece.indexOf(header));
+      expect(body.startsWith(header)).toBe(true);
+      expect(piece.length).toBeLessThanOrEqual(300);
+      // Whole rows only.
+      for (const line of body.split('\n')) expect(line).toMatch(/^\|.*\|$/);
+    }
+    // Every row once, in order.
+    expect(tablePieces.flatMap((p) => p.split('\n').filter((l) => l.startsWith('| part ')))).toEqual(rows);
+  });
 });

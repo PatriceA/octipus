@@ -206,12 +206,45 @@ export function splitParagraphs(text: string, max: number, firstMax = max): stri
       continue;
     }
     pushCurrent();
-    for (const piece of splitLong(para, max, limit())) {
+    for (const piece of isMarkdownTable(para) ? splitTable(para, max, limit()) : splitLong(para, max, limit())) {
       if (current) pushCurrent();
       current = piece;
     }
   }
   pushCurrent();
+  return out;
+}
+
+/** A paragraph that is one Markdown table: every line a `|` row, the second the `---` separator. */
+function isMarkdownTable(para: string): boolean {
+  const lines = para.trim().split('\n');
+  return lines.length >= 3 && lines.every((l) => /^\|.*\|\s*$/.test(l)) && /^\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[1]);
+}
+
+/**
+ * A table longer than `max` in pieces of whole rows, each opening with the
+ * header row and separator. Cut as prose, a table split at a sentence end
+ * inside a cell, and every piece after the first was a run of values with no
+ * column names — numbers a reader cannot place. A single row longer than a
+ * piece stays whole: half a row is worse than a long chunk.
+ */
+function splitTable(para: string, max: number, firstMax: number): string[] {
+  const [head, separator, ...rows] = para.trim().split('\n');
+  const header = `${head}\n${separator}`;
+  const out: string[] = [];
+  let current = header;
+  let hasRows = false;
+  for (const row of rows) {
+    const room = out.length === 0 ? firstMax : max;
+    if (hasRows && current.length + 1 + row.length > room) {
+      out.push(current);
+      current = header;
+      hasRows = false;
+    }
+    current += `\n${row}`;
+    hasRows = true;
+  }
+  if (hasRows) out.push(current);
   return out;
 }
 
