@@ -54,7 +54,10 @@ export type AgentSessionEvent =
   | { kind: 'login_required'; reason: string }
   | { kind: 'tool';           tool: ToolEventState; agentId?: string }
   | { kind: 'command.result'; name: string; result: unknown; error?: string; data?: unknown }
+  /** The agent proposes the whole new text of a file. */
   | { kind: 'agent.write';    path: string; newText: string }
+  /** The agent replaces `oldText` with `newText` somewhere in a file (`str_replace`, `edit`): a fragment, not the file. */
+  | { kind: 'agent.edit';     path: string; oldText: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
   | { kind: 'error';          message: string };
 
@@ -417,7 +420,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const preview = pickString(data, 'title') ?? summarizeToolArgs(name, args);
         out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer } });
         const write = extractAgentWrite(name, args);
-        if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
+        if (write) out.push(write);
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
         const isError = Boolean(data.error || data.isError);
@@ -548,25 +551,30 @@ function summarizeResultPreview(result: Record<string, unknown> | undefined): st
 const WRITE_TOOL_NAMES = new Set(['write_file', 'write', 'edit', 'apply_patch', 'str_replace_editor']);
 
 /**
- * Recognise write-style tool calls and pull out the proposed text.
- * Returns null when the tool isn't a known editor write or required
- * fields are missing.
+ * Recognise write-style tool calls and pull out what they propose: the whole
+ * new text of a file (`agent.write`), or a replacement of one fragment by
+ * another (`agent.edit`). Returns null when the tool isn't a known editor
+ * write or the call does not say enough to know either.
+ *
+ * A fragment is never reported as the file: `str_replace_editor`'s `new_str`
+ * replaces `old_str`, and treating it as the new file made the editor offer
+ * to replace the whole file with it. An insert (`new_str` at a line) or a
+ * lone `replacement` names no text to replace and is left out.
  *
  * Conservative on purpose: keeps the diff overlay from triggering on
- * unrelated tool calls (read_file, bash). Extensions can broaden the
- * set in Phase 7 once the registration API exists.
+ * unrelated tool calls (read_file, bash).
  */
-function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): { path: string; newText: string } | null {
+export function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): Extract<AgentSessionEvent, { kind: 'agent.write' | 'agent.edit' }> | null {
   if (!args) return null;
   if (!WRITE_TOOL_NAMES.has(toolName)) return null;
   const path = pickString(args, 'path') ?? pickString(args, 'file_path') ?? pickString(args, 'filename');
   if (!path) return null;
-  const newText = pickString(args, 'content')
-    ?? pickString(args, 'text')
-    ?? pickString(args, 'new_str')
-    ?? pickString(args, 'replacement');
-  if (newText === undefined) return null;
-  return { path, newText };
+  const whole = pickString(args, 'content') ?? pickString(args, 'text') ?? pickString(args, 'file_text');
+  if (whole !== undefined) return { kind: 'agent.write', path, newText: whole };
+  const oldText = pickString(args, 'old_str') ?? pickString(args, 'old_string');
+  const newText = pickString(args, 'new_str') ?? pickString(args, 'new_string');
+  if (oldText !== undefined && newText !== undefined) return { kind: 'agent.edit', path, oldText, newText };
+  return null;
 }
 
 const ARG_PREVIEW_MAX = 80;

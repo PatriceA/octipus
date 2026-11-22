@@ -426,6 +426,7 @@ export class OctipusTuiApp {
         return;
       }
       case 'agent.write':
+      case 'agent.edit':
         return;
     }
   }

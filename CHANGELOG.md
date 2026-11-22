@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: an agent's `str_replace` edit no longer offers to
+  replace the whole file with the fragment.** The chat adapter reported
+  `str_replace_editor`'s `new_str` as the file's new text, so the editor's
+  diff showed the file reduced to the replacement. A fragment edit is now its
+  own event (`agent.edit`: old and new fragment), which the editor does not
+  review yet; `create` (`file_text`) and whole-file writes are reviewed as
+  before.
 - **Terminal chat and editor run on the alternate screen; drag selects
   without Shift.** `octi tui` and `octi edit` now open on the terminal's
   alternate screen. What you had in the terminal before launch survives —
