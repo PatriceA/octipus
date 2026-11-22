@@ -86,4 +86,11 @@ export interface ContextHookResult {
    * waits for it; a block it fails for is left out.
    */
   commit?: () => Promise<void>;
+  /**
+   * Recall: the passages to count as read once the block is shown
+   * (`recordAccess`). Counted by `runContextHooks`, or, for a start that can
+   * still be refused after its hooks (`accessOnStart`), by `bindTurnToAgent`
+   * once the agent exists.
+   */
+  access?: string[];
 }

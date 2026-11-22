@@ -194,7 +194,12 @@ document's level and counts an access on the passage. Both happen only for a
 block that is actually shown: after the deadline and the shared budget, and
 before the agent starts (the session must hold the level of what it was given
 before it can pass it on). A block dropped for the budget, or a hook that
-timed out and finishes later, leaves nothing behind but its run record. When
+timed out and finishes later, leaves nothing behind but its run record. A
+specialist or a swarm child can still be refused after its hooks ran (the
+concurrency limit, a quota, the space check): its passages count as read only
+once the agent has started, but the level stays raised, since it has to be
+raised before the model is chosen and raising it for a passage no model saw
+is the safe direction. When
 raising the level fails or is not done by the start deadline, the block is
 left out (`error`, `commit_failed`) and its tokens go back to the shared
 budget: a later block left out for the budget is considered again. The

@@ -61,6 +61,8 @@ export interface ContextTurnHandle {
   shown: Array<{ excerpt: string; query: string }>;
   /** The record's write (`runContextHooks` does not wait for it); false when it failed. Absent: written. */
   recorded?: Promise<boolean>;
+  /** Passages shown but not yet counted as read (`accessOnStart`): `bindTurnToAgent` counts them. */
+  pendingAccess?: string[];
 }
 
 export interface ContextHooksOutcome {
@@ -93,6 +95,15 @@ export async function runContextHooks(
      * slow read costs the turn no more than the hook may.
      */
     previousMessage?: string | (() => Promise<string | undefined>);
+    /**
+     * Count the shown passages as read only when the agent has started
+     * (`bindTurnToAgent`), not here: for a start that can still be refused
+     * after its hooks (the concurrency limit, a quota, the space check of the
+     * spawn). The protection level is raised here either way: the model is
+     * chosen after it, and raising it for a passage no model saw is the safe
+     * direction.
+     */
+    accessOnStart?: boolean;
   },
 ): Promise<ContextHooksOutcome> {
   const settings = getConfig().contextHooks;
@@ -110,7 +121,7 @@ export async function runContextHooks(
     return NONE;
   }
   if (hooks.length === 0) return NONE;
-  const { previousMessage, ...hookInput } = input;
+  const { previousMessage, accessOnStart, ...hookInput } = input;
   let previous: Promise<string | undefined> | undefined;
   const previousFor = (): Promise<string | undefined> =>
     (previous ??= typeof previousMessage === 'function' ? previousMessage() : Promise.resolve(previousMessage));
@@ -182,8 +193,10 @@ export async function runContextHooks(
   const citable: ContextHookItem[] = [];
   let injectedItems = 0;
   const shown: ContextTurnHandle['shown'] = [];
+  const access: string[] = [];
   for (const { hook, latencyMs, result } of kept) {
     if (result.status === 'injected' && result.text) {
+      if (result.access) access.push(...result.access);
       texts.push(result.text);
       repeatable.push(result.repeatable ?? result.text);
       labelledBlocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
@@ -225,7 +238,11 @@ export async function runContextHooks(
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
     return false;
   });
-  const turn: ContextTurnHandle = { id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable, shown, recorded };
+  const turn: ContextTurnHandle = {
+    id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable, shown, recorded,
+    ...(accessOnStart && access.length ? { pendingAccess: access } : {}),
+  };
+  if (!accessOnStart) countAccess(access);
   return { text, blocks: texts.filter(Boolean), labelledBlocks, repeatable, turn };
 }
 
@@ -237,6 +254,17 @@ export function bindTurnToAgent(turn: ContextTurnHandle | null, agentId: string)
   if (!turn) return;
   turn.usageKey = agentUsageKey(agentId);
   turn.startUse = toolUseSnapshot(turn.usageKey);
+  // The agent exists: what it was shown counts as read, once (a retry binds again).
+  if (turn.pendingAccess) countAccess(turn.pendingAccess);
+  delete turn.pendingAccess;
+}
+
+/** Count recall passages as read (LFU retention). Fire and forget, as `recordAccess` is. */
+function countAccess(ids: string[]): void {
+  if (!ids.length) return;
+  void import('@/core/rag/embeddings').then(({ getEmbeddingService }) => getEmbeddingService().recordAccess(ids), (err: unknown) => {
+    coreLogger.warn({ err, count: ids.length }, 'context hooks: shown passages not counted as read (retention signal only)');
+  });
 }
 
 async function describeModel(agentId: string | undefined): Promise<{ model: string | null; cli: boolean | null }> {

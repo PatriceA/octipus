@@ -944,12 +944,16 @@ export class SwarmSpawner {
 
     // ── Context hooks (docs/CONTEXT-HOOKS.md) ───────────────────────
     // Against the child's own brief, under the turn's audience rule
-    // (`contextForAgentStart`), after every refusal above: showing a block
-    // raises the session's protection level, which a child that never starts
-    // must not do. The block is per task, so it goes in the child's first
-    // message — never in its system prompt, the tier cached and shared by
-    // every child of the role. Every retry reruns that message (block
-    // included). A fork carries its parent's conversation, which already has
+    // (`contextForAgentStart`), after the refusals above. The spawn can still
+    // refuse after them (the concurrency limit, a quota or spend budget, the
+    // space recheck), and by then showing the block has raised the session's
+    // protection level: it has to be raised before the child's model is
+    // chosen, and raising it for a passage no model saw is the safe
+    // direction. The passages count as read only once a child starts
+    // (`accessOnStart`, counted by `bindTurnToAgent`). The block is per
+    // task, so it goes in the child's first message — never in its system
+    // prompt, the tier cached and shared by every child of the role. Every
+    // retry reruns that message (block included). A fork carries its parent's conversation, which already has
     // the parent's blocks: it gets none of its own, unless an attempt runs as
     // the ordinary child instead (`forkOrOrdinary`). Not for a maintenance
     // review, which reviews a proposal with two tools and no user task.
@@ -961,7 +965,7 @@ export class SwarmSpawner {
         const hooks = await contextForAgentStart({
           event: 'worker_start', userId: parentContext.userId, workspaceId: parentContext.workspaceId ?? null,
           sessionId: parent.rootSessionId, space: parentContext.space, query: params.taskBrief, role: childRole,
-          session: maintenanceSession,
+          session: maintenanceSession, accessOnStart: true,
         });
         childContext.turn = hooks.turn;
         return hooks.text.trim();

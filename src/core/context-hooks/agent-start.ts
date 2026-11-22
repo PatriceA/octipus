@@ -41,6 +41,12 @@ interface AgentStartBase {
    * self-contained.
    */
   followUp?: boolean;
+  /**
+   * The start can still be refused after its hooks run (the spawn's
+   * concurrency, quota and space checks): the shown passages count as read
+   * only once `bindTurnToAgent` binds the record to the started agent.
+   */
+  accessOnStart?: boolean;
 }
 
 /**
@@ -76,6 +82,7 @@ export async function contextForAgentStart(input: AgentStartInput): Promise<Cont
       query: input.query,
       ...(input.role ? { role: input.role } : {}),
       ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.accessOnStart ? { accessOnStart: true } : {}),
       ...(input.followUp && searchesWithPreviousMessage(input.query)
         ? { previousMessage: () => previousTypedMessage(userId, input.sessionId, input.query) }
         : {}),

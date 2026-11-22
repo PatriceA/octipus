@@ -351,6 +351,22 @@ describe('side effects only for what is shown', () => {
     expect(await accessCounts()).toEqual({ [id]: 1, [other]: 0 });
   });
 
+  test('a start that can still be refused counts the access only once its agent exists; the level is raised at once', async () => {
+    const { runContextHooks, bindTurnToAgent } = await import('@/core/context-hooks');
+    const { sessionProtectionLevel } = await import('@/core/protection/session-level');
+    const id = await chunk('Contract', 'Contract terms: the website build costs 2400 euro, payable in two parts.', { source: `doc:${randomUUID()}`, purpose: 'document' });
+    const out = await runContextHooks({ event: 'worker_start', userId, workspaceId: null, sessionId: 'sess-onstart', query: 'what does the website build cost', accessOnStart: true });
+    expect(out.text).toContain('Document "Contract"');
+    // Raised before the model is chosen; not counted while the spawn may still refuse.
+    expect(sessionProtectionLevel('sess-onstart')).toBe(4);
+    expect((await accessCounts())[id]).toBe(0);
+    bindTurnToAgent(out.turn, 'agent-started');
+    expect((await accessCounts())[id]).toBe(1);
+    // A retry binds again: counted once.
+    bindTurnToAgent(out.turn, 'agent-retry');
+    expect((await accessCounts())[id]).toBe(1);
+  });
+
   test('a block dropped for the shared budget raises no level and counts no access', async () => {
     const { createContextHook, updateContextHook } = await import('@/core/context-hooks');
     const { sessionProtectionLevel } = await import('@/core/protection/session-level');

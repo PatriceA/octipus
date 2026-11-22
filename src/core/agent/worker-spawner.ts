@@ -882,6 +882,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   const hooks = await contextForAgentStart({
     event: 'worker_start', userId: context.userId, workspaceId: context.workspaceId ?? null,
     sessionId: context.sessionId, space: context.space, query: input ? `${task}\n${input}` : task, role: agentRole, audience,
+    // The spawn below can still refuse: the passages count as read once the worker exists (`bindTurnToAgent`).
+    accessOnStart: true,
   });
   if (hooks.text) volatileParts.push(hooks.text);
   const contextTurn = hooks.turn;

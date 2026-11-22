@@ -359,13 +359,12 @@ async function runRecall(input: ContextHookInput, raw: Record<string, unknown>):
     repeatable: selection.group,
     shown: { query: selection.query, excerpts: selection.passages.map((p) => p.excerpt) },
     // Only once the block is shown (runContextHooks): the passages' documents'
-    // levels become the session's, and the passages count as read.
+    // levels become the session's. They count as read then too (`access`).
     commit: async () => {
       const { readKnowledge } = await import('@/core/protection/content-read');
       await readKnowledge(input.sessionId, items);
-      const { getEmbeddingService } = await import('@/core/rag/embeddings');
-      getEmbeddingService().recordAccess(items.map((i) => i.id));
     },
+    access: items.map((i) => i.id),
   };
 }
 
