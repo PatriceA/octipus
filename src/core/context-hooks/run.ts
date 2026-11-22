@@ -100,6 +100,7 @@ export async function runContextHooks(
   // turn HOOK_TIMEOUT_MS at most, however many hooks the user has. The shared
   // budget is applied afterwards, in list order: a block that no longer fits
   // is left out.
+  const deadlineAt = Date.now() + HOOK_TIMEOUT_MS;
   const results = await Promise.all(hooks.map(async (hook) => {
     const hookStart = Date.now();
     let result: ContextHookResult;
@@ -107,7 +108,7 @@ export async function runContextHooks(
       result = await withDeadline(async () => {
         // Only recall reads the previous message (`buildRecallQuery`).
         const prev = hook.kind === 'recall' ? await previousFor() : undefined;
-        return KIND_RUNNERS[hook.kind]({ ...hookInput, ...(prev ? { previousMessage: prev } : {}), tokenBudget: settings.maxTokens }, hook.config);
+        return KIND_RUNNERS[hook.kind]({ ...hookInput, ...(prev ? { previousMessage: prev } : {}), tokenBudget: settings.maxTokens, deadlineAt }, hook.config);
       }, HOOK_TIMEOUT_MS);
     } catch (err) {
       const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';

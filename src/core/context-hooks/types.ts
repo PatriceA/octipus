@@ -39,6 +39,11 @@ export interface ContextHookInput {
   previousMessage?: string;
   /** What is left of the turn's token budget. */
   tokenBudget: number;
+  /**
+   * When the hook has to be done (epoch ms; `runContextHooks`). Recall's
+   * search statement is cancelled at it on Postgres.
+   */
+  deadlineAt?: number;
 }
 
 export interface ContextHookItem {

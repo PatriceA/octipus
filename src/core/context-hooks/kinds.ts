@@ -171,23 +171,42 @@ export interface RecallSearch {
  * searches once per question and selects at every threshold.
  */
 export async function searchRecall(
-  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage'>,
-  config: Pick<RecallConfig, 'limit'>,
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt'>,
+  config: Pick<RecallConfig, 'limit' | 'purposes' | 'includeProductDocs'>,
 ): Promise<RecallSearch | null> {
   // A short message is searched only as a follow-up of the previous one, and
   // a bare acknowledgement never (`skipsShortMessage`).
   if (skipsShortMessage(input.query, input.previousMessage)) return null;
+  const query = buildRecallQuery(input);
+  return { query, search: await recallSearch(input, config, query) };
+}
+
+/** Chunks of one source the search keeps: the first that qualifies is shown, so a few, not one. */
+const CHUNKS_PER_SOURCE = 3;
+
+/** One search behind recall: the purposes, the product-docs rule and the per-source cap applied in SQL. */
+async function recallSearch(
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'deadlineAt'>,
+  config: Pick<RecallConfig, 'limit' | 'purposes' | 'includeProductDocs'>,
+  query: string,
+): Promise<AnyTermSearch> {
   const { getEmbeddingService } = await import('@/core/rag/embeddings');
   const knowledge = agentKnowledgeScope({ userId: input.userId, workspaceId: input.workspaceId, space: input.space });
-  const query = buildRecallQuery(input);
-  // Over-fetch: several chunks of one note, the product docs and the
-  // candidates that do not qualify are dropped below. Repository artefacts
-  // stay out (`allowedRepoIds: []`), as for a search with no repo visibility.
-  const search = await getEmbeddingService().hybridSearchAnyTerm(knowledge, query, config.limit * 5, { alpha: 0.6, scope: { allowedRepoIds: [] } });
+  // Over-fetch: several chunks of one source and the candidates that do not
+  // qualify are dropped below. Repository artefacts stay out
+  // (`allowedRepoIds: []`), as for a search with no repo visibility.
+  const search = await getEmbeddingService().hybridSearchAnyTerm(knowledge, query, config.limit * 5, {
+    alpha: 0.6,
+    scope: { allowedRepoIds: [] },
+    purposes: config.purposes,
+    excludeProductDocs: !config.includeProductDocs,
+    perSource: CHUNKS_PER_SOURCE,
+    ...(input.deadlineAt !== undefined ? { timeoutMs: Math.max(1, input.deadlineAt - Date.now()) } : {}),
+  });
   if (search.embeddingError) {
     coreLogger.warn({ userId: input.userId, error: search.embeddingError }, 'recall: the query could not be embedded — keyword rules only for this turn');
   }
-  return { query, search };
+  return search;
 }
 
 /**
@@ -204,6 +223,8 @@ export function choosePassages({ query, search }: RecallSearch, config: RecallCo
     minSimilarity: config.minSimilarity,
     keywordCoverage: config.keywordCoverage,
   };
+  // Purposes and the product docs are filtered in the search's SQL; this
+  // repeats it for a search made with other settings (the sweep reuses one).
   const purposes = new Set<EmbeddingPurpose>(config.purposes);
   const seen = new Set<string>();
   const qualified: Array<AnyTermCandidate & { qualifiedBy: QualifiedBy[] }> = [];

@@ -198,6 +198,72 @@ describe('which passages qualify', () => {
   });
 });
 
+describe('what the search window holds', () => {
+  test('a hook limited to notes finds the one note among many matching documents', async () => {
+    const { createContextHook, updateContextHook } = await import('@/core/context-hooks');
+    await updateContextHook(userId, 'builtin:knowledge-recall', { enabled: false });
+    await createContextHook(userId, { name: 'Notes only', kind: 'recall', config: { purposes: ['note'] } });
+    for (let i = 0; i < 30; i++) {
+      await chunk(`Quote ${i}`, `Website pricing quote ${i}: a website costs 2400 euro for the design and build.`, { source: `doc:${randomUUID()}`, purpose: 'document' });
+    }
+    await chunk('Our rates', 'Our website pricing: we charge a fixed rate per page, agreed before the work starts.');
+    const { text } = await run('website pricing');
+    expect(text).toContain('Note "Our rates"');
+    expect(text).not.toContain('Document "');
+    expect(await lastRecord()).toMatchObject({ status: 'injected' });
+  });
+
+  test('one large document\'s chunks do not crowd out the other sources', async () => {
+    const source = `doc:${randomUUID()}`;
+    for (let i = 0; i < 40; i++) {
+      await chunk('Price book', `Website pricing, section ${i}: a website costs 2400 euro for design and build.`, { source, purpose: 'document' });
+    }
+    await chunk('Our rates', 'Our website pricing: we charge a fixed rate per page, agreed before the work starts.');
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    const search = await getEmbeddingService().hybridSearchAnyTerm({ kind: 'personal', userId, workspaceId: null }, 'website pricing', 20, { perSource: 3 });
+    expect(search.candidates.filter((c) => c.sourceId === source)).toHaveLength(3);
+    expect(search.candidates.map((c) => c.metadata.title)).toContain('Our rates');
+    const { text } = await run('website pricing');
+    expect(text).toContain('Note "Our rates"');
+    expect(text.match(/Document "Price book"/g)).toHaveLength(1);
+  });
+
+  test('the product manual stays out of the window unless the hook includes it', async () => {
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    for (let i = 0; i < 25; i++) {
+      await queryRaw(
+        `INSERT INTO embeddings (id, source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
+         VALUES ($1, $2, $3, 'fake', $4, 'document', $5, 'fake/512', NULL, $6)`,
+        [randomUUID(), `docs:${i}`, `Website pricing in the manual, part ${i}.`, vectorLiteral(embed(`Website pricing in the manual, part ${i}.`)), randomUUID(), JSON.stringify({ title: `Manual ${i}`, source: 'octipus-docs' })],
+      );
+    }
+    await chunk('Our rates', 'Our website pricing: we charge a fixed rate per page, agreed before the work starts.');
+    const scope = { kind: 'personal' as const, userId, workspaceId: null };
+    const without = await getEmbeddingService().hybridSearchAnyTerm(scope, 'website pricing', 5, { excludeProductDocs: true });
+    expect(without.candidates.map((c) => c.metadata.title)).toEqual(['Our rates']);
+    const withDocs = await getEmbeddingService().hybridSearchAnyTerm(scope, 'website pricing', 5);
+    expect(withDocs.candidates.some((c) => c.metadata.source === 'octipus-docs')).toBe(true);
+  });
+});
+
+describe('the keyword leg is bounded', () => {
+  test('a long paste searches at most MAX_KEYWORD_LEXEMES lexemes; coverage still counts every one', async () => {
+    const { getEmbeddingService, MAX_KEYWORD_LEXEMES } = await import('@/core/rag/embeddings');
+    const words = Array.from({ length: 250 }, (_, i) => `term${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}word`);
+    const paste = `${words.join(' ')} INV-2024-118`;
+    await chunk('Invoice', 'Invoice INV-2024-118 for the bakery, paid in May.');
+    const search = await getEmbeddingService().hybridSearchAnyTerm({ kind: 'personal', userId, workspaceId: null }, paste, 5);
+    expect(search.queryLexemes.length).toBeGreaterThan(250);
+    expect(search.keywordLexemes).toHaveLength(MAX_KEYWORD_LEXEMES);
+    // The reference's lexemes are searched first: the passage holding it is still a keyword candidate.
+    expect(search.keywordLexemes).toEqual(expect.arrayContaining(['-2024', '-118']));
+    const hit = search.candidates.find((c) => c.metadata.title === 'Invoice');
+    // Matched against every lexeme of the paste: `inv` was not searched for (too short to make the cut) and still counts.
+    expect(search.keywordLexemes).not.toContain('inv');
+    expect(hit?.matchedLexemes.sort()).toEqual(['-118', '-2024', 'inv']);
+  });
+});
+
 describe('whether the answer used what was shown', () => {
   const finish = async (turn: Awaited<ReturnType<typeof run>>['turn'], response?: string) => {
     const { finishContextTurn } = await import('@/core/context-hooks');

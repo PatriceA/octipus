@@ -30,7 +30,7 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { rawStore } from '@/db/cache';
-import { executeRaw, getDb, queryRaw } from '@/db/postgres';
+import { executeRaw, getDb, queryRaw, storageMode } from '@/db/postgres';
 import { dbLogger } from '@/utils/logger';
 
 /** Fixed identifiers, interpolated into DDL — never user input. */
@@ -189,6 +189,18 @@ function forgetIndexedTables(): void {
 }
 
 /**
+ * Cap a statement's run time to `ms` for the transaction `tx` (`SET LOCAL
+ * statement_timeout`): Postgres cancels it server side when the time is up.
+ * PGlite has no timer to cancel a statement with (it runs a query to its end
+ * whatever `statement_timeout` says; checked on 0.5), so on an embedded
+ * install this does nothing and the caller has to bound the work itself.
+ */
+export async function setLocalStatementTimeout(tx: VectorQueryable, ms: number | undefined): Promise<void> {
+  if (ms === undefined || storageMode() !== 'external') return;
+  await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${Math.max(1, Math.ceil(ms))}`));
+}
+
+/**
  * Run a nearest-neighbour query on `table` that also filters (by user,
  * scope, purpose) so that HNSW cannot return fewer rows than it asks for.
  *
@@ -201,19 +213,31 @@ function forgetIndexedTables(): void {
  * order); before 0.8 the best available is a wider candidate list. Both are
  * set for this query's transaction only, and only when the table has an
  * HNSW index for the planner to use.
+ *
+ * `statementTimeoutMs`: the query is cancelled after that long on Postgres
+ * (`setLocalStatementTimeout`; not on PGlite).
  */
 export async function withFilteredVectorScan<T>(
   table: (typeof TARGETS)[number]['table'],
   query: (q: VectorQueryable) => Promise<T>,
+  options: { statementTimeoutMs?: number } = {},
 ): Promise<T> {
+  const timeout = storageMode() === 'external' ? options.statementTimeoutMs : undefined;
   const indexed = await indexedTables().catch(() => new Set<string>());
-  if (!indexed.has(table)) return query(getDb());
+  if (!indexed.has(table)) {
+    if (timeout === undefined) return query(getDb());
+    return getDb().transaction(async (tx) => {
+      await setLocalStatementTimeout(tx, timeout);
+      return query(tx);
+    });
+  }
   pgvectorVersion ??= readPgvectorVersion().catch((err) => {
     dbLogger.warn({ err }, 'pgvector version unreadable — filtered vector searches run with default HNSW settings');
     return null;
   });
   const version = await pgvectorVersion;
   return getDb().transaction(async (tx) => {
+    await setLocalStatementTimeout(tx, timeout);
     if (version !== null && version >= 0.08) await tx.execute(sql`SET LOCAL hnsw.iterative_scan = strict_order`);
     else if (version !== null) await tx.execute(sql`SET LOCAL hnsw.ef_search = 400`);
     return query(tx);
