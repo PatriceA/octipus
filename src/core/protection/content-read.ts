@@ -34,8 +34,10 @@ export async function readKnowledge(sessionId: string | undefined, hits: readonl
     const stored = await documentRepository.protectionLevelsSystem(ids.filter((id) => UUID_RE.test(id)));
     const level = highestLevel(ids.map((id) => stored.get(id) ?? null));
     if (level !== undefined) raiseSessionLevel(sessionId, level);
-  } catch {
+  } catch (err) {
     // Levels that cannot be read count as unclear: the hits were handed over.
+    const { securityLogger } = await import('@/utils/logger');
+    securityLogger.warn({ err, sessionId, documents: ids.length }, 'protection level: document levels unreadable — the session counts as holding unclear content');
     raiseSessionLevel(sessionId, null);
   }
 }

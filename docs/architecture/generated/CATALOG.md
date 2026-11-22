@@ -859,7 +859,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 86 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 258 |
+| `core` | `utils` | 259 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
