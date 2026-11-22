@@ -5,6 +5,12 @@
  * Hooks run together and share one token budget (`contextHooks.maxTokens`),
  * spent in list order. A hook that fails or takes longer than HOOK_TIMEOUT_MS
  * costs the turn its block, never the turn: the agent starts without it.
+ *
+ * A hook computes its block without side effects; what showing it implies
+ * (recall: the session's protection level, the passages' access counts) is
+ * its result's `commit`, run here only for the blocks that are injected. A
+ * block dropped for the budget, or a hook that timed out and finishes later,
+ * leaves nothing behind but its run record.
  */
 import { isJobOn } from '@/core/modules/registry';
 import { eq } from 'drizzle-orm';
@@ -13,6 +19,7 @@ import { getDb } from '@/db/postgres';
 import { type ContextHookRunRecord, contextTurns } from '@/db/schema/context-hooks';
 import { coreLogger } from '@/utils/logger';
 import { withDeadline } from '@/utils/concurrency';
+import type { RepeatableBlock } from '@/core/agent/repeated-context';
 import { KIND_RUNNERS } from './kinds';
 import { listContextHooks } from './store';
 import { agentUsageKey, toolUseSnapshot, type ToolUseCount } from './tool-usage';
@@ -36,10 +43,15 @@ export interface ContextHooksOutcome {
   blocks: string[];
   /** `blocks` with each hook's name, for the Context inspector. */
   labelledBlocks: Array<{ label: string; text: string }>;
+  /**
+   * `blocks` as the cross-turn omission takes them (`REPEATABLE_CONTEXT_KEY`):
+   * the recall block as a group repeated per passage, the others whole.
+   */
+  repeatable: RepeatableBlock[];
   turn: ContextTurnHandle | null;
 }
 
-const NONE: ContextHooksOutcome = { text: '', blocks: [], labelledBlocks: [], turn: null };
+const NONE: ContextHooksOutcome = { text: '', blocks: [], labelledBlocks: [], repeatable: [], turn: null };
 
 /**
  * The hooks' blocks for this agent start, and the turn record to finish.
@@ -78,20 +90,43 @@ export async function runContextHooks(
     return { hook, result, latencyMs: Date.now() - hookStart };
   }));
 
+  // The shared budget, in list order: a block that no longer fits is left out.
   let budget = settings.maxTokens;
+  const kept = results.map(({ hook, latencyMs, result: ran }) => {
+    let result = ran;
+    if (result.status === 'injected' && result.tokens > budget) {
+      result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0, ...(ran.degraded ? { degraded: ran.degraded } : {}) };
+    }
+    if (result.status === 'injected' && result.text) budget -= result.tokens;
+    return { hook, latencyMs, result };
+  });
+
+  // The side effects of what is shown, before the agent starts: the session
+  // must hold the level of what it was given before it can pass it on. A
+  // commit that fails leaves its block out (fail safe: a block whose level
+  // could not be raised is not shown).
+  await Promise.all(kept.map(async (entry) => {
+    const { hook, result } = entry;
+    const commit = result.commit;
+    if (result.status !== 'injected' || !result.text || !commit) return;
+    try {
+      await withDeadline(() => commit(), HOOK_TIMEOUT_MS);
+    } catch (err) {
+      coreLogger.error({ err, hook: hook.name, userId: input.userId }, 'context hook: committing its block failed — the block is left out of this turn');
+      entry.result = { status: 'error', reason: 'commit_failed', text: '', items: [], tokens: 0, ...(result.degraded ? { degraded: result.degraded } : {}) };
+    }
+  }));
+
   const texts: string[] = [];
+  const repeatable: RepeatableBlock[] = [];
   const labelledBlocks: ContextHooksOutcome['labelledBlocks'] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
-  for (const { hook, latencyMs, result: ran } of results) {
-    let result = ran;
-    if (result.status === 'injected' && result.tokens > budget) {
-      result = { status: 'skipped', reason: 'budget_spent', text: '', items: [], tokens: 0 };
-    }
+  for (const { hook, latencyMs, result } of kept) {
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
+      repeatable.push(result.repeatable ?? result.text);
       labelledBlocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
-      budget -= result.tokens;
       if (hook.kind !== 'notes_index') citable.push(...result.items);
     }
     records.push({
@@ -100,6 +135,7 @@ export async function runContextHooks(
       kind: hook.kind,
       status: result.status,
       ...(result.reason ? { reason: result.reason } : {}),
+      ...(result.degraded ? { degraded: result.degraded } : {}),
       // The index lists many titles and is not something to cite; its count is enough.
       items: hook.kind === 'notes_index' ? [] : result.items,
       tokens: result.tokens,
@@ -125,7 +161,7 @@ export async function runContextHooks(
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
   }
-  return { text, blocks: texts.filter(Boolean), labelledBlocks, turn };
+  return { text, blocks: texts.filter(Boolean), labelledBlocks, repeatable, turn };
 }
 
 /**

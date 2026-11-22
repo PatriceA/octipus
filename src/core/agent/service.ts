@@ -1034,7 +1034,7 @@ export class AgentService {
       // nor where the session's text may not be copied anywhere. Started
       // here so it runs while memory is retrieved; it never throws.
       const contextHooksRun = sharedAudience || audience.contentStorageOff
-        ? Promise.resolve({ text: '', blocks: [], labelledBlocks: [], turn: null })
+        ? Promise.resolve({ text: '', blocks: [], labelledBlocks: [], repeatable: [], turn: null })
         : runContextHooks({
           event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
           space: scope.space, query: message, role: 'general', channel,
@@ -1153,7 +1153,7 @@ export class AgentService {
           ...(attachedFiles.length ? { attachedFiles } : {}),
           // What a later turn may leave out when an earlier one in the window
           // already carries it: retrieved blocks only, never a directive.
-          ...(memoryBlock || contextHooks.blocks.length ? { repeatableContext: [memoryBlock, ...contextHooks.blocks].filter(Boolean) } : {}),
+          ...(memoryBlock || contextHooks.repeatable.length ? { repeatableContext: [memoryBlock, ...contextHooks.repeatable].filter(Boolean) } : {}),
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
           ...(signal ? { signal } : {}),
           ...(spokenTurn ? { spoken: true } : {}),

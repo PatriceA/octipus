@@ -35,7 +35,12 @@ export interface ContextHookRunRecord {
   kind: string;
   status: 'injected' | 'abstained' | 'skipped' | 'error';
   reason?: string;
-  items: Array<{ id: string; sourceId: string; title: string; score: number }>;
+  /**
+   * Set when the hook ran in a reduced mode: `embedding_failed` — recall
+   * could not embed the query and matched by its keyword rules alone.
+   */
+  degraded?: 'embedding_failed';
+  items: Array<{ id: string; sourceId: string; title: string; score: number; qualifiedBy?: Array<'similarity' | 'coverage' | 'identifier'> }>;
   tokens: number;
   latencyMs: number;
 }

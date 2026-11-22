@@ -14,7 +14,8 @@ import { requireCapability } from '@/core/capabilities/gates';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ContextTurnRow, contextTurns } from '@/db/schema/context-hooks';
-import { contentWords, KIND_CONFIG, type RecallConfig, recallHits } from './kinds';
+import { getConfig } from '@/config';
+import { KIND_CONFIG, type RecallConfig, selectRecallPassages } from './kinds';
 import { listContextHooks } from './store';
 
 const MAX_ROWS = 5_000;
@@ -185,9 +186,13 @@ export async function evaluateRecall(
   await requireCapability('embedding');
   const builtin = (await listContextHooks(userId)).find((h) => h.builtin === 'knowledge-recall');
   const config = KIND_CONFIG.recall.parse({ ...(builtin?.config ?? {}), ...overrides });
+  // The hook's own selection, within the budget a turn would give it: what is
+  // reported is exactly what would be injected.
+  const budget = Math.min(config.tokenBudget, getConfig().contextHooks?.maxTokens ?? config.tokenBudget);
   const out: RecallEvalResult['cases'] = [];
   for (const c of cases) {
-    const hits = contentWords(c.question) < 2 ? [] : await recallHits({ userId, workspaceId, query: c.question }, config);
+    const { passages } = await selectRecallPassages({ userId, workspaceId, query: c.question }, config, budget);
+    const hits = passages.map((p) => p.hit);
     const wanted = c.expect.map((e) => e.trim().toLowerCase()).filter(Boolean);
     const index = wanted.length === 0 ? -1 : hits.findIndex((h) => {
       const hay = [h.metadata?.title ?? '', h.metadata?.filePath ?? '', h.sourceId, h.id, h.content].join('\n').toLowerCase();
@@ -197,7 +202,7 @@ export async function evaluateRecall(
     out.push({
       question: c.question,
       expect: c.expect,
-      hits: hits.map((h) => ({ title: h.metadata?.title || h.metadata?.filePath || h.sourceId, sourceId: h.sourceId, score: Number(h.similarity.toFixed(3)) })),
+      hits: passages.map((p) => ({ title: p.item.title, sourceId: p.item.sourceId, score: p.item.score })),
       rank,
       pass: wanted.length === 0 ? hits.length === 0 : rank !== null,
     });

@@ -3,8 +3,11 @@
  * own), what a run injects from the knowledge base and notes, the turn
  * record it leaves, the numbers on it, and the recall eval.
  *
- * No embedding model is set up here, so recall searches by keyword (the
- * hybrid search's fallback): passages are matched on every word of the query.
+ * No embedding model is set up here, so the query cannot be embedded and
+ * recall runs on its keyword rules alone (recorded as `embedding_failed`): a
+ * passage qualifies by covering the query's distinctive words or naming one
+ * of its identifiers. src/core/context-hooks/recall.db.test.ts covers the
+ * vector leg with an embedding stand-in.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -227,7 +230,7 @@ describe('a run', () => {
     settings.enabled = false;
     try {
       const off = await run('website pricing');
-      expect(off).toEqual({ text: '', blocks: [], labelledBlocks: [], turn: null });
+      expect(off).toEqual({ text: '', blocks: [], labelledBlocks: [], repeatable: [], turn: null });
     } finally {
       settings.enabled = true;
     }
