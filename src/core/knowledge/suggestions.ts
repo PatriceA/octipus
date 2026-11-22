@@ -59,8 +59,10 @@ export class SuggestionService {
     let hits: Awaited<ReturnType<EmbeddingService['hybridSearch']>>;
     try {
       // Pull a buffer beyond `limit` because we filter self/linked below.
-      // Scoped: only the scope's note embeddings are candidates.
-      hits = await this.embeddings.hybridSearch(scope.kind === 'personal' ? { kind: 'personal', userId: scope.userId, workspaceId: scope.workspaceId } : noteKnowledgeScope(scope), query, limit * 4, NOTE_PURPOSES, undefined, 0.3);
+      // Scoped: only the scope's note embeddings are candidates. Not a read
+      // (`skipAccess`): an editor's candidate list is not an agent shown the
+      // passage, and counting it would keep lessons from expiring.
+      hits = await this.embeddings.hybridSearch(scope.kind === 'personal' ? { kind: 'personal', userId: scope.userId, workspaceId: scope.workspaceId } : noteKnowledgeScope(scope), query, limit * 4, NOTE_PURPOSES, undefined, 0.3, { skipAccess: true });
     } catch (err) {
       coreLogger.warn({ err, component: 'suggestions', noteId }, 'Link suggestions unavailable (no embedding model?)');
       return [];

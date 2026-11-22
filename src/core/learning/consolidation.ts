@@ -418,8 +418,9 @@ export async function consolidateLessonNotes(userId: string, opts: { maxMerges: 
  * that. `updated_at` moves on every save (an edit, a merge from a review that
  * saw the lesson again, a consolidation merge into it) and on pin or unpin;
  * `last_accessed_at` moves when a search returns the chunk (recall counts only
- * the passages it shows; search_notes, search_knowledge, the knowledge API and
- * link suggestions count what they return), never when it is indexed. A
+ * the passages it shows; search_notes, search_knowledge and the knowledge API
+ * count what they return; link suggestions and ghost-link resolution in the
+ * editor count nothing), never when it is indexed. A
  * re-index replaces the chunks (no `last_accessed_at`), but it comes with a
  * save, which moves `updated_at`. Archived, never deleted, and marked
  * `frontmatter.archivedBy = 'expiry'`: a review that sees the lesson again

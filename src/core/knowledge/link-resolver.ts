@@ -212,7 +212,8 @@ export class LinkResolverService {
     const { userId } = scope;
 
     // Blocking. Scoped to the note's scope (the user's notes, or the
-    // space's), like link suggestions.
+    // space's), like link suggestions, and like them not a read of the
+    // candidates (`skipAccess`).
     const hits = await this.embeddings.hybridSearch(
       noteKnowledgeScope(scope),
       target,
@@ -220,6 +221,7 @@ export class LinkResolverService {
       NOTE_PURPOSES,
       undefined,
       MIN_CANDIDATE_SIMILARITY,
+      { skipAccess: true },
     );
     const blocked = selectCandidates(hits, noteId);
     if (blocked.length === 0) return null;

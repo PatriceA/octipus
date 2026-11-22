@@ -1,5 +1,16 @@
-import { describe, expect, test } from 'vitest';
-import { parseResolverMatch, selectCandidates } from './link-resolver';
+import { describe, expect, test, vi } from 'vitest';
+import type { EmbeddingService } from '@/core/rag/embeddings';
+import type { KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
+import { type NoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
+import { LinkResolverService, parseResolverMatch, selectCandidates } from './link-resolver';
+
+vi.mock('@/core/capabilities/gates', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/core/capabilities/gates')>(),
+  capabilityConfigured: async () => true,
+}));
+vi.mock('@/models/model-registry', () => ({
+  getModelRegistry: () => ({ getModelForTopic: async () => ({ modelId: 'test-background', name: 'background-test' }) }),
+}));
 
 /**
  * Pure halves of the ghost-link resolver: the pair-resolver verdict parser and
@@ -76,5 +87,17 @@ describe('selectCandidates', () => {
 
   test('no candidates means no guess', () => {
     expect(selectCandidates([], SELF)).toEqual([]);
+  });
+});
+
+describe('resolveGhostRefs', () => {
+  test('fetching the candidates of a ghost link is not counted as reading them (skipAccess)', async () => {
+    const searches: unknown[][] = [];
+    const notes = { getBySlug: async () => null, getByIds: async () => [] } as unknown as NoteRepository;
+    const embeddings = { hybridSearch: async (...args: unknown[]) => { searches.push(args); return []; } } as unknown as EmbeddingService;
+    const resolver = new LinkResolverService(notes, {} as KnowledgeLinkRepository, embeddings);
+    await resolver.resolveGhostRefs({ scope: personalNoteScope(SELF, null), noteId: SELF, wikilinks: [{ ref: 'roadmap', target: 'Roadmap' } as never] });
+    expect(searches).toHaveLength(1);
+    expect(searches[0][6]).toEqual({ skipAccess: true });
   });
 });
