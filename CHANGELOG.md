@@ -7,6 +7,12 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: auto-reload no longer grows memory without bound.** Every
+  reload of a changed file kept a full copy of the old and new text in the
+  undo history (up to 200 steps), so a log file appended to every second could
+  take hundreds of MB. A reload now records only what changed, the undo
+  history is capped by size as well as by steps, and the watcher reads a
+  changed file once per check instead of three times.
 - **Terminal editor: a rejected agent edit stays rejected.** The agent's edit
   reaches the editor before the tool writes the file, so after you rejected it
   the watcher saw the file change a moment later and reloaded the agent's

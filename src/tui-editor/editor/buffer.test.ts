@@ -394,3 +394,42 @@ describe('grouped undo (docs/plans/tui-modernization.md §5.2)', () => {
     b.redo(); expect(b.text()).toBe('alX\nYma');
   });
 });
+
+// A clean log file appended to every second was reloaded with setText, which kept the whole old and new
+// text per undo step (200 steps): hundreds of MB for a few-MB file.
+describe('undo memory', () => {
+  test('setText records only the changed middle: reloading a growing log keeps the appended lines, not copies', () => {
+    const log = Array.from({ length: 20_000 }, (_, i) => `line ${i} of the log`).join('\n');
+    const b = new Buffer(log);
+    let text = log;
+    for (let i = 0; i < 200; i++) { text += `\nappended ${i}`; b.setText(text); }
+    expect(b.text()).toBe(text);
+    expect(b.undoSize()).toBeLessThan(10_000);
+    for (let i = 0; i < 200; i++) b.undo();
+    expect(b.text()).toBe(log);
+    b.redo(); expect(b.text()).toBe(`${log}\nappended 0`);
+  });
+
+  test('setText of a change in the middle, with emoji next to it, undoes and redoes exactly', () => {
+    const b = new Buffer('a😀b\nkeep\nc😀d');
+    b.setText('a😁b\nkeep\nc😀d');
+    expect(b.undoSize()).toBeLessThanOrEqual(4);
+    b.setText('');
+    b.setText('a😀b\nkeep\nc😀d!');
+    b.undo(); expect(b.text()).toBe('');
+    b.undo(); expect(b.text()).toBe('a😁b\nkeep\nc😀d');
+    b.undo(); expect(b.text()).toBe('a😀b\nkeep\nc😀d');
+    b.redo(); b.redo(); b.redo(); expect(b.text()).toBe('a😀b\nkeep\nc😀d!');
+  });
+
+  test('the undo history is capped by size as well as steps; the newest step always stays', async () => {
+    const { MAX_UNDO_CHARS } = await import('./buffer');
+    const b = new Buffer('');
+    const big = (c: string) => c.repeat(Math.ceil(MAX_UNDO_CHARS / 3));
+    for (const c of ['a', 'b', 'c', 'd', 'e']) b.setText(big(c));
+    expect(b.undoSize()).toBeLessThanOrEqual(MAX_UNDO_CHARS);
+    expect(b.canUndo()).toBe(true);
+    b.undo();
+    expect(b.text()).toBe(big('d'));
+  });
+});

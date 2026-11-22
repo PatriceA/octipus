@@ -12,7 +12,7 @@ import { getKeybindings, type OverlayOptions } from '@/tui-kit';
 import { ExternalChangePrompt } from '../components/external-change-prompt';
 import { SaveAsPrompt } from '../components/save-as-prompt';
 import { UnsavedPrompt } from '../components/unsaved-prompt';
-import { checkDisk, readFileForBuffer, writeFileForBuffer } from '../workspace-fs-bridge';
+import { checkDisk, type ReadResult, readFileForBuffer, writeFileForBuffer } from '../workspace-fs-bridge';
 import type { EditorContext } from './context';
 import { externalKey } from './pending-prompts';
 
@@ -110,11 +110,11 @@ export class FileOps {
     overlays.show('external', prompt, PROMPT_OVERLAY);
   }
 
-  /** Replace the buffer with the file on disk, as one undoable step. */
-  reloadFromDisk(id: string): void {
+  /** Replace the buffer with the file on disk, as one undoable step. `read` is the file when the caller has just read it. */
+  reloadFromDisk(id: string, read: ReadResult | null = null): void {
     const record = this.ctx.buffers.byId(id);
     if (!record?.path) return;
-    const read = readFileForBuffer(record.path);
+    read ??= readFileForBuffer(record.path);
     if (!read.ok) { this.ctx.notice(read.error); this.ctx.pushMessage('system', `Error: ${read.error}`); return; }
     record.buffer.setText(read.text);
     this.ctx.buffers.markSaved(id, read.text, read.disk);

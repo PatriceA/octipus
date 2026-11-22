@@ -49,6 +49,12 @@ interface UndoStep {
 }
 
 const MAX_UNDO = 200;
+/**
+ * The most text (UTF-16 units, removed plus inserted) the undo history
+ * keeps; older steps go first. With the step cap alone, 200 reloads of a
+ * large file kept 200 copies of it.
+ */
+export const MAX_UNDO_CHARS = 8 * 1024 * 1024;
 /** A pause this long ends a typing burst. */
 const BURST_GAP_MS = 1000;
 
@@ -58,6 +64,8 @@ export class Buffer {
   private selection: Selection | null = null;
   private undoStack: UndoStep[] = [];
   private redoStack: UndoStep[] = [];
+  /** The text the undo stack holds (`MAX_UNDO_CHARS`). */
+  private undoChars = 0;
   /** The column Up/Down aim for (in cells), valid while the cursor is still where the last vertical move left it. */
   private goal: { cell: number; at: Position } | null = null;
   /** Edits of the action in progress; `depth` counts nested `transact` calls. */
@@ -106,6 +114,8 @@ export class Buffer {
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }
+  /** How much text (UTF-16 units) the undo history holds. */
+  undoSize(): number { return this.undoChars; }
   canRedo(): boolean { return this.redoStack.length > 0; }
 
   // ── Cursor + selection ──────────────────────────────────────────
@@ -283,13 +293,26 @@ export class Buffer {
     } finally { this.end(null); }
   }
 
-  /** Replace the entire buffer text (file reload, agent edits). One undo step. */
+  /**
+   * Replace the entire buffer text (file reload, agent edits). One undo
+   * step, which records only what changed: the common start and end of the
+   * old and new text are left in place, so reloading a log file that grew
+   * by a line stores that line, not two copies of the file.
+   */
   setText(text: string): void {
     this.begin();
     try {
       const cursor = { ...this.cursor };
-      const last = this.lines.length - 1;
-      this.replaceInternal({ line: 0, col: 0 }, { line: last, col: this.lines[last].length }, text);
+      const old = this.text();
+      const limit = Math.min(old.length, text.length);
+      let prefix = 0;
+      while (prefix < limit && old.charCodeAt(prefix) === text.charCodeAt(prefix)) prefix++;
+      // Never split a surrogate pair between the kept and the replaced part.
+      if (prefix > 0 && prefix < limit && isHighSurrogate(old.charCodeAt(prefix - 1))) prefix--;
+      let suffix = 0;
+      while (suffix < limit - prefix && old.charCodeAt(old.length - 1 - suffix) === text.charCodeAt(text.length - 1 - suffix)) suffix++;
+      if (suffix > 0 && isLowSurrogate(old.charCodeAt(old.length - suffix))) suffix--;
+      this.replaceInternal(positionAt(old, prefix), positionAt(old, old.length - suffix), text.slice(prefix, text.length - suffix));
       this.cursor = this.clampPosition(cursor);
       this.selection = null;
     } finally { this.end(null); }
@@ -306,6 +329,7 @@ export class Buffer {
   undo(): boolean {
     const step = this.undoStack.pop();
     if (!step) return false;
+    this.undoChars -= sizeOf(step.edits);
     for (let i = step.edits.length - 1; i >= 0; i--) {
       const e = step.edits[i];
       this.splice(e.start, endOf(e.start, e.inserted), e.removed);
@@ -324,6 +348,7 @@ export class Buffer {
     this.cursor = this.clampPosition(step.cursorAfter);
     this.selection = null;
     this.undoStack.push(step);
+    this.undoChars += sizeOf(step.edits);
     this.changed();
     return true;
   }
@@ -352,7 +377,12 @@ export class Buffer {
       top.at = now;
     } else {
       this.undoStack.push({ edits, cursorBefore: before.cursor, selectionBefore: before.selection, cursorAfter: { ...this.cursor }, burst, at: now });
-      if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+    }
+    this.undoChars += sizeOf(edits);
+    // The newest step always stays, however large.
+    while (this.undoStack.length > 1 && (this.undoStack.length > MAX_UNDO || this.undoChars > MAX_UNDO_CHARS)) {
+      const dropped = this.undoStack.shift();
+      if (dropped) this.undoChars -= sizeOf(dropped.edits);
     }
     this.redoStack = [];
     this.burstBroken = burst === null;
@@ -422,6 +452,24 @@ function endOf(start: Position, text: string): Position {
   if (parts.length === 1) return { line: start.line, col: start.col + text.length };
   return { line: start.line + parts.length - 1, col: parts[parts.length - 1].length };
 }
+
+/** The text an undo step holds. */
+function sizeOf(edits: readonly Edit[]): number {
+  let n = 0;
+  for (const e of edits) n += e.removed.length + e.inserted.length;
+  return n;
+}
+
+/** The position of UTF-16 offset `offset` in `text`. */
+function positionAt(text: string, offset: number): Position {
+  let line = 0;
+  let start = 0;
+  for (let nl = text.indexOf('\n'); nl !== -1 && nl < offset; nl = text.indexOf('\n', nl + 1)) { line++; start = nl + 1; }
+  return { line, col: offset - start };
+}
+
+function isHighSurrogate(code: number): boolean { return code >= 0xd800 && code <= 0xdbff; }
+function isLowSurrogate(code: number): boolean { return code >= 0xdc00 && code <= 0xdfff; }
 
 function isWordChar(ch: string): boolean {
   return /[A-Za-z0-9_]/.test(ch);

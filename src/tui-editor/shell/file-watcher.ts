@@ -5,8 +5,9 @@
  * Every second each open file's size and modification time are compared
  * with what the buffer last read or wrote (a stat per file; `fs.watch` loses
  * a file that is replaced by rename, which is how most editors and
- * formatters save). A changed file is then read and compared with the
- * buffer's saved text, so a touch is not a change.
+ * formatters save). A changed file is then read, once, and compared with
+ * the buffer's saved text, so a touch is not a change; the same read is the
+ * reload.
  *
  * A buffer without unsaved edits is reloaded (one undo step brings the old
  * text back) and the mode bar says so. A buffer with unsaved edits is not
@@ -21,7 +22,7 @@
  */
 import { statSync } from 'node:fs';
 import { relative } from 'node:path';
-import { checkDisk, readFileForBuffer } from '../workspace-fs-bridge';
+import { readFileForBuffer } from '../workspace-fs-bridge';
 import type { EditorContext } from './context';
 import type { FileOps } from './file-ops';
 import { externalKey } from './pending-prompts';
@@ -86,21 +87,22 @@ export class FileWatcher {
         tui.requestRender();
         continue;
       }
-      let check: ReturnType<typeof checkDisk>;
-      try {
-        check = checkDisk(record.path, record.disk, record.savedText);
-      } catch (error) {
+      // One read per changed file: it answers a touch, a catch-up, a rejected agent text and the reload.
+      const now = readFileForBuffer(record.path);
+      if (!now.ok) {
         this.told.set(record.id, version);
-        this.ctx.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`);
+        this.ctx.notice(`${shown} changed on disk and cannot be read again: ${now.error}`);
+        this.ctx.pushMessage('system', `Error: ${now.error}`);
+        tui.requestRender();
         continue;
       }
-      if (!check.changed) { this.inSync(record.id); buffers.markSaved(record.id, record.savedText, check.disk); continue; }
+      // A touch that left the content as it was.
+      if (now.text === record.savedText) { this.inSync(record.id); buffers.markSaved(record.id, record.savedText, now.disk); continue; }
       // The disk now holds what the buffer holds (the agent wrote the text the review accepted): in sync.
-      const now = readFileForBuffer(record.path);
-      if (now.ok && now.text === record.buffer.text()) { this.inSync(record.id); buffers.markSaved(record.id, now.text, now.disk); continue; }
+      if (now.text === record.buffer.text()) { this.inSync(record.id); buffers.markSaved(record.id, now.text, now.disk); continue; }
       // The agent wrote the version the user rejected in review (agent.write arrives before the write itself):
       // reloading would undo the review. The file is the new baseline; the user's text stays, unsaved.
-      if (now.ok && this.review.takeRejected(record.id, now.text)) {
+      if (this.review.takeRejected(record.id, now.text)) {
         this.inSync(record.id);
         buffers.markSaved(record.id, now.text, now.disk);
         this.ctx.notice(`The agent wrote its version of ${shown}, which you rejected: your version is kept, unsaved (Ctrl+S writes it back).`);
@@ -108,7 +110,7 @@ export class FileWatcher {
         continue;
       }
       if (!record.dirty) {
-        this.files.reloadFromDisk(record.id);
+        this.files.reloadFromDisk(record.id, now);
         this.ctx.notice(`${shown} changed on disk and was reloaded (Ctrl+Z brings the old text back).`, 'info');
         tui.requestRender();
         continue;
