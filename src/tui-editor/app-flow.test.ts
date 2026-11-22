@@ -426,3 +426,39 @@ test('an agent edit to a file that is not open opens it in a background tab, not
   expect(app.buffers.findByPath(`${process.cwd()}/package.json`)).not.toBeNull();
   expect(modals).toHaveLength(0);
 });
+
+// The chat adapter reports str_replace_editor's str_replace and edit's old_string as agent.edit; the editor dropped them.
+test('an agent.edit replaces its one occurrence in the buffer and is reviewed like a write', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/e.ts', 'one\ntwo\nthree', { disk: DISK });
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'two\r\n', newText: 'TWO\r\nTWO-B\r\n' });
+  expect(text()).toContain('agent edit to e.ts ready for review');
+  key('\x1by');
+  expect(modalText()).toContain('Agent edit: e.ts');
+  modalKey('a');
+  expect(rec.buffer.text()).toBe('one\nTWO\nTWO-B\nthree');
+});
+
+test('an agent.edit whose old text is missing or occurs twice is reported, not guessed', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/e.ts', 'x = 1;\nx = 1;\n', { disk: DISK });
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'y = 2;', newText: 'y = 3;' });
+  expect(text()).toContain('the text it replaces is not in the file');
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'x = 1;', newText: 'x = 2;' });
+  expect(chatLog()).toContain('occurs more than once');
+  expect(text()).not.toContain('ready for review');
+  key('\x1by');
+  expect(modals).toHaveLength(0);
+  expect(rec.buffer.text()).toBe('x = 1;\nx = 1;\n');
+});
+
+test('an agent.edit to a file that is not open reads it from disk; one after a waiting edit applies to the agent text', () => {
+  const app = mount();
+  f.read.mockReturnValue({ ok: true, text: 'alpha\nbeta\n', disk: DISK, mixedEol: false });
+  f.listener({ kind: 'agent.edit', path: 'package.json', oldText: 'beta', newText: 'BETA' });
+  const rec = app.buffers.findByPath(`${process.cwd()}/package.json`);
+  expect(rec?.buffer.text()).toBe('alpha\nbeta\n');
+  f.listener({ kind: 'agent.edit', path: 'package.json', oldText: 'alpha', newText: 'ALPHA' });
+  key('\x1by'); modalKey('a');
+  expect(rec?.buffer.text()).toBe('ALPHA\nBETA\n');
+});

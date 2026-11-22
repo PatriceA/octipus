@@ -58,6 +58,41 @@ export class AgentReview {
     this.wait({ bufferId: record.id, after });
   }
 
+  /**
+   * `agent.edit`: the agent replaces `oldText` with `newText` in `path`
+   * (`str_replace_editor` str_replace, `edit` with `old_string`). The
+   * replacement is made in the text the agent is working from — the edit
+   * still waiting for review, else the open buffer, else the file — and the
+   * whole result goes through the same review as a write. The old text must
+   * occur exactly once: none or several is reported, never guessed at.
+   */
+  handleEdit(path: string, oldText: string, newText: string): void {
+    const absolute = isAbsolute(path) ? resolve(path) : resolve(this.ctx.projectPath, path);
+    const shown = relative(this.ctx.projectPath, absolute) || absolute;
+    const fail = (why: string) => {
+      this.ctx.notice(`Agent edit to ${shown} not shown: ${why}`);
+      this.ctx.pushMessage('system', `Error: The agent's edit to ${shown} could not be reviewed: ${why}`);
+    };
+    const from = oldText.replace(/\r\n/g, '\n');
+    const to = newText.replace(/\r\n/g, '\n');
+    if (!from) { fail('it names no text to replace.'); return; }
+    let record = this.ctx.buffers.findByPath(absolute);
+    if (!record && !existsSync(absolute)) { fail('the file does not exist.'); return; }
+    const base = record ? (this.waiting.get(record.id)?.after ?? record.buffer.text()) : null;
+    let text = base;
+    if (text === null) {
+      const read = readFileForBuffer(absolute);
+      if (!read.ok) { fail(read.error); return; }
+      text = read.text;
+    }
+    const first = text.indexOf(from);
+    if (first < 0) { fail('the text it replaces is not in the file.'); return; }
+    if (text.indexOf(from, first + 1) >= 0) { fail('the text it replaces occurs more than once, so where it goes is ambiguous.'); return; }
+    record ??= this.openForReview(absolute);
+    if (!record) return;
+    this.wait({ bufferId: record.id, after: text.slice(0, first) + to + text.slice(first + from.length) });
+  }
+
   /** Hold an edit for the resolve key; nothing is opened over what the user is doing. */
   private wait(edit: PendingEdit): void {
     const id = edit.bufferId;

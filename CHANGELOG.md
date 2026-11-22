@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: fragment edits by the agent are reviewed.** A
+  `str_replace_editor` `str_replace`, or an `edit` with `old_string`, reached
+  the editor as an edit of one fragment and was dropped. It is now applied to
+  the text the agent works from (its waiting edit, the open tab, or the file
+  on disk) and reviewed hunk by hunk like a whole-file write; a fragment that
+  is not in the file, or occurs more than once, is reported instead of
+  guessed.
 - **Terminal editor: background prompts no longer take the keyboard.** A file
   changed on disk under unsaved edits and an agent edit ready for review used
   to open their prompt at once, switching tabs and taking focus mid-typing, so

@@ -52,4 +52,18 @@ describe.skipIf(process.platform === 'win32')('agent edit review in a real POSIX
     await tui.waitFor('Rejected agent edit');
     expect(readFileSync(path, 'utf8')).toBe('export const a = 1;\nexport const b = 2;\n');
   });
+
+  test('a str_replace_editor str_replace is reviewed as the file with its one fragment replaced', async () => {
+    tui = await TuiHarness.start('src/tui-editor/index.ts', 120, 30);
+    const path = join(tui.project, 'frag.ts');
+    writeFileSync(path, 'export const a = 1;\nexport const b = 2;\n');
+    await tui.waitFor('focus:editor'); await tui.waitFor('connected');
+    tui.event('agent.action', { agentId: 'root', data: { type: 'tool_call', toolName: 'str_replace_editor', args: { command: 'str_replace', path, old_str: 'b = 2', new_str: 'b = 20' } } });
+    await tui.waitFor('agent edit to frag.ts ready for review');
+    tui.send('\x1by'); await tui.waitFor('Agent edit: frag.ts');
+    expect(await tui.text()).toContain('+ export const b = 20;');
+    tui.send('a'); await tui.waitFor('Accepted agent edit');
+    await tui.waitFor('export const b = 20;');
+    expect(await tui.text()).toContain('export const a = 1;');
+  });
 });

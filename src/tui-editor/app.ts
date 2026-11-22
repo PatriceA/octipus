@@ -411,6 +411,7 @@ export class OctipusEditorApp {
       case 'permission': this.decisions.push(event); return;
       case 'approval': this.decisions.push(event); return;
       case 'agent.write': this.review.handleWrite(event.path, event.newText); return;
+      case 'agent.edit': this.review.handleEdit(event.path, event.oldText, event.newText); return;
       case 'login_required':
         // The editor has no login prompt of its own; the chat TUI stores the
         // login both of them use.
