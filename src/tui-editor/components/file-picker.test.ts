@@ -64,3 +64,49 @@ describe('FilePicker', () => {
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(60);
   });
 });
+
+describe('FilePicker over a large index (docs/plans/tui-modernization.md §5.2)', () => {
+  test('ranks the whole index: a file that sorts after the first thousand is found and comes first', () => {
+    const files = Array.from({ length: 5000 }, (_, i) => `${ROOT}/aaa/${String(i).padStart(4, '0')}.ts`);
+    files.push(`${ROOT}/zzz/components/header.ts`, `${ROOT}/zzz/had-er.txt`);
+    const picker = new FilePicker({ root: ROOT, files, onPick: () => {}, onCancel: () => {} });
+    for (const c of 'header') picker.handleInput(c);
+    expect(picker.getShownLabels()[0]).toBe('zzz/components/header.ts');
+  });
+
+  test('fuzzy: letters in order, not a substring', () => {
+    const { picker } = makePicker();
+    for (const c of 'srchdr') picker.handleInput(c);
+    expect(picker.getShownLabels()).toEqual(['src/components/header.ts']);
+  });
+
+  test('says how many matched when more than it shows', () => {
+    const files = Array.from({ length: 800 }, (_, i) => `${ROOT}/f${i}.ts`);
+    const picker = new FilePicker({ root: ROOT, files, onPick: () => {}, onCancel: () => {} });
+    expect(picker.render(100).map(strip).join('\n')).toContain('500 of 800 shown');
+  });
+
+  test('indexes asynchronously, and Enter typed before the index arrives opens the best match', async () => {
+    type Index = { files: string[]; source: 'walk'; truncated: boolean };
+    let resolveIndex: (index: Index) => void = () => {};
+    const index = new Promise<Index>((resolve) => { resolveIndex = resolve; });
+    let picked: string | null = null;
+    let updates = 0;
+    const picker = new FilePicker({ root: ROOT, index, onPick: (p) => { picked = p; }, onCancel: () => {}, onUpdate: () => { updates++; } });
+    expect(picker.render(80).map(strip).join('\n')).toContain('Indexing files');
+    for (const c of 'readme') picker.handleInput(c);
+    picker.handleInput('\r');
+    resolveIndex({ files: FILES, source: 'walk', truncated: false });
+    await index; await Promise.resolve();
+    expect(updates).toBe(1);
+    expect(picked).toBe(`${ROOT}/README.md`);
+  });
+
+  test('the filter takes a paste and non-ASCII names', () => {
+    const files = [`${ROOT}/docs/café notes.md`, `${ROOT}/other.md`];
+    const picker = new FilePicker({ root: ROOT, files, onPick: () => {}, onCancel: () => {} });
+    picker.handleInput('\x1b[200~café\x1b[201~');
+    expect(picker.getFilter()).toBe('café');
+    expect(picker.getShownLabels()).toEqual(['docs/café notes.md']);
+  });
+});

@@ -1,17 +1,18 @@
 /**
  * File picker overlay for the editor (Ctrl+O).
  *
- * Walks the workspace root once on mount, lets the user fuzzy-filter
- * the result with a small inline filter buffer, and opens the
- * selected file via the supplied callback.
+ * Indexes the project asynchronously on open (`project-files.ts`: `git
+ * ls-files` in a git work tree, so `.gitignore` is respected, a walk
+ * otherwise) and ranks the whole index against the filter with a fuzzy
+ * match — `hdr` finds `src/components/header.ts` however many files sort
+ * before it. The list shows the best `LIST_LIMIT` matches. Typing a name
+ * and Enter before the index has arrived opens the best match when it does.
  *
- * Keeps the implementation walking-based (same as FileTree) so we
- * don't depend on `fd` being installed; pi-tui's CombinedAutocomplete
- * already does fd-aware completion when the user types `@` in the
- * composer, which covers the path-from-keyboard case.
+ * The filter is a `TextField`: paste, emoji and IME input work.
  */
 import {
   type Component,
+  displayLine,
   type Focusable,
   matchesKey,
   type SelectItem,
@@ -19,39 +20,69 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@/tui-kit';
-import { readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { fuzzyMatch } from '@/tui-kit/editing';
+import { relative } from 'node:path';
 import { chalk, getPalette, getSelectListTheme } from '@/tui-pi/theme/defaults';
+import { indexProjectFiles, type ProjectIndex } from '../project-files';
+import { TextField } from './text-field';
 
-const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.octipus', '.next', '.cache']);
-const MAX_DEPTH = 6;
-const MAX_RESULTS = 1000;
-const PRINTABLE_CHAR = /^[\w\-./]$/;
+/** Rows of matches handed to the list; the rest are counted, not shown. */
+export const LIST_LIMIT = 500;
 
 export interface FilePickerOptions {
   root: string;
   onPick: (absolutePath: string) => void;
   onCancel: () => void;
-  /** Override the file list (mainly for tests). Each entry is an absolute path. */
+  /** Called when the index arrives, so the app can redraw. */
+  onUpdate?: () => void;
+  /** A ready file list (tests); otherwise the project is indexed. Absolute paths. */
   files?: string[];
+  /** The index to wait for; defaults to `indexProjectFiles(root)`. */
+  index?: Promise<ProjectIndex>;
 }
 
 export class FilePicker implements Component, Focusable {
   focused = false;
   private list: SelectList;
-  private filter = '';
-  private readonly allItems: SelectItem[];
+  private readonly field = new TextField();
+  private allItems: SelectItem[] = [];
+  private visible: SelectItem[] = [];
+  private shown = 0;
+  private matched = 0;
+  private state: 'indexing' | 'ready' | 'failed' = 'indexing';
+  /** Enter pressed before the index arrived: open the best match as soon as it does. */
+  private pickWhenReady = false;
+  private note = '';
 
   constructor(private readonly options: FilePickerOptions) {
-    this.allItems = options.files
-      ? options.files.map((p) => fileItem(options.root, p))
-      : walk(options.root).map((p) => fileItem(options.root, p));
-    this.list = this.buildList(this.allItems);
+    this.list = this.buildList([]);
+    if (options.files) {
+      this.setFiles({ files: options.files, source: 'walk', truncated: false });
+    } else {
+      (options.index ?? indexProjectFiles(options.root)).then(
+        (index) => { this.setFiles(index); options.onUpdate?.(); },
+        (error: unknown) => {
+          this.state = 'failed';
+          this.note = `Could not list the project's files: ${error instanceof Error ? error.message : String(error)}`;
+          options.onUpdate?.();
+        },
+      );
+    }
+  }
+
+  private setFiles(index: ProjectIndex): void {
+    this.allItems = index.files.map((p) => fileItem(this.options.root, p));
+    this.state = 'ready';
+    this.note = index.truncated ? `Indexed the first ${index.files.length.toLocaleString('en-US')} files.` : '';
+    this.applyFilter();
+    const best = this.visible[0];
+    if (this.pickWhenReady && best && this.field.value.trim()) this.options.onPick(best.value);
+    this.pickWhenReady = false;
   }
 
   private buildList(items: SelectItem[]): SelectList {
     const list = new SelectList(items, 12, getSelectListTheme(), {
-      maxPrimaryColumnWidth: 40,
+      maxPrimaryColumnWidth: 60,
     });
     list.onSelect = (item) => this.options.onPick(item.value);
     list.onCancel = () => this.options.onCancel();
@@ -59,38 +90,41 @@ export class FilePicker implements Component, Focusable {
   }
 
   private applyFilter(): void {
-    // pi-tui's SelectList.setFilter uses prefix-match on `value` (absolute
-    // paths in our case) so it never matches what the user types. We do
-    // case-insensitive substring matching on `label` (relative path) and
-    // rebuild the SelectList with the matching items.
-    const q = this.filter.toLowerCase();
-    const next = q.length === 0
-      ? this.allItems
-      : this.allItems.filter((item) => item.label.toLowerCase().includes(q));
-    this.list = this.buildList(next);
+    // pi-tui's SelectList.setFilter prefix-matches `value` (absolute paths),
+    // which never matches what the user types; rank the labels instead.
+    const q = this.field.value.trim();
+    let ranked: SelectItem[];
+    if (q.length === 0) {
+      ranked = this.allItems;
+    } else {
+      const scored: Array<{ item: SelectItem; score: number }> = [];
+      for (const item of this.allItems) {
+        const m = fuzzyMatch(q, item.label);
+        if (m.matches) scored.push({ item, score: m.score });
+      }
+      scored.sort((a, b) => a.score - b.score || a.item.label.length - b.item.label.length || a.item.label.localeCompare(b.item.label));
+      ranked = scored.map((s) => s.item);
+    }
+    this.matched = ranked.length;
+    const visible = ranked.slice(0, LIST_LIMIT);
+    this.shown = visible.length;
+    this.visible = visible;
+    this.list = this.buildList(visible);
   }
 
   invalidate(): void { this.list.invalidate(); }
 
   handleInput(data: string): void {
     if (matchesKey(data, 'escape')) { this.options.onCancel(); return; }
-    if (matchesKey(data, 'backspace')) {
-      if (this.filter.length === 0) { this.options.onCancel(); return; }
-      this.filter = this.filter.slice(0, -1);
-      this.applyFilter();
-      return;
-    }
+    if (matchesKey(data, 'backspace') && this.field.value === '') { this.options.onCancel(); return; }
+    if (matchesKey(data, 'enter') && this.state === 'indexing') { this.pickWhenReady = true; return; }
     if (matchesKey(data, 'up') || matchesKey(data, 'down')
         || matchesKey(data, 'pageUp') || matchesKey(data, 'pageDown')
-        || matchesKey(data, 'home') || matchesKey(data, 'end')
         || matchesKey(data, 'enter')) {
       this.list.handleInput(data);
       return;
     }
-    if (data.length === 1 && PRINTABLE_CHAR.test(data)) {
-      this.filter += data;
-      this.applyFilter();
-    }
+    if (this.field.handleInput(data) && this.state === 'ready') this.applyFilter();
   }
 
   render(width: number): string[] {
@@ -100,25 +134,32 @@ export class FilePicker implements Component, Focusable {
     const accent = (text: string) => chalk.hex(palette.accent)(text);
 
     const header = accent('Open file');
-    const filterLine = `${dim('filter:')} ${this.filter || dim('(type to filter)')}`;
-    const listLines = this.list.render(width - 4);
+    const filterLine = `${dim('filter:')} ${this.field.render(Math.max(1, width - 12), this.focused, dim('(type to filter)'))}`;
+    const status = this.state === 'indexing' ? [dim('Indexing files…')]
+      : this.state === 'failed' ? [chalk.hex(palette.error)(this.note)]
+      : this.matched === 0 ? [dim(this.allItems.length === 0 ? 'No files in this project.' : 'No file matches.')]
+      : [];
+    const counts = this.state === 'ready' && this.matched > this.shown
+      ? [dim(`${this.shown} of ${this.matched.toLocaleString('en-US')} shown — type to narrow`)]
+      : [];
+    const notes = this.state === 'ready' && this.note ? [dim(this.note)] : [];
+    const listLines = this.state === 'ready' && this.matched > 0 ? this.list.render(width - 4) : [];
 
-    const innerWidth = Math.max(
-      visibleWidth(header),
-      visibleWidth(filterLine),
-      ...listLines.map(visibleWidth),
-    );
+    const body = [header, filterLine, ...status, ...listLines, ...counts, ...notes];
+    const innerWidth = Math.max(...body.map(visibleWidth));
     const boxWidth = Math.min(width, innerWidth + 4);
     const inner = boxWidth - 4;
     const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
     const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
     const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
 
-    return [top, middle(header), middle(filterLine), ...listLines.map((line) => middle(line)), bottom];
+    return [top, ...body.map(middle), bottom];
   }
 
   /** Test aid: read the active filter. */
-  getFilter(): string { return this.filter; }
+  getFilter(): string { return this.field.value; }
+  /** Test aid: the labels in the list, best first. */
+  getShownLabels(): string[] { return this.visible.map((i) => i.label); }
 }
 
 function fileItem(root: string, absolutePath: string): SelectItem {
@@ -128,30 +169,9 @@ function fileItem(root: string, absolutePath: string): SelectItem {
   const rel = relative(root, absolutePath).replace(/\\/g, '/');
   return {
     value: absolutePath,
-    label: rel || absolutePath,
+    label: displayLine(rel || absolutePath),
     description: '',
   };
-}
-
-function walk(root: string): string[] {
-  const out: string[] = [];
-  visit(root, 0, out);
-  return out;
-}
-
-function visit(dir: string, depth: number, out: string[]): void {
-  if (out.length >= MAX_RESULTS || depth > MAX_DEPTH) return;
-  let names: string[];
-  try { names = readdirSync(dir).sort(); } catch { return; }
-  for (const name of names) {
-    if (SKIP.has(name)) continue;
-    if (out.length >= MAX_RESULTS) return;
-    const full = join(dir, name);
-    let isDir = false;
-    try { isDir = statSync(full).isDirectory(); } catch { continue; }
-    if (isDir) visit(full, depth + 1, out);
-    else out.push(full);
-  }
 }
 
 function padTo(text: string, width: number): string {
