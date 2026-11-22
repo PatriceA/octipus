@@ -1,7 +1,7 @@
 # Terminal chat and editor: modernization plan
 
-Status: proposed (2026-11-22). Nothing below Phase 0 is built. Phase 0 shipped
-with this document.
+Status: proposed (2026-11-22). Phase 0 shipped with this document; Phase 1 and
+Phase 2 item 1 have shipped since (§7).
 
 Scope: `octi tui` (`src/tui-pi/`, 5.4k lines with tests) and `octi edit`
 (`src/tui-editor/`, 6.5k lines with tests), their shared pieces, the
@@ -62,7 +62,7 @@ What the composer fix consists of (`src/tui-pi/terminal-text.ts`):
 Not covered by the fix, and listed as work below: pi-tui overlays are composited
 after our frame, so the backstop does not see them (each prompt sanitizes its
 own input instead); and width disagreements between pi-tui and the terminal
-(§3.3) can still wrap a row.
+(§3.3) can still wrap a row. Both were addressed in Phase 1 (§7).
 
 ## 3. Why the current base is fragile
 
@@ -434,10 +434,43 @@ No visible change; makes the rest safe to do.
 
 Done when: the invariant suite runs 500 seeds clean in CI.
 
+**Phase 1 — shipped.**
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Terminal restored on every exit path | `af30f7e` | `tests/tui/exit-paths.e2e.test.ts` drives the real runtime through an uncaught exception, an unhandled rejection, `process.exit` and SIGHUP from a test-only fixture entry; checks mouse mode, bracketed paste, cursor shown last, raw mode off, error printed after the restore, exit status. `runtime.test.ts` checks the order with a fake process. |
+| 2. Overlays framed in the registry | `d8245e0` | `overlays/registry.test.ts`. Every overlay, the editor's modals included, is wrapped in `FramedOverlay`: `frameRow`, truncation to the overlay width, and (since `c9c73d5`) never taller than the rows pi-tui gives it. |
+| 3. Invariant suite | `46d167e` | `tests/tui/invariants.e2e.test.ts`, chat surface only. Default 8 seeds × 30 steps (~25 s); `TUI_FUZZ_SEEDS`, `TUI_FUZZ_SEED`, `TUI_FUZZ_STEPS`. CI runs the default; the 500-seed run was made locally (below). |
+| 4. Non-wheel mouse reports swallowed, releases matched | `9a2d9e9` | `terminal-actions.test.ts`, `app-flow.test.ts`. No component was seen to misread a report before the change; the path is closed rather than an observed corruption fixed. |
+| 5. Dead code and stale comments | `c588414` | `AgentStore`, `LayoutStore.overlay`, the persisted `theme`, merge lock mode, `void chalk`, orphaned and alt-screen comments, the status bar doc. Vim mode and selection kept. |
+| 6. Width audit | `5df61ea`, `d55d1b2`, `658876e`, `2bd5d76` | `src/tui-kit/terminal-text.width.test.ts`. `displayText` drops invisible format characters, unjoins emoji (ZWJ, skin tones), puts a base-less combining mark on a no-break space and turns half a surrogate pair into U+FFFD. |
+
+Bugs the invariant suite found, each fixed with its own deterministic test:
+an approval question taller than the window pushed the choices and keys off
+screen and covered the status line (`c9c73d5`); a combining mark with no base
+was measured as no cells and drawn as one, wrapping the row (`d55d1b2`), and
+`displayLine`'s trim took the base away again (`2bd5d76`); text cut by UTF-16
+length (the adapter's 80-character previews, a model name) left half a
+surrogate pair, measured as no cells and drawn as one (`658876e`). The last
+two came from a 500-seed run (3 of 500 failed); see below for the rerun.
+Found on the way: `/copy` copied the screen's cleaned text rather than the
+reply (`e18486c`).
+
+Still open, pinned in the width audit rather than fixed: spacing marks (Mc) in
+Devanagari, Tibetan and similar scripts are measured as no cells and drawn as
+one, so such a row can still wrap — the suite leaves them out of its input.
+`@xterm/headless` has Unicode 6 tables and draws emoji one cell, so the PTY
+suites cannot catch an emoji measured too narrow; only too wide. The editor
+surface is not under the invariant suite.
+
 ### Phase 2 — Foundation (M)
 
 1. Create `src/tui-kit/`; route every pi-tui import through it; delete the
-   private-path import.
+   private-path import. **Shipped** (`97b6705`): `src/tui-kit/index.ts`
+   re-exports by name; the `dist/utils.js` path for `sliceByColumn` now
+   exists only there (0.73 does not export it); `seam.test.ts` fails on any
+   other importer. Module augmentation goes through `declare module
+   '@/tui-kit'`.
 2. Run the §4.4 spike; record the result in this file; take B or C.
 3. Move the chat surface to the alternate-screen layout of §6, with `--inline`
    as the fallback mode.

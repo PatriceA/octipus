@@ -28,7 +28,7 @@ Text from the agent, tools and the server is reduced to what a terminal draws pr
 
 The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls or mouse wheel for the transcript. Resizing reflows history without dropping text beyond the right edge.
 
-Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting.
+Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting. A question taller than the window scrolls inside its box with `Up` / `Down`; the choices and the keys to answer stay visible.
 
 ## Selecting and copying text
 
@@ -127,6 +127,8 @@ OCTIPUS_TUI_ICONS=emoji octi tui
 
 Keybindings can be overridden in `~/.octipus/keybindings.json`. The editor's `/reload` reloads those bindings; `/hotkeys` displays them.
 
+If either surface stops on an error, or the terminal closes under it, it first turns mouse reporting off, shows the cursor and leaves raw mode, then prints the error and exits with a non-zero status, so the shell you return to works normally.
+
 ## Testing
 
 ```bash
@@ -135,6 +137,6 @@ npm run test:tui
 
 This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
 
-The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. Tests do not establish compatibility with every terminal or font.
+The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps. It runs 8 seeds by default; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. Tests do not establish compatibility with every terminal or font.
 
 See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.
