@@ -7,6 +7,33 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal chat and editor run on the alternate screen; drag selects
+  without Shift.** `octi tui` and `octi edit` now open on the terminal's
+  alternate screen. What you had in the terminal before launch survives —
+  resizing no longer erased it (`ESC[3J`) — and quitting restores the screen
+  instead of leaving a dead frame behind. In the chat the transcript scrolls
+  in the app with the composer and status pinned below it; dragging selects
+  transcript text (without the rail) and copies it on release, the wheel
+  scrolls with nothing held, Shift+drag (Option+drag in iTerm2) still gives
+  the terminal's own selection, and `Ctrl+Shift+F` searches. Copying goes
+  through a chain — `pbcopy` / `clip.exe` / `wl-copy` / `xclip` / `xsel`
+  locally, the tmux buffer in tmux, OSC 52 otherwise — and says which one was
+  used, or that none worked. On quit the last exchange and
+  `octi tui --session <id>` are printed. New: `/export [path]` (Markdown),
+  `/scrollback` and `Alt+O` (the transcript in the terminal's own scrollback),
+  `--inline` (the previous main-screen drawing), and the `tui.mouse` setting
+  (`app` | `native` | `off`, in `~/.octipus/tui.json` or `--mouse`). Long
+  sessions render only the newest 200 messages and keep at most 5,000 in
+  memory, with a notice when older ones were dropped.
+- **pi-tui moved to `@earendil-works/pi-tui` 1.6.0.** `@mariozechner/pi-tui`
+  is deprecated upstream; its maintained successor is pinned to an exact
+  version. It ships small prebuilt native helpers (clipboard reads, modifier
+  keys) for macOS, Windows and Linux/X11; Octipus does not call them, pi-tui
+  loads the macOS/Windows one only to tell Shift+Enter apart in Terminal.app
+  and to enable VT input on Windows, and nothing on Linux or in the Docker
+  image loads one. `chalk`, which the terminal theme always used but only got
+  through the old package, is now a declared dependency.
+
 - **Terminal chat and editor: the composer no longer vanishes during a turn.**
   A tool call whose preview spanned lines (a multi-line shell command, a
   carriage return or tab in a result, an escape sequence in tool output) was

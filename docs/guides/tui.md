@@ -9,36 +9,84 @@ Octipus has two terminal surfaces:
 
 Use Node **24.22.1 or newer**. Start the backend with `octi start`, then open either surface. `octi start tui` starts the backend and chat together. Use `--project /path/to/project` to choose a directory; the default is the current directory.
 
-Both surfaces use pi-tui for terminal rendering, overlays and the chat composer. The file editor uses Octipus's own buffer, cursor and undo implementation. It is a lightweight editor, not a replacement for a complete IDE.
+Both surfaces use [pi-tui](https://www.npmjs.com/package/@earendil-works/pi-tui) (`@earendil-works/pi-tui`, pinned to an exact version) for terminal rendering, overlays and the chat composer. The file editor uses Octipus's own buffer, cursor and undo implementation. It is a lightweight editor, not a replacement for a complete IDE.
+
+## The screen
+
+Both surfaces open on the terminal's **alternate screen**, like `less` or `vim`: what you had in the terminal before launch is left alone, resizing never erases it, and quitting puts it back. Every row is drawn at its own position, so a row the terminal measures differently from Octipus damages only itself.
+
+The transcript scrolls inside the app. Below it the activity row, subagents, composer and status rows stay pinned; the composer never drops below one row.
+
+When you quit the chat, the screen is restored and the last exchange is printed to your terminal, followed by the command that reopens the conversation:
+
+```text
+Resume this conversation: octi tui --session <id>
+```
+
+`--inline` draws in the terminal's normal buffer instead, for people who want the previous behaviour; the transcript is still scrolled by the app there, and resizing no longer erases the terminal's scrollback either.
+
+```bash
+octi tui --inline
+```
 
 ## Reading a conversation
 
 User turns have a **You** heading and a vertical rail on every wrapped line. Replies have an **Octipus** heading and render Markdown when complete. Streaming text remains plain until completion. System notices use a muted dot; errors have a visible `! Error` marker as well as an error colour.
 
-- `PageUp` and `PageDown` scroll by screen rows, including within one long answer. The mouse wheel always scrolls the same transcript while the composer and status stay fixed.
-- `Ctrl+Home` jumps to the oldest retained output; `Ctrl+End` jumps to the latest. History controls appear when output exceeds the viewport.
+- The mouse wheel scrolls the transcript; `PageUp` and `PageDown` scroll by a page, including within one long answer. A scrollbar appears while you scroll.
+- `Ctrl+Home` jumps to the oldest retained output; `Ctrl+End` — or `End`, while reading history — returns to the latest. A **↓ End: latest** marker shows while you are away from it; clicking it also returns.
+- `Ctrl+Shift+F` searches the transcript.
 - While reading history, new messages and streaming text do not move the rows being read.
-- `End` returns to the latest output when scrolled back. Otherwise it retains its normal composer behaviour.
-- In the editor, transcript scrolling applies when the chat pane has focus.
-- Resizing while reading history reflows the retained messages and keeps the reading position within the same message.
+- In the editor, the wheel and the transcript keys apply when the chat pane has focus.
+- Resizing reflows the messages and keeps the reading position.
+
+Long sessions stay fast: only the newest 200 messages are rendered, and scrolling up past them brings older ones in. At most 5,000 messages are kept in memory; beyond that the oldest are dropped and a notice at the top of the transcript says how many. The server keeps the whole session. `/history` reloads its latest 50 messages; loading older turns from the server while scrolling needs a gateway change and is not available yet.
 
 The activity line shows thinking, elapsed time, model and current tool activity; it disappears when the turn ends, so the status bar keeps the model of the current or last turn at the end of its line, and drops it on `/resume`. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
 
-Text from the agent, tools and the server is reduced to what a terminal draws predictably before it is shown: control characters and escape sequences are removed, tabs become spaces, invisible format characters (variation selectors, soft hyphens, bidi controls) are dropped, and joined emoji (families, skin tones) are shown as their separate emoji. `/copy` copies the original text. Scripts with spacing vowel signs (Devanagari, Tibetan and similar) can still be measured narrower than the terminal draws them, which may wrap a row.
-
-The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls or mouse wheel for the transcript. Resizing reflows history without dropping text beyond the right edge.
+Text from the agent, tools and the server is reduced to what a terminal draws predictably before it is shown: control characters and escape sequences are removed, tabs become spaces, invisible format characters (variation selectors, soft hyphens, bidi controls) are dropped, and joined emoji (families, skin tones) are shown as their separate emoji. `/copy` copies the original text. Scripts with spacing vowel signs (Devanagari, Tibetan and similar) can still be measured narrower than the terminal draws them; on the alternate screen that shifts only the rest of that row.
 
 Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting.
 
 ## Selecting and copying text
 
-Mouse-wheel scrolling and native text selection are available together, without a mode switch. Hold **Shift** while dragging with the left mouse button to select visible text, then use your terminal's Copy command (usually **Ctrl+Shift+C** on Linux). **Ctrl+C** remains the app's quit/cancel key. Alt+M and `/mouse` have been removed.
+**Drag** with the left button to select transcript text — no modifier needed. Dragging at the top or bottom edge keeps scrolling and extends the selection past what is on screen. The selection is copied when you release the button; the rail in front of each row is left out. A short message says how the text was copied. Double-click selects a word, triple-click a line.
 
-Shift+drag is the native selection override in xterm and many compatible terminals ([xterm mouse documentation](https://invisible-island.net/xterm/manpage/xterm.html)). Terminal key mappings can differ; configure the terminal's selection override if needed. In the editor, focus chat to scroll its transcript. Selection itself works across the visible terminal, including the editor pane.
+Your terminal's own selection is still there behind its override key: **Shift**+drag in xterm, GNOME Terminal, Konsole, Kitty, Windows Terminal and most others; **Option**+drag in iTerm2 and Terminal.app. Then use the terminal's Copy command. **Ctrl+C** remains the app's quit/cancel key.
 
-`/copy` or `/copy last` requests a copy of the latest assistant response, including text outside the viewport. `/copy transcript` requests all currently loaded user, assistant and system messages. Both preserve raw Markdown and Unicode; during streaming they copy the text received so far. These commands work in both chat composers and do not send a gateway request.
+`/copy` or `/copy last` copies the latest assistant response, including text outside the viewport. `/copy transcript` copies all loaded user, assistant and system messages. Both preserve raw Markdown and Unicode; during streaming they copy the text received so far.
 
-Clipboard requests use OSC 52 without installing dependencies. Your terminal must allow OSC 52 clipboard writes; Octipus reports that it sent a request because terminals do not confirm success. If pasting produces nothing, use Shift+drag and your terminal’s Copy command instead. Requests over 75,000 UTF-8 bytes are refused without truncating; copy an individual response or select sections instead.
+Selection and `/copy` use the same clipboard chain, and say which way the text went:
+
+1. a clipboard tool, when the terminal is on this machine: `pbcopy` (macOS), `clip.exe` (Windows, WSL), `wl-copy` (Wayland), `xclip` or `xsel` (X11). Not over SSH, where it would copy on the remote machine;
+2. the tmux paste buffer, inside tmux (paste with prefix `]`; tmux passes it to your terminal's clipboard when its `set-clipboard` option allows);
+3. an OSC 52 request to the terminal. Terminals do not confirm it, so Octipus says it was sent, not that it worked. If pasting gives nothing, allow OSC 52 clipboard writes in your terminal or use its own selection.
+
+Text over 75,000 UTF-8 bytes cannot go through OSC 52; when no tool took it either, Octipus says it was not copied rather than truncating it.
+
+### Mouse setting
+
+`tui.mouse` sets how the app uses the mouse. Set it in `~/.octipus/tui.json`, next to `keybindings.json`, or per run with `--mouse`:
+
+```json
+{ "mouse": "native" }
+```
+
+| Value | Wheel | Selection |
+| --- | --- | --- |
+| `app` (default) | Scrolls the pane under the pointer | Drag selects in the app; Shift (Option) for the terminal's |
+| `native` | Arrives as Up/Down (alternate-scroll mode), which scroll the transcript while the composer is empty | The terminal's own, no modifier; no click targets |
+| `off` | Whatever the terminal does on the alternate screen | The terminal's own |
+
+An unknown value is an error at launch naming the choices; it is not silently replaced by the default. With `--inline`, `app` reports only the wheel and Shift+drag is the selection, as before.
+
+### Taking the conversation out
+
+| Command / key | Action |
+| --- | --- |
+| `/export [path]` | Write the transcript as Markdown (default `octipus-<session>-<time>.md` in the project directory). Refuses to overwrite an existing file. |
+| `/scrollback` / `Alt+O` | Leave the screen and print the transcript into the terminal's own scrollback, for its search and selection. Any key returns. |
+| Quit | The last exchange and the resume command are printed after the screen is restored. |
 
 ## Plans and feedback
 
@@ -64,10 +112,12 @@ The compact details show steps near the active step. The full transcript entry r
 | `Tab` | Completion |
 | `\` then `Enter` | Newline when the terminal does not support Shift+Enter |
 | `Alt+T` / `F8` | Chat shell voice input, when configured |
+| `Alt+O` | Transcript into the terminal scrollback |
+| `Ctrl+Shift+F` | Search the transcript |
 
 Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills` and `/compact`.
 
-The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace` and `/resume` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
+The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace`, `/resume`, `/export` and `/scrollback` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 
 To resume a chat session:
 
@@ -135,6 +185,6 @@ npm run test:tui
 
 This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
 
-The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. Tests do not establish compatibility with every terminal or font.
+The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
 
 See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.
