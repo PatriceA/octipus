@@ -13,7 +13,15 @@ import { type NodeProps, useViewRuntime } from './runtime';
 
 const ChartImpl = lazy(() => import('./chart-impl'));
 
-export interface ChartPoint { x: string; [series: string]: string | number | null }
+/**
+ * One point as recharts reads it: the label at `x`, series values at
+ * `s0`, `s1`… by position — never at the series' own keys, which may be
+ * `x` or repeat.
+ */
+export interface ChartPoint { x: string; [series: `s${number}`]: number | null }
+
+/** The key of the `i`th series in a point. */
+export const seriesKey = (i: number): `s${number}` => `s${i}`;
 
 const TYPE_NAME = { bar: 'Bar', line: 'Line', area: 'Area', pie: 'Pie' } as const;
 
@@ -24,17 +32,17 @@ export function Chart({ c, r }: NodeProps<'Chart'>) {
   const series = c.type === 'pie' ? c.series.slice(0, 1) : c.series;
   const points: ChartPoint[] = capped.map((row) => {
     const point: ChartPoint = { x: valueToText(row[c.x], rt.format) };
-    for (const s of series) {
+    series.forEach((s, i) => {
       const n = toNumber(row[s.key]);
-      point[s.key] = Number.isFinite(n) ? n : null;
-    }
+      point[seriesKey(i)] = Number.isFinite(n) ? n : null;
+    });
     return point;
   });
   const height = Math.max(120, Math.min(480, typeof c.height === 'number' ? c.height : 240));
   const label = (s: { key: string; label?: string }) => s.label || s.key;
 
-  const ranges = series.map((s) => {
-    const values = points.map((p) => p[s.key]).filter((v): v is number => typeof v === 'number');
+  const ranges = series.map((s, i) => {
+    const values = points.map((p) => p[seriesKey(i)]).filter((v): v is number => typeof v === 'number');
     if (values.length === 0) return `${label(s)}: no values`;
     return `${label(s)} from ${formatNumber(Math.min(...values), undefined, rt.format)} to ${formatNumber(Math.max(...values), undefined, rt.format)}`;
   });
@@ -44,7 +52,7 @@ export function Chart({ c, r }: NodeProps<'Chart'>) {
     <figure className="flex flex-col gap-1 min-w-0" data-testid="inline-ui-chart">
       <div role="img" aria-label={summary} style={{ height }} className="w-full min-w-0">
         <Suspense fallback={<div className="h-full w-full animate-pulse rounded-md bg-surface-container-high/50" />}>
-          <ChartImpl type={c.type} points={points} series={series.map((s) => ({ key: s.key, label: label(s) }))} stacked={!!c.stacked} />
+          <ChartImpl type={c.type} points={points} series={series.map((s, i) => ({ key: seriesKey(i), label: label(s) }))} stacked={!!c.stacked} />
         </Suspense>
       </div>
       {rows.length > capped.length && <p className="text-xs text-on-surface-variant">Showing the first {capped.length} of {rows.length} points.</p>}
@@ -56,14 +64,17 @@ export function Chart({ c, r }: NodeProps<'Chart'>) {
             <thead className="bg-surface-container-high">
               <tr>
                 <th scope="col" className="px-2 py-1 text-left font-medium">{c.x}</th>
-                {series.map((s) => <th key={s.key} scope="col" className="px-2 py-1 text-right font-medium">{label(s)}</th>)}
+                {series.map((s, i) => <th key={i} scope="col" className="px-2 py-1 text-right font-medium">{label(s)}</th>)}
               </tr>
             </thead>
             <tbody>
               {points.map((p, i) => (
                 <tr key={i} className="border-t border-outline-variant/30 text-on-surface">
                   <th scope="row" className="px-2 py-1 text-left font-normal">{p.x}</th>
-                  {series.map((s) => <td key={s.key} className="px-2 py-1 text-right tabular-nums">{p[s.key] === null ? '—' : formatNumber(p[s.key], undefined, rt.format)}</td>)}
+                  {series.map((s, si) => {
+                    const v = p[seriesKey(si)];
+                    return <td key={si} className="px-2 py-1 text-right tabular-nums">{v === null || v === undefined ? '—' : formatNumber(v, undefined, rt.format)}</td>;
+                  })}
                 </tr>
               ))}
             </tbody>

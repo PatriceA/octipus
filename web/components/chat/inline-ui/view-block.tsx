@@ -10,14 +10,15 @@
  */
 import { Code2, RotateCcw, Sparkles } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { INLINE_UI_LIMITS } from '../../../../src/shared/inline-ui/limits';
+import { INLINE_UI_LIMITS, INLINE_UI_VIEW_LIMITS } from '../../../../src/shared/inline-ui/limits';
 import { type InlineUiView as InlineUiViewDoc, viewToAuthored } from '../../../../src/shared/inline-ui/view';
-import type { InlineUiBlockData, InlineUiHost, InlineUiSendAction } from './context';
+import { type InlineUiBlockData, type InlineUiHost, type InlineUiSendAction, setCachedInlineUiState } from './context';
 import { SuggestionStrip } from './strip';
 import { InlineUiView, type InlineUiViewEvent } from './view/view';
 
 interface PendingStrip {
   action: InlineUiSendAction;
+  data: InlineUiViewEvent['data'];
   at: number;
   settle: (sent: boolean) => void;
   fail: (err: unknown) => void;
@@ -42,26 +43,37 @@ export function LoadedViewBlock({ block, view, host, untrusted }: { block: Inlin
     ? 'Answers are off while you act as another user.'
     : !host.sendAction ? 'Answers cannot be sent from here.' : null;
 
-  const deliver = async (action: InlineUiSendAction) => {
+  const deliver = async (action: InlineUiSendAction, data: InlineUiViewEvent['data']) => {
     if (!host.sendAction) throw new Error('Answers cannot be sent from here.');
     setRefusal(null);
-    await host.sendAction(action, (message) => setRefusal({ message }));
+    const before = block.state ?? null;
+    await host.sendAction(action, (message) => {
+      setCachedInlineUiState(host, block.id, before);
+      setRefusal({ message });
+    });
+    // A remount (back from another session) opens the view answered, as it is now.
+    setCachedInlineUiState(host, block.id, { data, action: { name: action.name, componentId: action.componentId, at: new Date().toISOString() } });
   };
 
   const onEvent = (event: InlineUiViewEvent): Promise<boolean> => {
+    // A data model over the server's limit (a selectable table writes whole
+    // rows) is left out: the answer still goes, and the server keeps the
+    // view's own data as the stored state.
+    const fits = JSON.stringify(event.data).length <= INLINE_UI_VIEW_LIMITS.dataChars;
+    if (!fits) console.warn(`[inline-ui] the answer of "${block.id}" is sent without its data: over ${INLINE_UI_VIEW_LIMITS.dataChars} characters`);
     const action: InlineUiSendAction = {
       blockId: block.id,
       name: event.name,
       componentId: event.componentId,
       context: event.context,
-      data: event.data,
+      ...(fits ? { data: event.data } : {}),
       text: event.userMessage,
     };
-    if (!block.tainted) return deliver(action).then(() => true);
+    if (!block.tainted) return deliver(action, event.data).then(() => true);
     // Outside content may have shaped what this button sends: the user reads the full text first (S6).
     return new Promise<boolean>((resolve, reject) => {
       strip?.settle(false);
-      setStrip({ action, at: Date.now(), settle: resolve, fail: reject });
+      setStrip({ action, data: event.data, at: Date.now(), settle: resolve, fail: reject });
     });
   };
 
@@ -104,7 +116,7 @@ export function LoadedViewBlock({ block, view, host, untrusted }: { block: Inlin
           onSend={() => {
             const pending = strip;
             setStrip(null);
-            deliver(pending.action).then(() => pending.settle(true), pending.fail);
+            deliver(pending.action, pending.data).then(() => pending.settle(true), pending.fail);
           }}
           onEdit={host.editSuggestion ? () => { host.editSuggestion?.(strip.action.text, block.id); closeStrip(false); } : undefined}
           onDismiss={() => closeStrip(false)}

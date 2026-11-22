@@ -5,8 +5,9 @@
  * model and writes through its `@path`; each has a label element. After an
  * answer is sent they are read-only until **Change answer**.
  */
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useEffect, useId, useState } from 'react';
 import {
+  actionSteps,
   componentEventSteps,
   formatValue,
   isJsonObject,
@@ -91,6 +92,14 @@ function NumberField({ id, label, c, current, write }: {
   const problem = parsed === undefined ? 'Enter a number.'
     : outOfRange ? (c.min !== undefined && c.max !== undefined ? `Enter a number from ${c.min} to ${c.max}.` : c.min !== undefined ? `Enter ${c.min} or more.` : `Enter ${c.max} or less.`)
     : null;
+  // The data model keeps the last valid number meanwhile: an answer now would
+  // send a value the field does not show, so it waits until this is fixed.
+  const { reportNumber } = rt;
+  const bad = problem !== null && !rt.readOnly && !rt.inert;
+  useEffect(() => {
+    reportNumber(id, bad ? c.label : null);
+    return () => reportNumber(id, null);
+  }, [reportNumber, id, bad, c.label]);
 
   const onChange = (next: string) => {
     setText(next);
@@ -127,8 +136,15 @@ export function Slider({ c, scope }: NodeProps<'Slider'>) {
   const id = useId();
   const { current, write } = useBinding(c.value, scope);
   const n = toNumber(current);
-  const value = Number.isFinite(n) ? Math.max(c.min, Math.min(c.max, n)) : c.min;
+  const held = Number.isFinite(n);
+  const value = held ? Math.max(c.min, Math.min(c.max, n)) : c.min;
   const shown = formatValue(value, c.format, rt.format);
+  // No number at the path (a template item, a view stored before the lint
+  // asked for one): the slider shows its minimum, so the data model holds it
+  // too — the display, expressions and the answer agree. Once, on mount.
+  const fill = !held && !rt.inert && !rt.readOnly;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (fill) write(value); }, []);
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-2">
@@ -289,7 +305,12 @@ const BUTTON_VARIANT = {
 export function Button({ c, r, scope }: NodeProps<'Button'>) {
   const rt = useViewRuntime();
   const answers = componentEventSteps(c).length > 0;
-  const blocked = answers ? rt.eventBlock : rt.inert ? 'Not available here' : null;
+  // A button that only changes the data model is an input: read-only after the answer, too.
+  const writes = actionSteps(c.action).some((step) => 'set' in step);
+  const blocked = answers ? rt.eventBlock
+    : rt.inert ? 'Not available here'
+    : writes && rt.readOnly ? 'Answer sent — choose Change answer to change it'
+    : null;
   const off = isTruthy(r.disabled ?? null);
   return (
     <button

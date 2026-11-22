@@ -37,6 +37,8 @@ export interface ViewRuntime {
   eventBlock: string | null;
   /** Id of the element that explains `eventBlock`, for `aria-describedby`. */
   eventBlockId: string;
+  /** A number field says its text is not a valid number (its label), or is again (null): answers wait meanwhile. */
+  reportNumber: (key: string, label: string | null) => void;
   /** Run a button's actions (it was clicked) in the scope it rendered in. */
   click: (componentId: string, scope: ExprScope) => void;
   format: FormatOptions;

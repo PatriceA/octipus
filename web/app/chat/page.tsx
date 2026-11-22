@@ -23,7 +23,7 @@ import MessageTimeline, {
 } from '@/components/chat/message-timeline';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 import PromptInput, { type Attachment, type PromptInputHandle } from '@/components/chat/prompt-input';
-import { type InlineUiBlockData, type InlineUiHost, InlineUiProvider, type InlineUiSendAction } from '@/components/chat/inline-ui/context';
+import { type InlineUiBlockData, type InlineUiHost, InlineUiProvider, type InlineUiSendAction, refreshInlineUiBlock } from '@/components/chat/inline-ui/context';
 import { inlineUiMarkerIds } from '../../../src/shared/inline-ui/fence';
 import type { InlineUiReport } from '../../../src/shared/inline-ui/bridge';
 import type { InlineUiViewAction } from '../../../src/shared/inline-ui/view';
@@ -272,7 +272,7 @@ export default function ChatPage() {
   /** isLoading before the last send: a steered message joins a run, it doesn't start one. */
   const loadingBeforeSendRef = useRef(false);
   /**
-   * The session of this tab's last `chat.send` until an event of that session
+   * The session of this tab's last `chat.send` until its `chat.delivery`
    * shows the server took it. A send refused before its turn starts gets an
    * `error` frame only (no `chat.error`); this is where it is reported.
    */
@@ -723,6 +723,12 @@ export default function ChatPage() {
       // More was missed than the server kept (or this tab saw nothing of the
       // session live): reload the transcript.
       void loadSessionMessages(message.sessionId);
+    } else if (message.type === 'chat.delivery') {
+      // The server took this tab's send (steered, queued, started): a later
+      // error frame is not its refusal. Other events of the session are not
+      // this answer — a running turn's stream can arrive before the refusal.
+      if (message.sessionId === pendingSendRef.current) pendingSendRef.current = null;
+      if (message.sessionId === pendingActionRef.current?.sid) pendingActionRef.current = null;
     } else if (message.type === 'error') {
       handleSendRefused(message.code, message.message);
     }
@@ -1032,9 +1038,6 @@ export default function ChatPage() {
     const eventSessionId = event.sessionId;
     const sid = eventSessionId || activeSessionId;
     const payload = (event.payload ?? {}) as Record<string, any>;
-    // An event of the session this tab just sent in: the server took the send.
-    if (eventSessionId && eventSessionId === pendingSendRef.current) pendingSendRef.current = null;
-    if (eventSessionId && eventSessionId === pendingActionRef.current?.sid) pendingActionRef.current = null;
 
     switch (event.type) {
       case 'chat.response': {
@@ -1079,6 +1082,8 @@ export default function ChatPage() {
         // delivery (`webchat:<you>`): show it in its session.
         const target = sid;
         if (!target || typeof payload.content !== 'string') break;
+        // Another tab answered a view: the block shows that answer, fetched again.
+        if (typeof payload.inlineUiAction?.blockId === 'string') refreshInlineUiBlock(target, payload.inlineUiAction.blockId);
         updateSessionState(target, (prev) => ({
           ...prev,
           messages: prev.messages.some((m) => m.id === `gw-${event.id}`) ? prev.messages : [...prev.messages, {
@@ -1774,7 +1779,7 @@ export default function ChatPage() {
         ? { inlineUi: {
           ...(inlineUiReports.length ? { reports: inlineUiReports } : {}),
           ...(options?.inlineUiProvenance ? { provenance: { inlineUiId: options.inlineUiProvenance } } : {}),
-          ...(inlineUiAction ? { action: { blockId: inlineUiAction.blockId, name: inlineUiAction.name, componentId: inlineUiAction.componentId, context: inlineUiAction.context, data: inlineUiAction.data } } : {}),
+          ...(inlineUiAction ? { action: { blockId: inlineUiAction.blockId, name: inlineUiAction.name, componentId: inlineUiAction.componentId, context: inlineUiAction.context, ...(inlineUiAction.data ? { data: inlineUiAction.data } : {}) } } : {}),
         } }
         : {}),
     };

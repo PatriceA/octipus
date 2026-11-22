@@ -1,4 +1,5 @@
 import type { InlineUiBlockData } from '@/components/chat/inline-ui/context';
+import type { InlineUiViewAction, JsonObject } from '../../src/shared/inline-ui/view';
 /**
  * Spaces joined on other installs (docs/plans/federation-spec.md §8.3): the
  * wire shapes of `/api/remote-spaces` (`src/api/routes/remote-spaces.ts`),
@@ -165,7 +166,7 @@ export interface RoomSource {
   listRooms(): Promise<Room[]>;
   messages(roomId: string, query: { before?: string; after?: string; limit: number }): Promise<{ messages: RoomMessage[]; hasMore: boolean }>;
   /** The REST post (the socket is down, or a remote space). */
-  post(roomId: string, body: { content: string; addressed: boolean; clientId: string }): Promise<PostOutcome>;
+  post(roomId: string, body: { content: string; addressed: boolean; clientId: string; inlineUi?: { action: InlineUiViewAction & { data?: JsonObject } } }): Promise<PostOutcome>;
   /** My mute of the room: no notifications of it. A remote room's is kept by its host. */
   setMuted(roomId: string, muted: boolean): Promise<unknown>;
   /** An interactive answer of a reply in the room (a remote room's from its host). */

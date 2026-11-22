@@ -15,7 +15,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { clampInlineUiHeight, INLINE_UI_LIMITS } from '../../../../src/shared/inline-ui/limits';
 import type { InlineUiErrorClass, InlineUiHostMessage, InlineUiOutcome } from '../../../../src/shared/inline-ui/bridge';
 import { cn } from '@/lib/utils';
-import { type InlineUiBlockData, type InlineUiHost, forgetInlineUiBlock, useInlineUiBlockFetch, useInlineUiHost } from './context';
+import { type InlineUiBlockData, type InlineUiHost, forgetInlineUiBlock, useInlineUiBlockFetch, useInlineUiBlockRevision, useInlineUiHost } from './context';
 import { InlineUiFrame } from './frame';
 import { SaveAsArtifactDialog } from './save-dialog';
 import { type Suggestion, SuggestionStrip } from './strip';
@@ -134,13 +134,15 @@ export function InlineUiBlock({ id, title, untrusted }: { id: string; title: str
   const host = useInlineUiHost();
   const [attempt, setAttempt] = useState(0);
   const pending = useInlineUiBlockFetch(host, id, attempt);
-  const [data, setData] = useState<{ block: InlineUiBlockData } | { error: 'not_found' | 'failed' } | null>(null);
+  // Moves on when the block changed elsewhere (a view answered in another tab): the view is drawn again from the new fetch.
+  const revision = useInlineUiBlockRevision(host, id);
+  const [data, setData] = useState<{ block: InlineUiBlockData; revision: number } | { error: 'not_found' | 'failed' } | null>(null);
 
   useEffect(() => {
     if (!pending) return;
     let cancelled = false;
     pending.then(
-      (block) => { if (!cancelled) setData({ block }); },
+      (block) => { if (!cancelled) setData({ block, revision }); },
       (err: unknown) => {
         if (cancelled) return;
         const status = (err as { status?: number })?.status;
@@ -148,7 +150,7 @@ export function InlineUiBlock({ id, title, untrusted }: { id: string; title: str
       },
     );
     return () => { cancelled = true; };
-  }, [pending]);
+  }, [pending, revision]);
 
   if (!host) return <p className="text-sm text-on-surface-variant">▸ Interactive answer “{title}”</p>;
 
@@ -172,7 +174,7 @@ export function InlineUiBlock({ id, title, untrusted }: { id: string; title: str
         </div>
       )}
       {data && 'block' in data && (data.block.kind === 'view' && data.block.view
-        ? <LoadedViewBlock block={data.block} view={data.block.view} host={host} untrusted={untrusted} />
+        ? <LoadedViewBlock key={data.revision} block={data.block} view={data.block.view} host={host} untrusted={untrusted} />
         : <LoadedBlock block={data.block} host={host} />)}
     </section>
   );

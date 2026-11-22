@@ -115,6 +115,80 @@ const BROKEN_VIEW = view({
   },
 });
 
+const WRITES = '77777777-aaaa-4777-8777-777777777777';
+const SETS = '88888888-aaaa-4888-8888-888888888888';
+const WIDE = '99999999-aaaa-4999-8999-999999999999';
+const ROWS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const LAYOUT = 'bbbbbbbb-aaaa-4bbb-8bbb-bbbbbbbbbbbb';
+
+// Writes that cannot land: a relative path on a string item, a path through a string.
+const WRITES_VIEW = view({
+  data: { items: ['a', 'b'], plan: 'basic' },
+  root: {
+    component: 'Column',
+    children: [
+      { component: 'Text', text: 'Still drawn', variant: 'caption' },
+      { component: 'Column', children: { path: '/items', template: { component: 'CheckBox', label: 'Done', value: { '@path': 'done' } } } },
+      { component: 'TextField', label: 'Plan name', value: { '@path': '/plan/name' } },
+    ],
+  },
+});
+
+// A button that only sets; a template Slider with no number; a button with two events.
+const SETS_VIEW = view({
+  data: { n: 1, items: [{ name: 'a' }] },
+  root: {
+    component: 'Column',
+    children: [
+      { component: 'Stat', label: 'Count', value: { '@path': '/n' } },
+      { id: 'add', component: 'Button', label: 'Add one', action: { set: { path: '/n', value: { '@expr': 'n + 1' } } } },
+      { component: 'Column', children: { path: '/items', template: { component: 'Slider', label: 'Level', min: 2, max: 10, value: { '@path': 'level' } } } },
+      { id: 'send', component: 'Button', label: 'Send', action: { event: { name: 'counted', context: { n: { '@path': '/n' } }, userMessage: 'Counted ${n}' } } },
+      { id: 'twice', component: 'Button', label: 'Twice', action: [{ event: { name: 'first', context: {}, userMessage: 'First' } }, { event: { name: 'second', context: {}, userMessage: 'Second' } }] },
+    ],
+  },
+});
+
+// Rows big enough that two selected copies take the data model over the limit.
+const WIDE_VIEW = view({
+  data: { picked: [], rows: ['r1', 'r2', 'r3', 'r4'].map((name) => ({ name, note: name.repeat(1_500) })) },
+  root: {
+    component: 'Column',
+    children: [
+      { component: 'Table', selectable: 'multiple', selected: { '@path': '/picked' }, rowKey: 'name', rows: { '@path': '/rows' }, columns: [{ key: 'name', label: 'Name' }] },
+      { id: 'go', component: 'Button', label: 'Use these', action: { event: { name: 'picked', context: { count: { '@expr': 'count(picked)' } }, userMessage: 'Use these rows' } } },
+    ],
+  },
+});
+
+// Two rows share a rowKey value; two columns share a key.
+const ROWS_VIEW = view({
+  data: { picked: [], rows: [{ name: 'api', region: 'eu' }, { name: 'api', region: 'us' }, { name: 'db', region: 'eu' }] },
+  root: {
+    component: 'Column',
+    children: [
+      { component: 'Table', selectable: 'multiple', selected: { '@path': '/picked' }, rowKey: 'name', rows: { '@path': '/rows' }, columns: [{ key: 'name', label: 'Name' }, { key: 'region', label: 'Region' }, { key: 'region', label: 'Region again' }] },
+      { component: 'Stat', label: 'Picked', value: { '@expr': 'count(picked)' } },
+    ],
+  },
+});
+
+// A chart series keyed `x`, and a row with a hidden child.
+const LAYOUT_VIEW = view({
+  data: { months: [{ m: 'Jan', x: 10 }, { m: 'Feb', x: 20 }] },
+  root: {
+    component: 'Column',
+    children: [
+      { component: 'Row', children: [
+        { component: 'Text', text: 'Left', variant: 'caption' },
+        { component: 'Text', text: 'Hidden', variant: 'caption', visible: false },
+        { component: 'Text', text: 'Right', variant: 'caption' },
+      ] },
+      { component: 'Chart', type: 'bar', data: { '@path': '/months' }, x: 'm', series: [{ key: 'x', label: 'Visits' }] },
+    ],
+  },
+});
+
 type BlockStub = Record<string, unknown> & { title: string };
 
 const blocks: Record<string, BlockStub> = {
@@ -123,6 +197,11 @@ const blocks: Record<string, BlockStub> = {
   [CHART]: { title: 'Revenue', kind: 'view', view: CHART_VIEW },
   [STEPS]: { title: 'How it works', kind: 'view', view: STEPS_VIEW },
   [BROKEN]: { title: 'Broken numbers', kind: 'view', view: BROKEN_VIEW },
+  [WRITES]: { title: 'Bad writes', kind: 'view', view: WRITES_VIEW },
+  [SETS]: { title: 'Counter', kind: 'view', view: SETS_VIEW },
+  [WIDE]: { title: 'Wide rows', kind: 'view', view: WIDE_VIEW },
+  [ROWS]: { title: 'Same names', kind: 'view', view: ROWS_VIEW },
+  [LAYOUT]: { title: 'Layout', kind: 'view', view: LAYOUT_VIEW },
   // A server from before views: no `kind`, `view` or `state`.
   [OLD]: { title: 'Old widget', html: '<p>old</p>', css: '', js: '', scripts: false },
 };
@@ -413,5 +492,184 @@ test.describe('declarative views in the chat', () => {
     await expect(preview.getByTestId('inline-ui-view')).toContainText('Hello there');
     gateway.event('chat.delta', { agentId: 'root-1', iteration: 0, delta: 'xt","text":"More text"}' }, 'sess-1');
     await expect(preview.getByTestId('inline-ui-view')).toContainText('More text');
+  });
+  test('a refusal that arrives after the running turn streamed on still reaches the block', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(PLAN)]);
+    const block = blockOf(page, 'Choose a plan');
+    await block.getByLabel('Basic').check();
+    await block.getByLabel('Your name').fill('Ada');
+    await block.getByRole('button', { name: 'Continue' }).click();
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    // A turn of the session is streaming: its delta comes before the refusal.
+    gateway.event('chat.delta', { agentId: 'root-1', iteration: 0, delta: 'Working on it' }, 'sess-1');
+    gateway.send({ type: 'error', code: 'INVALID_MESSAGE', message: 'The interactive answer was not sent: the view changed' });
+    await expect(block.getByTestId('inline-ui-view-error')).toContainText('the view changed');
+    await expect(block.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  });
+
+  test('once the server took the send (chat.delivery), a later error frame is not its refusal', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(PLAN)]);
+    const block = blockOf(page, 'Choose a plan');
+    await block.getByLabel('Basic').check();
+    await block.getByLabel('Your name').fill('Ada');
+    await block.getByRole('button', { name: 'Continue' }).click();
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    gateway.send({ type: 'chat.delivery', sessionId: 'sess-1', mode: 'auto', outcome: 'queued', ahead: 0 });
+    gateway.send({ type: 'error', code: 'INVALID_MESSAGE', message: 'some other frame' });
+    await page.waitForTimeout(300);
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    await expect(page.getByText('Message not sent: some other frame')).toHaveCount(0);
+  });
+
+  test('an answered block opens answered again after visiting another session', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    await openWithHistory(page, [reply(PLAN)]);
+    const block = blockOf(page, 'Choose a plan');
+    await block.getByLabel('Pro').check();
+    await block.getByLabel('Your name').fill('Ada');
+    await block.getByRole('button', { name: 'Continue' }).click();
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    await selectChatSession(page, 'sess-2');
+    await expect(block).toHaveCount(0);
+    await selectChatSession(page, 'sess-1');
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    await expect(block.getByLabel('Pro')).toBeChecked();
+    await expect(block.getByLabel('Your name')).toHaveValue('Ada');
+  });
+
+  test('an answer from another tab redraws the block from the server', async ({ authenticatedPage: page }) => {
+    const overrides: Record<string, Partial<BlockStub>> = {};
+    await stubBlocks(page, overrides);
+    const gateway = await openWithHistory(page, [reply(PLAN)]);
+    const block = blockOf(page, 'Choose a plan');
+    await expect(block.getByLabel('Seats')).toHaveValue('3');
+    overrides[PLAN] = { state: { data: { plan: 'pro', seats: 8, name: 'Bo' }, action: { name: 'plan_chosen', componentId: 'go', at: '2026-11-22T10:00:00.000Z' } } };
+    gateway.event('chat.message', { role: 'user', content: 'I take pro for 8 seats', injected: true, inlineUiAction: { blockId: PLAN, name: 'plan_chosen', context: { plan: 'pro', seats: 8 } } }, 'sess-1', { source: 'steer:another-tab' });
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    await expect(block.getByLabel('Seats')).toHaveValue('8');
+  });
+
+  test('a write that cannot land shows an error; the view stays', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    await openWithHistory(page, [reply(WRITES)]);
+    const block = blockOf(page, 'Bad writes');
+    await block.getByLabel('Done').first().click();
+    await expect(block.getByTestId('inline-ui-view-error')).toContainText('cannot write "/items/0/done"');
+    await expect(block.getByTestId('inline-ui-view-failed')).toHaveCount(0);
+    await expect(block).toContainText('Still drawn');
+    await block.getByLabel('Plan name').fill('x');
+    await expect(block.getByTestId('inline-ui-view-error')).toContainText('cannot write "/plan/name"');
+    await expect(block.getByTestId('inline-ui-view-failed')).toHaveCount(0);
+  });
+
+  test('a number field with a problem holds the answer back and says why', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(PLAN)]);
+    const block = blockOf(page, 'Choose a plan');
+    const go = block.getByRole('button', { name: 'Continue' });
+    await block.getByLabel('Your name').fill('Ada');
+    await block.getByLabel('Seats').fill('5');
+    await block.getByLabel('Seats').fill('500');
+    await expect(go).toBeDisabled();
+    await expect(go).toHaveAttribute('title', 'Fix “Seats” first');
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Fix “Seats” to answer.');
+    await block.getByLabel('Seats').fill('abc');
+    await expect(go).toBeDisabled();
+    await block.getByLabel('Seats').fill('6');
+    await expect(go).toBeEnabled();
+    await go.click();
+    await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send')?.inlineUi?.action?.context?.seats).toBe(6);
+  });
+
+  test('a set-only button is read-only after the answer until Change answer', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(SETS)]);
+    const block = blockOf(page, 'Counter');
+    const add = block.getByRole('button', { name: 'Add one' });
+    await add.click();
+    await expect(block.getByTestId('inline-ui-stat')).toContainText('2');
+    await block.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => gateway.sent.filter((m) => m.type === 'chat.send').length).toBe(1);
+    await expect(block.getByTestId('inline-ui-view-status')).toContainText('Answer sent');
+    await expect(add).toBeDisabled();
+    await block.getByRole('button', { name: 'Change answer' }).click();
+    await expect(add).toBeEnabled();
+  });
+
+  test('a template slider with no number at its path writes the minimum it shows', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(SETS)]);
+    const block = blockOf(page, 'Counter');
+    await expect(block.getByLabel('Level')).toHaveValue('2');
+    await block.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send')).toBeTruthy();
+    expect(gateway.sent.find((m) => m.type === 'chat.send')!.inlineUi.action.data).toEqual({ n: 1, items: [{ name: 'a', level: 2 }] });
+  });
+
+  test('a button with two events sends only the first', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(SETS)]);
+    const block = blockOf(page, 'Counter');
+    await block.getByRole('button', { name: 'Twice' }).click();
+    await expect.poll(() => gateway.sent.filter((m) => m.type === 'chat.send').length).toBe(1);
+    await page.waitForTimeout(200);
+    const sends = gateway.sent.filter((m) => m.type === 'chat.send');
+    expect(sends).toHaveLength(1);
+    expect(sends[0].content).toBe('First');
+    expect(sends[0].inlineUi.action.name).toBe('first');
+  });
+
+  test('an answer whose data model is over the limit is sent without its data', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    const gateway = await openWithHistory(page, [reply(WIDE)]);
+    const block = blockOf(page, 'Wide rows');
+    await block.getByLabel('Select r1').check();
+    await block.getByLabel('Select r2').check();
+    await block.getByLabel('Select r3').check();
+    await block.getByRole('button', { name: 'Use these' }).click();
+    await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send')).toBeTruthy();
+    const send = gateway.sent.find((m) => m.type === 'chat.send')!;
+    expect(send.content).toBe('Use these rows');
+    expect(send.inlineUi.action).toMatchObject({ blockId: WIDE, name: 'picked', context: { count: 3 } });
+    expect(send.inlineUi.action).not.toHaveProperty('data');
+  });
+
+  test('rows that share a rowKey value are selected one by one', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    await openWithHistory(page, [reply(ROWS)]);
+    const block = blockOf(page, 'Same names');
+    const table = block.getByTestId('inline-ui-table');
+    await expect(table.locator('thead th')).toHaveText(['Selected', 'Name', 'Region', 'Region again']);
+    const boxes = table.getByLabel('Select api');
+    await boxes.nth(0).check();
+    await expect(boxes.nth(0)).toBeChecked();
+    await expect(boxes.nth(1)).not.toBeChecked();
+    const picked = block.getByTestId('inline-ui-stat').filter({ hasText: 'Picked' });
+    await expect(picked).toContainText('1');
+    await boxes.nth(1).check();
+    await expect(picked).toContainText('2');
+    await boxes.nth(0).uncheck();
+    await expect(boxes.nth(1)).toBeChecked();
+    await expect(picked).toContainText('1');
+  });
+
+  test('a hidden row child leaves no slot', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    await openWithHistory(page, [reply(LAYOUT)]);
+    const left = blockOf(page, 'Layout').getByText('Left', { exact: true });
+    await expect(left).toBeVisible();
+    expect(await left.evaluate((el) => el.parentElement?.parentElement?.children.length)).toBe(2);
+  });
+
+  test('a chart series keyed x keeps the axis labels', async ({ authenticatedPage: page }) => {
+    await stubBlocks(page);
+    await openWithHistory(page, [reply(LAYOUT)]);
+    const chart = blockOf(page, 'Layout').getByTestId('inline-ui-chart');
+    await expect(chart.getByRole('img', { name: 'Bar chart by m, 2 points: Visits from 10 to 20' })).toBeVisible();
+    await chart.getByText('Show data').click();
+    await expect(chart.locator('details tbody th')).toHaveText(['Jan', 'Feb']);
+    await expect(chart.locator('details tbody td')).toHaveText(['10', '20']);
   });
 });

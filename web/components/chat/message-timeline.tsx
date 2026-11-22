@@ -268,11 +268,11 @@ const ACTION_VALUE_CHARS = 40;
 const ACTION_VALUES_SHOWN = 8;
 
 /** The values a view's answer sent, as compact `key: value` chips: what the user sees is what went out (S6). */
-function InlineUiActionValues({ context }: { context: JsonObject }) {
+function InlineUiActionValues({ context, align = 'end' }: { context: JsonObject; align?: 'start' | 'end' }) {
   const entries = Object.entries(context);
   if (entries.length === 0) return null;
   return (
-    <ul className="flex flex-wrap justify-end gap-1 max-w-[min(32rem,85vw)] px-1" aria-label="Values sent" data-testid="inline-ui-action-values">
+    <ul className={cn('flex flex-wrap gap-1 max-w-[min(32rem,85vw)] px-1', align === 'end' ? 'justify-end' : 'justify-start')} aria-label="Values sent" data-testid="inline-ui-action-values">
       {entries.slice(0, ACTION_VALUES_SHOWN).map(([key, value]) => {
         const full = valueToText(value);
         const shown = full.length > ACTION_VALUE_CHARS ? `${full.slice(0, ACTION_VALUE_CHARS - 1)}…` : full;
@@ -345,6 +345,10 @@ function MessageBubble({ message, sessionId, untrusted, onOpenFile, companionNam
         </div>
         <div className="flex flex-col items-start gap-0.5 min-w-0">
           <span className="text-[11px] text-on-surface-variant px-1">{message.author.name}</span>
+          {message.fromInlineUi && (
+            <span className="text-[10px] text-on-surface-variant px-1" data-testid="from-inline-ui">from an interactive answer</span>
+          )}
+          {message.inlineUiAction && <InlineUiActionValues context={message.inlineUiAction.context} align="start" />}
           <div className="bg-surface-container-high text-on-surface px-4 py-2.5 rounded-2xl rounded-tl-md shadow-xs">
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>

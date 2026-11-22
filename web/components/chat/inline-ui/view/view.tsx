@@ -7,7 +7,7 @@
  * `setPointer`, buttons run their actions with `runViewActions`, and an event
  * goes to `onEvent` (the block decides how it is sent, §4).
  */
-import { Component, type ErrorInfo, type ReactNode, useId, useMemo, useState } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useCallback, useId, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import {
   type ExprScope,
@@ -100,6 +100,24 @@ export function InlineUiView(props: InlineUiViewProps) {
 function ViewBody({ view, initialData, state, disabled, preview, onEvent, eventsOff, refusal, untrusted }: InlineUiViewProps) {
   const hintId = useId();
   const [ownData, setOwnData] = useState<JsonObject>(() => initialData ?? state?.data ?? view.data);
+  // The data model as last written, read by every write and click: a write
+  // is computed here (where its error can be caught), and two writes in one
+  // tick (two sliders filling in their minimum) build on each other.
+  const latest = useRef(ownData);
+  const commit = (next: JsonObject) => {
+    latest.current = next;
+    setOwnData(next);
+  };
+  // Number fields whose text is not a valid number now, by field: the answer waits for them.
+  const [badNumbers, setBadNumbers] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const reportNumber = useCallback((key: string, label: string | null) => {
+    setBadNumbers((prev) => {
+      if ((prev.get(key) ?? null) === label) return prev;
+      const next = new Map(prev);
+      if (label === null) next.delete(key); else next.set(key, label);
+      return next;
+    });
+  }, []);
   const [answered, setAnswered] = useState(!!state);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,10 +132,13 @@ function ViewBody({ view, initialData, state, disabled, preview, onEvent, events
   const format = useMemo(() => viewerFormat(), []);
   const components = useMemo(() => new Map(view.components.map((c) => [c.id, c])), [view]);
   const missing = useMemo(() => (preview ? null : missingRequired(view, data, format)), [view, data, format, preview]);
+  // What the user must do before answering: fill in a required field, or fix a number field.
+  const badNumber = preview ? null : badNumbers.values().next().value ?? null;
+  const todo = missing ? `Fill in “${missing}”` : badNumber ? `Fix “${badNumber}”` : null;
   const inert = !!disabled || !!preview;
   const eventBlock = inert ? 'Not available here'
     : answered ? 'Answer sent — choose Change answer to answer again'
-    : eventsOff ?? (sending ? 'Sending…' : missing ? `Fill in “${missing}” first` : null);
+    : eventsOff ?? (sending ? 'Sending…' : todo ? `${todo} first` : null);
 
   const send = async (event: ResolvedEvent, componentId: string, at: JsonObject) => {
     if (!onEvent) return;
@@ -141,26 +162,35 @@ function ViewBody({ view, initialData, state, disabled, preview, onEvent, events
     inert,
     eventBlock,
     eventBlockId: hintId,
+    reportNumber,
     write: (pointer, value) => {
       if (inert) return;
+      let next: JsonObject;
       try {
-        setOwnData((prev) => setPointer(prev, pointer, value));
+        // Computed now, not in a state updater: an updater runs inside React,
+        // where a throw would take the whole view down instead of landing here.
+        next = setPointer(latest.current, pointer, value);
       } catch (err) {
         setError(errorText(err));
+        return;
       }
+      commit(next);
     },
     click: (componentId, scope) => {
       if (inert) return;
       setError(null);
       let result: ReturnType<typeof runViewActions>;
       try {
-        result = runViewActions(view, componentId, { ...scope, data });
+        result = runViewActions(view, componentId, { ...scope, data: latest.current });
       } catch (err) {
         // An unsafe link or an unwritable path stops the whole click, before any effect.
         setError(`${componentId}: ${errorText(err)}`);
         return;
       }
-      setOwnData(result.data);
+      commit(result.data);
+      // One answer per click, deliberately: a button listing several `event`
+      // steps sends the first (with the data after all its `set` steps) and
+      // warns (covered by tests/web/inline-ui-view.spec.ts).
       const events = result.effects.filter((e) => e.type === 'event');
       if (events.length > 1) console.warn(`[inline-ui] button "${componentId}" has ${events.length} events; only the first is sent`);
       for (const effect of result.effects) {
@@ -175,7 +205,7 @@ function ViewBody({ view, initialData, state, disabled, preview, onEvent, events
       <div className="flex flex-col gap-3 p-3 text-sm text-on-surface min-w-0" data-testid="inline-ui-view">
         <ViewNode id={view.root} scope={viewScope(view, data, format)} />
         {!preview && <p role="status" className="sr-only">{answered ? 'Answer sent' : sending ? 'Sending your answer' : ''}</p>}
-        {!preview && (answered || sending || eventsOff || missing) && (
+        {!preview && (answered || sending || eventsOff || todo) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-on-surface-variant" data-testid="inline-ui-view-status">
             {answered ? <span>Answer sent</span> : sending ? <span>Sending…</span> : null}
             {answered && !disabled && (
@@ -185,7 +215,7 @@ function ViewBody({ view, initialData, state, disabled, preview, onEvent, events
                 className="rounded-md border border-outline-variant px-2 py-1 text-on-surface hover:bg-surface-container-high"
               >Change answer</button>
             )}
-            {!answered && !sending && (eventsOff || missing) && <span id={hintId}>{eventsOff ?? `Fill in “${missing}” to answer.`}</span>}
+            {!answered && !sending && (eventsOff || todo) && <span id={hintId}>{eventsOff ?? `${todo} to answer.`}</span>}
           </div>
         )}
         {error && (

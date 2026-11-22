@@ -5,9 +5,12 @@ import { type KeyboardEvent, useId, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   type ChildList,
+  type Dynamic,
   type ExprScope,
   expandTemplateChildren,
   type InlineUiComponentName,
+  isTruthy,
+  resolveDynamic,
   type TitledChild,
   valueToText,
 } from '../../../../../src/shared/inline-ui/view';
@@ -21,6 +24,15 @@ const JUSTIFY = { start: 'justify-start', center: 'justify-center', end: 'justif
 
 /** In a row, controls and short labels keep their own width; everything else shares the line and wraps. */
 const NATURAL_WIDTH: ReadonlySet<InlineUiComponentName> = new Set(['Button', 'Badge', 'Link', 'CheckBox', 'Divider']);
+
+function visibleIn(visible: Dynamic<boolean>, scope: ExprScope): boolean | null {
+  try {
+    return isTruthy(resolveDynamic(visible, scope));
+  } catch (err) {
+    console.warn('[inline-ui] a row child\'s visible could not be resolved', err);
+    return null;
+  }
+}
 
 function Children({ list, scope, inRow }: { list: ChildList<string>; scope: ExprScope; inRow?: boolean }) {
   const rt = useViewRuntime();
@@ -36,7 +48,11 @@ function Children({ list, scope, inRow }: { list: ChildList<string>; scope: Expr
       {expanded.children.map((copy) => {
         const node = <ViewNode key={copy.key} id={copy.id} scope={copy.scope} />;
         if (!inRow) return node;
-        const kind = rt.components.get(copy.id)?.component;
+        const component = rt.components.get(copy.id);
+        // A hidden child takes no slot (and no gap) in the row. A `visible` that
+        // fails to resolve keeps its slot: ViewNode shows the error there.
+        if (component?.visible !== undefined && visibleIn(component.visible, copy.scope) === false) return null;
+        const kind = component?.component;
         return <div key={copy.key} className={kind && NATURAL_WIDTH.has(kind) ? 'shrink-0 min-w-0' : 'flex-[1_1_10rem] min-w-0'}>{node}</div>;
       })}
       {expanded.hidden > 0 && <p className="text-xs text-on-surface-variant">…and {expanded.hidden} more not shown.</p>}

@@ -75,7 +75,15 @@ export function Table({ c, r, scope }: NodeProps<'Table'>) {
   const selectable = c.selectable && c.selected ? c.selectable : null;
   const selectedPath = selectable && c.selected ? resolvePath(c.selected['@path'], scope) : null;
   const selectedValue = selectedPath ? getPointer(rt.data, selectedPath) : undefined;
-  const sameRow = (a: JsonValue, b: JsonObject) => (c.rowKey ? isJsonObject(a) && jsonEqual(a[c.rowKey], b[c.rowKey]) : jsonEqual(a, b));
+  // A row is the same as a selected one by its `rowKey` value (the row may
+  // have changed since), unless other rows share that value: then by the
+  // whole row, so picking one of two "api" rows picks only that one.
+  const keyCounts = new Map<string, number>();
+  if (c.rowKey) for (const row of capped) { const k = JSON.stringify(row[c.rowKey] ?? null); keyCounts.set(k, (keyCounts.get(k) ?? 0) + 1); }
+  const sameRow = (a: JsonValue, b: JsonObject) => {
+    if (!c.rowKey || (keyCounts.get(JSON.stringify(b[c.rowKey] ?? null)) ?? 0) > 1) return jsonEqual(a, b);
+    return isJsonObject(a) && jsonEqual(a[c.rowKey], b[c.rowKey]);
+  };
   const isSelected = (row: JsonObject) => selectable === 'multiple'
     ? Array.isArray(selectedValue) && selectedValue.some((s) => sameRow(s, row))
     : selectedValue !== undefined && selectedValue !== null && sameRow(selectedValue, row);
@@ -112,12 +120,12 @@ export function Table({ c, r, scope }: NodeProps<'Table'>) {
           <thead className="bg-surface-container-high">
             <tr>
               {selectable && <th scope="col" className="w-8 px-2 py-1.5"><span className="sr-only">Selected</span></th>}
-              {c.columns.map((col) => {
+              {c.columns.map((col, ci) => {
                 const sorted = sort?.key === col.key ? sort.dir : null;
                 const Icon = sorted === 'asc' ? ArrowUp : sorted === 'desc' ? ArrowDown : ArrowUpDown;
                 return (
                   <th
-                    key={col.key}
+                    key={ci}
                     scope="col"
                     aria-sort={sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : undefined}
                     className={cn('px-2 py-1.5 text-xs font-medium text-on-surface-variant whitespace-nowrap', ALIGN[col.align ?? 'start'])}
@@ -140,7 +148,7 @@ export function Table({ c, r, scope }: NodeProps<'Table'>) {
               const selected = selectable ? isSelected(row) : false;
               const label = valueToText(row[c.rowKey ?? c.columns[0]?.key ?? ''], rt.format) || `row ${index + 1}`;
               return (
-                <tr key={c.rowKey ? valueToText(row[c.rowKey]) || index : index} className={cn('border-t border-outline-variant/30', selected && 'bg-primary-container/40')}>
+                <tr key={index} className={cn('border-t border-outline-variant/30', selected && 'bg-primary-container/40')}>
                   {selectable && (
                     <td className="px-2 py-1.5">
                       <input
@@ -154,8 +162,8 @@ export function Table({ c, r, scope }: NodeProps<'Table'>) {
                       />
                     </td>
                   )}
-                  {c.columns.map((col) => (
-                    <td key={col.key} className={cn('px-2 py-1.5 text-on-surface align-top', ALIGN[col.align ?? 'start'], col.format && col.format !== 'text' ? 'tabular-nums whitespace-nowrap' : 'min-w-[9rem]')}>
+                  {c.columns.map((col, ci) => (
+                    <td key={ci} className={cn('px-2 py-1.5 text-on-surface align-top', ALIGN[col.align ?? 'start'], col.format && col.format !== 'text' ? 'tabular-nums whitespace-nowrap' : 'min-w-[9rem]')}>
                       {cell(row, col)}
                     </td>
                   ))}
