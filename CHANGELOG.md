@@ -663,6 +663,10 @@ labels reflect blast radius, not contract guarantees.
 - **Terminal chat: a cancelled picker stays cancelled.** Closing the session
   or skills picker before its list arrived printed the late list into the
   transcript.
+- **Terminal chat and editor: they reconnect after the server goes away.** A
+  connection cut without a close frame (a crashed or restarted server, a
+  dropped network) reported an error first, and the client then never tried
+  to reconnect.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

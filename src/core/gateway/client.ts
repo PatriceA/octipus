@@ -77,6 +77,12 @@ export class GatewayClient {
   private authenticatedAs: { username: string; userId: string } | null = null;
   /** The server's frame cap from `auth_ok` (`gateway.maxFrameBytes`). */
   private maxFrameBytes: number | null = null;
+  /**
+   * The current socket got `auth_ok`. Read by `onclose` to decide on a
+   * reconnect: the status cannot say, because a socket that dies abnormally
+   * fires `error` (status 'error') before `close`.
+   */
+  private authenticated = false;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -127,7 +133,8 @@ export class GatewayClient {
       };
 
       this.ws.onclose = (event) => {
-        const wasConnected = this.status === 'connected';
+        const wasConnected = this.authenticated;
+        this.authenticated = false;
         this.setStatus('disconnected');
         if (wasConnected && event.code !== 1000) {
           this.scheduleReconnect();
@@ -164,6 +171,7 @@ export class GatewayClient {
       stale.onclose = null;
       stale.onerror = null;
       this.ws = null;
+      this.authenticated = false;
       stale.close(1000, 'TUI exit');
     }
     this.setStatus('disconnected');
@@ -338,6 +346,7 @@ export class GatewayClient {
 
     switch (msg.type) {
       case 'auth_ok':
+        this.authenticated = true;
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.maxFrameBytes = msg.maxFrameBytes ?? null;

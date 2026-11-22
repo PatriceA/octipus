@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { FakeSocket } from '@/tui-pi/testing/wire';
 import { GatewayClient } from './client';
 
 vi.mock('@/core/gateway/cli-session', () => ({
@@ -187,5 +188,30 @@ describe('GatewayClient — attachments go over REST, the turn names them', () =
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Each attachment must contain data and be no larger than 10 MiB.' }), { status: 400 })));
     const { client } = stubClient();
     await expect(client.uploadAttachments('s', [image], 'x')).rejects.toThrow('no larger than 10 MiB');
+  });
+});
+
+describe('GatewayClient — reconnecting after the server went away', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  test('a socket that dies with an error before it closes is reconnected', async () => {
+    vi.useFakeTimers();
+    FakeSocket.all = [];
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const statuses: string[] = [];
+    const client = new GatewayClient({ url: 'ws://gateway.test/gateway', onStatusChange: s => statuses.push(s), onError: () => {} });
+    await client.connect();
+    FakeSocket.latest().open();
+    expect(client.getStatus()).toBe('connected');
+    // What Node's WebSocket does when the connection is cut: `error`, then `close` 1006.
+    FakeSocket.latest().onerror?.();
+    FakeSocket.latest().drop();
+    expect(statuses.slice(-2)).toEqual(['error', 'disconnected']);
+    vi.advanceTimersByTime(1000);
+    await Promise.resolve();
+    expect(FakeSocket.all).toHaveLength(2);
+    FakeSocket.latest().open();
+    expect(client.getStatus()).toBe('connected');
+    client.disconnect();
   });
 });
