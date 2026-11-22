@@ -134,6 +134,7 @@ export class EditorOverlays {
         tui.requestRender();
       },
       onClose: () => overlays.close('replace'),
+      onMatches: (bufferId, matches, current) => { this.deps.editor.setSearchHighlights(bufferId, matches, current); tui.requestRender(); },
     });
     overlays.show('replace', overlay, SEARCH_OVERLAY);
   }

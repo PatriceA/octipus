@@ -88,6 +88,29 @@ export function replaceAll(
   return matches.length;
 }
 
+/**
+ * What `match` would be replaced with: the replacement itself, or in regex
+ * mode its expansion for that match (`$1` and the rest). Null when the text
+ * at `match` no longer matches (the buffer changed).
+ */
+export function replacementFor(buf: Buffer, match: Match, query: string, replacement: string, opts: SearchOptions = {}): string | null {
+  const re = compileQuery(query, opts);
+  const sticky = new RegExp(re.source, re.flags.replace('g', '') + 'y');
+  const line = buf.getLine(match.line);
+  sticky.lastIndex = match.col;
+  const found = sticky.exec(line);
+  if (!found || found[0].length !== match.length) return null;
+  return opts.regex ? expand(sticky, line, match.col, match.col + match.length, replacement) : replacement;
+}
+
+/** Replace one match, as one undo step. Returns whether it was replaced. */
+export function replaceOne(buf: Buffer, match: Match, query: string, replacement: string, opts: SearchOptions = {}): boolean {
+  const text = replacementFor(buf, match, query, replacement, opts);
+  if (text === null) return false;
+  buf.replaceRange({ line: match.line, col: match.col }, { line: match.line, col: match.col + match.length }, text);
+  return true;
+}
+
 /** The replacement for the match at [start, end) of `line`, expanded in its own context (lookbehind included). */
 function expand(sticky: RegExp, line: string, start: number, end: number, replacement: string): string {
   sticky.lastIndex = start;
