@@ -1,4 +1,23 @@
 import { createHash } from 'node:crypto';
+import type { CompletionOptions, CompletionResult } from '../litellm-client';
+
+/** Rough prompt size of a request, the codebase's chars/4 budget, tool schemas included. */
+export function estimatePromptTokens(options: Pick<CompletionOptions, 'messages' | 'tools'>): number {
+  const chars = options.messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length)
+    + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0), 0) + (options.tools ? JSON.stringify(options.tools).length : 0);
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * The usage of a stream that ended before its provider reported any (the
+ * reader went away, the call failed midway): the prompt plus what was
+ * generated so far, chars/4 like the CLI workers' estimate, marked estimated.
+ */
+export function estimateStreamUsage(options: Pick<CompletionOptions, 'messages' | 'tools'>, outputChars: number): CompletionResult['usage'] {
+  const inputTokens = estimatePromptTokens(options);
+  const outputTokens = Math.ceil(outputChars / 4);
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: true, estimated: true };
+}
 
 /**
  * Normalize provider prompt-cache usage fields into CompletionResult.usage.
