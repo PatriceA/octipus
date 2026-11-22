@@ -250,7 +250,36 @@ export function narrowToStage(roleTools: import('@/core/agent-base').ToolHandler
   return roleTools;
 }
 
-export async function spawnWorker(
+/** A worker's context-hook record while it is open: whoever closes it takes it, so it is finished once. */
+interface OpenContextTurn { turn: import('@/core/context-hooks').ContextTurnHandle | null }
+
+function closeContextTurn(open: OpenContextTurn, done: Parameters<typeof import('@/core/context-hooks').finishContextTurn>[1]): void {
+  const turn = open.turn;
+  open.turn = null;
+  if (!turn) return;
+  void import('@/core/context-hooks').then(({ finishContextTurn }) => finishContextTurn(turn, done))
+    .catch((err: unknown) => coreLogger.warn({ err, turnId: turn.id }, 'context hooks: worker turn record not finished (measurement only)'));
+}
+
+/**
+ * Spawn a worker on its task and run it. The context-hook record its start
+ * opens (docs/CONTEXT-HOOKS.md) is closed however the start ends: a throw
+ * anywhere after the hooks ran and before the worker's own run (a refused
+ * contract, a failed spawn, a stage start that could not be recorded)
+ * finishes it as `error`.
+ */
+export async function spawnWorker(...args: Parameters<typeof spawnWorkerRecorded> extends [OpenContextTurn, ...infer Rest] ? Rest : never): Promise<unknown> {
+  const open: OpenContextTurn = { turn: null };
+  try {
+    return await spawnWorkerRecorded(open, ...args);
+  } catch (err) {
+    closeContextTurn(open, { outcome: 'error' });
+    throw err;
+  }
+}
+
+async function spawnWorkerRecorded(
+  open: OpenContextTurn,
   role: string,
   task: string,
   input: string,
@@ -856,6 +885,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   });
   if (hooks.text) volatileParts.push(hooks.text);
   const contextTurn = hooks.turn;
+  open.turn = contextTurn;
   // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context), against the same brief and audience rule.
   if (isRealUserId(context.userId) && !audience.shared && !audience.contentStorageOff) {
     const { runPluginContexts } = await import('@/plugins/packages/contributions/context');
@@ -1041,7 +1071,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // to a child whose model reads images as images; a blind child gets the
   // paths in its task and vision__view_image (docs/MEDIA.md).
   const childMedia = await mediaNamedIn(`${task}\n${input}`, context, finalModelEntry);
-  const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
+  const { bindTurnToAgent } = await import('@/core/context-hooks');
   const worker = await agentManager.spawn({
     attended: context.attended ?? false,
     sessionId: context.sessionId,
@@ -1064,10 +1094,6 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
     contextMetadata: pipelineMetadata(context.metadata, { planMode: planModeWorker, userMedia: childMedia }),
-  }).catch((err: unknown) => {
-    // A worker that never started still closes its context-hook record.
-    void finishContextTurn(contextTurn, { outcome: 'error' });
-    throw err;
   });
 
   const workerId = worker.getContext().id;
@@ -1307,7 +1333,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       }
     }
 
-    void finishContextTurn(contextTurn, { agentId: workerId, response: result, outcome: 'success' });
+    closeContextTurn(open, { agentId: workerId, response: result, outcome: 'success' });
 
     getNotificationService().notify(
       context.userId,
@@ -1320,7 +1346,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     overrides?.onTokens?.(worker.getBillableTokens());
     return result;
   } catch (error) {
-    void finishContextTurn(contextTurn, { agentId: workerId, outcome: 'error' });
+    closeContextTurn(open, { agentId: workerId, outcome: 'error' });
     const partial = worker.getPartialOutput();
     if (partial) overrides?.onPartialOutput?.(partial);
     // Mark the swarm node as failed before delegating to the retry/fallback

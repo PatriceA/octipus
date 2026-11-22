@@ -42,7 +42,7 @@ const SITES: readonly Site[] = [
     hooked: { file: 'src/core/agent/service.ts', within: 'runTurn', how: 'turn_start against the message, or the plan brief on "go"; runRootAgent is only called from runTurn' },
   },
   {
-    file: 'src/core/agent/worker-spawner.ts', within: 'spawnWorker', call: 'spawn',
+    file: 'src/core/agent/worker-spawner.ts', within: 'spawnWorkerRecorded', call: 'spawn',
     hooked: { how: 'worker_start against task and input, in the volatile tier of the worker prompt' },
   },
   {
