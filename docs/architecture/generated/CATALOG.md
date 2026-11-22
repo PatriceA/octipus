@@ -960,14 +960,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `utils` | 43 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 7 |
-| `tui-editor` | `mcp` | 2 |
+| `tui-editor` | `mcp` | 1 |
 | `tui-editor` | `shared` | 1 |
-| `tui-editor` | `tui-kit` | 41 |
+| `tui-editor` | `tui-kit` | 42 |
 | `tui-editor` | `tui-pi` | 34 |
 | `tui-editor` | `utils` | 2 |
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `shared` | 2 |
-| `tui-pi` | `tui-kit` | 19 |
+| `tui-pi` | `tui-kit` | 20 |
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
