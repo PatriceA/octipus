@@ -4,10 +4,10 @@
 03|You
 04|│ Run the build
 05|
-06|· ▸ 2 tool calls · 1 running · <time> — shell, read_file
+06|· ▸ Thinking · 1 line — A streaming reply
 07|
-08|Octipus
-09|  A streaming reply
+08|· ▸ 2 tool calls · 1 running · <time> — shell, read_file
+09|
 10|
 11|
 12|
@@ -34,9 +34,9 @@
 03|ccc
 04|ddeeeeeeeeeeeee
 05|
-06|a
+06|aafffffffffffffffffffffffffffffffffffffff
 07|
-08|fffffff
+08|a
 09|
 10|
 11|
@@ -63,7 +63,7 @@ b = fg default bg default
 c = fg #92c9c5 bg default bold
 d = fg #92c9c5 bg default
 e = fg #edf5f3 bg default
-f = fg #edf5f3 bg default bold
+f = fg #a6babd bg default italic
 g = fg #5e8590 bg default
 h = fg default bg default inverse
 i = fg #b9ded9 bg default
