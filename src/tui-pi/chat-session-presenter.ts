@@ -100,8 +100,7 @@ export class ChatSessionPresenter {
         // call, not the reply: keep it as a folded thinking item so the trail
         // stays visible without reading as an answer, then start the next live block.
         if (event.iteration !== this.streamIteration) {
-          if (this.streamText.trim()) this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
-          this.streamText = '';
+          this.flushReasoning();
           this.streamIteration = event.iteration;
         }
         this.streamText += event.delta;
@@ -235,6 +234,14 @@ export class ChatSessionPresenter {
       default: return false;
     }
   }
+  /** The live text so far becomes a folded thinking item; a later delta of the same iteration starts a new live block. */
+  private flushReasoning(): void {
+    if (!this.streamText.trim()) return;
+    this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
+    this.streamText = '';
+    this.messages.setLive(null);
+  }
+
   private clearStream(): void {
     this.streamText = '';
     this.streamIteration = -1;
@@ -243,6 +250,9 @@ export class ChatSessionPresenter {
 
   /** A root agent tool event: into this turn's tool group, which the first call puts in the transcript. */
   private recordTool(tool: ToolEventState): void {
+    // What streamed before the call was the reasoning that led to it: keep it
+    // above the group, as a thinking item, not under it as a live reply.
+    this.flushReasoning();
     const group = this.toolGroup ?? (this.toolGroup = { ...newToolGroup(), expanded: this.messages.getDetail() });
     applyToolEvent(group, tool);
     // The first call puts the group in the transcript (again, after /clear emptied it).

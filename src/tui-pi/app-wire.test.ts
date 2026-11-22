@@ -276,3 +276,18 @@ test('a turn cut by a disconnect does not stick, and a command typed offline say
   expect(t.screen()).toContain('Not connected: /status was not sent');
   await t.app.stop();
 });
+
+test('the reasoning that led to a tool call stays above the call, not under it', async () => {
+  const t = await mount();
+  t.submit('fix it');
+  const sid = t.sid();
+  t.socket.event(wire.rootSpawned(sid, 'root-1'));
+  t.socket.event(wire.delta(sid, 'root-1', 'I will read the file first.', 1));
+  t.socket.event(wire.cliToolUse(sid, 'root-1', 'call-1', 'read_file', { path: 'a.ts' }));
+  t.socket.event(wire.delta(sid, 'root-1', 'Now the answer', 2));
+  const [reasoning, tools, answer] = order(t.screen(), 'I will read the file first.', '1 tool call', 'Now the answer');
+  expect(reasoning).toBeGreaterThan(-1);
+  expect(tools).toBeGreaterThan(reasoning);
+  expect(answer).toBeGreaterThan(tools);
+  await t.app.stop();
+});

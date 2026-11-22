@@ -649,6 +649,8 @@ labels reflect blast radius, not contract guarantees.
 - **Terminal chat: transcript search finds every message in memory.** It
   searched only the rendered window of the newest 200–400 messages, so older
   ones were neither found nor counted.
+- **Terminal chat: reasoning reads before the tool calls it led to.** The
+  folded "Thinking" row used to appear below the turn's tool calls.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 
