@@ -28,6 +28,12 @@ export interface FileTreeOptions {
   onOpen: (absolutePath: string) => void;
   /** The tree was clicked: give it the focus. */
   onFocus?: () => void;
+  /** n: a new file in `folder` (the selected folder, or the selected file's). */
+  onNewFile?: (folder: string) => void;
+  /** m: rename (move) the selected file or folder. */
+  onRename?: (path: string) => void;
+  /** d / Delete: delete the selected file. */
+  onDelete?: (path: string) => void;
 }
 
 export class FileTree implements Component, Focusable {
@@ -95,7 +101,14 @@ export class FileTree implements Component, Focusable {
       }
       return;
     }
-    if (matchesKey(data, 'r') && this.focused) { this.refresh(); }
+    if (matchesKey(data, 'r') && this.focused) { this.refresh(); return; }
+    const entry = this.entries[this.selected];
+    if (!entry) return;
+    if (matchesKey(data, 'n')) { this.options.onNewFile?.(entry.isDir ? entry.path : entry.parent ?? this.options.root); return; }
+    // The root itself is not renamed or deleted from here.
+    if (entry.path === this.options.root) return;
+    if (matchesKey(data, 'm')) { this.options.onRename?.(entry.path); return; }
+    if (matchesKey(data, 'd') || matchesKey(data, 'delete')) this.options.onDelete?.(entry.path);
   }
 
   /**

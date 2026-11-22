@@ -40,6 +40,8 @@ import { installEditorKeybindings } from './keybindings';
 import { AgentReview } from './shell/agent-review';
 import { type CommandHost, handleChatSubmit, handleGlobalKey } from './shell/commands';
 import type { EditorContext } from './shell/context';
+import { FileCommands } from './shell/file-commands';
+import { FileWatcher } from './shell/file-watcher';
 import { FileOps, PROMPT_OVERLAY } from './shell/file-ops';
 import { HighlightParses } from './shell/highlight-parses';
 import { EditorOverlays } from './shell/overlay-actions';
@@ -83,6 +85,8 @@ export class OctipusEditorApp {
   private readonly ctx: EditorContext;
   private readonly slots: OverlaySlots;
   private readonly files: FileOps;
+  private readonly fileCommands: FileCommands;
+  private readonly watcher: FileWatcher;
   private readonly review: AgentReview;
   private readonly overlays: EditorOverlays;
   private readonly persistence: EditorPersistence;
@@ -132,6 +136,7 @@ export class OctipusEditorApp {
     this.parses = new HighlightParses(this.buffers, () => this.tui.requestRender());
     this.files = new FileOps(this.ctx, (id) => this.parses.reparse(id));
     this.review = new AgentReview(this.ctx, this.files);
+    this.watcher = new FileWatcher(this.ctx, this.files);
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
     const copy = terminalClipboard(tui);
@@ -164,7 +169,11 @@ export class OctipusEditorApp {
       root: this.projectPath,
       onOpen: (path) => this.files.openFile(path),
       onFocus: () => { if (this.layout.get().focused !== 'tree') this.layout.focus('tree'); },
+      onNewFile: (folder) => this.fileCommands.newFile('', folder),
+      onRename: (path) => this.fileCommands.rename('', path),
+      onDelete: (path) => this.fileCommands.delete(path),
     });
+    this.fileCommands = new FileCommands(this.ctx, this.files, () => { this.tree.refresh(); this.tui.requestRender(); }, (id) => this.parses.reparse(id));
     this.chat = new ChatPane({
       tui,
       basePath: this.projectPath,
@@ -254,6 +263,7 @@ export class OctipusEditorApp {
       ctx: this.ctx,
       chat: this.chat,
       overlays: this.overlays,
+      fileCommands: this.fileCommands,
       clearInfoNotice: () => this.modeBar.clearInfo(),
       hidePlanDetails: () => { this.status.setPlanDetails(null); this.tui.requestRender(); },
       setVimMode: (on) => this.setVimMode(on),
@@ -308,6 +318,7 @@ export class OctipusEditorApp {
     // failure, so this never blocks startup.
     installTreeSitterHighlighter();
     this.tui.start();
+    this.watcher.start();
     try {
       await this.adapter.connect();
     } catch (error) {
@@ -420,6 +431,7 @@ export class OctipusEditorApp {
     if (this.exiting) return;
     this.exiting = true;
     if (this.mcpPoll) clearInterval(this.mcpPoll);
+    this.watcher.stop();
     this.persistence.flush();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.parses.dispose();

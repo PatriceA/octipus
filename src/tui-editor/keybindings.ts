@@ -20,6 +20,7 @@ declare module '@/tui-kit' {
     'app.view.wrap': true;
     'app.goto.line': true;
     'app.search.project': true;
+    'app.file.new': true;
   }
 }
 
@@ -29,6 +30,7 @@ export const EDITOR_KEYBINDINGS = {
   'app.view.wrap':    { defaultKeys: 'alt+z', description: 'Soft wrap long lines on or off' },
   'app.goto.line':    { defaultKeys: 'ctrl+g', description: 'Go to a line (line or line:column)' },
   'app.search.project': { defaultKeys: ['ctrl+shift+f', 'alt+g'], description: 'Search the project\'s files' },
+  'app.file.new':     { defaultKeys: 'alt+n', description: 'Create a new file and open it' },
 } as const satisfies KeybindingDefinitions;
 
 /**

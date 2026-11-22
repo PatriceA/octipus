@@ -9,12 +9,14 @@ import { getKeybindings, matchesKey } from '@/tui-kit';
 import { handleTerminalCommand, wheelDirection } from '@/tui-pi/terminal-actions';
 import type { ChatPane } from '../components/chat-pane';
 import type { EditorContext } from './context';
+import type { FileCommands } from './file-commands';
 import type { EditorOverlays } from './overlay-actions';
 
 export interface CommandHost {
   ctx: EditorContext;
   chat: ChatPane;
   overlays: EditorOverlays;
+  fileCommands: FileCommands;
   /** Clear the info notice in the mode bar; returns whether there was one. */
   clearInfoNotice(): boolean;
   hidePlanDetails(): void;
@@ -60,6 +62,10 @@ export function handleChatSubmit(host: CommandHost, rawText: string): void {
     if (name === 'new') { host.newScratch(); return; }
     if (name === 'goto' || name === 'line') { host.goToLine(value); return; }
     if (name === 'search') { host.overlays.openProjectSearch(value); return; }
+    if (name === 'new-file') { host.fileCommands.newFile(value); return; }
+    if (name === 'rename') { host.fileCommands.rename(value); return; }
+    if (name === 'delete') { host.fileCommands.delete(); return; }
+    if (name === 'revert') { host.fileCommands.revert(); return; }
     if (name === 'save-as') { host.saveAsCommand(value); return; }
     if (name === 'quit' || name === 'exit' || name === 'q') { host.shutdownAndExit(); return; }
     if (name === 'keys' || name === 'hotkeys' || name === 'help-keys') { host.overlays.openHotkeys(); return; }
@@ -96,6 +102,7 @@ export function handleGlobalKey(host: CommandHost, data: string): { consume: tru
   if (kb.matches(data, 'app.view.wrap'))     { host.setSoftWrap(!ctx.layout.get().softWrap); return { consume: true }; }
   if (kb.matches(data, 'app.goto.line'))     { host.goToLine(''); return { consume: true }; }
   if (kb.matches(data, 'app.search.project')) { overlays.openProjectSearch(''); return { consume: true }; }
+  if (kb.matches(data, 'app.file.new'))      { host.fileCommands.newFile(''); return { consume: true }; }
   if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
   if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
   if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }
