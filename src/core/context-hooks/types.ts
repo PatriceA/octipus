@@ -70,6 +70,13 @@ export interface ContextHookResult {
    */
   repeatable?: RepeatableGroup;
   /**
+   * Recall: what each passage showed (its excerpt, in the order of `items`)
+   * and the query it was searched with. Kept only on the in-memory turn
+   * handle, to tell whether the answer used a passage (`passageUsed`); never
+   * stored.
+   */
+  shown?: { query: string; excerpts: string[] };
+  /**
    * The side effects of showing this block (recall: the session's protection
    * level, the passages' access counts). `runContextHooks` runs it only for a
    * block that is injected, within the deadline and the shared budget, and

@@ -134,6 +134,8 @@ export interface RecallPassage {
   qualifiedBy: QualifiedBy[];
   /** The passage as injected: label line, excerpt, newline. */
   block: string;
+  /** The excerpt alone, without the label. */
+  excerpt: string;
   item: ContextHookItem;
 }
 
@@ -145,6 +147,8 @@ export interface RecallSelection {
   degraded?: 'embedding_failed';
   /** What would be injected, best first, one per source; empty unless `injected`. */
   passages: RecallPassage[];
+  /** What was searched (`buildRecallQuery`); empty unless `injected`. */
+  query: string;
   /** `RECALL_HEAD + passages' blocks + RECALL_TAIL`; empty unless `injected`. */
   text: string;
   tokens: number;
@@ -163,7 +167,7 @@ export async function selectRecallPassages(
   tokenBudget: number,
 ): Promise<RecallSelection> {
   const none = (status: RecallSelection['status'], reason: string, degraded?: 'embedding_failed'): RecallSelection =>
-    ({ status, reason, ...(degraded ? { degraded } : {}), passages: [], text: '', tokens: 0 });
+    ({ status, reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
   // A short message is searched only as a follow-up of the previous one, and
   // a bare acknowledgement never (`skipsShortMessage`).
   if (skipsShortMessage(input.query, input.previousMessage)) return none('skipped', 'short_message');
@@ -213,7 +217,7 @@ export async function selectRecallPassages(
     const block = `${label}\n${excerpt}\n`;
     used += estimateTokens(block);
     passages.push({
-      hit, qualifiedBy, block,
+      hit, qualifiedBy, block, excerpt,
       item: { id: hit.id, sourceId: hit.sourceId, title, score: Number((hit.cosine ?? 0).toFixed(3)), qualifiedBy },
     });
   }
@@ -221,7 +225,7 @@ export async function selectRecallPassages(
   const parts = passages.map((p) => p.block);
   const text = RECALL_HEAD + parts.join('') + RECALL_TAIL;
   return {
-    status: 'injected', ...(degraded ? { degraded } : {}), passages, text, tokens: estimateTokens(text),
+    status: 'injected', ...(degraded ? { degraded } : {}), passages, query, text, tokens: estimateTokens(text),
     group: { head: RECALL_HEAD, tail: RECALL_TAIL, parts },
   };
 }
@@ -240,6 +244,7 @@ async function runRecall(input: ContextHookInput, raw: Record<string, unknown>):
   return {
     status: 'injected', text: selection.text, items, tokens: selection.tokens, ...degraded,
     repeatable: selection.group,
+    shown: { query: selection.query, excerpts: selection.passages.map((p) => p.excerpt) },
     // Only once the block is shown (runContextHooks): the passages' documents'
     // levels become the session's, and the passages count as read.
     commit: async () => {

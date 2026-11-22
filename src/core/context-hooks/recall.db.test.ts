@@ -191,6 +191,31 @@ describe('which passages qualify', () => {
   });
 });
 
+describe('whether the answer used what was shown', () => {
+  const finish = async (turn: Awaited<ReturnType<typeof run>>['turn'], response?: string) => {
+    const { finishContextTurn } = await import('@/core/context-hooks');
+    await finishContextTurn(turn, { ...(response !== undefined ? { response } : {}), outcome: 'success' });
+    const { rows } = await queryRaw('SELECT * FROM context_turns ORDER BY created_at DESC LIMIT 1');
+    return rows[0];
+  };
+
+  test('finishing a turn records the passages the answer used, and the row holds no message, passage or answer text', async () => {
+    await chunk('Pricing', 'Pricing: a website costs 2400 euro, hosting 15 euro a month, renovations quoted per project.');
+    await chunk('Website hosting', 'Website hosting: every website runs on our own servers with backups and updates included.');
+    const first = await run('What do we charge for a website?');
+    expect(first.text).toContain('2400 euro');
+    const used = await finish(first.turn, 'A website is 2400 euro; the answer is in the Pricing note.');
+    expect(used).toMatchObject({ used_items: 1, cited_items: 1 });
+    const stored = JSON.stringify(used);
+    for (const text of ['2400', 'What do we charge', 'renovations', 'backups and updates', 'the answer is in']) expect(stored).not.toContain(text);
+
+    // An answer that repeats nothing of the passages used none of them.
+    expect(await finish((await run('What do we charge for a website?')).turn, 'I am not sure, let me look.')).toMatchObject({ used_items: 0 });
+    // Nothing shown, nothing to measure: null, not zero.
+    expect(await finish((await run('quarterly tax deadline')).turn, 'The deadline is 2026-01-31.')).toMatchObject({ used_items: null });
+  });
+});
+
 describe('when the query cannot be embedded', () => {
   test('recall runs on its keyword rules alone, says so in the run record, and logs it', async () => {
     const { getEmbeddingService } = await import('@/core/rag/embeddings');

@@ -21,6 +21,7 @@ import { coreLogger } from '@/utils/logger';
 import { withDeadline } from '@/utils/concurrency';
 import type { RepeatableBlock } from '@/core/agent/repeated-context';
 import { KIND_RUNNERS } from './kinds';
+import { usedPassages } from './measure';
 import { listContextHooks } from './store';
 import { agentUsageKey, toolUseSnapshot, type ToolUseCount } from './tool-usage';
 import type { ContextHookInput, ContextHookItem, ContextHookResult } from './types';
@@ -35,6 +36,12 @@ export interface ContextTurnHandle {
   startUse: ToolUseCount;
   /** What the answer can cite: recall passages and context notes, not the index. */
   citable: ContextHookItem[];
+  /**
+   * The recall passages shown, each with its excerpt and the query it was
+   * searched with: what `finishContextTurn` compares the answer against
+   * (`usedPassages`). In memory only; the row gets the count.
+   */
+  shown: Array<{ excerpt: string; query: string }>;
 }
 
 export interface ContextHooksOutcome {
@@ -139,12 +146,14 @@ export async function runContextHooks(
   const labelledBlocks: ContextHooksOutcome['labelledBlocks'] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
+  const shown: ContextTurnHandle['shown'] = [];
   for (const { hook, latencyMs, result } of kept) {
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
       repeatable.push(result.repeatable ?? result.text);
       labelledBlocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
       if (hook.kind !== 'notes_index') citable.push(...result.items);
+      if (result.shown) shown.push(...result.shown.excerpts.map((excerpt) => ({ excerpt, query: result.shown?.query ?? '' })));
     }
     records.push({
       id: hook.id,
@@ -174,7 +183,7 @@ export async function runContextHooks(
       tokens: records.reduce((n, r) => n + r.tokens, 0),
       latencyMs: Date.now() - started,
     }).returning({ id: contextTurns.id });
-    turn = { id: row.id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable };
+    turn = { id: row.id, usageKey: input.sessionId, startUse: toolUseSnapshot(input.sessionId), citable, shown };
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
   }
@@ -217,7 +226,11 @@ async function describeModel(agentId: string | undefined): Promise<{ model: stri
   return { model, cli: Boolean(getCLIToolConfig(model)) };
 }
 
-/** Close a turn record: what the agent looked up itself, and which injected sources its answer named. Never throws. */
+/**
+ * Close a turn record: what the agent looked up itself, which injected
+ * sources its answer named, and how many recall passages it used. Never
+ * throws. For a worker or a swarm child the answer is its result text.
+ */
 export async function finishContextTurn(
   turn: ContextTurnHandle | null,
   done: { agentId?: string; response?: string; outcome?: string },
@@ -233,6 +246,8 @@ export async function finishContextTurn(
       knowledgeToolCalls: Math.max(0, end.knowledge - turn.startUse.knowledge),
       notesToolCalls: Math.max(0, end.notes - turn.startUse.notes),
       citedItems: citedItems(done.response ?? '', turn.citable),
+      // Measured only when recall showed something; no answer uses nothing.
+      usedItems: turn.shown.length ? usedPassages(done.response ?? '', turn.shown) : null,
       outcome: done.outcome ?? null,
       finishedAt: new Date(),
     }).where(eq(contextTurns.id, turn.id));

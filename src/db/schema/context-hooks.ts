@@ -74,6 +74,12 @@ export const contextTurns = pgTable('context_turns', {
   notesToolCalls: integer('notes_tool_calls'),
   /** Injected sources the answer named. */
   citedItems: integer('cited_items'),
+  /**
+   * Recall passages the answer used: it repeats distinctive content of the
+   * passage's excerpt not already in the query (`passageUsed`). Null when no
+   * recall passage was shown, and on rows written before it was measured.
+   */
+  usedItems: integer('used_items'),
   outcome: text('outcome'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
