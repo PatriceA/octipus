@@ -27,8 +27,9 @@ labels reflect blast radius, not contract guarantees.
     the session's protection level and counting accesses happen only for
     passages actually shown.
   - **New recall settings** `keywordCoverage` (0.6) and `maxGap` (0.15).
-    **Default changed:** the recall block's `tokenBudget` is 1000 (was 700),
-    so the default four passages fit.
+    **Defaults changed:** the recall block's `tokenBudget` is 1200 (was
+    700) and `excerptChars` 1000 (was 700), the indexers' largest chunk, so
+    a chunk is shown whole and the default four passages fit.
   - When the query cannot be embedded, recall runs on its keyword rules and
     the run is marked `embedding_failed`.
   - **Measurement:** the stats show "used" beside "named": an answer uses a

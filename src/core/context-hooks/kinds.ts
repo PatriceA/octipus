@@ -56,14 +56,22 @@ export const KIND_CONFIG = {
     /** The relative cut: a passage qualified on similarity alone is dropped this far below the best one. */
     maxGap: z.number().min(0).max(1).default(RECALL_DEFAULTS.maxGap),
     /**
-     * Room for the default four passages of 700 characters with their labels
-     * and the fence: about 720 tokens of plain prose (kinds.test.ts checks it
-     * with the real estimator), more for text dense with names and numbers.
-     * The old 700 did not fit them. With the notes index and a context note
-     * it stays within the install's `contextHooks.maxTokens` of 2000.
+     * Room for the default four passages of 1000 characters with their
+     * labels and the fence: about 960 tokens of plain prose (kinds.test.ts
+     * checks it with the real estimator), with room left for text denser in
+     * names and numbers; a passage past the budget is cut. With the notes
+     * index and a context note it stays within the install's
+     * `contextHooks.maxTokens` of 2000.
      */
     tokenBudget: z.number().int().min(50).max(4000).default(RECALL_DEFAULTS.tokenBudget),
-    /** Characters of each passage: the window of the chunk with the most query terms. */
+    /**
+     * Characters of each passage. A chunk this long or shorter is shown
+     * whole, so the same chunk keeps its bytes whatever question found it and
+     * a later turn can leave it out while it is in view. The default is the
+     * indexers' largest chunk (`MAX_CHUNK_SIZE`); a longer chunk (indexed
+     * before long paragraphs were split) shows the window with the most query
+     * terms.
+     */
     excerptChars: z.number().int().min(100).max(3000).default(RECALL_DEFAULTS.excerptChars),
     purposes: z.array(z.enum(RECALL_PURPOSES)).min(1).default([...RECALL_PURPOSES]),
     /** Octipus's own manual. Off: agents already search it for setup questions. */

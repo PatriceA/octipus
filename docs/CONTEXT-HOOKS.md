@@ -142,9 +142,11 @@ What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`):
 
 ### The excerpt
 
-Each passage shows `excerptChars` (700) characters: the window of the chunk
-that holds the most words of the query, not its first characters. A cut is
-marked with "…". The label line gives the kind (note or document), the
+Each passage shows up to `excerptChars` (1000) characters. That is the
+indexers' largest chunk, so a chunk is normally shown whole and keeps the
+same bytes whichever question found it. A longer chunk (indexed before long
+paragraphs were split) shows the window that holds the most words of the
+query, not its first characters. A cut is marked with "…". The label line gives the kind (note or document), the
 title, the section and the age of a passage over a month old; never a score
 or a position, so the same passage keeps the same bytes from turn to turn.
 
@@ -158,9 +160,10 @@ left out, and a one-line note says that the context above still applies.
 When the conversation is compacted within a turn, the passages left out are
 put back. Limits:
 
-- The excerpt window depends on the query, so the same passage found by a
-  different question can show a different part of the chunk. That is new
-  text and is sent.
+- A chunk longer than `excerptChars` shows a window that depends on the
+  query, so the same chunk found by a different question can show a
+  different part of it. That is new text and is sent. With the defaults
+  only chunks indexed before long paragraphs were split are that long.
 - A part under 120 characters is always sent again: it is too short to be
   recognised safely in earlier messages.
 - Side questions resend their passages: `directResponse` has no cross-turn
@@ -201,8 +204,8 @@ Set per hook on the Recall page; a blank field takes the default shown in it.
 | `keywordCoverage` | 0.6 | Rule 2: the share of the query's distinctive words a passage must contain (and at least two). |
 | `maxGap` | 0.15 | The relative cut: a passage qualified on similarity alone is dropped this far below the best one. |
 | `limit` | 4 | Most passages (one per source). |
-| `excerptChars` | 700 | Characters per passage. |
-| `tokenBudget` | 1000 | Most tokens for the block: the default four passages of 700 characters fit, with their labels. |
+| `excerptChars` | 1000 | Characters per passage: the largest chunk the indexers write, so a chunk is shown whole. |
+| `tokenBudget` | 1200 | Most tokens for the block: the default four passages of 1000 characters of prose fit, with their labels; with the notes index (150) and a context note (600) it stays within `contextHooks.maxTokens` (2000). |
 | `purposes` | note, document, knowledge_artifact, image_description | Which knowledge-base rows count. |
 | `includeProductDocs` | false | Octipus's own manual. Agents are already told to search it for setup questions. |
 

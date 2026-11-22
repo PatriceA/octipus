@@ -21,8 +21,9 @@ export const RECALL_DEFAULTS = {
   minSimilarity: 0.45,
   keywordCoverage: 0.6,
   maxGap: 0.15,
-  tokenBudget: 1000,
-  excerptChars: 700,
+  tokenBudget: 1200,
+  /** A chunk's maximum length (`MAX_CHUNK_SIZE`): a chunk is shown whole, so its bytes do not depend on the query. */
+  excerptChars: 1000,
 } as const;
 export const NOTE_DEFAULTS = { tokenBudget: 600 } as const;
 export const NOTES_INDEX_DEFAULTS = { limit: 15, tokenBudget: 150 } as const;
