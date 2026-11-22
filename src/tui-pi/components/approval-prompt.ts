@@ -35,8 +35,13 @@ const MAX_CHOICES = 9;
 
 export class ApprovalPrompt implements Component, Focusable {
   focused = false;
+  /** Rows the box may take; the question scrolls inside it when it is longer. */
+  private maxRows = Number.POSITIVE_INFINITY;
+  private scroll = 0;
 
   constructor(private readonly options: ApprovalPromptOptions) {}
+
+  setMaxRows(rows: number): void { this.maxRows = Math.max(1, rows); }
 
   invalidate(): void { /* no cached state */ }
 
@@ -73,6 +78,8 @@ export class ApprovalPrompt implements Component, Focusable {
       }
     }
 
+    if (matchesKey(data, 'up')) { this.scroll = Math.max(0, this.scroll - 1); return; }
+    if (matchesKey(data, 'down')) { this.scroll++; return; }
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c')) {
       // A decline, not a dismissal. The agent is waiting on an answer, and
       // closing the box without sending one leaves it waiting.
@@ -89,8 +96,19 @@ export class ApprovalPrompt implements Component, Focusable {
     const choices = this.choices;
     const lines: string[] = [bold('? Your decision')];
     if (this.options.summary) lines.push(dim(displayLine(this.options.summary)));
-    // A question may span lines; each one is its own row of the box.
-    lines.push(...displayText(this.options.question).split('\n'));
+    // A question may span lines; each one is its own row of the box. A
+    // question taller than the box allows scrolls, so the choices and the
+    // keys to answer stay on screen.
+    const question = displayText(this.options.question).split('\n');
+    const fixed = 2 + lines.length + choices.length + 1;
+    const room = Math.max(1, this.maxRows - fixed);
+    if (question.length <= room) lines.push(...question);
+    else {
+      const shown = Math.max(1, room - 1);
+      this.scroll = Math.min(this.scroll, question.length - shown);
+      lines.push(...question.slice(this.scroll, this.scroll + shown));
+      lines.push(dim(`↑/↓ lines ${this.scroll + 1}–${this.scroll + shown} of ${question.length}`));
+    }
     for (const [i, choice] of choices.entries()) lines.push(`  ${i + 1}. ${displayLine(choice)}`);
     lines.push(
       dim(choices.length > 0

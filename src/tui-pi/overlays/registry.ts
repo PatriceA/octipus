@@ -54,9 +54,15 @@ const COMMAND_PALETTE_OVERLAY: OverlayOptions = {
  * correctly; this is the backstop for the ones that do not.
  */
 export class FramedOverlay implements Component, Focusable {
-  constructor(readonly inner: Component) {}
+  constructor(readonly inner: Component & { setMaxRows?: (rows: number) => void }, private readonly maxRows: () => number = () => Number.POSITIVE_INFINITY) {}
   render(width: number): string[] {
-    return this.inner.render(width).map(line => truncateToWidth(frameRow(line), width, ''));
+    const max = this.maxRows();
+    this.inner.setMaxRows?.(max);
+    let lines = this.inner.render(width);
+    // Taller than the screen allows: pi-tui would keep the top and drop the
+    // bottom border and the keys to answer. Keep the top and the last two rows.
+    if (lines.length > max) lines = max <= 2 ? lines.slice(-max) : [...lines.slice(0, max - 2), ...lines.slice(-2)];
+    return lines.map(line => truncateToWidth(frameRow(line), width, ''));
   }
   handleInput(data: string): void { this.inner.handleInput?.(data); }
   invalidate(): void { this.inner.invalidate(); }
@@ -65,9 +71,21 @@ export class FramedOverlay implements Component, Focusable {
   set focused(value: boolean) { if (isFocusable(this.inner)) this.inner.focused = value; }
 }
 
+/** The rows pi-tui gives an overlay: the screen less its margins, capped by `maxHeight`. */
+export function overlayRows(options: OverlayOptions, screenRows: number): number {
+  const margin = typeof options.margin === 'number'
+    ? { top: options.margin, bottom: options.margin }
+    : options.margin ?? {};
+  const available = Math.max(1, screenRows - Math.max(0, margin.top ?? 0) - Math.max(0, margin.bottom ?? 0));
+  const max = options.maxHeight;
+  if (max === undefined) return available;
+  const cap = typeof max === 'number' ? max : Math.floor(screenRows * Number.parseFloat(max) / 100);
+  return Math.max(1, Math.min(available, cap));
+}
+
 export function createOverlayController(tui: TUI): OverlayController {
   const show = (component: Component, options: OverlayOptions): OverlayHandle => {
-    const handle = tui.showOverlay(new FramedOverlay(component), options);
+    const handle = tui.showOverlay(new FramedOverlay(component, () => overlayRows(options, tui.terminal?.rows ?? 24)), options);
     handle.focus();
     return handle;
   };

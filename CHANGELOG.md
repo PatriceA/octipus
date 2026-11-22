@@ -34,6 +34,11 @@ labels reflect blast radius, not contract guarantees.
   screen.** Every box — prompts, the command palette and the editor's file
   picker, find, diff and other boxes — is drawn one terminal row per row and
   cut to its width, so a control byte in what it shows cannot break the frame.
+- **Terminal chat and editor: a long agent question fits on the screen.** A
+  question taller than the window pushed the choices and the keys to answer
+  off the bottom and covered the status line. The question now scrolls inside
+  its box (Up/Down), and the choices, the keys and the status line stay
+  visible; no box is drawn taller than the screen.
 - **Terminal chat: `/copy` copies the reply as it arrived.** Since the
   composer fix a copied reply had its tabs turned into spaces and its line
   endings and escape sequences altered — the screen's cleaned version. It now

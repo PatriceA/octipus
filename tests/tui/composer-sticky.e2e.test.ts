@@ -48,4 +48,20 @@ describe.skipIf(process.platform === 'win32')('decision prompts with multi-line 
     const screen = rows.join('\n');
     for (const line of [/│ Run this\? +│/, /│ for f in \*; do +│/, /│ {3}rm "\$f" +│/, /│ done +│/]) expect(screen).toMatch(line);
   });
+
+  test('a question taller than the screen scrolls in its box and leaves the status line and choices visible', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 16);
+    await tui.waitFor('connected');
+    const question = Array.from({ length: 40 }, (_, n) => `question line ${n}`).join('\n');
+    tui.event('agent.approval_required', { requestId: 'tall', question, options: ['Keep', 'Revise'] });
+    await tui.waitFor('1. Keep');
+    await settle();
+    const rows = (await tui.text()).split('\n');
+    expect(rows.at(-1)).toContain('● Octipus');
+    expect(rows.join('\n')).toContain('Esc decline');
+    expect(rows.join('\n')).toContain('question line 0');
+    tui.send('\x1b[B'); await tui.waitFor('question line 0', true);
+    tui.send('2'); await tui.waitFor('1. Keep', true);
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'tall', response: 'Revise' }));
+  });
 });

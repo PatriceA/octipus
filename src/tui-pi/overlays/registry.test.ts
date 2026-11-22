@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { type Component, CURSOR_MARKER, type Focusable, type TUI, visibleWidth } from '@mariozechner/pi-tui';
-import { createOverlayController, FramedOverlay } from './registry';
+import { createOverlayController, FramedOverlay, overlayRows } from './registry';
 
 function fakeTui() {
   const shown: Component[] = [];
@@ -52,4 +52,22 @@ test('the chat prompts are framed too', () => {
   overlays.showApprovalPrompt({ summary: '', question: 'Go?', options: ['Yes'], onRespond: () => {} });
   overlays.showCommandPalette({ onCommand: () => {}, onCancel: () => {} });
   expect(shown.every(component => component instanceof FramedOverlay)).toBe(true);
+});
+
+test('an overlay is never taller than the rows pi-tui gives it; its last rows survive', () => {
+  const shown: Component[] = [];
+  const tui = { terminal: { rows: 10 }, showOverlay: (component: Component) => { shown.push(component); return { focus: vi.fn(), hide: vi.fn() }; } } as unknown as TUI;
+  const tall: Component = { render: () => ['top', ...Array.from({ length: 30 }, (_, n) => `row ${n}`), 'hint', 'bottom'], invalidate() {} };
+  createOverlayController(tui).showModal(tall, { anchor: 'bottom-center', margin: { bottom: 2 } });
+  const rows = shown[0]?.render(40) ?? [];
+  expect(rows).toHaveLength(8);
+  expect(rows[0]).toBe('top');
+  expect(rows.slice(-2)).toEqual(['hint', 'bottom']);
+});
+
+test('overlay rows follow pi-tui: screen less margins, capped by maxHeight', () => {
+  expect(overlayRows({ margin: { bottom: 2 } }, 24)).toBe(22);
+  expect(overlayRows({ margin: 1, maxHeight: '85%' }, 24)).toBe(20);
+  expect(overlayRows({ margin: 1, maxHeight: 5 }, 24)).toBe(5);
+  expect(overlayRows({}, 3)).toBe(3);
 });
