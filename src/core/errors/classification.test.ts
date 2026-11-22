@@ -40,6 +40,11 @@ describe('classifyError — rate limit variants', () => {
     });
     expect(err.retryAfterMs).toBe(12000);
   });
+
+  test('extracts retry-after from a fetch Headers object, as current SDK errors carry it', () => {
+    const err = classifyError({ status: 429, message: 'rate limited', headers: new Headers({ 'Retry-After': '9' }) });
+    expect(err.retryAfterMs).toBe(9000);
+  });
 });
 
 describe('classifyError — auth variants', () => {

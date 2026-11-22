@@ -230,6 +230,13 @@ describe('failure classification over the wire', () => {
     expect(err.providerHint).toBe('litellm');
   });
 
+  test('a 429 carries the Retry-After the proxy sent', async () => {
+    proxy.enqueue(openAIError(429, 'Rate limit reached for requests', { headers: { 'retry-after': '7' } }));
+    const err = await rejection(clientWith().completeViaProxy({ model: 'gpt-4o', messages: hi }));
+    expect(err.reason).toBe(FailoverReason.RATE_LIMIT);
+    expect(err.retryAfterMs).toBe(7_000);
+  });
+
   test('a truncated JSON body is an invalid response', async () => {
     proxy.enqueue(text('{"id":"x","choices":[{"message":', { contentType: 'application/json' }));
     const err = await rejection(clientWith().completeViaProxy({ model: 'gpt-4o', messages: hi }));
@@ -380,6 +387,15 @@ describe('streaming over the wire', () => {
     proxy.enqueue(sse([chatChunk({ content: 'Sure<thi' }), chatChunk({ content: 'nk>secret</th' }), chatChunk({ content: 'ink>, done.' }), chatChunk({ finishReason: 'stop' })]));
     const { chunks } = await drain(clientWith().streamViaProxy({ model: 'gpt-4o', messages: hi }));
     expect(chunks.map(c => c.content ?? '').join('')).toBe('Sure, done.');
+  });
+
+  test('an error status before the stream starts is classified', async () => {
+    proxy.enqueue(openAIError(429, 'rate limit', { headers: { 'retry-after': '3' } }));
+    const { chunks, error } = await drain(clientWith().streamViaProxy({ model: 'gpt-4o', messages: hi }));
+    expect(chunks).toEqual([]);
+    expect(error).toBeInstanceOf(ClassifiedError);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.RATE_LIMIT);
+    expect((error as ClassifiedError).retryAfterMs).toBe(3_000);
   });
 
   test('stream() on a direct provider that fails before its first chunk is sent to the proxy under the same model id', async () => {

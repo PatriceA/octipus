@@ -138,15 +138,19 @@ function extractStatus(err: unknown): number | undefined {
 function extractRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== 'object') return undefined;
   const e = err as Record<string, unknown>;
-  // OpenAI SDK exposes headers at e.headers or e.response.headers
+  // OpenAI SDK exposes headers at e.headers or e.response.headers: a fetch
+  // `Headers` (current SDKs) or a plain record (older SDKs, hand-built errors).
   const headers =
     (e.headers as Record<string, unknown> | undefined) ||
     ((e.response as Record<string, unknown> | undefined)?.headers as
       | Record<string, unknown>
       | undefined);
-  const raw =
-    (headers?.['retry-after'] as string | number | undefined) ??
-    (headers?.['Retry-After'] as string | number | undefined);
+  const header = (name: string): string | number | undefined => {
+    if (!headers) return undefined;
+    if (typeof headers.get === 'function') return (headers as unknown as { get(n: string): string | null }).get(name) ?? undefined;
+    return headers[name] as string | number | undefined;
+  };
+  const raw = header('retry-after') ?? header('Retry-After');
   if (raw == null) return undefined;
   const num = typeof raw === 'number' ? raw : parseFloat(raw);
   if (!Number.isFinite(num)) return undefined;
