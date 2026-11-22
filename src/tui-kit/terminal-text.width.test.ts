@@ -14,7 +14,7 @@
  * see the note on each.
  */
 import xterm from '@xterm/headless';
-import { visibleWidth } from '@mariozechner/pi-tui';
+import { visibleWidth } from './index';
 import { afterAll, describe, expect, test } from 'vitest';
 import { displayLine, displayText } from './terminal-text';
 

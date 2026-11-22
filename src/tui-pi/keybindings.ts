@@ -53,6 +53,7 @@ declare module '@/tui-kit' {
     'app.subagents.toggle': true;
     'app.subagents.scrollUp': true;
     'app.subagents.scrollDown': true;
+    'app.transcript.dump': true;
   }
 }
 
@@ -81,6 +82,7 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.subagents.toggle':{ defaultKeys: ['alt+s', 'f7'],    description: 'Expand/collapse the subagent panel' },
   'app.subagents.scrollUp':   { defaultKeys: 'alt+up',   description: 'Scroll the expanded subagent panel up' },
   'app.subagents.scrollDown': { defaultKeys: 'alt+down', description: 'Scroll the expanded subagent panel down' },
+  'app.transcript.dump': { defaultKeys: 'alt+o', description: 'Show the transcript in the terminal scrollback (any key returns)' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFAULT_USER_PATH = join(homedir(), '.octipus', 'keybindings.json');

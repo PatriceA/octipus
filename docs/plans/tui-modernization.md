@@ -1,11 +1,11 @@
 # Terminal chat and editor: modernization plan
 
-Status: proposed (2026-11-22). Phase 0 shipped with this document; Phase 1 and
-Phase 2 item 1 have shipped since (§7).
+Status: in progress (2026-11-22). Phase 0 shipped with this document;
+Phases 1 and 2 are on the modernization branch (§7).
 
 Scope: `octi tui` (`src/tui-pi/`, 5.4k lines with tests) and `octi edit`
 (`src/tui-editor/`, 6.5k lines with tests), their shared pieces, the
-`@mariozechner/pi-tui` dependency, and `tests/tui/`.
+`@mariozechner/pi-tui` dependency (now `@earendil-works/pi-tui`), and `tests/tui/`.
 
 Goal: the terminal is a first-class way to use Octipus, comparable with Claude
 Code, Codex CLI, Grok Build and the pi coding agent in how it reads, scrolls,
@@ -221,6 +221,40 @@ Open questions the spike answers: whether `TuiAltScreen`'s selection can
 exclude decorations (rail, line numbers); whether the 1.x `Editor` still
 supports the autocomplete and paste-marker behaviour the composer relies on;
 whether overlays take part in layout or are still composited afterwards.
+
+#### Spike result (2026-11-22): go, option B
+
+`@earendil-works/pi-tui` 1.6.0 (exact pin) replaced 0.73.1, and both
+surfaces run on `TuiAltScreen`. The port was small: `TUI` became an
+interface (`TuiMainScreen` / `TuiAltScreen` are the renderers),
+`Component.render` returns `readonly string[]`, `sliceByColumn` is public,
+and `chalk` is no longer a pi-tui dependency (it was ours all along, now
+declared). Typecheck errors after the swap: four in `src/`, seven in the
+setup wizard. `Editor`, `CombinedAutocompleteProvider`, `Markdown`,
+`SelectList`, `Input` and the keybindings manager kept the API the app uses;
+the composer's autocomplete, history and paste markers pass their tests
+unchanged. **[code, run]**
+
+| Criterion | Result |
+| --- | --- |
+| 1. e2e suites at 80×24 and 200×60 through 50 random resizes | Pass. Every pre-existing suite passes on the alternate screen; the expectations that changed are the ones the plan changes (mouse mode `any` instead of `vt200`, a scrollbar beside the rows, no PgUp hint row). `screen.e2e` adds the two sizes with 50 resizes each; the invariant fuzzer ran 150 seeds clean, a quarter of them `--inline`. **[run]** |
+| 2. Drag selects and copies; override key; wheel with nothing held | Pass in the harness: a drag with no modifier selects across transcript rows, copies on release (rail left out through the `copySelection` hook) and the wheel scrolls. The Shift/Option override is the terminal's own and cannot be exercised in xterm-headless; the app uses standard SGR any-motion reporting (button-motion inside tmux/screen), which xterm, VTE, Kitty and Windows Terminal override with Shift **[upstream]**. |
+| 3. 5,000 messages, frame time < 16 ms at 200×60 | Pass: p95 about 1 ms per streaming frame, about 7 ms per page scroll that pages older messages into the window (`frame-time.e2e`, real app on the real renderer over a counting terminal). **[run]** |
+| 4. Terminal matrix | Approximated only: xterm-headless for every suite, plus the chat inside a real tmux 3.4 (`tmux.e2e`: layout through resizes, copy to the tmux buffer, clean quit). VTE, Kitty/Ghostty, iTerm2, Windows Terminal, SSH and the Linux console were not available and are **not verified**. |
+| 5. Uncaught exception restores the terminal | Pass, alternate and inline: `exit-paths.e2e` checks the normal buffer is back with the pre-launch text, mouse and bracketed paste off, cursor shown, cooked mode, and the error printed after `?1049l`. **[run]** |
+| 6. Native helpers | Acceptable. Prebuilt `.node` files (16–72 kB each, C/Objective-C sources shipped beside them, no install script) for clipboard reads and modifier-key state on macOS, Windows and Linux/X11. They load lazily: Linux only through `getNativeClipboard()`, which Octipus never calls, so the Docker image and Linux never load one; on macOS only to tell Shift+Enter apart in Terminal.app; on Windows to enable VT input and for Shift+Enter. There is no switch to disable them short of patching the package; each load is wrapped in `try`, so a missing or blocked binary degrades to the plain behaviour. Windows itself was not run. **[code]** |
+
+Open questions: selection cannot leave out decorations by itself — it copies
+the source rows — but its `copySelection` hook lets the app strip the rail,
+which is what the chat does; the editor's line numbers and tree are not
+stripped. The 1.x `Editor` keeps autocomplete and paste markers. Overlays are
+still composited over the layout, so `FramedOverlay` stays the backstop.
+
+Two costs of the renderer, accepted: a `ScrollView` needs every row of its
+content, so the transcript renders a window of the newest messages and grows
+it as the reader reaches its top (`transcript-view.ts`); and the alternate
+screen consumes viewport keys (PageUp, Ctrl+Home, Ctrl+Up/Down) before the
+app sees them, so the editor, which scrolls its own panes, unbinds them.
 
 ## 5. Findings
 
@@ -482,6 +516,39 @@ surface is not under the invariant suite.
 Done when: the §4.4 criteria hold on `main`; the user-reported symptoms
 (composer off screen, Shift to select, history lost on resize) are each
 covered by a PTY test.
+
+**Shipped** on the modernization branch (not yet on `main`), option B:
+
+| Item | Commit | Covered by |
+| --- | --- | --- |
+| 1. `src/tui-kit/` seam | `97b6705`; package move `4456ebd` | `seam.test.ts` (either package name) |
+| 2. Spike | this section, §4.4 "Spike result" | — |
+| 3. Alternate screen, sticky footer, `--inline` | `79a2c66`, `a23dc70` | `screen.e2e` (scrollback through resizes, both modes; 50 resizes at 80×24 and 200×60), `composer-sticky.e2e`, `invariants.e2e` |
+| 4. Mouse, selection, clipboard chain, `tui.mouse` | `4456ebd`, `79a2c66`, `a23dc70` | `selection.e2e` (drag without modifier, wheel, native/off, fake `xclip`, OSC 52), `tmux.e2e`, `clipboard.test.ts`, `settings.test.ts` |
+| 5. Exit summary, `/export`, `/scrollback` / `Alt+O` | `a23dc70` | `screen.e2e`, `exit-paths.e2e` (crash restores the screen), `transcript-export.test.ts` |
+| 6. Virtualised, capped transcript | `a23dc70` | `transcript-view.test.ts`, `frame-time.e2e` |
+
+Tests: `af190f7`; docs `2f05c4e`; `MouseRegion` in the seam `e28b2db`. Server paging of older turns is **not done**: the
+gateway's `history` command returns the last 50 messages and takes no
+cursor, so it needs a gateway change (a `before` message id or offset on
+`history`) before the transcript can load older turns on scroll. Until then
+the client keeps up to 5,000 messages and says when it dropped older ones.
+
+API for the next phases:
+
+- Mouse click targets: implement `handleMouse(event: TuiMouseEvent)` on a
+  component, or wrap one in `MouseRegion` from `@/tui-kit`; return
+  `{ handled: true }` for a click, `{ capture: true }` to receive the drag
+  and release. Unhandled drags fall through to text
+  selection, unhandled wheels to the scroll view under the pointer.
+- A sticky row above the composer: pass a component as `sticky` in the
+  `ChatFooterParts` the app hands `ChatFooter` / `renderChatFrame`
+  (`components/chat-frame.ts`). It gets up to a quarter of the screen, the
+  newest rows kept, and gives way to the composer and status first.
+- Transcript item types: add a member to `TranscriptItem` in
+  `components/messages-pane.ts`, a case in `renderItem`, and decide what
+  `entries()` (copy, export, exit summary) takes from it; add it with
+  `pushItem`. Rendering is cached per item and width.
 
 ### Phase 3 — Chat experience (L)
 

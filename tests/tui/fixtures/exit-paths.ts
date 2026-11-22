@@ -6,7 +6,7 @@
 import { createRuntime } from '../../../src/tui-pi/runtime';
 
 const path = process.argv.at(-1);
-const runtime = createRuntime({ title: 'exit paths' });
+const runtime = createRuntime({ title: 'exit paths', screen: process.argv.includes('--inline') ? 'inline' : 'alt', mouse: 'app' });
 runtime.tui.addChild({ render: () => ['exit-path fixture ready'], invalidate() {} });
 runtime.tui.start();
 // Registered after the runtime's own handlers, so it runs after the restore.
