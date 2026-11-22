@@ -847,17 +847,15 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // Context hooks (docs/CONTEXT-HOOKS.md), against the worker's own brief: a
   // specialist or role agent gets the knowledge base and notes nearest its
-  // job without having to think of searching. Same audience rule as the root.
-  let contextTurn: import('@/core/context-hooks').ContextTurnHandle | null = null;
-  if (context.userId && !audience.shared && !audience.contentStorageOff) {
-    const { runContextHooks } = await import('@/core/context-hooks');
-    const hooks = await runContextHooks({
-      event: 'worker_start', userId: context.userId, workspaceId: context.workspaceId ?? null,
-      sessionId: context.sessionId, space: context.space, query: input ? `${task}\n${input}` : task, role: agentRole,
-    });
-    if (hooks.text) volatileParts.push(hooks.text);
-    contextTurn = hooks.turn;
-  }
+  // job without having to think of searching. Same audience rule as the root
+  // (`contextForAgentStart`).
+  const { contextForAgentStart } = await import('@/core/context-hooks');
+  const hooks = await contextForAgentStart({
+    event: 'worker_start', userId: context.userId, workspaceId: context.workspaceId ?? null,
+    sessionId: context.sessionId, space: context.space, query: input ? `${task}\n${input}` : task, role: agentRole, audience,
+  });
+  if (hooks.text) volatileParts.push(hooks.text);
+  const contextTurn = hooks.turn;
   // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context), against the same brief and audience rule.
   if (isRealUserId(context.userId) && !audience.shared && !audience.contentStorageOff) {
     const { runPluginContexts } = await import('@/plugins/packages/contributions/context');

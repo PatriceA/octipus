@@ -150,6 +150,16 @@ function distinctiveWords(text: string): string[] {
 }
 
 /**
+ * Whether `buildRecallQuery` searches this message together with the
+ * previous typed one: a message too short to carry its own subject. A caller
+ * that would have to read the previous message asks this first and skips the
+ * read when it cannot matter.
+ */
+export function searchesWithPreviousMessage(message: string): boolean {
+  return distinctiveWords(message.trim()).length < SHORT_QUERY_WORDS;
+}
+
+/**
  * What recall searches for this message. A short one is searched together
  * with the previous typed message (no model call: recall must not add a
  * model round trip to every turn); a long one keeps its head and its tail.
@@ -158,7 +168,7 @@ function distinctiveWords(text: string): string[] {
 export function buildRecallQuery(input: { query: string; previousMessage?: string }): string {
   const message = input.query.trim();
   const previous = input.previousMessage?.trim();
-  if (previous && previous !== message && distinctiveWords(message).length < SHORT_QUERY_WORDS) {
+  if (previous && previous !== message && searchesWithPreviousMessage(message)) {
     return headAndTail(`${headAndTail(previous, PREVIOUS_MESSAGE_CHARS, PREVIOUS_MESSAGE_CHARS / 2)}\n${message}`, MAX_QUERY_CHARS, QUERY_HEAD_CHARS);
   }
   return headAndTail(message, MAX_QUERY_CHARS, QUERY_HEAD_CHARS);

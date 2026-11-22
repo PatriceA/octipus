@@ -58,7 +58,16 @@ const NONE: ContextHooksOutcome = { text: '', blocks: [], labelledBlocks: [], re
  * Never throws.
  */
 export async function runContextHooks(
-  input: Omit<ContextHookInput, 'tokenBudget'> & { role?: string; channel?: string },
+  input: Omit<ContextHookInput, 'tokenBudget' | 'previousMessage'> & {
+    role?: string;
+    channel?: string;
+    /**
+     * `ContextHookInput.previousMessage`, or how to read it. A reader runs
+     * once, only when a recall hook runs, and inside that hook's deadline: a
+     * slow read costs the turn no more than the hook may.
+     */
+    previousMessage?: string | (() => Promise<string | undefined>);
+  },
 ): Promise<ContextHooksOutcome> {
   const settings = getConfig().contextHooks;
   // Recall is the `recall` module (docs/MODULES.md): off, no hook runs.
@@ -72,6 +81,10 @@ export async function runContextHooks(
     return NONE;
   }
   if (hooks.length === 0) return NONE;
+  const { previousMessage, ...hookInput } = input;
+  let previous: Promise<string | undefined> | undefined;
+  const previousFor = (): Promise<string | undefined> =>
+    (previous ??= typeof previousMessage === 'function' ? previousMessage() : Promise.resolve(previousMessage));
 
   // All hooks at once, under one deadline: a slow embedding provider costs the
   // turn HOOK_TIMEOUT_MS at most, however many hooks the user has. The shared
@@ -81,7 +94,11 @@ export async function runContextHooks(
     const hookStart = Date.now();
     let result: ContextHookResult;
     try {
-      result = await withDeadline(() => KIND_RUNNERS[hook.kind]({ ...input, tokenBudget: settings.maxTokens }, hook.config), HOOK_TIMEOUT_MS);
+      result = await withDeadline(async () => {
+        // Only recall reads the previous message (`buildRecallQuery`).
+        const prev = hook.kind === 'recall' ? await previousFor() : undefined;
+        return KIND_RUNNERS[hook.kind]({ ...hookInput, ...(prev ? { previousMessage: prev } : {}), tokenBudget: settings.maxTokens }, hook.config);
+      }, HOOK_TIMEOUT_MS);
     } catch (err) {
       const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';
       coreLogger.warn({ err, hook: hook.name, userId: input.userId }, 'context hook failed — skipped for this turn');

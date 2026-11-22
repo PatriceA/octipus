@@ -10,7 +10,7 @@ import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from
 import { isTypedOwnerRow } from '@/core/memory/owner-messages';
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
-import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
+import { contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
 import { runPluginContexts } from '@/plugins/packages/contributions/context';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
@@ -1031,14 +1031,15 @@ export class AgentService {
       // nearest this message, put in front of the agent instead of waiting
       // for it to call search_knowledge, which CLI agents rarely do on their
       // own. Not where other people read the reply (a group thread, a room)
-      // nor where the session's text may not be copied anywhere. Started
-      // here so it runs while memory is retrieved; it never throws.
-      const contextHooksRun = sharedAudience || audience.contentStorageOff
-        ? Promise.resolve({ text: '', blocks: [], labelledBlocks: [], repeatable: [], turn: null })
-        : runContextHooks({
-          event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
-          space: scope.space, query: message, role: 'general', channel,
-        });
+      // nor where the session's text may not be copied anywhere (the rule is
+      // `contextForAgentStart`'s). Started here so it runs while memory is
+      // retrieved; it never throws. A message the user typed is a possible
+      // follow-up: a short one is searched with their previous message.
+      const contextHooksRun = contextForAgentStart({
+        event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
+        space: scope.space, query: message, role: 'general', channel, audience,
+        ...(scope.trigger === 'user' ? { followUp: true } : {}),
+      });
       // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
       // same audience rule, never in a space; it never throws either.
       const pluginContextRun = sharedAudience || audience.contentStorageOff
