@@ -214,7 +214,7 @@ Long lines scroll horizontally to keep the cursor visible, or break into rows wi
 
 Undo (`Ctrl+Z`, redo `Ctrl+Y`) works in steps you would expect: a burst of typing, a paste, a replace-all or an accepted agent edit is one step. The unsaved marker (`●`) compares the buffer with the file as last opened or saved, so undoing back to it clears the marker.
 
-Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode, `/wrap [on|off]` soft wrap, `/goto <line[:column]>` goes to a line, `/search [query]` searches the project, and `/new-file`, `/rename`, `/delete` and `/revert` work on files (below).
+Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode, `/wrap [on|off]` soft wrap, `/goto <line[:column]>` goes to a line, `/search [query]` searches the project, and `/new-file`, `/rename`, `/delete` and `/revert` work on files (below). A command's argument is taken as typed after the first space, so a path can hold runs of spaces.
 
 ### The mouse
 
@@ -236,7 +236,7 @@ The wheel scrolls the pane under the pointer, whatever has the focus. While a bo
 | --- | --- |
 | `Alt+N`, `/new-file [path]`, `n` in the tree | Create an empty file and open it; refuses a path that exists or a folder that does not |
 | `/rename [path]`, `m` in the tree | Rename (move) the file — or, from the tree, a folder — taking its open tabs with it, unsaved edits included |
-| `/delete`, `d` or `Delete` in the tree | Delete the file after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
+| `/delete [path]`, `d` or `Delete` in the tree | Delete the file (the path given, else the active tab's) after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
 | `/revert` | Put the file on disk back into the buffer (one undo step) |
 
 Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone, and nothing opens over what you are typing: the bottom bar says `⚑ <file> changed on disk — press alt+y to resolve` until you do. `Alt+Y` (or saving that tab) asks: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). Each version of the file is offered once. A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.

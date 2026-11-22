@@ -207,3 +207,13 @@ test('rejecting an agent edit is not undone when the agent writes the file after
   watcher.check();
   expect(ctx.buffers.byId(id)?.buffer.text()).toBe('agent version\n');
 });
+
+test('/delete with a path deletes that file, not the active one', () => {
+  writeFileSync(join(root, 'src', 'b c.ts'), 'other\n');
+  files.openFile(join(root, 'src', 'a.ts'));
+  commands.deleteCommand('src/b c.ts');
+  expect(modalText()).toContain('Delete src/b c.ts?');
+  modals.at(-1)?.handleInput?.('y');
+  expect(existsSync(join(root, 'src', 'b c.ts'))).toBe(false);
+  expect(existsSync(join(root, 'src', 'a.ts'))).toBe(true);
+});

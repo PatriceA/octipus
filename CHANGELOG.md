@@ -7,6 +7,11 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: `/delete <path>` deletes that path, and paths keep their
+  spaces.** `/delete` ignored its argument and offered to delete the active
+  tab's file instead; `/rename` and `/save-as` collapsed a run of spaces in
+  the path to one. The argument is now everything after the command name, as
+  typed.
 - **Terminal editor: project search results keep non-ASCII text intact.**
   ripgrep's output was decoded one chunk at a time, so a character split
   between two chunks showed as `��` and shifted the match highlight. The

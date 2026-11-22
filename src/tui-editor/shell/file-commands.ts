@@ -111,6 +111,11 @@ export class FileCommands {
     return null;
   }
 
+  /** `/delete [path]`: the path typed (relative to the project, or absolute), or the active buffer's file. */
+  deleteCommand(input: string): void {
+    this.delete(input ? resolve(this.ctx.projectPath, input) : undefined);
+  }
+
   /** `/delete`, the tree's d: delete a file after asking. `path` defaults to the active buffer's file. */
   delete(path?: string): void {
     const { overlays, buffers, tui } = this.ctx;
