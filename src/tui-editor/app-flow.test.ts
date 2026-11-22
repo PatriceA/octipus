@@ -50,6 +50,8 @@ function mount(options: { onShutdown?: () => Promise<void> } = {}) {
 }
 /** Keys the TUI would route to the focused editor pane. */
 const editorKey = (data: string) => (app as unknown as { editor: Component }).editor.handleInput?.(data);
+/** Everything the chat transcript holds, unwrapped. */
+const chatLog = () => (app as unknown as { chat: { messages: { entries(): Array<{ content: string }> } } }).chat.messages.entries().map((m) => m.content).join('\n');
 const modalText = () => (modals.at(-1)?.render(100) ?? []).join('\n').replace(/\x1b\[[0-9;]*m|\x1b_pi:c\x07/g, '');
 afterEach(async () => { await app?.stop(); });
 
@@ -276,4 +278,55 @@ test('start() that fails to connect restores the terminal before the error surfa
   f.connect.mockRejectedValueOnce(new Error('corrupt session file'));
   await expect(app.start()).rejects.toThrow('corrupt session file');
   expect(onShutdown).toHaveBeenCalledTimes(1);
+});
+
+// docs/plans/tui-modernization.md §7, Phase 5 item 2: hunk-level review.
+test('an agent edit to a file that is not open opens it in a review tab instead of being dropped', () => {
+  const app = mount();
+  const path = `${process.cwd()}/package.json`; // exists; its content comes from the mocked read
+  f.read.mockReturnValue({ ok: true, text: 'one\ntwo\nthree', disk: DISK, mixedEol: false });
+  f.listener({ kind: 'agent.write', path: 'package.json', newText: 'one\nTWO\nthree' });
+  expect(app.buffers.active()?.path).toBe(path);
+  expect(app.buffers.active()?.agentLocked).toBe(true);
+  expect(modalText()).toContain('Agent edit: package.json');
+  expect(chatLog()).toContain('opened it for review');
+  modalKey('a');
+  expect(app.buffers.active()?.buffer.text()).toBe('one\nTWO\nthree');
+  expect(app.buffers.active()?.agentLocked).toBe(false);
+});
+
+test('a partial accept puts the accepted hunks in the buffer as one undo step', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/a.ts', 'a\nb\nc\nd\ne', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'a\nB\nc\nD\ne' });
+  modalKey('y'); modalKey('n'); modalKey('\r');
+  expect(rec.buffer.text()).toBe('a\nB\nc\nd\ne');
+  expect(modals).toHaveLength(0);
+  expect(chatLog()).toContain('Applied 1 of 2 hunks');
+  rec.buffer.undo();
+  expect(rec.buffer.text()).toBe('a\nb\nc\nd\ne');
+});
+
+test('an agent edit with CRLF line ends is compared without the CRs', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/w.txt', 'first\nsecond', { disk: { ...DISK, eol: '\r\n' } });
+  f.listener({ kind: 'agent.write', path: '/tmp/w.txt', newText: 'first\r\nSECOND' });
+  expect(modalText()).not.toContain('- first');
+  modalKey('a');
+  expect(rec.buffer.text()).toBe('first\nSECOND');
+});
+
+test('a file changed on disk by something else during the review is not taken as the saved text', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  f.disk.mockReturnValue({ changed: true, deleted: false });
+  f.read.mockReturnValue({ ok: true, text: 'a third version', disk: { ...DISK, mtimeMs: 3 }, mixedEol: false });
+  modalKey('a');
+  expect(rec.buffer.text()).toBe('agent');
+  expect(rec.savedText).toBe('mine'); // not the third version: saving will ask before overwriting it
+  expect(chatLog()).toContain('also changed on disk outside this review');
+  editorKey('\x13');
+  expect(modalText()).toContain('changed on disk');
+  expect(f.save).not.toHaveBeenCalled();
 });

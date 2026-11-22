@@ -200,24 +200,33 @@ export class FileOps {
   }
 
   /**
-   * Take the file's current content as the buffer's saved text if it changed
-   * on disk (the agent wrote it), so `dirty` says whether the buffer matches
-   * the disk. Returns whether the disk changed.
+   * After an agent edit is reviewed: if the file on disk now holds exactly
+   * the agent's text (`agentText`), the agent has written it, and that
+   * becomes the buffer's saved text, so `dirty` says whether the buffer
+   * matches the disk. Returns what the disk holds: the agent's text, what
+   * the buffer was loaded from (`unchanged`), or something else (`other`:
+   * changed outside the review, and not taken as the baseline, so saving
+   * asks before overwriting it).
    */
-  syncWithDisk(bufferId: string): boolean {
+  syncWithDisk(bufferId: string, agentText: string): 'agent' | 'unchanged' | 'other' {
     const record = this.ctx.buffers.byId(bufferId);
-    if (!record?.path || !record.disk) return false;
-    let check: ReturnType<typeof checkDisk>;
-    try {
-      check = checkDisk(record.path, record.disk, record.savedText);
-    } catch (error) {
-      this.ctx.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+    if (!record?.path) return 'unchanged';
+    if (record.disk) {
+      let check: ReturnType<typeof checkDisk>;
+      try {
+        check = checkDisk(record.path, record.disk, record.savedText);
+      } catch (error) {
+        this.ctx.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`);
+        return 'unchanged';
+      }
+      if (!check.changed) return 'unchanged';
+      if (check.deleted) return 'other';
+    } else if (!existsSync(record.path)) {
+      return 'unchanged';
     }
-    if (!check.changed || check.deleted) return false;
     const read = readFileForBuffer(record.path);
-    if (!read.ok) return false;
+    if (!read.ok || read.text !== agentText) return 'other';
     this.ctx.buffers.markSaved(bufferId, read.text, read.disk);
-    return true;
+    return 'agent';
   }
 }
