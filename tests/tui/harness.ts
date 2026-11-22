@@ -129,6 +129,20 @@ export class TuiHarness {
     }
     throw new Error(`Screen did not ${absent ? 'remove' : 'show'} ${JSON.stringify(needle)}:\n${await this.text()}\n${this.error}`);
   }
+  /**
+   * Connected, and the plan this fixture's server answers with is drawn.
+   *
+   * Until then the status area is still growing: "authenticating" with a
+   * two-row plan placeholder, then the full plan. In the editor that area is
+   * at the top, so every pane moves down when the plan lands, and a click
+   * aimed at coordinates read before that hits the row above its target —
+   * which is how `editor-mouse.e2e`'s tree click failed about one run in
+   * ten on a loaded machine. Read screen coordinates after this.
+   */
+  async ready(): Promise<void> {
+    await this.waitFor('connected');
+    await this.waitFor('[pending] Verify');
+  }
   async saveScreen(name: string): Promise<void> {
     const dir = process.env.TUI_SCREENSHOTS_DIR;
     if (!dir) return;
