@@ -73,6 +73,12 @@ export class MessagesPane implements Component {
   /** What each message said before `displayText`: `/copy` hands over the text, not the screen's version of it. */
   private raw = new WeakMap<ChatMessage, string>();
   private liveRaw: string | null = null;
+  /**
+   * The streaming reply's Markdown, kept across deltas: pi-tui's Markdown
+   * reuses the blocks whose source did not change, so only the block being
+   * written is styled and wrapped again, and the blocks above it stay put.
+   */
+  private liveMarkdown: Markdown | null = null;
   private revision = 0;
   private cachedRevision = -1;
   private cachedWidth = -1;
@@ -242,7 +248,7 @@ export class MessagesPane implements Component {
     return all;
   }
   getScrollOffset(): number { return this.offset; }
-  invalidate(): void { this.messageCache = new WeakMap(); this.changed(); }
+  invalidate(): void { this.messageCache = new WeakMap(); this.liveMarkdown = null; this.changed(); }
   private changed(): void { this.itemsRevision++; this.revision++; }
 
   /** All rows of the rendered window, for a scroll view; the same array while nothing changed. */
@@ -281,13 +287,13 @@ export class MessagesPane implements Component {
       this.historyRevision = this.itemsRevision;
     }
     const live = this.liveItem();
-    this.cachedLines = live ? this.historyLines.concat(this.historyLines.length ? [''] : [], this.renderItem(live, width)) : this.historyLines;
+    this.cachedLines = live ? this.historyLines.concat(this.historyLines.length ? [''] : [], this.renderItem(live, width, true)) : this.historyLines;
     this.cachedWidth = width; this.cachedRevision = this.revision;
     return this.cachedLines;
   }
 
   private liveItem(): ChatMessage | null {
-    return this.live ? { role: 'assistant', content: this.live, timestamp: new Date(), markdown: false } : null;
+    return this.live ? { role: 'assistant', content: this.live, timestamp: new Date() } : null;
   }
 
   /** The notice at the top of the window, when something is above it or was dropped. */
@@ -309,7 +315,13 @@ export class MessagesPane implements Component {
     return live ? [...this.windowItems(), live] : this.windowItems();
   }
 
-  private renderItem(item: TranscriptItem, width: number): string[] {
+  /**
+   * `live`: the reply still streaming. It renders exactly as the finished
+   * message with the same text will, so the reply does not jump when it
+   * completes; mid-stream an unterminated code fence is a code block that
+   * runs to the end and a table shows the rows that arrived.
+   */
+  private renderItem(item: TranscriptItem, width: number, live = false): string[] {
     const cached = this.messageCache.get(item);
     if (cached?.width === width) return cached.lines;
     const p = getPalette();
@@ -329,7 +341,7 @@ export class MessagesPane implements Component {
       }
       const markdown = item.role === 'assistant' && this.options.markdown !== false && item.markdown !== false;
       const body = markdown
-        ? new Markdown(item.content, 0, 0, getMarkdownTheme()).render(inner)
+        ? this.markdownFor(item.content, live).render(inner)
         : wrapTextWithAnsi((error ? 'Error · ' : '') + item.content, inner);
       for (const line of body) {
         const rail = item.role === 'user' ? chalk.hex(p.accent)('│ ') : item.role === 'system' ? chalk.hex(colour)(error ? '! ' : '· ') : '  ';
@@ -338,6 +350,13 @@ export class MessagesPane implements Component {
     }
     this.messageCache.set(item, { width, lines });
     return lines;
+  }
+
+  private markdownFor(text: string, live: boolean): Markdown {
+    if (!live) return new Markdown(text, 0, 0, getMarkdownTheme());
+    if (!this.liveMarkdown) this.liveMarkdown = new Markdown(text, 0, 0, getMarkdownTheme());
+    else this.liveMarkdown.setText(text);
+    return this.liveMarkdown;
   }
 
   private renderMessages(all: TranscriptItem[], width: number, rows?: Array<{ item: TranscriptItem; start: number; end: number }>): string[] {
