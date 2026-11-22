@@ -644,6 +644,8 @@ labels reflect blast radius, not contract guarantees.
   NTLM credentials to that host. `file:` links are now kept only for this
   machine (no host, `localhost` or its own name), and a click on one copies
   its path and says so; `http`/`https` links still open in the browser.
+- **Terminal chat: `/clear` keeps the composer and status rows.** On the
+  alternate screen `/clear` left them blank until something redrew them.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

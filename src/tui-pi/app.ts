@@ -775,7 +775,12 @@ export class OctipusTuiApp {
         }
 
         if (event.name === 'clear' && !event.error) {
-          this.tui.terminal.clearScreen();
+          // Inline, the terminal's screen holds the old frame: erase it. On
+          // the alternate screen the renderer owns every row and redraws only
+          // the changed ones — an ESC[2J under it left the composer and the
+          // status rows blank — so redraw the whole screen instead.
+          if (this.transcript) this.tui.requestRender(true);
+          else this.tui.terminal.clearScreen();
           this.messages.reset();
           // Turns counted in THIS client reset; tokens and cost do not. They
           // come from the session's cost log, which /clear does not touch, so
