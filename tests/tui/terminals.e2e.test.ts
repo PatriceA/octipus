@@ -59,9 +59,11 @@ function tmux(conf: string): { socket: string; wrap: string[] } {
 /** The settings docs/guides/tui.md recommends. */
 const RECOMMENDED = 'set -g mouse on\nset -g set-clipboard on\nset -g allow-passthrough on\nset -g status on\n';
 
-describe.skipIf(process.platform === 'win32' || !hasTmux)('inside tmux with the recommended settings', () => {
-  test('the editor: frame above tmux\'s status, mouse through tmux, a drag-copy lands in the tmux buffer and reaches the outer terminal as OSC 52', async () => {
-    const { socket, wrap } = tmux(RECOMMENDED);
+describe.skipIf(process.platform === 'win32' || !hasTmux)('inside tmux', () => {
+  // tmux 3.4's defaults (`mouse off`, `set-clipboard external`) behave the same for Octipus: a pane that asks
+  // for the mouse gets it, and `load-buffer -w` reaches the outer terminal. Both are run so a tmux that changes that is noticed.
+  test.each([['the recommended settings', RECOMMENDED], ['tmux defaults', '']])('the editor with %s: frame above tmux\'s status, mouse through tmux, a drag-copy lands in the tmux buffer and reaches the outer terminal as OSC 52', async (_name, conf) => {
+    const { socket, wrap } = tmux(conf);
     tui = await TuiHarness.start('src/tui-editor/index.ts', 120, 30, [], { wrap });
     await tui.waitFor('focus:editor'); await tui.ready();
     let screen = (await tui.text()).split('\n');
