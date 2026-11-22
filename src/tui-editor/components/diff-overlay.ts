@@ -24,7 +24,7 @@ import {
   visibleWidth,
 } from '@/tui-kit';
 import { drawBox } from '@/tui-kit/overlay-frame';
-import { diffLines, diffStats, type Hunk } from '../editor/diff';
+import { diffLines, diffStats, type LineOp } from '../editor/diff';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export interface DiffOverlayOptions {
@@ -45,14 +45,18 @@ const COMPACT_CHROME_ROWS = 4;
 
 export class DiffOverlay implements Component, Focusable {
   focused = false;
-  readonly hunks: readonly Hunk[];
+  readonly hunks: readonly LineOp[];
+  /** The diff was too large to compare line by line and shows the change as one replacement. */
+  readonly coarse: boolean;
   readonly stats: { adds: number; dels: number };
   private scroll = 0;
   private bodyRows: number;
   private compact = false;
 
   constructor(private readonly options: DiffOverlayOptions) {
-    this.hunks = diffLines(options.before, options.after);
+    const diff = diffLines(options.before, options.after);
+    this.hunks = diff.ops;
+    this.coarse = diff.coarse;
     this.stats = diffStats(this.hunks);
     this.bodyRows = Math.max(4, options.height ?? DEFAULT_BODY_ROWS);
   }
@@ -93,7 +97,7 @@ export class DiffOverlay implements Component, Focusable {
     const error = (text: string) => chalk.hex(palette.error)(text);
 
     const header = accent(`Agent edit: ${this.options.bufferLabel}`);
-    const stats = `${ok(`+${this.stats.adds}`)} ${error(`-${this.stats.dels}`)}`;
+    const stats = `${ok(`+${this.stats.adds}`)} ${error(`-${this.stats.dels}`)}${this.coarse ? dim(' · too large to compare line by line: shown as one replacement') : ''}`;
     const help = dim('a/Enter accept · r/Esc reject · ↑↓/PgUp/PgDn scroll');
 
     const headerLines = this.compact ? [`${header} ${stats}`] : [header, stats];
@@ -127,7 +131,7 @@ export class DiffOverlay implements Component, Focusable {
 }
 
 function renderHunk(
-  hunk: Hunk,
+  hunk: LineOp,
   palette: ReturnType<typeof getPalette>,
   ok: (text: string) => string,
   error: (text: string) => string,
