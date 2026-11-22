@@ -582,6 +582,11 @@ A publisher can sign a package, and a host can trust the publisher's key. The
 signature covers the content hash above, so it covers every file of the
 package, its name and its version.
 
+The same keys and the same trust settings sign and check skill bundles
+(`octi plugin sign-skill-bundle`, [Exchanging skills](SKILL-EXCHANGE.md#trust-settings)),
+under a domain prefix of their own: a package signature never verifies as a
+bundle signature, or the other way round.
+
 ```
 octi plugin keygen ./acme                       # writes acme.key (private) and acme.pub
 octi plugin sign ./my-package --key ./acme.key  # writes my-package/octipus-plugin.sig

@@ -97,6 +97,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [FLOW-GUARD.md](FLOW-GUARD.md) | Execution flow checks and their limits. |
 | [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
 | [LANE-ROLE-SKILL-ROUTING.md](LANE-ROLE-SKILL-ROUTING.md) | How a request picks a role, a model lane, and its skills. |
+| [SKILL-EXCHANGE.md](SKILL-EXCHANGE.md) | Exporting and importing skills as signed JSON bundles (or a SKILL.md): preview, trust settings, collisions. |
 | [TOOL-ROUTING.md](TOOL-ROUTING.md) | How roles expose tools and resolve models for agents. |
 | [MULTI-REPO.md](MULTI-REPO.md) | Working across a suite of repos: the repo registry, dependency graph, and how agents navigate it. |
 | [API.md](API.md) | REST + WebSocket API reference, and how to get an API token. |

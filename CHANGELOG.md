@@ -7,6 +7,31 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Skill export and import as signed JSON bundles** ([reference](docs/SKILL-EXCHANGE.md)).
+  - Skills → **Export** downloads the chosen skills as one versioned bundle
+    (`GET /api/skills/exchange/export`): content and metadata, a content hash,
+    and no ids, owners, flags, triggers or usage data. A server export is
+    unsigned and says so; `octi plugin sign-skill-bundle <file> --key <key>`
+    signs it offline with a plugin publisher key.
+  - Skills → **Import** takes an uploaded or pasted bundle, an agentskills.io
+    `SKILL.md`, or (administrators) an https URL through the SSRF-guarded
+    plugin download. `POST /api/skills/exchange/preview` shows every skill in
+    full, the signature and each name collision and writes nothing;
+    `POST /api/skills/exchange/install` writes only the previewed content
+    hash, with an explicit skip, rename or replace for each collision, in one
+    transaction, audited per skill.
+  - Imports follow the plugin package trust settings: a revoked key or an
+    invalid signature is always refused; with `plugins.requireSignature`, an
+    unsigned bundle (or SKILL.md) or an unknown key is refused; a URL import
+    needs a trusted signature. A bundle naming a privileged field
+    (`isSystem`, `userId`, `alwaysInject`, `triggers`, …) is refused.
+  - **Removed:** `POST /api/skills/import`, which wrote unsigned skills without
+    a preview, a trust check or an audit row and overwrote by name on
+    `overwrite: true`. Use the exchange routes. `GET /api/skills/export` and
+    `GET /api/skills/:id/export` are unchanged.
+  - Not built: a hosted registry, browsing community skills, ratings,
+    automatic updates.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).
