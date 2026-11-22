@@ -117,8 +117,16 @@ What recall searches (`buildRecallQuery`, `src/core/context-hooks/recall.ts`):
   user typed, a message with fewer than four distinctive words is searched
   together with the previous message the user typed in this session (their
   own words only, nothing from before a clear, at most 500 characters of it):
-  "and for enterprise?" after "What do we charge for a website?". There is no
-  model call: recall does not add a model round trip to every turn.
+  "and for enterprise?" after "What do we charge for a website?". The message
+  is searched on its own first, and its own passages come first: a short
+  question on a new topic ("What is our refund policy?") is not steered by
+  the one before. Only when that leaves slots free are the two searched
+  together, to fill them; a passage from that second search must hold a
+  distinctive word of the new message (or its identifier), identifiers come
+  from the new message only, and the excerpt is steered by the new message's
+  words first. The second search costs one more embedding call for such a
+  message, inside the same deadline. There is no model call: recall does not
+  add a model round trip to every turn.
 - **A short message.** A message of fewer than two content words is skipped
   (`short_message`), unless an earlier typed message is there and the message
   names something itself: a distinctive word that is not an acknowledgement

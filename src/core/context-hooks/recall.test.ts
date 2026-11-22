@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  buildRecallQuery, carriesSubject, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isAcknowledgement, isDistinctive, isIdentifier,
+  buildRecallQuery, carriesSubject, followUpQuery, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isAcknowledgement, isDistinctive, isIdentifier,
   lexicalCoverage, MAX_QUERY_CHARS, messageIdentifiers, type QualifiedBy, qualifyHit, queryTerms, relativeCut, searchesWithPreviousMessage,
   skipsShortMessage,
 } from './recall';
@@ -135,6 +135,14 @@ describe('buildRecallQuery', () => {
     expect(buildRecallQuery({ query: full, previousMessage: 'What do we charge for a website?' })).toBe(full);
   });
 
+  test('the follow-up search exists only for a short message after another one', () => {
+    expect(followUpQuery({ query: 'and for enterprise?' })).toBeNull();
+    expect(followUpQuery({ query: 'and for enterprise?', previousMessage: 'What do we charge for a website?' })).toBe('What do we charge for a website?\nand for enterprise?');
+    expect(followUpQuery({ query: 'Which hosting provider runs the client portal for Acme?', previousMessage: 'What do we charge?' })).toBeNull();
+    expect(followUpQuery({ query: 'thanks', previousMessage: 'What do we charge?' })).toBeNull();
+    expect(followUpQuery({ query: 'Enterprise?', previousMessage: 'Enterprise?' })).toBeNull();
+  });
+
   test('a long previous message contributes its head and tail only', () => {
     const previous = `${'background '.repeat(200)}the real question about invoices`;
     const q = buildRecallQuery({ query: 'and the second?', previousMessage: previous });
@@ -245,6 +253,13 @@ describe('excerptWindow', () => {
     expect(out).toContain('alpha');
     expect(out).toContain('omega');
     expect(out.length).toBeLessThanOrEqual(114);
+  });
+
+  test('the message\'s own terms steer the window; the fallback terms only when none of them is there', () => {
+    const content = `${filler(30)} pricing for a website ${filler(60)} enterprise support plans ${filler(60)}`;
+    expect(excerptWindow(content, ['enterprise'], 120, ['pricing'])).toContain('enterprise');
+    expect(excerptWindow(content, ['enterprise'], 120, ['pricing'])).not.toContain('pricing');
+    expect(excerptWindow(content, ['zzzz'], 120, ['pricing'])).toContain('pricing');
   });
 
   test('no term found: the first characters, as before', () => {

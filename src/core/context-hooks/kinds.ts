@@ -29,7 +29,7 @@ import { NOTE_DEFAULTS, NOTES_INDEX_DEFAULTS, RECALL_DEFAULTS } from '@/shared/c
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import {
-  buildRecallQuery, distinctiveLexemes, excerptWindow, messageIdentifiers, type QualifiedBy, type QualifyContext,
+  buildRecallQuery, distinctiveLexemes, excerptWindow, followUpQuery, messageIdentifiers, type QualifiedBy, type QualifyContext,
   qualifyHit, queryTerms, relativeCut, skipsShortMessage,
 } from './recall';
 
@@ -159,14 +159,23 @@ export interface RecallSelection {
 
 /** What recall searched for a message, before any threshold is applied: one search, any number of selections. */
 export interface RecallSearch {
-  /** What was searched (`buildRecallQuery`). */
+  /** What was searched: the message alone (`buildRecallQuery` without a previous message). */
   query: string;
   search: AnyTermSearch;
+  /**
+   * A short follow-up searched together with the previous typed message
+   * (`followUpQuery`). Run only when the message alone left slots free; its
+   * passages come after the message's own.
+   */
+  combined?: { query: string; search: AnyTermSearch };
 }
 
 /**
  * The search behind recall for this message, or null when the message is
- * not searched (`skipsShortMessage`). The candidates and their cosines do not
+ * not searched (`skipsShortMessage`). The message is searched on its own,
+ * whatever came before: a self-contained question ("What is our refund
+ * policy?") must not be steered by the previous one (`selectRecallPassages`
+ * adds the follow-up search). The candidates and their cosines do not
  * depend on `minSimilarity`, `keywordCoverage` or `maxGap`: the sweep
  * searches once per question and selects at every threshold.
  */
@@ -177,7 +186,7 @@ export async function searchRecall(
   // A short message is searched only as a follow-up of the previous one, and
   // a bare acknowledgement never (`skipsShortMessage`).
   if (skipsShortMessage(input.query, input.previousMessage)) return null;
-  const query = buildRecallQuery(input);
+  const query = buildRecallQuery({ query: input.query });
   return { query, search: await recallSearch(input, config, query) };
 }
 
@@ -209,38 +218,69 @@ async function recallSearch(
   return search;
 }
 
+type Qualified = AnyTermCandidate & { qualifiedBy: QualifiedBy[] };
+
 /**
- * The passages recall injects from `searched` within `tokenBudget`, and the
- * block they make. No I/O and no side effect.
+ * The candidates of one search that qualify (`qualifyHit`), one per source,
+ * after the relative cut. `ownLexemes`: for the follow-up search, the
+ * message's own distinctive lexemes, one of which a hit must hold unless it
+ * names the message's identifier: what the previous message alone brings in
+ * is not about this one.
  */
-export function choosePassages({ query, search }: RecallSearch, config: RecallConfig, tokenBudget: number): RecallSelection {
-  const degraded: 'embedding_failed' | undefined = search.embeddingError ? 'embedding_failed' : undefined;
-  const none = (reason: string): RecallSelection =>
-    ({ status: 'abstained', reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
-  const ctx: QualifyContext = {
-    distinctive: distinctiveLexemes(search.queryLexemes),
-    identifiers: messageIdentifiers(query),
-    minSimilarity: config.minSimilarity,
-    keywordCoverage: config.keywordCoverage,
-  };
+function qualifiedHits(search: AnyTermSearch, ctx: QualifyContext, config: RecallConfig, ownLexemes?: readonly string[]): Qualified[] {
   // Purposes and the product docs are filtered in the search's SQL; this
   // repeats it for a search made with other settings (the sweep reuses one).
   const purposes = new Set<EmbeddingPurpose>(config.purposes);
+  const own = ownLexemes?.length ? new Set(ownLexemes) : null;
   const seen = new Set<string>();
-  const qualified: Array<AnyTermCandidate & { qualifiedBy: QualifiedBy[] }> = [];
+  const qualified: Qualified[] = [];
   for (const r of search.candidates) {
     if (!purposes.has(r.purpose)) continue;
     if (!config.includeProductDocs && r.metadata?.source === PRODUCT_DOCS_SOURCE) continue;
     if (seen.has(r.sourceId)) continue;
     const qualifiedBy = qualifyHit(r, ctx);
     if (!qualifiedBy.length) continue;
+    if (own && !qualifiedBy.includes('identifier') && !r.matchedLexemes.some((l) => own.has(l))) continue;
     seen.add(r.sourceId);
     qualified.push({ ...r, qualifiedBy });
   }
-  const hits = relativeCut(qualified, config.maxGap).slice(0, config.limit);
+  return relativeCut(qualified, config.maxGap);
+}
+
+function qualifyContext(search: AnyTermSearch, identifiers: string[], config: RecallConfig): QualifyContext {
+  return {
+    distinctive: distinctiveLexemes(search.queryLexemes),
+    identifiers,
+    minSimilarity: config.minSimilarity,
+    keywordCoverage: config.keywordCoverage,
+  };
+}
+
+/**
+ * The passages recall injects from `searched` within `tokenBudget`, and the
+ * block they make. No I/O and no side effect. The message's own passages
+ * come first; a follow-up search (`combined`) fills the slots left, with
+ * the message's own identifiers only, and only with passages that hold one
+ * of the message's own distinctive words.
+ */
+export function choosePassages({ query, search, combined }: RecallSearch, config: RecallConfig, tokenBudget: number): RecallSelection {
+  const degraded: 'embedding_failed' | undefined = search.embeddingError || combined?.search.embeddingError ? 'embedding_failed' : undefined;
+  const none = (reason: string): RecallSelection =>
+    ({ status: 'abstained', reason, ...(degraded ? { degraded } : {}), passages: [], query: '', text: '', tokens: 0 });
+  const identifiers = messageIdentifiers(query);
+  const own = qualifiedHits(search, qualifyContext(search, identifiers, config), config);
+  const fromOwn = new Set(own.map((h) => h.sourceId));
+  const added = combined
+    ? qualifiedHits(combined.search, qualifyContext(combined.search, identifiers, config), config, distinctiveLexemes(search.queryLexemes))
+      .filter((h) => !fromOwn.has(h.sourceId))
+    : [];
+  const hits = [...own, ...added].slice(0, config.limit);
   if (hits.length === 0) return none('nothing_relevant');
 
+  // The window is steered by the message's own words; the previous
+  // message's only for a passage that holds none of them.
   const terms = queryTerms(query);
+  const fallbackTerms = combined ? queryTerms(combined.query) : [];
   let used = estimateTokens(RECALL_HEAD + RECALL_TAIL);
   const passages: RecallPassage[] = [];
   for (const { qualifiedBy, ...hit } of hits) {
@@ -248,7 +288,7 @@ export function choosePassages({ query, search }: RecallSearch, config: RecallCo
     const label = passageLabel(hit, title);
     const room = tokenBudget - used - estimateTokens(label) - 2;
     if (room < 40) break;
-    const excerpt = fitTokens(excerptWindow(fenceSafe(hit.content || hit.abstract || ''), terms, config.excerptChars), room);
+    const excerpt = fitTokens(excerptWindow(fenceSafe(hit.content || hit.abstract || ''), terms, config.excerptChars, fallbackTerms), room);
     const block = `${label}\n${excerpt}\n`;
     used += estimateTokens(block);
     passages.push({
@@ -259,8 +299,11 @@ export function choosePassages({ query, search }: RecallSearch, config: RecallCo
   if (passages.length === 0) return none('over_budget');
   const parts = passages.map((p) => p.block);
   const text = RECALL_HEAD + parts.join('') + RECALL_TAIL;
+  // What was searched for what is shown: with the previous message when a
+  // passage came from that search (the measure's "words the question held").
+  const shownQuery = passages.some((p) => added.some((h) => h.id === p.hit.id)) && combined ? combined.query : query;
   return {
-    status: 'injected', ...(degraded ? { degraded } : {}), passages, query, text, tokens: estimateTokens(text),
+    status: 'injected', ...(degraded ? { degraded } : {}), passages, query: shownQuery, text, tokens: estimateTokens(text),
     group: { head: RECALL_HEAD, tail: RECALL_TAIL, parts },
   };
 }
@@ -269,15 +312,26 @@ export function choosePassages({ query, search }: RecallSearch, config: RecallCo
  * The passages recall injects for this message within `tokenBudget`, and the
  * block they make. Shared by the hook and the eval. No side effect: no access
  * is counted and no protection level raised (the hook's commit step does).
+ *
+ * A short follow-up with a previous typed message gets a second search, of
+ * the two together, only when the message alone did not fill `limit`: one
+ * more embedding call for such a message, inside the same hook deadline.
+ * Without a previous message this is `searchRecall` then `choosePassages`,
+ * what the eval and the sweep run.
  */
 export async function selectRecallPassages(
-  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage'>,
+  input: Pick<ContextHookInput, 'userId' | 'workspaceId' | 'space' | 'query' | 'previousMessage' | 'deadlineAt'>,
   config: RecallConfig,
   tokenBudget: number,
 ): Promise<RecallSelection> {
   const searched = await searchRecall(input, config);
   if (!searched) return { status: 'skipped', reason: 'short_message', passages: [], query: '', text: '', tokens: 0 };
-  return choosePassages(searched, config, tokenBudget);
+  const combinedQuery = followUpQuery(input);
+  if (combinedQuery === null) return choosePassages(searched, config, tokenBudget);
+  const own = qualifiedHits(searched.search, qualifyContext(searched.search, messageIdentifiers(searched.query), config), config);
+  if (own.length >= config.limit) return choosePassages(searched, config, tokenBudget);
+  const combined = { query: combinedQuery, search: await recallSearch(input, config, combinedQuery) };
+  return choosePassages({ ...searched, combined }, config, tokenBudget);
 }
 
 async function runRecall(input: ContextHookInput, raw: Record<string, unknown>): Promise<ContextHookResult> {

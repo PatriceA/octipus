@@ -175,6 +175,36 @@ describe('which passages qualify', () => {
     expect((await lastRecord()).items[0].qualifiedBy).toContain('coverage');
   });
 
+  test('a short self-contained question after another topic is searched on its own first', async () => {
+    await chunk('Refunds', 'Refund policy: we refund the deposit within 14 days when a project is cancelled before work starts.');
+    await chunk('Invoice 118', 'Invoice INV-2024-118 for Bakery Smit: logo design, sent in May, still unpaid; send a friendly email reminder.');
+    const previousMessage = 'Please draft a friendly email to the bakery about the overdue invoice INV-2024-118 from May';
+    const alone = await run('What is our refund policy?');
+    expect(alone.text).toContain('Note "Refunds"');
+    const after = await run('What is our refund policy?', { previousMessage });
+    expect(after.text).toContain('Note "Refunds"');
+    // The previous message's own passage holds no word of this one: it is not brought in.
+    expect(after.text).not.toContain('Invoice 118');
+    expect((await lastRecord()).items.map((i) => i.title)).toEqual(['Refunds']);
+  });
+
+  test('the follow-up search runs only when the message alone left slots free', async () => {
+    const { createContextHook, updateContextHook } = await import('@/core/context-hooks');
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    await updateContextHook(userId, 'builtin:knowledge-recall', { enabled: false });
+    await createContextHook(userId, { name: 'One passage', kind: 'recall', config: { limit: 1 } });
+    await chunk('Enterprise plans', 'Enterprise plans start at 9000 euro a year, with priority support and a named contact.');
+    const embedCalls = () => vi.mocked(getEmbeddingService().generateEmbedding).mock.calls.length;
+    const before = embedCalls();
+    const filled = await run('enterprise plans?', { previousMessage: 'What do we charge for a website?' });
+    expect(filled.text).toContain('Note "Enterprise plans"');
+    expect(embedCalls() - before).toBe(1);
+    // Nothing found alone: the second search, of both messages together, runs.
+    const mid = embedCalls();
+    await run('and the website?', { previousMessage: 'How much are the enterprise plans?' });
+    expect(embedCalls() - mid).toBe(2);
+  });
+
   test('a one-word follow-up is searched with the previous message; an acknowledgement after a question is not', async () => {
     await chunk('Enterprise plans', 'Enterprise website plans start at 9000 euro a year, with priority support and a named contact.');
     const previousMessage = 'What do we charge for a website?';

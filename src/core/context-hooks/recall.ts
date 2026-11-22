@@ -318,7 +318,9 @@ export function searchesWithPreviousMessage(message: string): boolean {
  * What recall searches for this message. A short one is searched together
  * with the previous typed message (no model call: recall must not add a
  * model round trip to every turn); a long one keeps its head and its tail.
- * A worker's brief (task and input) goes through the same trimming.
+ * A worker's brief (task and input) goes through the same trimming. Recall
+ * searches the message alone first, and this combined text only after
+ * (`followUpQuery`, kinds.ts `selectRecallPassages`).
  */
 export function buildRecallQuery(input: { query: string; previousMessage?: string }): string {
   const message = input.query.trim();
@@ -327,6 +329,18 @@ export function buildRecallQuery(input: { query: string; previousMessage?: strin
     return headAndTail(`${headAndTail(previous, PREVIOUS_MESSAGE_CHARS, PREVIOUS_MESSAGE_CHARS / 2)}\n${message}`, MAX_QUERY_CHARS, QUERY_HEAD_CHARS);
   }
   return headAndTail(message, MAX_QUERY_CHARS, QUERY_HEAD_CHARS);
+}
+
+/**
+ * The follow-up search for this message: it with the previous typed one
+ * (`buildRecallQuery`), or null when the message is not a follow-up
+ * (`searchesWithPreviousMessage`) or there is no other previous message.
+ */
+export function followUpQuery(input: { query: string; previousMessage?: string }): string | null {
+  const message = input.query.trim();
+  const previous = input.previousMessage?.trim();
+  if (!previous || previous === message || !searchesWithPreviousMessage(message)) return null;
+  return buildRecallQuery(input);
 }
 
 // ── Excerpt ─────────────────────────────────────────────────────────────────
@@ -350,13 +364,17 @@ function matchesTerm(word: string, term: string): boolean {
  * The `chars`-long window of `content` holding the most query terms (the
  * first such window on a tie), cut on word boundaries. Elision is marked: a
  * leading "… " when it does not start at the passage's start, a trailing " …"
- * when it stops before its end. Whitespace is collapsed first.
+ * when it stops before its end. Whitespace is collapsed first. When no
+ * word of `terms` is in it, `fallbackTerms` steer the window instead (the
+ * previous message's words, for a follow-up's passage).
  */
-export function excerptWindow(content: string, terms: readonly string[], chars: number): string {
+export function excerptWindow(content: string, terms: readonly string[], chars: number, fallbackTerms: readonly string[] = []): string {
   const text = content.replace(/\s+/g, ' ').trim();
   if (text.length <= chars) return text;
   const words = [...text.matchAll(/\S+/g)].map((m) => ({ at: m.index ?? 0, end: (m.index ?? 0) + m[0].length, word: m[0].toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '') }));
-  const hits = words.filter((w) => w.word && terms.some((t) => matchesTerm(w.word, t)));
+  const matching = (list: readonly string[]) => words.filter((w) => w.word && list.some((t) => matchesTerm(w.word, t)));
+  let hits = matching(terms);
+  if (!hits.length && fallbackTerms.length) hits = matching(fallbackTerms);
   let start = 0;
   if (hits.length) {
     // The run of hits that fits in one window and is longest; ties keep the first.
