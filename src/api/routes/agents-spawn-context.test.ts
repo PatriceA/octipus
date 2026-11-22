@@ -15,6 +15,8 @@ const fx = vi.hoisted(() => ({
   hooks: vi.fn(),
   finish: vi.fn(),
   turn: { id: 'turn-api', usageKey: 's', startUse: { knowledge: 0, notes: 0 }, citable: [] },
+  hooksBeforeSpawn: [] as number[],
+  spawnError: undefined as Error | undefined,
 }));
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
@@ -31,13 +33,19 @@ vi.mock('@/core/agent/context', async (original) => ({
 vi.mock('@/security/workspace-fs', async (original) => ({ ...await original<object>(), isSharedWorkspaceId: async () => false }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
-    spawn: async () => ({
-      run: async (message: string) => { fx.runs.push(message); return 'done'; },
-      getContext: () => ({ id: 'agent-api', sessionId: 'sess-api', topic: 'general', model: 'm', role: 'general' }),
-      getStatus: () => 'idle',
-    }),
+    spawn: async () => {
+      // How many hook runs had happened when the spawn chose its model.
+      fx.hooksBeforeSpawn.push(fx.hooks.mock.calls.length);
+      if (fx.spawnError) throw fx.spawnError;
+      return spawned();
+    },
   }),
 }));
+const spawned = () => ({
+  run: async (message: string) => { fx.runs.push(message); return 'done'; },
+  getContext: () => ({ id: 'agent-api', sessionId: 'sess-api', topic: 'general', model: 'm', role: 'general' }),
+  getStatus: () => 'idle',
+});
 vi.mock('@/core/context-hooks/run', async (original) => ({
   ...await original<object>(),
   runContextHooks: (...args: unknown[]) => fx.hooks(...args),
@@ -52,6 +60,8 @@ const spawn = (message: string) => app.handle(new Request('http://test/api/agent
 
 beforeEach(() => {
   fx.session = {};
+  fx.hooksBeforeSpawn = [];
+  fx.spawnError = undefined;
   fx.runs = [];
   fx.hooks.mockReset().mockResolvedValue({ text: BLOCK, blocks: [BLOCK], labelledBlocks: [], repeatable: [], turn: fx.turn });
   fx.finish.mockReset();
@@ -72,4 +82,17 @@ test('in a room: no hooks, the message as sent', async () => {
   await vi.waitFor(() => expect(fx.runs).toHaveLength(1));
   expect(fx.hooks).not.toHaveBeenCalled();
   expect(fx.runs).toEqual(['prepare the release']);
+});
+
+test('the hooks run before the spawn: the model is chosen at the level what they show raised', async () => {
+  expect((await spawn('summarise the contract')).status).toBe(200);
+  expect(fx.hooksBeforeSpawn).toEqual([1]);
+});
+
+test('a spawn refused after the hooks ran closes their record', async () => {
+  fx.spawnError = new Error('This conversation holds confidential content (protection level 3), which stays on local models, and no local model is bound.');
+  const res = await spawn('summarise the contract');
+  expect(await res.json()).toEqual({ error: fx.spawnError.message });
+  await vi.waitFor(() => expect(fx.finish).toHaveBeenCalledWith(fx.turn, { outcome: 'error' }));
+  expect(fx.runs).toEqual([]);
 });

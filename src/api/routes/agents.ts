@@ -375,6 +375,21 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       const agentManager = getAgentManager();
 
+      // The caller's own task in their own session: the context hooks run
+      // against it as for any agent start (`contextForAgentStart`, the turn's
+      // audience rule), before the spawn: a passage they show can raise the
+      // session's protection level, and the spawn chooses the model at the
+      // level it sees (a level 3-4 session runs on a local model or is
+      // refused). The block goes before the message, as a root turn's
+      // context does. A spawn refused after the hooks ran closes their record.
+      const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+      const hooks = message
+        ? await contextForAgentStart({
+          event: 'worker_start', userId: user.id, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+          query: message, role: 'general', channel: 'api', session,
+        })
+        : null;
+
       try {
         const agent = await agentManager.spawn({
           sessionId,
@@ -386,23 +401,17 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           systemPrompt,
           // REST has no approval relay (`channelCanPrompt('api')`).
           attended: false,
+        }).catch((error: unknown) => {
+          void finishContextTurn(hooks?.turn ?? null, { outcome: 'error' });
+          throw error;
         });
 
-        // Start the agent with initial message if provided
-        // The caller's own task in their own session: the context hooks run
-        // against it as for any agent start (`contextForAgentStart`, the
-        // turn's audience rule), after the response is sent. The block goes
-        // before the message, as a root turn's context does.
-        if (message) {
+        // Start the agent with the initial message, after the response is sent.
+        if (message && hooks) {
           const userId = user.id;
+          const agentId = agent.getContext().id;
+          bindTurnToAgent(hooks.turn, agentId);
           void (async () => {
-            const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
-            const agentId = agent.getContext().id;
-            const hooks = await contextForAgentStart({
-              event: 'worker_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
-              query: message, role: agent.getContext().role, channel: 'api', session,
-            });
-            bindTurnToAgent(hooks.turn, agentId);
             try {
               const out = await withAgentUsage(userId, scope, () => agent.run(hooks.text ? `${hooks.text.trim()}\n\n${message}` : message));
               void finishContextTurn(hooks.turn, { agentId, response: out, outcome: 'success' });

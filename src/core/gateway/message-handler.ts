@@ -659,13 +659,26 @@ export async function answerSideQuestion(sessionId: string, userId: string, cont
       query: content, role: 'general', ...(channel ? { channel } : {}), session, followUp: true,
     });
     turn = hooks.turn;
+    // The model is chosen after the hooks, as a root turn's is: a passage
+    // they showed can raise the session to a level whose content stays on
+    // local models. The reply then runs on a local model, or the refusal
+    // (no local model bound) is the answer, rather than a call to a remote
+    // model that is refused on its way out and reported as a broken provider.
+    const requester = { userId, inSpace: !!scope.space, spaceRole: scope.space?.role, sponsor: scope.sponsor };
+    const chosen = await selector.selectByComplexity('simple', requester);
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const chosenRow = await getModelRegistry().getModel(chosen.name);
+    const { localRowInstead, PSEUDONYMIZED } = await import('@/core/protection/routing');
+    const { modelCandidates } = await import('@/core/agent/model-selector');
+    const row = await localRowInstead(chosenRow, sessionId, 'text', () => modelCandidates(requester), PSEUDONYMIZED);
+    const model = row && row !== chosenRow ? { modelId: row.modelId, name: row.name } : chosen;
     const result = await directResponse(
       content,
       sessionId,
       userId,
       selector,
       'simple',
-      [], hooks.text, undefined, scope.space, scope.sponsor,
+      [], hooks.text, model, scope.space, scope.sponsor,
     );
     void finishContextTurn(turn, { response: result.response, outcome: 'success' });
     return `${personaName} — side question: ${result.response}`;

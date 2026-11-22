@@ -29,10 +29,28 @@ vi.mock('@/core/personas/resolver', () => ({ resolvePersonaForUser: async () => 
 vi.mock('@/core/agent/context', () => ({ resolveAgentScope: async () => ({ workspaceId: 'ws', space: null, sponsor: null, trigger: 'user', funding: 'own' }) }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async (id: string) => ({ id, userId: USER, ...fx.session }) } }));
 vi.mock('@/security/workspace-fs', () => ({ isSharedWorkspaceId: async () => false }));
+// The model rows: the side question's choice is a remote one; a local row is bound only where a test says so.
+const models = vi.hoisted(() => ({
+  remote: { name: 'gpt-remote', provider: 'openai', modelId: 'gpt-remote', endpoint: null, metadata: {}, isEnabled: true, supportsTools: true, supportsVision: false, contextWindow: 128000 },
+  local: { name: 'vllm-local', provider: 'custom-openai', modelId: 'vllm-local', endpoint: 'http://vllm:8000', metadata: { dataPolicy: { hosting: 'local', retention: 'none', trainsOnInput: false } }, isEnabled: true, supportsTools: true, supportsVision: false, contextWindow: 32000 },
+  localBound: false,
+}));
+vi.mock('@/core/agent/model-selector', () => ({
+  ModelSelector: class { async selectByComplexity() { return { modelId: 'gpt-remote', name: 'gpt-remote' }; } },
+  modelCandidates: async () => ({ defaultModel: null, rows: models.localBound ? [models.local] : [] }),
+}));
+vi.mock('@/models/model-registry', async (original) => ({
+  ...await original<object>(),
+  getModelRegistry: () => ({ getModel: async (name: string) => (name === 'gpt-remote' ? models.remote : name === 'vllm-local' ? models.local : null) }),
+}));
+vi.mock('@/core/modules/registry', async (original) => ({ ...await original<object>(), isModuleOn: (id: string) => id === 'protection' }));
 const { answerSideQuestion } = await import('./message-handler');
+const { raiseSessionLevel, resetSessionLevels } = await import('@/core/protection/session-level');
 
 beforeEach(() => {
   fx.session = {};
+  models.localBound = false;
+  resetSessionLevels();
   fx.hooks.mockReset().mockResolvedValue({ text: BLOCK, blocks: [BLOCK], labelledBlocks: [], repeatable: [], turn: TURN });
   fx.finish.mockReset();
   fx.direct.mockReset().mockResolvedValue({ response: '99 euro a month.', metadata: {} });
@@ -62,6 +80,35 @@ describe('a side question', () => {
     fx.direct.mockRejectedValue(new Error('model down'));
     expect(await answerSideQuestion('sess-side', USER, 'what do we charge enterprise customers for hosting?')).toBe('Octi — side question: model down');
     expect(fx.finish).toHaveBeenCalledWith(TURN, { outcome: 'failed' });
+  });
+});
+
+describe('a side question whose context raises the session to a local-only level', () => {
+  // What recall's commit does when it shows a level 3 passage.
+  const showsConfidential = (sessionId: string) => fx.hooks.mockImplementation(async () => {
+    raiseSessionLevel(sessionId, 3);
+    return { text: BLOCK, blocks: [BLOCK], labelledBlocks: [], repeatable: [], turn: TURN };
+  });
+
+  test('is answered on a local model, chosen after the hooks', async () => {
+    models.localBound = true;
+    showsConfidential('sess-side-3');
+    expect(await answerSideQuestion('sess-side-3', USER, 'what does the confidential contract say about hosting?')).toBe('Octi — side question: 99 euro a month.');
+    // directResponse(…, extraSystemContext, modelOverride, space, sponsor)
+    expect(fx.direct.mock.calls[0][7]).toEqual({ modelId: 'vllm-local', name: 'vllm-local' });
+  });
+
+  test('with no local model bound, the refusal is the answer and no model is called', async () => {
+    showsConfidential('sess-side-4');
+    const reply = await answerSideQuestion('sess-side-4', USER, 'what does the confidential contract say about hosting?');
+    expect(reply).toMatch(/^Octi — side question: This conversation holds .*protection level 3.*no local model is bound/);
+    expect(fx.direct).not.toHaveBeenCalled();
+    expect(fx.finish).toHaveBeenCalledWith(TURN, { outcome: 'failed' });
+  });
+
+  test('below level 3 the chosen model answers', async () => {
+    await answerSideQuestion('sess-side-1', USER, 'what do we charge enterprise customers for hosting?');
+    expect(fx.direct.mock.calls[0][7]).toEqual({ modelId: 'gpt-remote', name: 'gpt-remote' });
   });
 });
 

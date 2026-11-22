@@ -65,6 +65,14 @@ without deciding.
 | A swarm child (`spawn_child`) | `worker_start` | its brief | its first message; every retry reruns that message |
 | A hook's spawned agent, `POST /api/agents` with a message | `worker_start` | the message | before the message |
 
+The model is chosen after the hooks ran, so a passage at protection level 3-4
+puts the agent on a local model, or refuses the start with the reason when
+none is bound ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)). `POST /api/agents`
+runs the hooks before it spawns; a side question picks its model after them;
+a hook's agent is spawned when the hook fires (so a refusal for capacity
+fails the action at once) and, when its hooks then raise the session to a
+local-only level, is spawned again before it runs.
+
 Deliberately not hooked:
 
 - **The voice planning reply.** It is spoken on the fast voice model, where
