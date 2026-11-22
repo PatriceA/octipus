@@ -68,7 +68,7 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 |---------|---------|-------------|
 | `/work-plan` | — | Show the visible plan, evidence, and feedback |
 | `/plan-feedback <change>` | — | Save feedback on the current plan |
-| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version) |
+| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version). Every running agent of yours, in every session |
 | `/status` | `/s` | Show session status and agents (gateway version) |
 | `/cost` | — | Show cumulative token usage and cost |
 | `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
@@ -92,7 +92,7 @@ Handled by `octi tui` itself ([guide](guides/tui.md#chat-shortcuts-and-commands)
 | `/search` | Search the transcript (also `Ctrl+F`) |
 | `/copy [last\|transcript\|code]`, `/export [path]`, `/scrollback` | Take the conversation out (`code`: the latest reply's last code block, also `Alt+C`) |
 
-`Esc` stops the running turn; messages typed while a turn runs wait above the composer and are sent when it ends.
+`Esc` stops the running turn of this chat's session only — never `/abort`'s every agent of yours: its root agent (`agent.stop`), or, before the root is known, the session (`session.stop`). Messages typed while a turn runs, or while the connection is down, wait above the composer and are sent when it ends (or the connection is back).
 
 ### Channel-Specific
 

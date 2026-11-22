@@ -886,7 +886,7 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | Type | Description |
 |------|-------------|
 | `auth` | Authentication handshake |
-| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`, `mode`). `mode`: `auto` (default — a text message sent while a turn of that session runs steers it, `chat.message` with `injected: true`, when the running agent takes input mid-turn; otherwise it queues), `queue`, `steer` (refused when nothing running takes it) or `restart` (stop the running turn, run this next). Answered with `chat.delivery` `{ outcome: steered \| queued \| restarted \| refused, ahead?, reason? }` |
+| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`, `mode`, `turnId` — echoed on the turn's `chat.response` / `chat.error` payloads, its `chat.delivery` and the `error` frames that answer it, with `sessionId`). `mode`: `auto` (default — a text message sent while a turn of that session runs steers it, `chat.message` with `injected: true`, when the running agent takes input mid-turn; otherwise it queues), `queue`, `steer` (refused when nothing running takes it) or `restart` (stop the running turn, run this next). Answered with `chat.delivery` `{ outcome: steered \| queued \| restarted \| refused, ahead?, reason? }` |
 | `chat.steer` | Inject a message into the running turn of one of your sessions (with `mode` `auto`, a normal `chat.send` when nothing running takes it; `mode: 'steer'` refuses instead) |
 | `chat.interject` | A side question answered alongside a running turn |
 | `command` | Execute gateway command (`name`, optional `args`) |
@@ -894,7 +894,8 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
-| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`). Stopping the session's running root drops your messages queued behind it (`agent.stopped` payload `droppedQueued`) |
+| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`). Stopping the session's running root drops your messages queued behind it (`agent.stopped` payload `droppedQueued`; envelope `sessionId`, payload `root`) |
+| `session.stop` | `{ sessionId }` — stop your turn in one of your sessions only: your queued messages in it, then your running agents in it. Another user's session is `SESSION_NOT_FOUND`. Answered with `session.stopped` `{ stopped, droppedQueued, rootAgentId? }` |
 | `voice.set` | `{ sessionId, on }` — voice mode for one of your sessions on this connection: lifecycle narration arrives as `voice.speak` events; cleared when the connection closes. Another user's session is `SESSION_NOT_FOUND` |
 | `replay` | `{ sessionId, afterEventId? }` — the buffered events of one of your existing sessions after `afterEventId`. Another user's or an unknown session is `SESSION_NOT_FOUND` |
 | `ping` | Heartbeat |
