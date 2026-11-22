@@ -330,6 +330,12 @@ describe('embeddings over the wire', () => {
     expect(usageLog).toEqual([expect.objectContaining({ model: 'embed-small' })]);
   });
 
+  test('puts vectors back in input order when the proxy lists them by index out of order', async () => {
+    proxy.enqueue(json(embeddings([[1], [2], [3]], { order: [2, 0, 1] })));
+    registryDouble.add(modelRow({ provider: 'litellm', modelId: 'embed-small' }));
+    expect(await clientWith().embed(['a', 'b', 'c'], 'embed-small')).toEqual([[1], [2], [3]]);
+  });
+
   test('a single string is sent as a one-element batch', async () => {
     proxy.enqueue(json(embeddings([[0.5, 0.5]])));
     registryDouble.add(modelRow({ provider: 'litellm', modelId: 'embed-small' }));

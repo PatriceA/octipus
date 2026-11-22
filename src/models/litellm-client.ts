@@ -937,7 +937,10 @@ export class LiteLLMClient {
       });
       const { recordProviderUsage } = await import('./providers/instrumented');
       await recordProviderUsage({ model: embeddingModel, messages: [], requestType: 'embedding' }, 'litellm', { model: embeddingModel, usage: normalizeUsage(response.usage) });
-      return response.data.map((d) => d.embedding);
+      // `index` names the input each vector belongs to; the list order is not
+      // part of the contract, and a vector filed under the wrong text corrupts
+      // the index silently.
+      return [...response.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       modelLogger.error(
