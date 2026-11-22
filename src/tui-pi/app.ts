@@ -1,23 +1,32 @@
 import { readClipboardImage, readImageFile } from './image-attachments';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
-import { renderChatFrame } from './components/chat-frame';
+import { ChatFooter, renderChatFrame } from './components/chat-frame';
+import { createTranscriptView, type TranscriptScroll } from './components/transcript-view';
+import { defaultExportName, exitSummary, transcriptMarkdown, transcriptPlainText } from './transcript-export';
+import type { ClipboardResult } from '@/tui-kit';
+import type { MouseMode } from './settings';
+import { writeFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
 /**
  * OctipusTuiApp.
  *
- * Composes the chat surface: status bar, scrolling messages pane,
- * pi Editor as composer, and pi-tui overlays for permission prompts
- * and the command palette (Ctrl+P). Submit handler routes the
- * TUI-local commands (see `source: 'tui'` in slash-commands.ts) and
- * forwards everything else to the gateway adapter.
+ * Composes the chat surface: a scrolling transcript, and below it the
+ * activity row, subagents, pi Editor as composer and the status rows, pinned
+ * (docs/plans/tui-modernization.md §6). On the alternate screen the
+ * transcript is a scroll view and the rest a sticky footer; inline, one
+ * full-height frame. Overlays for permission prompts and the command palette
+ * (Ctrl+P). Submit handler routes the TUI-local commands (see
+ * `source: 'tui'` in slash-commands.ts) and forwards everything else to the
+ * gateway adapter.
  *
  * State that belongs to multiple components (cumulative tokens,
  * session list, pending overlays) lives in plain fields here.
  */
 import { ChatSessionPresenter } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
-import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@/tui-kit';
+import { Container, getKeybindings, isViewportTUI, matchesKey, type OverlayHandle, Spacer, type TUI, VStack } from '@/tui-kit';
 import { loginWithPassword } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { formatChangesMessage } from './changes-render';
@@ -42,11 +51,17 @@ export interface OctipusTuiAppOptions {
   exit?: (code: number) => void;
   /**
    * Optional shutdown hook. When set, /exit and /quit call this BEFORE
-   * exiting the process so the runtime can restore the terminal and
-   * drain stdin. Without it, the PowerShell prompt redraws inside the
-   * TUI's bottom border.
+   * exiting the process so the runtime can restore the terminal, print
+   * `farewell` (the last exchange and the resume command) to the normal
+   * buffer, and drain stdin.
    */
-  onShutdown?: () => Promise<void>;
+  onShutdown?: (farewell?: string) => Promise<void>;
+  /** The clipboard chain (`runtime.copy`); `/copy` falls back to the same chain bound to `tui.terminal`. */
+  copy?: (text: string) => Promise<ClipboardResult>;
+  /** Show the transcript in the terminal's own scrollback (`runtime.dumpToScrollback`). */
+  dumpToScrollback?: (text: string) => Promise<void>;
+  /** The mouse mode the runtime set up; it decides the welcome hint and whether Up/Down scroll. */
+  mouse?: MouseMode;
 }
 
 function newSessionId(): string {
@@ -64,7 +79,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.quit'] as const;
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -94,7 +109,14 @@ export class OctipusTuiApp {
   /** The login prompt opens by itself once per run; after that, /login. */
   private loginPrompted = false;
   private exiting = false;
-  private readonly onShutdown?: () => Promise<void>;
+  private readonly onShutdown?: (farewell?: string) => Promise<void>;
+  private readonly copy?: (text: string) => Promise<ClipboardResult>;
+  private readonly dumpToScrollback?: (text: string) => Promise<void>;
+  private readonly mouse: MouseMode;
+  /** The transcript's scroll view on the alternate screen; null inline, where the pane scrolls itself. */
+  private readonly transcript: TranscriptScroll | null = null;
+  /** A message was sent or a session resumed: the session exists on the server and can be resumed. */
+  private sessionUsed = false;
   /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
   private voice: VoiceService | null = null;
   private voiceInit: Promise<VoiceService | null> | null = null;
@@ -121,6 +143,10 @@ export class OctipusTuiApp {
     this.gatewayUrl = options.gatewayUrl;
     this.projectPath = options.projectPath;
     this.onShutdown = options.onShutdown;
+    this.copy = options.copy;
+    this.dumpToScrollback = options.dumpToScrollback;
+    this.mouse = options.mouse ?? 'app';
+    this.sessionUsed = options.sessionId !== undefined;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
@@ -129,23 +155,33 @@ export class OctipusTuiApp {
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
 
-    // Layout: messages, blank line, activity, composer, status bar LAST.
+    // Layout: transcript, then activity, subagents, composer, status bar LAST.
     // The bar carries counters that have to stay readable — at the top it
     // scrolled off with the first screenful of output, which is exactly when
     // the numbers start being interesting.
     const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents };
-    const root = new class extends Container {
-      override render(width: number): string[] {
-        return renderChatFrame(width, tui.terminal?.rows ?? 30, parts);
-      }
-    }();
-    root.addChild(this.messages);
-    root.addChild(new Spacer(1));
-    root.addChild(this.activity);
-    root.addChild(this.subagents);
-    root.addChild(this.composer);
-    root.addChild(this.status);
-    tui.addChild(root);
+    const rows = () => tui.terminal?.rows ?? 30;
+    if (isViewportTUI(tui)) {
+      // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
+      this.transcript = createTranscriptView(this.messages);
+      tui.setLayoutRoot(new VStack([
+        { component: this.transcript, basis: 0, grow: 1, minSize: 0 },
+        { component: new ChatFooter(parts, rows), basis: 'auto', shrink: 0 },
+      ]));
+    } else {
+      const root = new class extends Container {
+        override render(width: number): string[] {
+          return renderChatFrame(width, rows(), parts);
+        }
+      }();
+      root.addChild(this.messages);
+      root.addChild(new Spacer(1));
+      root.addChild(this.activity);
+      root.addChild(this.subagents);
+      root.addChild(this.composer);
+      root.addChild(this.status);
+      tui.addChild(root);
+    }
     tui.setFocus(this.composer);
 
     this.composer.onSubmit = (text) => this.handleSubmit(text);
@@ -167,6 +203,8 @@ export class OctipusTuiApp {
         this.tui.requestRender();
         return { consume: true };
       }
+      if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
+      if (this.transcript) return this.transcriptKey(this.transcript, data);
       if (this.messages.handleScrollInput(data)) {
         this.tui.requestRender();
         return { consume: true };
@@ -185,13 +223,50 @@ export class OctipusTuiApp {
   }
 
   private quit(): void {
-    void this.stop().then(() => this.exit(0));
+    void this.stop(exitSummary(this.messages.entries(), this.sessionUsed ? this.sessionId : null)).then(() => this.exit(0));
+  }
+
+  /**
+   * Keys for the alternate-screen transcript that the scroll view does not
+   * take itself (it has PageUp/PageDown and Ctrl+Home/End): End returns to
+   * the latest while reading history; with `tui.mouse: native` the wheel
+   * arrives as Up/Down, which scroll while the composer is empty.
+   */
+  private transcriptKey(transcript: TranscriptScroll, data: string): { consume: true } | undefined {
+    if (matchesKey(data, 'end') && !transcript.isFollowingEnd) { transcript.scrollToEnd(); return { consume: true }; }
+    if (this.mouse === 'native' && this.composer.getText() === '' && !this.composer.isShowingAutocomplete()) {
+      if (matchesKey(data, 'up')) { transcript.scrollBy(-3); return { consume: true }; }
+      if (matchesKey(data, 'down')) { transcript.scrollBy(3); return { consume: true }; }
+    }
+    return undefined;
+  }
+
+  /** The transcript in the terminal's own scrollback, for its search and selection; any key comes back. */
+  private async dumpTranscript(): Promise<void> {
+    if (!this.dumpToScrollback) { this.pushMessage('system', 'This terminal session cannot show the transcript in scrollback.'); return; }
+    await this.dumpToScrollback(transcriptPlainText(this.messages.entries()));
+  }
+
+  /** `/export [path]`: the transcript as Markdown, never over an existing file. */
+  private exportTranscript(path: string): void {
+    const target = resolvePath(this.projectPath ?? process.cwd(), path || defaultExportName(this.sessionId, new Date()));
+    const entries = this.messages.entries();
+    try {
+      writeFileSync(target, transcriptMarkdown(entries, this.sessionId, new Date()), { flag: 'wx' });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      this.pushMessage('system', `Error: transcript not exported: ${code === 'EEXIST' ? `${target} already exists; give another path` : error instanceof Error ? error.message : String(error)}.`);
+      return;
+    }
+    const { dropped } = this.messages.size();
+    this.pushMessage('system', `Exported ${entries.length} message${entries.length === 1 ? '' : 's'} to ${target}${dropped ? ` (${dropped} older ones were no longer in memory)` : ''}.`);
   }
 
   private hotkeysText(): string {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
     rows.push(['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
+    if (this.transcript) rows.push(['Ctrl+Shift+F', 'Search the transcript'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
     const w = Math.max(...rows.map(([k]) => k.length));
     return `Hotkeys (override in ~/.octipus/keybindings.json):\n${rows.map(([k, d]) => `  ${k.padEnd(w)}  ${d}`).join('\n')}`;
   }
@@ -222,7 +297,7 @@ export class OctipusTuiApp {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(farewell?: string): Promise<void> {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
@@ -234,7 +309,9 @@ export class OctipusTuiApp {
     // drained. Without this the shell's next prompt redraws on top of the
     // TUI border instead of starting on a fresh line.
     if (this.onShutdown) {
-      try { await this.onShutdown(); } catch { /* shutdown failure is non-fatal */ }
+      try { await this.onShutdown(farewell); } catch (error) {
+        process.stderr.write(`Shutdown did not finish: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
     }
   }
 
@@ -245,7 +322,9 @@ export class OctipusTuiApp {
     const greeting = projectName
       ? `Welcome to Octipus. Project: ${projectName}`
       : 'Welcome to Octipus.';
-    this.pushMessage('system', `${greeting}  Type a message or /help. Wheel: scroll · Shift+drag: select · /copy last: copy reply.`);
+    const mouse = this.mouse === 'off' ? '' : !this.transcript ? 'Wheel: scroll · Shift+drag: select · '
+      : this.mouse === 'app' ? 'Wheel: scroll · drag: select and copy · ' : 'Wheel: scroll · select as usual · ';
+    this.pushMessage('system', `${greeting}  Type a message or /help. ${mouse}/copy last: copy reply.`);
   }
 
   private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
@@ -354,7 +433,7 @@ export class OctipusTuiApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleSubmit(rawText: string): void {
-    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, text => this.pushMessage('system', text))) return;
+    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, text => this.pushMessage('system', text), this.copy)) return;
     const text = rawText.trim();
     if (!text) return;
 
@@ -369,6 +448,7 @@ export class OctipusTuiApp {
       this.handleCommand(text.slice(1));
       return;
     }
+    this.sessionUsed = true;
     const images = this.pendingImages.filter(image => text.includes(image.marker)).map(image => image.attachment);
     this.pendingImages = [];
     if (images.length) void this.sendWithImages(text, images);
@@ -601,6 +681,12 @@ export class OctipusTuiApp {
       case 'hotkeys':
         this.pushMessage('system', this.hotkeysText());
         return;
+      case 'export':
+        this.exportTranscript(value);
+        return;
+      case 'scrollback':
+        void this.dumpTranscript();
+        return;
       case 'resume': {
         const n = Number(value);
         const row = Number.isInteger(n) && n >= 1
@@ -614,6 +700,7 @@ export class OctipusTuiApp {
         this.sessionBeforeResume = this.sessionId;
         this.pendingImages = [];
         this.sessionId = id;
+        this.sessionUsed = true;
         this.session.reset();
         this.adapter.sendCommand('history');
         return;
