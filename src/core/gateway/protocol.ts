@@ -89,6 +89,10 @@ export type GatewayEventType =
   | 'agent.spawned'
   | 'agent.completed'
   | 'agent.stopped'
+  // A `session.stop` was handled: how many of the caller's running agents of
+  // the session it stopped and how many of their queued messages it dropped
+  // (both 0: nothing of theirs had started yet). Envelope `sessionId`.
+  | 'session.stopped'
   | 'agent.event'
   // Tool-call stream from the agent's executor — start / complete /
   // file_change / cli_tool_use payloads land here. Distinct subtype
@@ -422,6 +426,17 @@ export const AgentStopSchema = z.object({
 });
 
 /**
+ * Stop the caller's turn in ONE session: their running agents in it and their
+ * messages queued behind it — never their agents in other sessions (that is
+ * the `/abort` command). For a client that has not learnt the turn's root
+ * agent yet (Esc right after sending). Answered with a `session.stopped` event.
+ */
+export const SessionStopSchema = z.object({
+  type: z.literal('session.stop'),
+  sessionId: z.string().uuid(),
+});
+
+/**
  * `chat.interject` — a non-blocking side-channel message sent while
  * the session already has an active root agent turn running.
  *
@@ -623,6 +638,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   PermissionRespondSchema,
   ApprovalRespondSchema,
   AgentStopSchema,
+  SessionStopSchema,
   PingSchema,
   VoiceSetSchema,
   ReplaySchema,

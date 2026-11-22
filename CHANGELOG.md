@@ -604,6 +604,14 @@ labels reflect blast radius, not contract guarantees.
   went out while the root still ran, and the root's live reply was wiped. The
   turn now ends only on the agent the server marks `root: true`; workers get a
   row in the subagent panel, and their token counts are read again.
+- **Terminal chat: Esc stops this chat only.** Esc pressed before the turn's
+  root agent was known sent `/abort`, which stops every agent of the user in
+  every session — a pipeline in a browser tab included. It now sends the new
+  gateway frame `session.stop` (`{ sessionId }`): the caller's running agents
+  in that one session stop and their messages queued in it are dropped, and a
+  `session.stopped` event says how many. When nothing had started yet the chat
+  says so and stops the root as soon as it starts. The `/abort` command is
+  unchanged.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

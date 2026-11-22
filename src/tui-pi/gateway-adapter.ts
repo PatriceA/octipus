@@ -72,6 +72,11 @@ export type AgentSessionEvent =
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string; root?: boolean }
   /** An agent was stopped on request (`agent.stop`, Esc). */
   | { kind: 'agent.stopped';  agentId: string }
+  /**
+   * A `session.stop` was handled: `stopped` running agents of this user in the
+   * session, `droppedQueued` of their queued messages (both 0: nothing had started).
+   */
+  | { kind: 'session.stopped'; stopped: number; droppedQueued: number; rootAgentId?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
   /** The session's work plan was saved; the summary is stale. */
@@ -190,6 +195,11 @@ export class GatewayAdapter {
   /** Stop an agent of this user (the running turn's root, for Esc). */
   stopAgent(agentId: string): void {
     this.client.stopAgent(agentId);
+  }
+
+  /** Stop this user's turn in one session — never their agents elsewhere (Esc before the root is known). */
+  stopSession(sessionId: string): void {
+    this.client.stopSession(sessionId);
   }
 
   /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
@@ -334,6 +344,12 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     case 'agent.stopped': {
       const agentId = pickString(payload, 'agentId');
       if (agentId) out.push({ kind: 'agent.stopped', agentId });
+      return out;
+    }
+
+    case 'session.stopped': {
+      const rootAgentId = pickString(payload, 'rootAgentId');
+      out.push({ kind: 'session.stopped', stopped: pickNumber(payload, 'stopped') ?? 0, droppedQueued: pickNumber(payload, 'droppedQueued') ?? 0, ...(rootAgentId ? { rootAgentId } : {}) });
       return out;
     }
 

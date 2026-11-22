@@ -101,10 +101,12 @@ describe('GatewayClient — session-scoped commands and dropped events', () => {
     client.sendChat(sid, 'plain');
     client.sendChat(sid, 'after the turn', undefined, undefined, 'queue');
     client.stopAgent('agent-7');
+    client.stopSession(sid);
     expect(sent).toEqual([
       { type: 'chat.send', sessionId: sid, content: 'plain' },
       { type: 'chat.send', sessionId: sid, content: 'after the turn', mode: 'queue' },
       { type: 'agent.stop', agentId: 'agent-7' },
+      { type: 'session.stop', sessionId: sid },
     ]);
   });
 

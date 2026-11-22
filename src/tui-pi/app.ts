@@ -112,7 +112,12 @@ const DOUBLE_ESCAPE_MS = 1500;
  * agent starting, for a turn another tab began) to its reply, an error or
  * the root agent stopping. `rootAgentId` is what Esc stops.
  */
-interface RunningTurn { rootAgentId: string | null; stopping: boolean }
+interface RunningTurn {
+  rootAgentId: string | null;
+  stopping: boolean;
+  /** Esc came before anything of the turn had started on the server: stop the root as soon as it does. */
+  stopWhenRootStarts?: boolean;
+}
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -362,9 +367,10 @@ export class OctipusTuiApp {
 
   /**
    * Stop the running turn: `agent.stop` for its root agent, which also drops
-   * the turns the server queued behind it; the gateway's `/abort` (every
-   * running agent of this user) when the root is not known yet. Messages
-   * queued here come back to the composer instead of starting a new turn.
+   * the turns the server queued behind it; `session.stop` for this session
+   * when the root is not known yet — never `/abort`, which stops the user's
+   * agents in every session. Messages queued here come back to the composer
+   * instead of starting a new turn.
    */
   private interrupt(): void {
     const turn = this.turn;
@@ -372,7 +378,7 @@ export class OctipusTuiApp {
     if (turn.stopping) { this.queue.setHint('Already stopping the turn…'); this.tui.requestRender(); return; }
     turn.stopping = true;
     if (turn.rootAgentId) this.adapter.stopAgent(turn.rootAgentId);
-    else this.adapter.sendCommand('abort');
+    else this.adapter.stopSession(this.sessionId);
     this.pushMessage('system', 'Stopping the turn (Esc)…');
     const queued = this.queue.drain();
     if (queued.length) {
@@ -425,7 +431,21 @@ export class OctipusTuiApp {
         if (!event.root) return;
         if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
         else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        if (this.turn.stopWhenRootStarts && this.turn.rootAgentId) {
+          this.turn.stopWhenRootStarts = false;
+          this.adapter.stopAgent(this.turn.rootAgentId);
+        }
         this.showState();
+        return;
+      case 'session.stopped':
+        if (!this.turn) return;
+        if (event.stopped || event.droppedQueued) { this.endTurn('stopped'); return; }
+        // The message is still on its way into the session's queue: nothing
+        // of it runs yet, so stop its root the moment it starts.
+        if (this.turn.stopping && !this.turn.rootAgentId) {
+          this.turn.stopWhenRootStarts = true;
+          this.pushMessage('system', 'Nothing of the turn was running yet; it is stopped as soon as it starts.');
+        }
         return;
       case 'message':
         if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
@@ -660,6 +680,7 @@ export class OctipusTuiApp {
       case 'agent.write':
       case 'agent.edit':
       case 'agent.stopped':
+      case 'session.stopped':
         return;
     }
   }

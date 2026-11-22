@@ -80,3 +80,39 @@ test('a worker spawning never takes the root\'s place as what Esc stops', async 
   expect(t.sent('agent.stop')).toEqual([{ type: 'agent.stop', agentId: 'root-1' }]);
   await t.app.stop();
 });
+
+test('Esc before the root is known stops this session only (never the user-wide /abort), and stops the root once it starts', async () => {
+  const t = await mount();
+  t.submit('quick');
+  const sid = t.sid();
+  t.key(ESC);
+  expect(t.sent('command').filter(frame => frame.name === 'abort')).toEqual([]);
+  expect(t.sent('session.stop')).toEqual([{ type: 'session.stop', sessionId: sid }]);
+  // The message had not reached the session's queue yet: nothing stopped.
+  t.socket.event(wire.sessionStopped(sid, 0, 0));
+  expect(t.screen()).toContain('stopped as soon as it starts');
+  t.socket.event(wire.rootSpawned(sid, 'root-9'));
+  expect(t.sent('agent.stop')).toEqual([{ type: 'agent.stop', agentId: 'root-9' }]);
+  t.socket.event(wire.agentStopped(undefined, 'root-9', true));
+  t.key(ESC);
+  // The turn is over: Esc no longer stops anything.
+  expect(t.sent('agent.stop')).toHaveLength(1);
+  expect(t.sent('session.stop')).toHaveLength(1);
+  await t.app.stop();
+});
+
+test('a session stop that stopped something ends the turn', async () => {
+  const t = await mount();
+  t.submit('quick');
+  t.submit('next one');
+  const sid = t.sid();
+  t.key(ESC);
+  t.socket.event(wire.sessionStopped(sid, 2, 0));
+  // The queued message came back to the composer; nothing more was sent.
+  expect(t.chats()).toEqual(['quick']);
+  expect(t.composer.getText()).toBe('next one');
+  // The turn is over: the next message goes out at once instead of queueing.
+  t.submit('again');
+  expect(t.chats()).toEqual(['quick', 'again']);
+  await t.app.stop();
+});

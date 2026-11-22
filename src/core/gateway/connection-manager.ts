@@ -751,8 +751,8 @@ export class ConnectionManager {
   }
 
   private getCapabilities(isAdmin: boolean): string[] {
-    // `agent.stop` stops the caller's own agents, so every user has it.
-    const caps = ['chat', 'subscribe', 'commands', 'ping', 'agent.stop'];
+    // `agent.stop` / `session.stop` stop the caller's own agents, so every user has them.
+    const caps = ['chat', 'subscribe', 'commands', 'ping', 'agent.stop', 'session.stop'];
     if (isAdmin) caps.push('admin');
     return caps;
   }

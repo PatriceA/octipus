@@ -11,12 +11,14 @@ const gateway = vi.hoisted(() => ({
   sendCommand: vi.fn(),
   sendChat: vi.fn(),
   stopAgent: vi.fn(),
+  stopSession: vi.fn(),
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
   sendCommand = gateway.sendCommand;
   sendChat = gateway.sendChat;
   stopAgent = gateway.stopAgent;
+  stopSession = gateway.stopSession;
   getWorkspace() { return null; }
   disconnect() {}
 } }));
@@ -44,7 +46,7 @@ function mount() {
   };
 }
 
-beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); gateway.stopAgent.mockClear(); installOctipusKeybindings({}); });
+beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); gateway.stopAgent.mockClear(); gateway.stopSession.mockClear(); installOctipusKeybindings({}); });
 afterEach(() => { vi.useRealTimers(); });
 
 test('a message typed during a turn is queued above the composer and sent when the turn ends', async () => {
@@ -98,12 +100,13 @@ test('Esc stops the running turn by its root agent; queued messages come back to
   await t.app.stop();
 });
 
-test('Esc before the root agent is known sends the gateway abort; a second Esc while stopping does not send another', async () => {
+test('Esc before the root agent is known stops this session, never the user-wide abort; a second Esc while stopping does not send another', async () => {
   const t = mount();
   t.submit('quick');
   t.key(ESC);
   t.key(ESC);
-  expect(gateway.sendCommand.mock.calls.filter(call => call[0] === 'abort')).toHaveLength(1);
+  expect(gateway.sendCommand.mock.calls.filter(call => call[0] === 'abort')).toHaveLength(0);
+  expect(gateway.stopSession).toHaveBeenCalledTimes(1);
   expect(gateway.stopAgent).not.toHaveBeenCalled();
   expect(t.screen()).toContain('Already stopping the turn');
   await t.app.stop();

@@ -249,6 +249,11 @@ export class GatewayClient {
     this.send({ type: 'agent.stop', agentId });
   }
 
+  /** Stop this user's turn in one session (`session.stop`): its running agents and the messages queued in it, nothing elsewhere. */
+  stopSession(sessionId: string): void {
+    this.send({ type: 'session.stop', sessionId });
+  }
+
   /**
    * Respond to a permission request — the kind raised by the tool
    * executor's permission gate (ASK/DENY). Distinct from

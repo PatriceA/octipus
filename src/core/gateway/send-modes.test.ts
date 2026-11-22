@@ -15,6 +15,7 @@ const mock = vi.hoisted(() => ({
   stop: vi.fn(() => true),
   get: vi.fn((_id: string): unknown => undefined),
   create: vi.fn(async () => undefined),
+  sessionOwner: 'user',
 }));
 const sid = 'bbbbbbbb-0000-4000-8000-000000000000';
 vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: mock.handle }) }));
@@ -22,7 +23,7 @@ vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({ getBySession: () => mock.workers, stopSession: mock.stopSession, stop: mock.stop, get: mock.get }),
 }));
 vi.mock('@/db/repositories/session-repository', () => ({
-  sessionRepository: { findById: async () => ({ id: 'bbbbbbbb-0000-4000-8000-000000000000', userId: 'user' }), incrementMessageCount: async () => undefined },
+  sessionRepository: { findById: async () => ({ id: 'bbbbbbbb-0000-4000-8000-000000000000', userId: mock.sessionOwner }), incrementMessageCount: async () => undefined },
 }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { create: mock.create } }));
 vi.mock('@/core/agent/session-resolver', () => ({ resolveSession: async () => 'bbbbbbbb-0000-4000-8000-000000000000', turnWorkspaceId: async () => 'workspace' }));
@@ -76,6 +77,7 @@ beforeEach(() => {
   mock.workers = [];
   mock.handle.mockImplementation(async () => ({ response: 'ok' }));
   mock.stop.mockImplementation(() => true);
+  mock.sessionOwner = 'user';
 });
 afterEach(() => { mock.workers = []; });
 
@@ -243,5 +245,50 @@ describe('agent.stop', () => {
     expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent.stopped', payload: { agentId: 'old-root', stoppedBy: 'user' } }));
     await release();
     expect(await queued).toBe('ran');
+  });
+});
+
+describe('session.stop', () => {
+  const agent = (id: string, opts: { root?: boolean; userId?: string; status?: string } = {}) => ({
+    getContext: () => ({ id, root: opts.root ?? false, userId: opts.userId ?? 'user', sessionId: sid, metadata: {} }),
+    getStatus: () => opts.status ?? 'running',
+  });
+
+  test('stops the caller\'s running agents of this session and drops their queued messages, nobody else\'s', async () => {
+    mock.workers = [agent('root-1', { root: true }), agent('child-1'), agent('done-1', { status: 'completed' }), agent('bob-1', { userId: 'bob' })];
+    const release = holdTurn();
+    const mine = withSessionTurn(sid, async () => 'ran', { owner: 'user' }).catch((err: Error) => err.name);
+    const theirs = withSessionTurn(sid, async () => 'ran', { owner: 'bob' });
+    await Promise.resolve();
+    const gw = wire();
+    await gw.run({ type: 'session.stop', sessionId: sid });
+    expect(await mine).toBe('SessionTurnCancelledError');
+    expect(mock.stop.mock.calls).toEqual([['root-1', { actorUserId: 'user' }], ['child-1', { actorUserId: 'user' }]]);
+    expect(mock.stopSession).not.toHaveBeenCalled();
+    expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'session.stopped', sessionId: sid, userId: 'user',
+      payload: { sessionId: sid, stopped: 2, droppedQueued: 1, stoppedBy: 'user', rootAgentId: 'root-1' },
+    }));
+    await release();
+    expect(await theirs).toBe('ran');
+  });
+
+  test('with nothing started yet it says so: nothing stopped, nothing dropped', async () => {
+    const gw = wire();
+    await gw.run({ type: 'session.stop', sessionId: sid });
+    expect(mock.stop).not.toHaveBeenCalled();
+    expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'session.stopped', payload: { sessionId: sid, stopped: 0, droppedQueued: 0, stoppedBy: 'user' },
+    }));
+  });
+
+  test('another user\'s session is refused and nothing is stopped', async () => {
+    mock.sessionOwner = 'bob';
+    mock.workers = [agent('root-2', { root: true, userId: 'bob' })];
+    const gw = wire();
+    await gw.run({ type: 'session.stop', sessionId: sid });
+    expect(mock.stop).not.toHaveBeenCalled();
+    expect(gw.publish).not.toHaveBeenCalled();
+    expect(gw.send).toHaveBeenCalledWith('connection', { type: 'error', code: 'SESSION_NOT_FOUND', message: 'Session not found' });
   });
 });

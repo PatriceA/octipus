@@ -1069,6 +1069,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
 | `session.plan_updated` | yes | `src/core/agent/work-plan-store.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
+| `session.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `space.presence` | yes | — | `*` |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `*` |

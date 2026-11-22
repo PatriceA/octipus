@@ -238,6 +238,10 @@ export function wireMessageHandler(hub: GatewayHub): void {
         await handleAgentStop(hub, connectionId, context, message);
         break;
 
+      case 'session.stop':
+        await handleSessionStop(hub, connectionId, context, message);
+        break;
+
       case 'voice.set':
         await handleVoiceSet(hub, connectionId, context, message);
         break;
@@ -869,6 +873,55 @@ async function handleAgentStop(
       code: 'AGENT_STOP_ERROR',
       message: (err as Error).message,
     });
+  }
+}
+
+/**
+ * Stop the caller's turn in one session (`session.stop`): their messages
+ * queued in it are dropped first, so none starts in the gap, then their
+ * running agents in it are stopped. Other sessions of the same user — and
+ * other members' agents and messages in this one — are left alone; that is
+ * the difference from `/abort`, which stops every agent of the user. Only a
+ * session the caller may chat in (`sessionAccessError`); one that does not
+ * exist yet has nothing to stop. `session.stopped` says what was done, so a
+ * client can tell "stopped" from "nothing had started yet".
+ */
+async function handleSessionStop(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'session.stop' }>,
+): Promise<void> {
+  try {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const agentManager = getAgentManager();
+    const running = agentManager.getBySession(message.sessionId)
+      .filter((agent) => agent.getContext().userId === context.userId && agent.getStatus() === 'running');
+    const root = running.find((agent) => agent.getContext().root === true);
+    const droppedQueued = cancelQueuedTurns(message.sessionId, { owner: context.userId });
+    if (root) {
+      try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(message.sessionId, context.userId); }
+      catch (error) { coreLogger.error({ error, sessionId: message.sessionId }, 'Could not persist Companion owner stop'); }
+    }
+    for (const agent of running) agentManager.stop(agent.getContext().id, { actorUserId: context.userId });
+    hub.publishEvent({
+      type: 'session.stopped',
+      source: `user:${context.userId}`,
+      userId: context.userId,
+      sessionId: message.sessionId,
+      payload: {
+        sessionId: message.sessionId, stopped: running.length, droppedQueued, stoppedBy: context.userId,
+        ...(root ? { rootAgentId: root.getContext().id } : {}),
+      },
+    });
+  } catch (err) {
+    coreLogger.error({ err, connectionId, sessionId: message.sessionId }, 'Session stop error');
+    hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_STOP_ERROR', message: (err as Error).message });
   }
 }
 

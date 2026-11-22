@@ -29,6 +29,11 @@ describe('Protocol', () => {
       expect(result.ok).toBe(true);
     });
 
+    test('parses session.stop, which names a session', () => {
+      expect(parseClientMessage(JSON.stringify({ type: 'session.stop', sessionId: '11111111-2222-4333-8444-555555555555' })).ok).toBe(true);
+      expect(parseClientMessage(JSON.stringify({ type: 'session.stop' })).ok).toBe(false);
+    });
+
     test('parses agent.stop', () => {
       const result = parseClientMessage(JSON.stringify({
         type: 'agent.stop',
