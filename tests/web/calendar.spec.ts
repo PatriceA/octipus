@@ -264,7 +264,12 @@ test('deleting asks first, and says when guests are told', async ({ authenticate
 
 test('dragging an event moves it by the grid\'s quarter hours', async ({ authenticatedPage: page }) => {
   const api = await stubCalendar(page);
+  // The grid opens scrolled to two hours before now, so early in the day an
+  // afternoon event is below the fold: a taller window and a scroll keep the
+  // event and where it is dropped on screen whatever the hour.
+  await page.setViewportSize({ width: 1280, height: 1100 });
   await page.goto('/calendar');
+  await block(page, 'Outlook meeting').scrollIntoViewIfNeeded();
   const box = (await block(page, 'Outlook meeting').boundingBox())!;
   const x = box.x + box.width / 2;
   await page.mouse.move(x, box.y + 10);
@@ -580,7 +585,10 @@ test('a new repeating event with a reminder and guests: their busy time, a free 
 test('an untitled event stays untitled when it is moved or edited', async ({ authenticatedPage: page }) => {
   const untitled = event('blank', '(no title)', '13:00', '14:00', { untitled: true });
   const api = await stubCalendar(page, { events: [untitled] });
+  // As in the drag test above: on screen whatever the hour.
+  await page.setViewportSize({ width: 1280, height: 1100 });
   await page.goto('/calendar');
+  await block(page, '\\(no title\\)').scrollIntoViewIfNeeded();
   const box = (await block(page, '\\(no title\\)').boundingBox())!;
   const x = box.x + box.width / 2;
   await page.mouse.move(x, box.y + 10);
