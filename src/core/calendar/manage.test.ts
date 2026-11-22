@@ -250,3 +250,56 @@ test('an edit without a title leaves it alone; creating needs one', async () => 
   await writeCalendarEvent('alice', 'google', untitled, 'e1');
   expect(JSON.parse((request.mock.calls[0] as unknown as [string, { body: string }])[1].body)).not.toHaveProperty('summary');
 });
+
+test('"all events" of an all-day series changes its length: Google moves the series\' last date', async () => {
+  token.mockResolvedValue('caller-secret');
+  const request = stubProvider([
+    ['GET', 'events/occ?fields=recurringEventId', { recurringEventId: 'master', start: { date: '2026-11-18' }, end: { date: '2026-11-19' } }],
+    ['GET', 'events/master?fields=start', { start: { date: '2026-11-04' }, end: { date: '2026-11-05' }, recurrence: ['RRULE:FREQ=WEEKLY'] }],
+  ]);
+  const longer = { ...input, allDay: true, start: '2026-11-18', end: '2026-11-20', timeZone: 'Europe/Berlin' };
+  expect(await writeCalendarEvent('alice', 'google', longer, 'occ', { scope: 'all' })).toEqual({ id: 'master' });
+  const write = calls(request).find((c) => c.method === 'PATCH')!;
+  expect(write.url).toBe('https://www.googleapis.com/calendar/v3/calendars/primary/events/master');
+  expect(write.body.start).toEqual({ date: '2026-11-04', dateTime: null, timeZone: null });
+  expect(write.body.end).toEqual({ date: '2026-11-06', dateTime: null, timeZone: null });
+  // The same length: the dates are not rewritten.
+  request.mockClear();
+  await writeCalendarEvent('alice', 'google', { ...longer, end: '2026-11-19' }, 'occ', { scope: 'all' });
+  expect(calls(request).find((c) => c.method === 'PATCH')!.body).not.toHaveProperty('end');
+});
+
+test('"all events" of an all-day Graph series: the occurrence\'s UTC evening is its day, and the series\' last midnight moves', async () => {
+  token.mockResolvedValue('caller-secret');
+  const request = stubProvider([
+    // Berlin's 18 November asked for in UTC.
+    ['GET', 'events/occ?$select=seriesMasterId', { seriesMasterId: 'master', type: 'occurrence', isAllDay: true, start: { dateTime: '2026-11-17T23:00:00.0000000' }, end: { dateTime: '2026-11-18T23:00:00.0000000' }, originalStartTimeZone: 'W. Europe Standard Time' }],
+    ['GET', 'events/master?$select=start', { start: { dateTime: '2026-11-04T00:00:00.0000000', timeZone: 'W. Europe Standard Time' }, end: { dateTime: '2026-11-05T00:00:00.0000000', timeZone: 'W. Europe Standard Time' } }],
+  ]);
+  await writeCalendarEvent('alice', 'microsoft', { ...input, allDay: true, start: '2026-11-18', end: '2026-11-20', timeZone: 'Europe/Berlin' }, 'occ', { scope: 'all' });
+  const write = calls(request).find((c) => c.method === 'PATCH')!;
+  expect(write.url).toBe('https://graph.microsoft.com/v1.0/me/events/master');
+  expect(write.body.start).toEqual({ dateTime: '2026-11-04T00:00:00.0000000', timeZone: 'W. Europe Standard Time' });
+  expect(write.body.end).toEqual({ dateTime: '2026-11-06T00:00:00', timeZone: 'W. Europe Standard Time' });
+  // Another first day is still refused.
+  await expect(writeCalendarEvent('alice', 'microsoft', { ...input, allDay: true, start: '2026-11-19', end: '2026-11-20', timeZone: 'Europe/Berlin' }, 'occ', { scope: 'all' })).rejects.toThrow(/another day/);
+});
+
+test('an event that does not repeat can be given a repeat rule, with "All events" or without a scope', async () => {
+  token.mockResolvedValue('caller-secret');
+  const weekly = { ...input, timeZone: 'Europe/Berlin', recurrence: { frequency: 'weekly' as const, byDay: ['WE' as const] } };
+  const google = stubProvider([['GET', 'events/single?fields=recurringEventId', { start: { dateTime: '2026-11-04T09:00:00+01:00' }, end: { dateTime: '2026-11-04T10:00:00+01:00' } }]]);
+  expect(await writeCalendarEvent('alice', 'google', weekly, 'single', { scope: 'all' })).toEqual({ id: 'single' });
+  await writeCalendarEvent('alice', 'google', weekly, 'single');
+  const writes = calls(google).filter((c) => c.method === 'PATCH');
+  expect(writes).toHaveLength(2);
+  for (const write of writes) {
+    expect(write.url).toBe('https://www.googleapis.com/calendar/v3/calendars/primary/events/single');
+    expect(write.body).toMatchObject({ recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=WE'], start: { dateTime: '2026-11-04T08:00:00.000Z', timeZone: 'Europe/Berlin' } });
+  }
+  const graph = stubProvider([['GET', 'events/single?$select=seriesMasterId', { type: 'singleInstance', start: { dateTime: '2026-11-04T08:00:00.0000000' }, end: { dateTime: '2026-11-04T09:00:00.0000000' } }]]);
+  await writeCalendarEvent('alice', 'microsoft', weekly, 'single', { scope: 'all' });
+  const write = calls(graph).find((c) => c.method === 'PATCH')!;
+  expect(write.url).toBe('https://graph.microsoft.com/v1.0/me/events/single');
+  expect(write.body).toMatchObject({ start: { dateTime: '2026-11-04T09:00:00', timeZone: 'Europe/Berlin' }, recurrence: { pattern: { type: 'weekly', daysOfWeek: ['wednesday'] }, range: { startDate: '2026-11-04', recurrenceTimeZone: 'Europe/Berlin' } } });
+});

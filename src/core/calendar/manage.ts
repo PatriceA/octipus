@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { htmlToText } from '@/core/mail/parse';
 import { getOAuthManager } from '@/security/oauth';
 import type { BusyInterval, CalendarAttendee, CalendarEventDetails, CalendarRecurrence, CalendarResponse, RecurrenceScope } from '@/shared/calendar';
-import type { CalendarProvider } from './events';
+import { type CalendarProvider, graphAllDayDate } from './events';
 import {
   googleRecurrence, googleReminders, graphRecurrence, graphReminders, parseGoogleRecurrence, parseGoogleReminder, parseGraphRecurrence,
   shiftWallTime, validTimeZone, wallTime, zoned,
@@ -199,7 +199,13 @@ async function writeCalendarEventInAccount(userId: string, provider: CalendarPro
   // Validated before any provider connection.
   calendarWriteBody(provider, input);
   if (id && target.scope === 'all') return writeSeries(userId, provider, input, id, target);
-  if (id && input.recurrence) throw new CalendarInputError('Only a whole series can be given a repeat rule: choose "All events".');
+  // One occurrence takes no repeat rule of its own; an event that does not repeat yet can be given one.
+  if (id && input.recurrence && await seriesOf(userId, provider, id, target.calendarId)) throw new CalendarInputError('Only a whole series can be given a repeat rule: choose "All events".');
+  return writeOne(userId, provider, input, id, target);
+}
+
+/** Create an event, or change one event as it is (a single event, or one occurrence). */
+async function writeOne(userId: string, provider: CalendarProvider, input: CalendarWrite, id: string | undefined, target: CalendarTarget): Promise<{ id: string }> {
   const existing = id && input.attendees ? await currentAttendees(userId, provider, id, target.calendarId) : undefined;
   const body = calendarWriteBody(provider, input, existing);
   // A guest added now gets an invitation, whatever the others were told.
@@ -226,12 +232,14 @@ async function seriesOf(userId: string, provider: CalendarProvider, id: string, 
     if (!e.recurringEventId) return null;
     return { seriesId: e.recurringEventId, occurrence: { start: e.start?.dateTime ?? e.start?.date ?? '', end: e.end?.dateTime ?? e.end?.date ?? '', allDay: !e.start?.dateTime } };
   }
-  const e = await readJson<{ seriesMasterId?: string; type?: string; isAllDay?: boolean; start?: { dateTime?: string }; end?: { dateTime?: string } }>(
-    userId, provider, `${eventUrl(provider, id, calendarId)}?$select=seriesMasterId,type,isAllDay,start,end`, 'could not read the event', UTC_TIMES);
-  if (e.type === 'seriesMaster') return { seriesId: id, occurrence: { start: `${e.start?.dateTime ?? ''}Z`, end: `${e.end?.dateTime ?? ''}Z`, allDay: e.isAllDay === true } };
-  if (!e.seriesMasterId) return null;
-  const at = (v?: string) => (v ? (v.endsWith('Z') ? v : `${v}Z`) : '');
-  return { seriesId: e.seriesMasterId, occurrence: { start: at(e.start?.dateTime), end: at(e.end?.dateTime), allDay: e.isAllDay === true } };
+  const e = await readJson<{ seriesMasterId?: string; type?: string; isAllDay?: boolean; start?: { dateTime?: string }; end?: { dateTime?: string }; originalStartTimeZone?: string }>(
+    userId, provider, `${eventUrl(provider, id, calendarId)}?$select=seriesMasterId,type,isAllDay,start,end,originalStartTimeZone`, 'could not read the event', UTC_TIMES);
+  const seriesId = e.type === 'seriesMaster' ? id : e.seriesMasterId;
+  if (!seriesId) return null;
+  const allDay = e.isAllDay === true;
+  // Asked for in UTC, an all-day event's midnight can come back as the evening before: its date, as Google gives it.
+  const at = (v?: string) => (!v ? '' : allDay ? graphAllDayDate(v.endsWith('Z') ? v : `${v}Z`, e.originalStartTimeZone) : v.endsWith('Z') ? v : `${v}Z`);
+  return { seriesId, occurrence: { start: at(e.start?.dateTime), end: at(e.end?.dateTime), allDay } };
 }
 
 /**
@@ -242,7 +250,8 @@ async function seriesOf(userId: string, provider: CalendarProvider, id: string, 
  */
 async function writeSeries(userId: string, provider: CalendarProvider, input: CalendarWrite, id: string, target: CalendarTarget): Promise<{ id: string }> {
   const series = await seriesOf(userId, provider, id, target.calendarId);
-  if (!series) return writeCalendarEvent(userId, provider, input, id, { ...target, scope: 'this' });
+  // Not a series (yet): the event itself, a repeat rule included.
+  if (!series) return writeOne(userId, provider, input, id, target);
   if (series.occurrence.allDay !== input.allDay) throw new CalendarInputError('A whole series cannot change between all-day and timed here. Change this event only, or edit the series in the provider\'s own calendar.');
   const zone = input.timeZone ?? 'UTC';
   const dayOf = (value: string, allDay: boolean) => (allDay ? value.slice(0, 10) : zoned(value, zone).date);
@@ -253,6 +262,27 @@ async function writeSeries(userId: string, provider: CalendarProvider, input: Ca
     userId, provider, `${eventUrl(provider, series.seriesId, target.calendarId)}${provider === 'google' ? '?fields=start,end,attendees,recurrence' : '?$select=start,end,attendees,recurrence'}`, 'could not read the series');
   const body = calendarWriteBody(provider, { ...input, recurrence: undefined }, input.attendees ? (master.attendees ?? []) : undefined);
   delete body.start; delete body.end;
+  // All-day: the first day stays (checked above), so only the length can change; the series' last day moves by as many days.
+  const days = input.allDay ? Math.round((Date.parse(input.end) - Date.parse(series.occurrence.end.slice(0, 10))) / 86_400_000) : 0;
+  if (!Number.isFinite(days)) throw new Error('The calendar provider gave the occurrence no end date.');
+  if (days) {
+    if (provider === 'google') {
+      const first = master.start?.date, last = master.end?.date;
+      if (!first || !last) throw new Error('The calendar provider gave the all-day series no dates.');
+      const end = new Date(Date.parse(last) + days * 86_400_000).toISOString().slice(0, 10);
+      if (end <= first) throw new CalendarInputError('Every event of the series would end before it starts: change this event only.');
+      body.start = { date: first, dateTime: null, timeZone: null };
+      body.end = { date: end, dateTime: null, timeZone: null };
+    } else {
+      // Graph keeps an all-day series as midnights in its own zone: the wall time moves by whole days.
+      const first = master.start?.dateTime, last = master.end?.dateTime;
+      if (!first || !last || !Number.isFinite(Date.parse(`${shiftWallTime(last, 0)}Z`))) throw new Error('The calendar provider gave the all-day series no dates.');
+      const end = shiftWallTime(last, days * 86_400_000);
+      if (end <= shiftWallTime(first, 0)) throw new CalendarInputError('Every event of the series would end before it starts: change this event only.');
+      body.start = { dateTime: first, timeZone: master.start?.timeZone ?? 'UTC' };
+      body.end = { dateTime: end, timeZone: master.end?.timeZone ?? 'UTC' };
+    }
+  }
   const startDelta = input.allDay ? 0 : Date.parse(input.start) - Date.parse(series.occurrence.start);
   const endDelta = input.allDay ? 0 : Date.parse(input.end) - Date.parse(series.occurrence.end);
   if (startDelta || endDelta) {

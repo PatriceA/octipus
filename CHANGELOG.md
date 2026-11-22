@@ -40,9 +40,27 @@ labels reflect blast radius, not contract guarantees.
     offered interactive answers (`used`, `kinds`, `refused`, `setting`).
   - `eval/inline-ui.yaml` gains ten unprompted positives and four view
     negatives (live-model suite; not yet run).
+- **Fix:** the calendar list kept for two minutes is dropped when an account
+  is connected, disconnected or made the default, so events and edits no
+  longer use the new default's token on the old default's calendars.
+- **Fix:** "All events" of an all-day series now applies a changed last day to
+  every occurrence (Google and Microsoft) instead of answering success and
+  dropping it; a Microsoft all-day occurrence is no longer refused as moved to
+  another day in zones ahead of UTC.
+- **Fix:** an existing event that does not repeat can be given a repeat rule
+  (`PATCH /api/calendar/events/:id` with `recurrence`).
+- **Fix:** listing accounts, "Make default" and disconnecting no longer write
+  back a refresh token and expiry superseded by a refresh made a moment
+  earlier.
 - **Fix:** routes declaring a `format: 'uuid'` field (email unsnooze and
   dismiss, note proposals filtered by note) refused every request with 422:
   the format was never registered with the validator.
+- **Fix:** files uploaded for a mail and never sent are now dropped from
+  server memory once their hour is up (a periodic sweep), not only when the
+  same user uploads or sends again.
+- **Fix:** a snooze that moves only some messages of a conversation marks only
+  those as handled; the ones left in the inbox stay in the heartbeat's inbox
+  watch.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).

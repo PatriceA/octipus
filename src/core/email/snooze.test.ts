@@ -237,7 +237,9 @@ describe('nothing is lost when a move fails part way', () => {
     const err = await snooze('u1', 'microsoft', request(['m1', 'm2', 'm3']), store, now).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SnoozePartialError);
     expect((err as Error).message).toMatch(/2 of 3 messages were snoozed/);
-    expect((err as { snoozed: { messageIds: string[] } }).snoozed.messageIds).toEqual(['m1-moved', 'm3-moved']);
+    expect((err as InstanceType<typeof SnoozePartialError>).snoozed.messageIds).toEqual(['m1-moved', 'm3-moved']);
+    // The ids as asked of what moved: the route marks only those as dealt with.
+    expect((err as InstanceType<typeof SnoozePartialError>).snoozedIds).toEqual(['m1', 'm3']);
     expect(store.rows[0].messageIds).toEqual(['m1-moved', 'm3-moved']);
     // Nothing moved at all: no row, the error as it was.
     failing = [{ match: '/move', status: 503, times: 5 }];

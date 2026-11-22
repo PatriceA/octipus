@@ -701,7 +701,8 @@ test('rooms list unread badges; an editor creates a private room; space memory',
   await alice.getByLabel('private — only the members I pick').check();
   await alice.getByLabel(/^ben/).check();
   await alice.getByRole('button', { name: 'create room' }).click();
-  expect(relay.created).toEqual([{ title: 'Launch plan', visibility: 'private', memberIds: [BEN.id] }]);
+  // The click only dispatches the submit: the POST reaches the relay later.
+  await expect.poll(() => relay.created).toEqual([{ title: 'Launch plan', visibility: 'private', memberIds: [BEN.id] }]);
   await expect(alice.getByTestId('room-title')).toHaveText('Launch plan');
   await expect(alice.getByTestId('room-link').filter({ hasText: 'Launch plan' })).toHaveAttribute('aria-current', 'page');
 

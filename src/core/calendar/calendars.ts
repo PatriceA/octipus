@@ -9,7 +9,7 @@
  * cannot be opened is reported as unreadable, never as empty.
  */
 import { userRepository } from '@/db/repositories/user-repository';
-import { getOAuthManager } from '@/security/oauth';
+import { getOAuthManager, onAccountsChanged } from '@/security/oauth';
 import { calendarKey, type CalendarInfo, type CalendarPreferences, type CalendarProvider } from '@/shared/calendar';
 import { coreLogger } from '@/utils/logger';
 import { type CalendarDeps, type CalendarSource, defaultCalendarDeps } from './events';
@@ -190,15 +190,34 @@ export interface CalendarView {
 /** The list changes rarely and every page of events needs it: kept briefly per user. */
 const CACHE_MS = 2 * 60_000;
 const calendarCache = new Map<string, { at: number; value: CalendarsResult }>();
+/**
+ * A kept list is the accounts' as they were: once an account is connected,
+ * disconnected or made the default, the user's list goes (otherwise a new
+ * default's token would be used on the old default's calendar ids), and a
+ * list read while that happened is not kept. Subscribed on the first read.
+ */
+const accountChanges = new Map<string, number>();
+let subscribed = false;
+function followAccountChanges(): void {
+  if (subscribed) return;
+  subscribed = true;
+  onAccountsChanged((userId) => {
+    calendarCache.delete(userId);
+    accountChanges.set(userId, (accountChanges.get(userId) ?? 0) + 1);
+    if (accountChanges.size > 5000) accountChanges.clear();
+  });
+}
 
 /** The reader's calendars with their visibility. `fresh` asks the providers again. */
 export async function calendarView(userId: string, options: { fresh?: boolean; deps?: CalendarDeps } = {}): Promise<CalendarView> {
+  if (!options.deps) followAccountChanges();
   const cached = calendarCache.get(userId);
   let listed = !options.fresh && !options.deps && cached && Date.now() - cached.at < CACHE_MS ? cached.value : null;
   if (!listed) {
+    const changes = accountChanges.get(userId);
     listed = await listCalendars(userId, options.deps);
     // A failed list is not kept: the next read tries again.
-    if (!options.deps && !listed.partial) calendarCache.set(userId, { at: Date.now(), value: listed });
+    if (!options.deps && !listed.partial && accountChanges.get(userId) === changes) calendarCache.set(userId, { at: Date.now(), value: listed });
     if (calendarCache.size > 5000) calendarCache.clear();
   }
   const preferences = await getCalendarPreferences(userId);

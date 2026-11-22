@@ -7,10 +7,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: vi.fn(async () => null), update: vi.fn() } }));
-vi.mock('@/security/oauth', () => ({ getOAuthManager: () => ({ getValidToken: async () => null }) }));
+/** Google accounts as the OAuth manager has them; `changed` is what it tells listeners of account changes. */
+const oauth = vi.hoisted(() => ({ accounts: [] as string[], listeners: new Set<(userId: string, provider: string) => void>() }));
+vi.mock('@/security/oauth', () => ({
+  getOAuthManager: () => ({
+    getValidToken: async (_u: string, provider: string, account?: string) => (provider === 'google' && oauth.accounts.length && (!account || oauth.accounts.includes(account)) ? `token:${account ?? oauth.accounts[0]}` : null),
+    listAccounts: async (_u: string, provider: string) => (provider === 'google' ? oauth.accounts.map((account, i) => ({ provider, account, isDefault: i === 0 })) : []),
+  }),
+  onAccountsChanged: (listener: (userId: string, provider: string) => void) => { oauth.listeners.add(listener); return () => oauth.listeners.delete(listener); },
+}));
 
 import { calendarKey } from '@/shared/calendar';
-import { applyVisibility, listCalendars, validateCalendarPreferences } from './calendars';
+import { applyVisibility, calendarView, listCalendars, validateCalendarPreferences } from './calendars';
 import { type CalendarDeps, listCalendarEvents } from './events';
 
 const list = (id: string, name: string, primary = false) => ({ items: [{ id, summary: name, primary, accessRole: 'owner', selected: true }] });
@@ -71,5 +79,34 @@ describe('several accounts of one provider', () => {
       ['token:home:primary-home', undefined],
       ['token:me@work.example:primary-work', 'me@work.example'],
     ]));
+  });
+});
+
+describe('the kept calendar list', () => {
+  it('is dropped when the user\'s connected accounts change, so a new default\'s calendars are listed as its own', async () => {
+    // Each account's token answers with that account's own primary calendar.
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const token = String(new Headers(init?.headers).get('authorization')).replace('Bearer token:', '');
+      return new Response(JSON.stringify(list(`primary-${token}`, token, true)));
+    }));
+    try {
+      oauth.accounts = ['me@home.example', 'me@work.example'];
+      const names = async () => (await calendarView('carol')).calendars.map((c) => [c.id, c.account]);
+      expect(await names()).toEqual([['primary-me@home.example', undefined], ['primary-me@work.example', 'me@work.example']]);
+      // "Make default" on work: until the kept list goes, home's calendar would be read with work's token.
+      oauth.accounts = ['me@work.example', 'me@home.example'];
+      for (const listener of oauth.listeners) listener('carol', 'google');
+      expect(await names()).toEqual([['primary-me@work.example', undefined], ['primary-me@home.example', 'me@home.example']]);
+      // A third account connected: its calendar appears at once.
+      oauth.accounts = ['me@work.example', 'me@home.example', 'me@club.example'];
+      for (const listener of oauth.listeners) listener('carol', 'google');
+      expect((await names()).map(([id]) => id)).toContain('primary-me@club.example');
+      // Another user's change leaves this user's kept list alone.
+      oauth.accounts = [];
+      for (const listener of oauth.listeners) listener('dave', 'google');
+      expect(await names()).toHaveLength(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

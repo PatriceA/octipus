@@ -28,19 +28,24 @@ vi.mock('@/core/email/providers', () => ({
   gmailBatch: async () => { throw new Error('no batch in this test'); },
   graphBytes: async () => new Uint8Array(),
 }));
+const handled: string[] = [];
 vi.mock('@/core/email/watch', async (original) => ({
   ...(await original<typeof import('@/core/email/watch')>()),
-  markEmailHandled: async () => {},
+  markEmailHandled: async ({ messageId }: { messageId: string }) => { handled.push(messageId); },
 }));
 const snoozed: unknown[] = [];
 vi.mock('@/core/email/snooze', async (original) => {
   const real = await original<typeof import('@/core/email/snooze')>();
   return {
     ...real,
-    snooze: async (userId: string, provider: string, request: { wakeAt: string }) => {
+    snooze: async (userId: string, provider: string, request: { wakeAt: string; ids: string[] }) => {
       real.checkWakeAt(request.wakeAt);
       snoozed.push({ userId, provider, ...request });
-      return { id: 's1' };
+      const view: import('@/core/email/snooze').SnoozeView = { id: 's1', provider: 'google', messageIds: [], from: { email: 'boss@x.com' }, subject: 'Budget', snippet: '', wakeAt: request.wakeAt };
+      // Ids starting "stuck" could not be moved: they stay in the inbox.
+      const stuck = request.ids.filter((id) => id.startsWith('stuck'));
+      if (stuck.length) throw new real.SnoozePartialError('Some stayed.', view, request.ids.filter((id) => !stuck.includes(id)));
+      return view;
     },
     listSnoozed: async () => [{ id: 's1', subject: 'Budget' }],
   };
@@ -69,7 +74,7 @@ const sentMime = () => {
   return send ? Buffer.from((send.body as { raw: string }).raw, 'base64url').toString('utf8') : '';
 };
 
-beforeEach(() => { calls.length = 0; snoozed.length = 0; });
+beforeEach(() => { calls.length = 0; snoozed.length = 0; handled.length = 0; });
 
 describe('uploads and the send that names them', () => {
   test('a held upload and a forwarded file go out with a formatted body', async () => {
@@ -160,5 +165,16 @@ describe('snooze routes', () => {
     expect((await json(app, 'POST', '/api/email/snooze', { ...body, wakeAt: 'soon' })).status).toBe(400);
     const list = await app.handle(new Request('http://localhost/api/email/snoozed'));
     expect(await list.json()).toEqual({ snoozed: [{ id: 's1', subject: 'Budget' }] });
+  });
+
+  test('a partial snooze marks only the snoozed messages handled; the ones left in the inbox stay watched', async () => {
+    const app = await buildApp();
+    const wakeAt = new Date(Date.now() + 3600_000).toISOString();
+    const body = { ids: ['m1', 'stuck1', 'm2', 'stuck2', 'm3'], wakeAt, from: { email: 'boss@x.com' }, subject: 'Budget', snippet: 'Please' };
+    const res = await json(app, 'POST', '/api/email/snooze', body);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ snoozed: { id: 's1' }, warning: 'Some stayed.' });
+    await vi.waitFor(() => expect(handled).toHaveLength(3));
+    expect(handled).toEqual(['m1', 'm2', 'm3']);
   });
 });

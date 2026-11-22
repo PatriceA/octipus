@@ -221,6 +221,32 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
   }
 }
 
+// --- Account changes ---
+
+type AccountsListener = (userId: string, provider: string) => void;
+const accountsListeners = new Set<AccountsListener>();
+
+/**
+ * Be told when a user's connected accounts of a provider change: one is
+ * connected or reconnected, the default changes, or one is disconnected
+ * (by the user, or because its refresh was refused). What keeps a copy of
+ * the accounts' data (the calendar list) drops it here. Returns the unsubscribe.
+ */
+export function onAccountsChanged(listener: AccountsListener): () => void {
+  accountsListeners.add(listener);
+  return () => { accountsListeners.delete(listener); };
+}
+
+function accountsChanged(userId: string, provider: string): void {
+  for (const listener of accountsListeners) {
+    try {
+      listener(userId, provider);
+    } catch (err) {
+      securityLogger.error({ userId, provider, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'OAuth: a listener for account changes failed');
+    }
+  }
+}
+
 // --- OAuth Manager ---
 
 export class OAuthManager {
@@ -436,6 +462,7 @@ export class OAuthManager {
       // Deactivate the stored credential since refresh failed
       const v = getVault();
       await v.delete(userId, credentialId);
+      accountsChanged(userId, provider);
       throw new Error(`Token refresh failed for ${provider}. Please reconnect.`);
     }
 
@@ -445,26 +472,17 @@ export class OAuthManager {
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : undefined;
 
-    // Update stored tokens
-    const v = getVault();
-    const metadata: Record<string, unknown> = {
-      oauthConfig: {
-        // Which account this is, and whether it is the default, stay as they were.
-        ...(previous?.account ? { account: previous.account } : {}),
-        ...(typeof previous?.isDefault === 'boolean' ? { isDefault: previous.isDefault } : {}),
-        provider,
-        // A refresh response may leave `scope` out: the grant is then what it
-        // was, not whatever the provider config asks for today.
-        scopes: grantedScopes(tokens, previous?.scopes?.length ? previous.scopes : providerConfig.scopes),
-        refreshToken: tokens.refresh_token || refreshToken, // Some providers rotate refresh tokens
-        expiresAt,
-      },
-    };
-
-    await v.update(userId, credentialId, {
-      value: tokens.access_token,
-      metadata,
-    });
+    // Update stored tokens. Which account this is, and whether it is the
+    // default, stay as they are stored now (read again: the default may have
+    // changed while the provider answered).
+    await this.updateOAuthConfig(userId, credentialId, {
+      provider,
+      // A refresh response may leave `scope` out: the grant is then what it
+      // was, not whatever the provider config asks for today.
+      scopes: grantedScopes(tokens, previous?.scopes?.length ? previous.scopes : providerConfig.scopes),
+      refreshToken: tokens.refresh_token || refreshToken, // Some providers rotate refresh tokens
+      expiresAt,
+    }, tokens.access_token);
 
     securityLogger.info({ userId, provider }, 'OAuth token refreshed');
     return tokens.access_token;
@@ -538,6 +556,32 @@ export class OAuthManager {
         metadata,
       });
     }
+    accountsChanged(userId, provider);
+  }
+
+  /**
+   * Merge `change` onto an entry's oauthConfig as it is stored right now, and
+   * write it (with a new access token when given). Never from an entry read
+   * earlier: reading an address or a default can refresh the token, and a
+   * snapshot from before that would put the superseded refresh token back.
+   * Returns the written config; null when the entry has none (it is left alone).
+   */
+  private async updateOAuthConfig(
+    userId: string,
+    entryId: string,
+    change: Partial<NonNullable<NonNullable<VaultEntry['metadata']>['oauthConfig']>>,
+    accessToken?: string
+  ): Promise<NonNullable<NonNullable<VaultEntry['metadata']>['oauthConfig']> | null> {
+    const [row] = await getDb().select({ metadata: vault.metadata }).from(vault)
+      .where(and(eq(vault.id, entryId), eq(vault.userId, userId))).limit(1);
+    const current = row?.metadata?.oauthConfig;
+    if (!current && !change.provider) return null;
+    const oauthConfig = { ...current, ...change } as NonNullable<NonNullable<VaultEntry['metadata']>['oauthConfig']>;
+    await getVault().update(userId, entryId, {
+      ...(accessToken !== undefined ? { value: accessToken } : {}),
+      metadata: { ...row?.metadata, oauthConfig },
+    });
+    return oauthConfig;
   }
 
   /**
@@ -556,8 +600,12 @@ export class OAuthManager {
         if (found && !known.has(found)) {
           account = found;
           known.add(found);
-          const current = entry.metadata?.oauthConfig;
-          if (current) await getVault().update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...current, account: found } } }).catch(() => null);
+          // Onto the entry as stored now: the token read above may have been refreshed.
+          const written = await this.updateOAuthConfig(userId, entry.id, { account: found }).catch((err: unknown) => {
+            securityLogger.warn({ userId, provider, err: String((err as Error)?.message ?? err).slice(0, 120) }, 'OAuth: account address not stored; it is asked again next time');
+            return null;
+          });
+          if (written) { out.push({ provider, account, isDefault: index === 0, scopes: written.scopes, expiresAt: written.expiresAt }); continue; }
         }
       }
       const config = entry.metadata?.oauthConfig;
@@ -605,10 +653,13 @@ export class OAuthManager {
     if (entries[0]?.id === target.id) return;
     // Move the data first: if that fails, the default stays as it was.
     await this.moveDefaultData(userId, provider, entries[0] ? await this.addressOf(userId, provider, entries[0]) : undefined, await this.addressOf(userId, provider, target));
-    for (const entry of entries) {
-      const config = entry.metadata?.oauthConfig;
-      if (!config) continue;
-      await getVault().update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...config, isDefault: entry.id === target.id } } });
+    try {
+      // Only the mark changes, on each entry as stored now: asking an address above may have refreshed its token.
+      for (const entry of entries) {
+        if (entry.metadata?.oauthConfig) await this.updateOAuthConfig(userId, entry.id, { isDefault: entry.id === target.id });
+      }
+    } finally {
+      accountsChanged(userId, provider);
     }
     securityLogger.info({ userId, provider }, 'OAuth default account changed');
     // The index held the previous default's headers.
@@ -629,30 +680,35 @@ export class OAuthManager {
     const successor = entries[0] && doomed.includes(entries[0]) ? entries.find((e) => !doomed.includes(e)) : undefined;
     if (successor) await this.moveDefaultData(userId, provider, await this.addressOf(userId, provider, entries[0]), await this.addressOf(userId, provider, successor));
 
-    for (const entry of doomed) {
-      // Try to revoke the token with the provider
-      try {
-        const accessToken = await v.get(userId, entry.id);
-        if (accessToken && provider === 'google') {
-          await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
-            method: 'POST',
-          });
+    try {
+      for (const entry of doomed) {
+        // Try to revoke the token with the provider
+        try {
+          const accessToken = await v.get(userId, entry.id);
+          if (accessToken && provider === 'google') {
+            await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
+              method: 'POST',
+            });
+          }
+          // Microsoft doesn't have a simple revoke endpoint
+        } catch (err) {
+          // Best effort: the local token is deleted either way, but a token the provider still honours is worth knowing about.
+          securityLogger.warn({ userId, provider, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'OAuth: could not revoke the token with the provider; deleting it locally');
         }
-        // Microsoft doesn't have a simple revoke endpoint
-      } catch {
-        // Best effort — continue with local deletion
-      }
 
-      await v.delete(userId, entry.id);
-    }
-    // The default went: the account connected next becomes it, said explicitly.
-    const rest = entries.filter((e) => !doomed.includes(e));
-    if (entries[0] && doomed.includes(entries[0]) && rest.length > 0) {
-      const next = rest[0];
-      for (const entry of rest) {
-        const config = entry.metadata?.oauthConfig;
-        if (config) await v.update(userId, entry.id, { metadata: { ...entry.metadata, oauthConfig: { ...config, isDefault: entry.id === next.id } } });
+        await v.delete(userId, entry.id);
       }
+      // The default went: the account connected next becomes it, said explicitly.
+      const rest = entries.filter((e) => !doomed.includes(e));
+      if (entries[0] && doomed.includes(entries[0]) && rest.length > 0) {
+        const next = rest[0];
+        // Only the mark changes, on each entry as stored now: asking the successor's address above may have refreshed its token.
+        for (const entry of rest) {
+          if (entry.metadata?.oauthConfig) await this.updateOAuthConfig(userId, entry.id, { isDefault: entry.id === next.id });
+        }
+      }
+    } finally {
+      if (doomed.length) accountsChanged(userId, provider);
     }
     if (doomed.length) securityLogger.info({ userId, provider, accounts: doomed.length }, 'OAuth token revoked');
     // The local mail index holds the default account's headers: gone, or now another account's default, it goes too.

@@ -21,14 +21,29 @@ export const UPLOAD_TTL_MS = 60 * 60_000;
 export const USER_MAX_BYTES = 2 * MAX_ATTACHMENT_BYTES;
 export const USER_MAX_FILES = 40;
 
+/** How often files nobody came back for are dropped (see sweepUploads). */
+const SWEEP_INTERVAL_MS = 5 * 60_000;
+
 interface Held extends OutgoingFile { at: number }
 const held = new Map<string, Map<string, Held>>();
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
-function mine(userId: string, now = Date.now()): Map<string, Held> {
-  let files = held.get(userId);
-  if (!files) { files = new Map(); held.set(userId, files); }
+/** The user's files still within their hour, or undefined when none are; drops the expired ones and an emptied map. */
+function mine(userId: string, now = Date.now()): Map<string, Held> | undefined {
+  const files = held.get(userId);
+  if (!files) return undefined;
   for (const [id, file] of files) if (now - file.at > UPLOAD_TTL_MS) files.delete(id);
+  if (files.size === 0) { held.delete(userId); return undefined; }
   return files;
+}
+
+/**
+ * Drop every user's expired files, and the users left with none, so a file
+ * whose writer never came back does not stay in memory until a restart. Run
+ * on an unref'd interval started by the first upload.
+ */
+export function sweepUploads(now = Date.now()): void {
+  for (const userId of [...held.keys()]) mine(userId, now);
 }
 
 export interface UploadView { id: string; name: string; size: number; contentType: string }
@@ -37,13 +52,18 @@ export interface UploadView { id: string; name: string; size: number; contentTyp
 export function holdUpload(userId: string, input: { name: string; contentType?: string; content: Uint8Array }, now = Date.now()): UploadView {
   if (input.content.byteLength === 0) throw new EmailInputError('The file is empty.');
   if (input.content.byteLength > MAX_ATTACHMENT_BYTES) throw new EmailInputError(`A file may be at most ${MAX_ATTACHMENT_BYTES / 1048576} MB.`);
-  const files = mine(userId, now);
+  const files = mine(userId, now) ?? new Map<string, Held>();
   if (files.size >= USER_MAX_FILES) throw new EmailInputError('Too many files are waiting to be sent. Send or remove some first.');
   const total = [...files.values()].reduce((sum, f) => sum + f.content.byteLength, 0);
   if (total + input.content.byteLength > USER_MAX_BYTES) throw new EmailInputError('Too much is waiting to be sent. Send or remove some files first.');
   const id = randomUUID();
   const file: Held = { name: safeFileName(input.name), contentType: safeContentType(input.contentType), content: input.content, at: now };
   files.set(id, file);
+  held.set(userId, files);
+  if (!sweepTimer) {
+    sweepTimer = setInterval(() => sweepUploads(), SWEEP_INTERVAL_MS);
+    sweepTimer.unref();
+  }
   return { id, name: file.name, size: file.content.byteLength, contentType: file.contentType };
 }
 
@@ -51,7 +71,7 @@ export function holdUpload(userId: string, input: { name: string; contentType?: 
 export function heldUploads(userId: string, ids: string[]): OutgoingFile[] {
   const files = mine(userId);
   return ids.map((id) => {
-    const file = files.get(id);
+    const file = files?.get(id);
     if (!file) throw new EmailInputError('An attachment is no longer waiting on the server. Remove it and add it again.');
     return { name: file.name, contentType: file.contentType, content: file.content };
   });
@@ -68,6 +88,13 @@ export function dropUploads(userId: string, ids: string[]): void {
 /** For tests. */
 export function clearUploads(): void {
   held.clear();
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+}
+
+/** For tests: the users holding files. */
+export function uploadHolders(): number {
+  return held.size;
 }
 
 /** What a send names as an attachment: a held upload, or a file of a message in the mailbox (a forward). */
