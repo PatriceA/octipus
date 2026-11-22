@@ -185,6 +185,32 @@ Pipeline step fields for QA retry:
 | `maxRetries` | number | Maximum retry attempts before escalation (default: 3) |
 | `retryTargetStage` | string | Which stage to retry on failure (typically the preceding implementation stage) |
 
+**The verdict contract.** A QA stage must end its reply with a fenced `json`
+block: `passed`, `confidence`, `issues`, `feedback` (naming each stage it
+audited) and `whatIDidNotCheck`, plus `criteria` when the item has acceptance
+criteria. The requirement is stated before the stage prompt and specified
+after it, and it goes after the handoff block when the stage hands off. The
+parser accepts harmless variation: a `JSON`/`jsonc`/untagged fence, prose
+after the block, or an unfenced object on its own lines. It does not fill in
+missing fields.
+
+Three different answers from the audit gate, three different costs:
+
+| What the gate saw | What runs next | Budget it uses |
+|---|---|---|
+| A real FAIL (or a pass reporting an unmet criterion) | The implementer, with the QA feedback | `maxRetries` (the `qa_fail` edge) |
+| A pass that never names a stage in scope, or skips a stage that handed off with low confidence | The auditor alone, a full re-audit | `maxRetries` (the `audit_gate_failed` edge) |
+| No readable verdict block, or a covered pass missing a required field | **Verdict repair**: the same auditor gets its own report back and is asked for the block only. No commands are run and no edge is taken | Its own bound, 2 per audit round (`VERDICT_REPAIR_LIMIT`) |
+
+A repaired block goes through the same gate as a first answer. When the
+repairs run out, the pipeline stops as failed at that stage
+(`audit_gate_failed`). It is never passed, and a verdict is never read out of
+prose the gate refused. Each repair visit is in the run log as a `spawn` whose
+`startReason` starts with `verdict_repair n/2`. Each miss is an
+`audit_coverage` evidence row with `detail.fault: "report"` (and
+`detail.repairAttempt` on rows written by a repair), which
+`scripts/run-health.ts` reports apart from the rubber-stamp rate.
+
 **Acceptance criteria per plan item.** The planning stage can give each plan
 item an `acceptance` list (`plan__add_items`), which is one checkable statement
 per entry. The implementer sees the list with the item. The QA stage has to

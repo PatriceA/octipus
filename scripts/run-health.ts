@@ -132,20 +132,57 @@ export function rubberStampRate(total: number, rejected: number): number {
 interface AuditTally {
   total: number;
   rejected: number;
+  /** Formatting misses sent to a verdict repair — not verdicts, not counted above. */
+  repairs: number;
+}
+
+/** One `audit_coverage` row, reduced to what the tally reads. */
+export interface AuditRow {
+  passed: boolean;
+  /** `detail.fault`: `report` (repairable block fault), `coverage`, or absent. */
+  fault: string | null;
+  /** `detail.source`: `unparseable` for a reply with no readable verdict. */
+  source: string | null;
+}
+
+/**
+ * Fold audit rows into the rubber-stamp tally.
+ *
+ * A REPORT fault is a verdict block that was missing or incomplete, and the
+ * pipeline re-asks the auditor for it (`VERDICT_REPAIR_LIMIT`); the repaired
+ * verdict then writes its own row. Counting the miss as a rejected pass would
+ * charge one formatting slip twice — once as a "rubber stamp" it never was,
+ * once more as the verdict that followed — which is how the 2026-08 reading of
+ * 60% came to be mostly "forgot the json block". So report faults are tallied
+ * apart. An unparseable row from before `fault` existed is the same miss and
+ * is set aside too; an older thin-verdict row has no tag and still counts as
+ * it always did.
+ */
+export function tallyAudits(audits: AuditRow[]): AuditTally {
+  let total = 0;
+  let rejected = 0;
+  let repairs = 0;
+  for (const a of audits) {
+    if (a.fault === 'report' || a.source === 'unparseable') {
+      repairs++;
+      continue;
+    }
+    total++;
+    if (!a.passed) rejected++;
+  }
+  return { total, rejected, repairs };
 }
 
 /** Audit-coverage verdicts in the window. Only PASSING verdicts are gated, so
- *  every row here is a verdict that claimed success. */
+ *  every counted row is a verdict that claimed success. */
 async function loadAuditTally(days: number): Promise<AuditTally> {
   const res = await getDb().execute(sql`
-    SELECT COUNT(*)::int                                   AS total,
-           COUNT(*) FILTER (WHERE passed = false)::int      AS rejected
+    SELECT passed, detail->>'fault' AS fault, detail->>'source' AS source
       FROM verification_evidence
      WHERE kind = 'audit_coverage'
        AND created_at > now() - (${days}::text || ' days')::interval
   `);
-  const [row] = rows<AuditTally>(res);
-  return { total: row?.total ?? 0, rejected: row?.rejected ?? 0 };
+  return tallyAudits(rows<AuditRow>(res));
 }
 
 async function main(): Promise<number> {
@@ -172,6 +209,9 @@ async function main(): Promise<number> {
       console.log(`  rejected      ${audits.rejected} (${(rate * 100).toFixed(0)}%)`);
     } else {
       console.log(`\nRubber-stamp rate — no audit-coverage verdicts recorded in the last ${days} days.`);
+    }
+    if (audits.repairs > 0) {
+      console.log(`  verdict repairs ${audits.repairs} (missing or incomplete verdict blocks — not counted as rejections)`);
     }
 
     const runs = await loadRuns(days);

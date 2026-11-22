@@ -321,6 +321,55 @@ describe('PipelineManager.gateQaVerdict', () => {
     spy.mockRestore();
   });
 
+  // Which rejections a verdict repair may fix. Getting this wrong in either
+  // direction is costly: a coverage fault sent to repair can only re-word, and
+  // a missing field sent to a full re-audit pays for the audit twice.
+  test('a covered pass missing only a required field is a REPORT fault', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(
+      verdictBlock({ passed: true, issues: [], feedback: 'Implementation and Testing are both fine.', confidence: 'high' }),
+    );
+    expect(result).toMatchObject({ passed: false, auditGateFailed: true, auditGateReason: 'report' });
+    expect(auditRows()[0].detail).toMatchObject({ fault: 'report' });
+    spy.mockRestore();
+  });
+
+  test('an uncovered stage makes it a COVERAGE fault, even with fields missing too', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(verdictBlock({ passed: true, issues: [], feedback: 'Implementation is fine.' }));
+    expect(result).toMatchObject({ auditGateFailed: true, auditGateReason: 'coverage' });
+    // Every reason still reaches the re-audit at once.
+    expect(result?.issues.join(' ')).toContain('Testing');
+    expect(result?.issues.join(' ')).toContain('did NOT check');
+    expect(auditRows()[0].detail).toMatchObject({ fault: 'coverage' });
+    spy.mockRestore();
+  });
+
+  test('an unreadable verdict is tagged a report fault, and a repair attempt is recorded', async () => {
+    const { auditRows, spy } = setup();
+    const result = await (new PipelineManager() as unknown as {
+      gateQaVerdict: (o: string, s: typeof SCOPE, e: typeof evidence & { repairAttempt?: number }) => Promise<QAValidationResult | null>;
+    }).gateQaVerdict('Prose only.', SCOPE, { ...evidence, repairAttempt: 2 });
+    expect(result).toMatchObject({ auditGateReason: 'unparseable' });
+    expect(auditRows()[0].detail).toMatchObject({ source: 'unparseable', fault: 'report', repairAttempt: 2 });
+    spy.mockRestore();
+  });
+
+  test('an accepted pass carries no fault', async () => {
+    const { auditRows, spy, call } = setup();
+    await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing both check out.',
+        confidence: 'high',
+        whatIDidNotCheck: ['the migration path'],
+      }),
+    );
+    expect((auditRows()[0].detail as Record<string, unknown>).fault).toBeUndefined();
+    spy.mockRestore();
+  });
+
   test('a ledger failure never breaks the run, and never masks the gate verdict', async () => {
     const spy = vi.spyOn(verificationEvidenceRepository, 'record').mockImplementation(async () => {
       throw new Error('db down');

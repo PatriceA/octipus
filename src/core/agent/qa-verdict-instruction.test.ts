@@ -2,10 +2,12 @@ import { describe, expect, test } from 'vitest';
 import { thinVerdictFailure } from './audit-coverage';
 import {
   aliasVerdict,
+  isVerdictRepair,
   PipelineManager,
   qaVerdictCorrectionInput,
   QA_VERDICT_JSON_INSTRUCTION,
   QA_VERDICT_JSON_LEAD,
+  VERDICT_REPAIR_LIMIT,
   withQaVerdictContract,
 } from './pipeline-manager';
 
@@ -266,5 +268,63 @@ describe('parseQAResult tier 1b — LAST fenced block wins', () => {
       '```',
     ].join('\n');
     expect(parse(out)?.passed).toBe(false);
+  });
+});
+
+// Harmless variation in HOW the block is written must not cost a verdict
+// repair; a block missing what the contract asks for must still be refused.
+describe('parseQAResult — tolerant of the wrapper, strict about the fields', () => {
+  const VERDICT = '{"passed": false, "confidence": "high", "issues": ["no test for 0"], "feedback": "Implementation: fails on 0.", "whatIDidNotCheck": ["perf"]}';
+  const parse = (out: string) => parseQA(out) as { passed: boolean; source?: string; issues: string[] } | null;
+
+  test.each(['JSON', 'jsonc', 'json5', 'js', ''])('a fence tagged %j is still the json tier', (tag) => {
+    const r = parse(`Report.\n\n\`\`\`${tag}\n${VERDICT}\n\`\`\``);
+    expect(r).toMatchObject({ passed: false, source: 'json', issues: ['no test for 0'] });
+  });
+
+  test('a one-line fence with the tag and the object together parses', () => {
+    expect(parse(`Report.\n\`\`\`json ${VERDICT}\`\`\``)?.source).toBe('json');
+  });
+
+  test('prose after the fenced block does not hide it', () => {
+    expect(parse(`Report.\n\`\`\`json\n${VERDICT}\n\`\`\`\n\nLet me know if you want more detail.`)?.source).toBe('json');
+  });
+
+  test('an unfenced object with prose around it is the json tier', () => {
+    const r = parse(`My report.\n\n${VERDICT}\n\nThat is my verdict — happy to elaborate.`);
+    expect(r).toMatchObject({ passed: false, source: 'json' });
+  });
+
+  test('a brace inside a string value does not cut the bare object short', () => {
+    const v = '{"passed": false, "issues": ["returns {} on empty"], "feedback": "Implementation: see }", "confidence": "low", "whatIDidNotCheck": ["x"]}';
+    expect(parse(`Report.\n${v}\nThanks.`)?.issues).toEqual(['returns {} on empty']);
+  });
+
+  test('a block under another tag is not read as the verdict', () => {
+    expect(parse(`\`\`\`handoff\n${VERDICT}\n\`\`\``)?.source).not.toBe('json');
+    expect(parse(`\`\`\`python\n${VERDICT}\n\`\`\``)?.source).not.toBe('json');
+  });
+
+  test('missing fields are not filled in — a pass without them stays thin', () => {
+    const r = parseQA('```JSON\n{"passed": true, "issues": [], "feedback": "Implementation: ok."}\n```') as never;
+    expect(thinVerdictFailure(r)).not.toBeNull();
+  });
+
+  test('the contract stays inert when echoed, even through the bare-object scan', () => {
+    expect(parseQA(`${QA_VERDICT_JSON_INSTRUCTION}\n\nTrailing prose.`)).toBeNull();
+  });
+});
+
+describe('isVerdictRepair', () => {
+  test('a missing or incomplete block is a repair; a coverage fault and a real failure are not', () => {
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'unparseable' })).toBe(true);
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'report' })).toBe(true);
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'coverage' })).toBe(false);
+    expect(isVerdictRepair({})).toBe(false);
+  });
+
+  test('its bound is its own and small', () => {
+    expect(VERDICT_REPAIR_LIMIT).toBeGreaterThan(0);
+    expect(VERDICT_REPAIR_LIMIT).toBeLessThanOrEqual(3);
   });
 });

@@ -124,6 +124,54 @@ function parseConfidence(text: string): QAValidationResult['confidence'] {
   return m ? (m[1].toLowerCase() as 'high' | 'medium' | 'low') : undefined;
 }
 
+/**
+ * Fence tags a verdict block may carry. The contract asks for `json`, and a
+ * model that writes `JSON`, `jsonc` or no tag at all has still answered in the
+ * asked shape — failing it for the label would spend a repair on nothing. Any
+ * other tag (`handoff`, `python`, a pasted shell log) is another block's.
+ */
+const VERDICT_FENCE_TAG = /^(?:json[c5]?|javascript|js)?$/i;
+
+/** Bodies of the fenced blocks that may hold a verdict, in reply order. */
+export function verdictFenceBodies(output: string): string[] {
+  const bodies: string[] = [];
+  for (const m of output.matchAll(/```[ \t]*([A-Za-z0-9_+-]*)[ \t]*\n?([\s\S]*?)\n?[ \t]*```/g)) {
+    if (VERDICT_FENCE_TAG.test(m[1])) bodies.push(m[2].trim());
+  }
+  return bodies;
+}
+
+/**
+ * Top-level JSON objects written OUTSIDE any fence, each starting on its own
+ * line, in reply order: a bare verdict object with prose before or after it.
+ * Brace matching skips string contents, so a `}` inside a value does not end
+ * the object early. Only the extraction is lenient — every candidate still
+ * has to parse and still has to carry the contract's fields.
+ */
+export function bareJsonObjects(output: string): string[] {
+  const text = output.replace(/```[\s\S]*?```/g, '');
+  const objects: string[] = [];
+  for (const start of text.matchAll(/^[ \t]*\{/gm)) {
+    let i = (start.index ?? 0) + start[0].length - 1;
+    const from = i;
+    let depth = 0;
+    let inString = false;
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (ch === '\\') i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) {
+        objects.push(text.slice(from, i + 1));
+        break;
+      }
+    }
+  }
+  return objects;
+}
+
 /** Field names a verdict block uses for each part of the contract, in priority order. */
 const VERDICT_KEYS = ['passed', 'verdict', 'status', 'result', 'outcome'];
 const ISSUE_KEYS = ['issues', 'blockers', 'problems', 'critical_issues', 'criticalIssues'];
@@ -276,6 +324,30 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
     QA_VERDICT_JSON_INSTRUCTION +
     qaCriteriaInstruction(acceptance)
   );
+}
+
+/**
+ * How many times one audit round may re-ask its auditor for the verdict block
+ * alone before the pipeline stops (`isVerdictRepair`).
+ *
+ * Separate from the stage's `maxRetries` on purpose: on 2026-08-07 an auditor
+ * omitted the block three times in a row and spent the whole retry budget on
+ * formatting before the substance was ever re-judged. A repair re-runs nothing
+ * — the prompt carries the auditor's own report and asks only for the block —
+ * so it costs a short turn, not an audit, and two is plenty: a model that
+ * cannot produce the block three times running is not going to on the fourth,
+ * and stopping loudly beats paying for a hope.
+ */
+export const VERDICT_REPAIR_LIMIT = 2;
+
+/**
+ * A gate rejection that a verdict repair can fix: no readable block at all, or
+ * a block missing a field the contract requires, with every stage in scope
+ * accounted for. A coverage rejection is NOT one — that auditor has to go and
+ * look again, which only a real re-audit does.
+ */
+export function isVerdictRepair(verdict: Pick<QAValidationResult, 'auditGateFailed' | 'auditGateReason'>): boolean {
+  return verdict.auditGateFailed === true && (verdict.auditGateReason === 'unparseable' || verdict.auditGateReason === 'report');
 }
 
 /** A stage's gate command, and the stage scope a plan or stage approval grants it in. */
@@ -436,7 +508,7 @@ QA VERDICT (required) — append your verdict now, as a fenced code block tagged
 
 Long gates (whole test suites, race tests, compose builds) need shell__run timeout of at least 1800000 ms; run them one after another, not in parallel; in a stage shorter limits are raised to that floor. A command killed by its own timeout is not an environment block. It may leave partial effects: inspect them before retrying with a larger timeout. Further commands require recovery review unless the user-approved run profile explicitly enables allowTimedOutCommands and covers that exact call. Size limits generously instead of retrying short ones. If a required gate cannot run because a toolchain, test database or Docker socket is unavailable, include the exact command and error in issues and say ENVIRONMENT BLOCKED. Do not classify an unavailable environment as a code defect or invent a pass. The pipeline pauses for repair.
 
-Emit the block exactly once, as the LAST thing in your reply.`;
+Emit the block exactly once, as the LAST thing in your reply (after the handoff block, when one is asked for). A pass/fail status line in your prose report does NOT replace the block.`;
 
 /**
  * The same contract, stated up front. Position is the fix: on the 2026-08-07
@@ -820,6 +892,8 @@ export type { PendingStageApproval } from '@/shared/pipeline-approval';
 export interface WalkState {
   qaAttempts?: Record<string, QaAttempt[]>;
   contractRetries?: Record<string, number>;
+  /** Verdict repairs spent in the current audit round, keyed like `contractRetries`. */
+  verdictRepairs?: Record<string, number>;
   contractFeedback?: string;
   cursor: string;
   previousOutput: string;
@@ -880,6 +954,7 @@ export function hydrateWalk(raw: unknown): WalkState | null {
   return {
     cursor: r.cursor,
     contractRetries: record<number>(r.contractRetries),
+    verdictRepairs: record<number>(r.verdictRepairs),
     contractFeedback: typeof r.contractFeedback === 'string' ? r.contractFeedback : undefined,
     previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
     handoffChain,
@@ -1305,6 +1380,8 @@ export class PipelineManager {
     /** Rejection notice for a QA node re-running because its report was unaccountable. */
     let pendingRejection: string | undefined;
     const contractRetries = new Map<string, number>();
+    /** Verdict repairs spent in the current audit round, per item and auditor (`VERDICT_REPAIR_LIMIT`). */
+    const verdictRepairs = new Map<string, number>();
     let contractFeedback: string | undefined;
     /** That node's rejected report, handed back to it so the retry is a correction. */
     let rejectedReport: string | undefined;
@@ -1336,7 +1413,8 @@ export class PipelineManager {
       for (const [k, v] of Object.entries(r.traversals)) {
         if (!deferred || graph.edges.some(edge => edgeId(edge) === k && bodyKeys.has(edge.from))) traversals.set(k, v);
       }
-      pendingFeedback.clear(); judgedContext.clear(); contractRetries.clear(); qaAttempts.clear();
+      pendingFeedback.clear(); judgedContext.clear(); contractRetries.clear(); qaAttempts.clear(); verdictRepairs.clear();
+      for (const [k, v] of Object.entries(r.verdictRepairs ?? {})) verdictRepairs.set(k, v);
       for (const [key, attempts] of Object.entries(r.qaAttempts ?? {})) if (Array.isArray(attempts)) qaAttempts.set(key, attempts);
       for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
@@ -1399,6 +1477,7 @@ export class PipelineManager {
       const snapshot: WalkState = {
         qaAttempts: Object.fromEntries(qaAttempts),
         contractRetries: Object.fromEntries(contractRetries),
+        verdictRepairs: Object.fromEntries(verdictRepairs),
         contractFeedback,
         cursor,
         previousOutput,
@@ -1827,7 +1906,7 @@ export class PipelineManager {
           reviewModels,
           attemptId,
           itemTitle: currentItem?.title ?? null,
-          startReason: contractFeedback ? `contract_retry: ${contractFeedback}` : correcting ? `verdict_correction: ${pendingRejection}` : feedback ? `qa_rework: ${feedback.feedback}` : isResumedAttempt ? 'resume' : graph.edges.some(edge => edge.condition === 'qa_fail' && (traversals.get(edgeId(edge)) ?? 0) > 0) ? 'qa_rework' : 'item_stage',
+          startReason: contractFeedback ? `contract_retry: ${contractFeedback}` : correcting ? `verdict_repair ${verdictRepairs.get(retryKey) ?? 0}/${VERDICT_REPAIR_LIMIT}: ${pendingRejection}` : feedback ? `qa_rework: ${feedback.feedback}` : isResumedAttempt ? 'resume' : graph.edges.some(edge => edge.condition === 'qa_fail' && (traversals.get(edgeId(edge)) ?? 0) > 0) ? 'qa_rework' : 'item_stage',
           itemId: currentItem?.id ?? null,
           checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
           partial,
@@ -1884,6 +1963,7 @@ export class PipelineManager {
             pipelineId: pipeline.id,
             stageName: node.name,
             checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
+            ...(correcting ? { repairAttempt: verdictRepairs.get(retryKey) ?? 0 } : {}),
           }, itemAcceptance);
           // A rejected REPORT says nothing about the work, so only a verdict
           // the gate let stand is an attempt worth remembering.
@@ -1892,24 +1972,50 @@ export class PipelineManager {
             ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot, context)));
             qaAttempts.set(cursor, ledger);
           }
+          if (qaResult && isVerdictRepair(qaResult)) {
+            // The audit happened; only its verdict block is missing or
+            // incomplete. Re-ask the same auditor for the block alone, given
+            // its own report (`qaVerdictCorrectionInput`), WITHOUT taking an
+            // edge: neither the implementer's `qa_fail` budget nor the
+            // auditor's `audit_gate_failed` re-audit budget pays for a
+            // formatting miss. Its own bound keeps it from looping.
+            const used = verdictRepairs.get(retryKey) ?? 0;
+            if (used < VERDICT_REPAIR_LIMIT) {
+              verdictRepairs.set(retryKey, used + 1);
+              pendingRejection = qaResult.feedback;
+              // The original report, not the growing pile — re-embedding each
+              // round's verdict block would enlarge the prompt every repair.
+              rejectedReport = reportUnderCorrection ?? verdictText;
+              coreLogger.warn(
+                { pipelineId: pipeline.id, stage: node.name, reason: qaResult.auditGateReason, repair: used + 1, limit: VERDICT_REPAIR_LIMIT },
+                'QA verdict needs repair — re-asking the auditor for the verdict block only',
+              );
+              continue;
+            }
+            // Repairs used up: the same typed stop an exhausted audit route
+            // has always been. Never a pass, and never a verdict read out of
+            // prose the gate already refused.
+            coreLogger.warn(
+              { pipelineId: pipeline.id, stage: node.name, reason: qaResult.auditGateReason, limit: VERDICT_REPAIR_LIMIT },
+              'QA verdict still unusable after every repair — stopping the pipeline',
+            );
+            verdictRepairs.delete(retryKey);
+            stoppedShort = { node: node.name, outcome: 'audit_gate_failed' };
+            break;
+          }
+          // A verdict the gate could read settles this audit round's repairs.
+          verdictRepairs.delete(retryKey);
           if (!qaResult || qaResult.passed) {
             outcome = 'qa_pass';
           } else if (qaResult.auditGateFailed) {
-            // The REPORT was rejected, not the work. Re-run the auditor alone.
+            // A COVERAGE rejection: the auditor never examined stages it
+            // passed. The repair prompt forbids re-reading anything, so it
+            // could only re-word, the gate would reject the same uncovered
+            // stages, and the budget would burn down with the missing stage
+            // still unexamined. This one re-audits for real, on the edge.
             outcome = 'audit_gate_failed';
             pendingRejection = qaResult.feedback;
-            // The original report, not the growing pile — re-embedding each
-            // round's verdict block would enlarge the prompt every retry.
-            // Only an unusable REPORT is correctable in place. A coverage
-            // rejection says the auditor never examined stages it passed, and
-            // the correction prompt forbids re-reading anything — so it could
-            // only re-word, the gate would reject the same uncovered stages,
-            // and the edge's retry budget would burn down with the missing
-            // stage still unexamined. That one re-audits for real.
-            rejectedReport =
-              qaResult.auditGateReason === 'coverage'
-                ? undefined
-                : (reportUnderCorrection ?? verdictText);
+            rejectedReport = undefined;
           } else {
             outcome = 'qa_fail';
           }
@@ -2685,9 +2791,12 @@ export class PipelineManager {
   private async gateQaVerdict(
     output: string,
     scope: AuditScopeStage[],
-    evidence: { sessionId: string; pipelineId: string; stageName: string; checkScope?: string },
+    evidence: { sessionId: string; pipelineId: string; stageName: string; checkScope?: string; repairAttempt?: number },
     acceptance: string[] = [],
   ): Promise<QAValidationResult | null> {
+    // Which verdict repair produced this reply, if any — recorded on every
+    // audit row so a reader can tell a first answer from a re-asked block.
+    const repairDetail = evidence.repairAttempt ? { repairAttempt: evidence.repairAttempt } : {};
     let parsed = this.parseQAResult(output);
     if (!parsed) {
       // A `qa_validation` stage that emits nothing parseable used to mean "no QA
@@ -2698,8 +2807,12 @@ export class PipelineManager {
       // went green on an unexamined verdict.
       //
       // Treated as a FAILED audit gate: the deliverable may be perfectly fine,
-      // it is the report that is unusable, so this takes the auditor-only retry
-      // path (`auditGateFailed`) rather than re-running the implementation.
+      // it is the report that is unusable, so this takes the auditor-only
+      // verdict-repair path (`auditGateFailed`) rather than re-running the
+      // implementation. The row is still written as a failed `audit_coverage`
+      // check — a verdict nobody could read must never stand as the newest
+      // evidence for its scope — but tagged `fault: 'report'`, because it is
+      // not a passing verdict and `rubberStampRate` must not count it as one.
       const reason =
         'the stage produced no machine-readable verdict. Emit the required ```json block with ' +
         'passed / confidence / issues / feedback / whatIDidNotCheck — a verdict nobody can read ' +
@@ -2715,7 +2828,7 @@ export class PipelineManager {
           stage: evidence.stageName,
           kind: 'audit_coverage',
           passed: false,
-          detail: { reason, source: 'unparseable', scope: coverageScope(scope).map((s) => s.name), ...(evidence.checkScope ? { checkScope: evidence.checkScope } : {}) },
+          detail: { reason, source: 'unparseable', fault: 'report', ...repairDetail, scope: coverageScope(scope).map((s) => s.name), ...(evidence.checkScope ? { checkScope: evidence.checkScope } : {}) },
         });
       } catch (err) {
         coreLogger.warn({ err: (err as Error).message }, 'Failed to record unparseable-verdict evidence');
@@ -2741,6 +2854,14 @@ export class PipelineManager {
 
     const failure = auditVerdictFailure(parsed, scope, acceptance);
     if (!parsed.passed) return parsed;
+    const uncovered = uncoveredStages(parsed, coverageScope(scope));
+    const doubted = unaddressedDoubt(parsed, scope);
+    // A rejection is a COVERAGE fault when the auditor skipped work it owed a
+    // look at; otherwise every reason is a field the block left out, and the
+    // audit itself stands. Mixed faults go to the re-audit, which is asked
+    // every reason at once and fixes both.
+    const fault: 'coverage' | 'report' | null =
+      failure === null ? null : uncovered.length > 0 || doubted.length > 0 ? 'coverage' : 'report';
 
     try {
       await verificationEvidenceRepository.record({
@@ -2754,12 +2875,13 @@ export class PipelineManager {
           ...(evidence.checkScope ? { checkScope: evidence.checkScope } : {}),
           scope: coverageScope(scope).map((s) => s.name),
           doubtScope: scope.filter((s) => s.confidence === 'low').map((s) => s.name),
-          uncovered: uncoveredStages(parsed, coverageScope(scope)),
-          unaddressedDoubt: unaddressedDoubt(parsed, scope),
+          uncovered,
+          unaddressedDoubt: doubted,
           source: parsed.source ?? 'unknown',
           whatIDidNotCheck: parsed.whatIDidNotCheck ?? [],
           ...(acceptance.length > 0 ? { acceptance, criteria: parsed.criteria ?? [] } : {}),
-          ...(failure ? { reason: failure } : {}),
+          ...(failure ? { reason: failure, fault } : {}),
+          ...repairDetail,
         },
       });
     } catch (err) {
@@ -2783,14 +2905,16 @@ export class PipelineManager {
     }
 
     coreLogger.warn(
-      { pipelineId: evidence.pipelineId, stage: evidence.stageName, failure },
-      'Audit-coverage gate rejected a passing verdict — re-running the auditor',
+      { pipelineId: evidence.pipelineId, stage: evidence.stageName, failure, fault },
+      fault === 'coverage'
+        ? 'Audit-coverage gate rejected a passing verdict — re-running the auditor'
+        : 'Audit gate rejected an incomplete verdict block — asking the auditor to repair it',
     );
     return {
       ...parsed,
       passed: false,
       auditGateFailed: true,
-      auditGateReason: 'coverage',
+      auditGateReason: fault ?? 'coverage',
       feedback: `Your PASS verdict was rejected: ${failure}\n\n${parsed.feedback}`.trim(),
       issues: [...parsed.issues, failure],
     };
@@ -2829,14 +2953,14 @@ export class PipelineManager {
     // fallback) and take the first that yields an object with a boolean
     // `passed` — a QA/code-review report often has a code block ABOVE its
     // verdict, so matching only the first fence would parse the wrong block.
-    const candidates: string[] = [];
-    for (const m of output.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?```/g)) {
-      candidates.push(m[1].trim());
-    }
-    // Fenced blocks in reply order; the bare-output fallback is appended after,
-    // and tier 1b reverses only the fenced slice (see there).
+    const candidates = verdictFenceBodies(output);
+    // Fenced blocks in reply order; the bare-output fallbacks are appended
+    // after, and tier 1b reverses only the fenced slice (see there).
     const fencedCount = candidates.length;
     candidates.push(output.trim()); // whole output, when the model emitted bare JSON
+    // An unfenced object with prose after it ("…} Let me know if…") is the
+    // same block with trailing chatter. Same field rules apply to it.
+    candidates.push(...bareJsonObjects(output));
     for (const jsonStr of candidates) {
       try {
         const parsed = JSON.parse(jsonStr);

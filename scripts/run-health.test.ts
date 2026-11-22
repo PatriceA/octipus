@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { fmt, percentile, rubberStampRate } from './run-health';
+import { fmt, percentile, rubberStampRate, tallyAudits } from './run-health';
 
 describe('percentile (nearest-rank)', () => {
   test('returns a value that a real run actually had', () => {
@@ -52,5 +52,27 @@ describe('rubberStampRate', () => {
   test('reports 0 when nothing was audited — no audits is not a clean record', () => {
     expect(rubberStampRate(0, 0)).toBe(0);
     expect(rubberStampRate(-1, 0)).toBe(0);
+  });
+});
+
+describe('tallyAudits', () => {
+  const row = (passed: boolean, fault: string | null = null, source: string | null = 'json') => ({ passed, fault, source });
+
+  test('a formatting miss and its repair count as ONE accepted verdict, not a rejection', () => {
+    // No block → repaired → accepted pass.
+    const t = tallyAudits([row(false, 'report', 'unparseable'), row(true)]);
+    expect(t).toEqual({ total: 1, rejected: 0, repairs: 1 });
+  });
+
+  test('a coverage rejection still counts — the gate catching a rubber stamp is the signal', () => {
+    expect(tallyAudits([row(false, 'coverage'), row(true)])).toEqual({ total: 2, rejected: 1, repairs: 0 });
+  });
+
+  test('an unparseable row written before `fault` existed is set aside too', () => {
+    expect(tallyAudits([row(false, null, 'unparseable')])).toEqual({ total: 0, rejected: 0, repairs: 1 });
+  });
+
+  test('an untagged older rejection keeps counting as it always did', () => {
+    expect(tallyAudits([row(false, null, 'json')])).toEqual({ total: 1, rejected: 1, repairs: 0 });
   });
 });

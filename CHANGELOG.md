@@ -7,6 +7,31 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Pipelines: a missing QA verdict block is repaired, and the repair no longer
+  spends a retry** ([reference](docs/AGENT-ARCHITECTURE.md#qa-retry-loop),
+  [status](docs/plans/quality-loop-status.md)).
+  - A QA stage that writes its report but leaves out the `json` verdict block,
+    or leaves out a required field while naming every stage it audited, is
+    asked for the block alone. It gets its own report back and runs nothing.
+    This takes no retry edge and has its own bound of 2 per audit round. If the
+    block is still unusable after that, the pipeline stops as failed at that
+    stage, as before. A pass that skips a stage in scope still gets a full
+    re-audit on the stage's `maxRetries`.
+  - Previously a missing field (`whatIDidNotCheck`, `confidence`, a criteria
+    entry) caused a full re-audit, and a missing block used up the auditor's
+    `maxRetries`.
+  - The verdict parser accepts a `JSON`/`jsonc`/untagged fence and an
+    unfenced verdict object with prose around it. It still fills in no
+    missing field.
+  - `audit_coverage` evidence rows carry `detail.fault` (`report` or
+    `coverage`) and, on a repaired reply, `detail.repairAttempt`. A repair
+    visit's `spawn` run event has a `startReason` starting with
+    `verdict_repair n/2`.
+  - `scripts/run-health.ts` no longer counts missing or incomplete verdict
+    blocks as rubber stamps. It reports them on a separate "verdict repairs"
+    line, so the rubber-stamp rate over a window that includes older
+    `unparseable` rows will read lower than before.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).

@@ -219,6 +219,11 @@ Record every gate rejection to `verification_evidence` with a new kind
 rubberStampRate = QA passes rejected by the coverage gate / total QA passes
 ```
 
+(2026-11: rows tagged `detail.fault: "report"` — a missing or incomplete
+verdict block, sent to a verdict repair — and older `source: "unparseable"`
+rows are counted apart as repairs, not as rejected passes. See
+`quality-loop-status.md`, "The open one".)
+
 That gives a baseline the day it lands and a target to loop against — the
 stopping condition the status doc says does not exist. A rate that stays high
 means the audit prompts are wrong, not that the gate is wrong; a rate that
