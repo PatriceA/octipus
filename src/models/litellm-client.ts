@@ -784,6 +784,7 @@ export class LiteLLMClient {
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     const think = createThinkStreamFilter();
+    let finished = false;
 
     for await (const chunk of classifiedChunks(stream, 'litellm')) {
       if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
@@ -825,8 +826,15 @@ export class LiteLLMClient {
           );
         }
         if (text) yield { content: text };
+        finished = true;
         yield { finishReason: chunk.choices[0].finish_reason };
       }
+    }
+
+    // The SDK ends a stream the caller aborted as if it had completed. Cut
+    // short before its finish_reason, it is a cancellation, not an answer.
+    if (options.signal?.aborted && !finished) {
+      throw classifyError(new Error('Request was aborted.', { cause: options.signal.reason }), 'litellm');
     }
 
     // Stream ended without an explicit finish_reason — still flush.

@@ -423,6 +423,26 @@ describe('streaming over the wire', () => {
     expect((error as ClassifiedError).reason).toBe(FailoverReason.PROVIDER_DOWN);
   });
 
+  test('an abort mid-stream closes the connection and ends the stream as a cancellation', async () => {
+    proxy.enqueue(sse([chatChunk({ content: 'first' })], { then: 'hold' }));
+    const ctrl = new AbortController();
+    const seen: string[] = [];
+    let error: unknown;
+    try {
+      for await (const c of clientWith().streamViaProxy({ model: 'gpt-4o', messages: hi, signal: ctrl.signal })) {
+        if (c.content) seen.push(c.content);
+        ctrl.abort();
+      }
+    } catch (e) {
+      error = e;
+    }
+    expect(seen).toEqual(['first']);
+    expect(error).toBeInstanceOf(ClassifiedError);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.CASCADED_CANCELLATION);
+    await proxy.requests[0].closed;
+    expect(proxy.requests[0].clientClosed).toBe(true);
+  });
+
   test('stream() on a direct provider that fails before its first chunk is sent to the proxy under the same model id', async () => {
     registryDouble.add(modelRow({
       provider: 'custom-openai', modelId: 'gateway-only', endpoint: proxy.url, apiKeyRef: 'env:BOUNDARY_GATEWAY_KEY',
