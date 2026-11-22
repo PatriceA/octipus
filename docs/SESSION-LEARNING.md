@@ -72,6 +72,37 @@ There is no cap on the number of learned skills and no eviction when one is adde
 - Skills you wrote but that carry no lock are treated like learned ones: the lock is set only by an edit in person in the app (above), not by scripts or API tokens, and skills that existed before the lock was added are not locked.
 - An archived skill keeps its row and gets `archived_at` and `curation_notes` (`auto-curator: <reason>`). It is no longer injected for its topics, offered as a patch target, or matched by proposal deduplication. No route or page unarchives a skill; clear `skills.archived_at` in the database to restore one.
 
+## Offer to distil a finished task
+
+After a turn that was both complex and successful, the web chat shows a strip above the composer: "That took several steps. Save how it was done as a skill?" with **Distil into a skill**, **Don't ask again** and **Not now** (×). It is decided when the turn ends, from what the run already recorded; no model is called to decide, and nothing is distilled until you accept.
+
+**Accepting** runs the same distillation as `distill_skill`: one call to the background model, then filing with the usual deduplication, merge and rejection suppression ([Filing](#filing-drop-merge-or-new)). The material is the run itself: its messages from the request to the answer (each cut at 12,000 characters) and the names of the tools it used, in order of first use. The source is `session:<id>`, so it counts as that session in the proposal's session count. Like any `distill_skill` request the proposal is pending at once, and you still approve or reject it on **Skills → Proposals**. When the distillation fails (no background model, a malformed or truncated reply, the `skill-distill`/`distill` permission denied), the strip says why and the offer stays open, so you can retry. An ASK on that permission is answered by your click.
+
+**Not now** closes the offer; **Don't ask again** closes it and turns the offers off for you (`preferences.distillNudge: false`; back on under **Settings → Profile**). Every offer takes exactly one decision, stored on the answer it follows (`messages.metadata.skillNudge`: `offered`, then `accepted` with the proposal id, or `dismissed`), so the same run is never offered twice. An offer you leave alone lapses when the next answer arrives.
+
+**When a run is offered.** All of these, in this order (the first that fails is logged at debug as `Distil offer skipped` with its reason):
+
+| Rule | Read from |
+|---|---|
+| `learning.distillNudge` is on | config |
+| A person asked: trigger `user`, not a hook, cron, heartbeat, monitor or webhook turn, not voice (spoken, read aloud, `mobile-voice`) | the turn |
+| The client can show the offer: it listed `skill_nudge` in `chat.send` `renders` (the web chat does; `/api/chat` may) | the turn |
+| Not a one-shot request, not a Companion briefing or supervisor input, not a room, group thread or space session, not a session that keeps no content | the turn |
+| It answered (`success`), was not refused by a spend budget or quota, and the output guard did not replace or withhold the answer | the turn |
+| You have not turned the offers off | `users.preferences` |
+| Complex: at least `learning.distillNudgeMinDistinctTools` (3) different tools, and either `learning.distillNudgeMinToolCalls` (8) tool calls or a delegation (a child agent's event, `spawn_child`, `create_pipeline`) | the run's `agent_events` (by run id, children included) |
+| The checks recorded during the run passed: the latest verdict of each check (kind, stage, node); no evidence leaves it to the outcome | `verification_evidence` of the session since the run started |
+| No skill was used: none was injected in full (selected, required or topic skills), loaded with `get_skill` in-process or through the MCP bridge | the skill registry, the run's events |
+| The run did not call `distill_skill` itself | the run's events |
+| None of your open (pending, candidate) or rejected and still suppressed proposals came from this session (`session:<id>` or `learning:<job>:session:<id>` in its sources) | `skill_proposals` |
+| Your cool-down is free: at most one offer per `learning.distillNudgeCooldownHours` (24); only an offer that is made takes it | `kv_store` key `learning:distill-nudge:<user>` |
+
+Time spent is not a signal, for the same reason the learning checks count tools: on a slow local model every turn takes long. Before a distillation nothing about the run's topic is known, so a run on the topic of a proposal from another session is still offered; filing then merges it into that proposal or drops it as suppressed, as for any `distill_skill`. The thresholds are defaults chosen when the feature was written, not calibrated.
+
+**Other surfaces.** Only a client that says it can show the offer gets one, so the terminal UIs, the messaging channels, MCP clients and voice get nothing, and their turns do not use the cool-down. There is no chat command for it; in any channel you can ask the agent to distil the conversation into a skill, which calls `distill_skill`.
+
+**API.** `GET /api/sessions/:id/distill-nudge`, `POST /api/sessions/:id/distill-nudge/:messageId` (`{decision}`) and `PUT /api/auth/distill-nudge` ([API](API.md#skill-proposals)). The owner of the session only, never while an admin acts as the user. The live answer also carries `skillNudge: { messageId }` on the `chat.response` result. The offer is made with `Distil offer made` (info: run id, session, the signals).
+
 ## The life of a skill proposal
 
 A skill proposal comes from a learning check (a *learned* proposal, `sourceRef` `learning:<job>:session:<session>`) or from `distill_skill`, which you or an agent call on purpose (`text`, `session:<id>` or `trajectory:<id>`). Patches to learned skills are proposals too but follow only the rules in [Repairing a learned skill](#repairing-a-learned-skill).
@@ -165,6 +196,7 @@ If the process dies while two proposals are being merged: the absorbed proposal 
 | review more or less often | `learning.reviewEveryToolCalls`, `learning.minReviewIntervalMinutes` (0: no interval) |
 | merge more or less eagerly | `learning.duplicateSimilarity`, `learning.relatedSimilarity` |
 | keep unseen candidates longer | `learning.candidateTtlDays` |
+| offer to distil finished tasks more or less often | `learning.distillNudgeMinToolCalls`, `learning.distillNudgeMinDistinctTools`, `learning.distillNudgeCooldownHours`; `learning.distillNudge` off for none |
 
 An admin changes these under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` and body `{"value": …}`. They apply to the whole install, take effect without a restart, and are checked against the bounds in [CONFIGURATION.md](CONFIGURATION.md#learning-config). There is no environment variable for them. Per proposal you also have **Show now**, approve or reject on a candidate, **Reject selected**, **Merge into…** and **Consolidate now**.
 

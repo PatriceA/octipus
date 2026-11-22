@@ -7,7 +7,7 @@ export interface SettingsEntry {
 export const settingsGroups: Array<{ name: string; description: string; icon: string; entries: SettingsEntry[] }> = [
   { name: 'You & your workspace', description: 'Your profile, preferences, and devices.', icon: 'user', entries: [
     { title: 'Appearance', tab: 'appearance', keywords: 'theme dark light mode display colors' },
-    { title: 'Profile', tab: 'general', keywords: 'account username email' },
+    { title: 'Profile', tab: 'general', keywords: 'account username email skill distil offer' },
     { title: 'Companion appearance', href: '/persona', keywords: 'name persona personality instructions' },
     { title: 'Notifications', tab: 'notifications', keywords: 'alerts sound' },
     { title: 'Voice & Calls', tab: 'voice', keywords: 'speech microphone dictation transcription hear speak engine whisper kokoro voices phone telephony', module: 'voice', adminWhenOff: true },

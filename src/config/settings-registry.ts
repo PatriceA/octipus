@@ -1818,6 +1818,38 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Days after which a candidate skill proposal never seen in a second session is deleted by the daily consolidation (at least 1).',
     isSecret: false,
   },
+  {
+    key: 'learning.distillNudge',
+    category: 'learning',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'After a complex, successful turn, offer in the web chat to distil it into a skill proposal. Nothing is distilled until the user accepts; each user can also turn the offers off.',
+    isSecret: false,
+  },
+  {
+    key: 'learning.distillNudgeMinToolCalls',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 8,
+    description: 'Tool calls, child agents included, a turn needs to be offered for distilling, unless it delegated (at least 1).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.distillNudgeMinDistinctTools',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 3,
+    description: 'Different tools a turn needs to be offered for distilling (at least 1).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.distillNudgeCooldownHours',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 24,
+    description: 'At most one distil offer per user in this many hours (0: no cool-down).',
+    isSecret: false,
+  },
 
   // ── Heartbeat (WS2) ──
   {

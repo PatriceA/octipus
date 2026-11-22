@@ -93,6 +93,8 @@ export interface UserPreferences {
     /** The last automatic run that triaged something or failed. */
     lastAuto?: { at: string; triaged: number; archived: number; skipped?: number; error?: string };
   };
+  /** The offer to distil a finished task into a skill (docs/SESSION-LEARNING.md). Unset = on; false = never offered. */
+  distillNudge?: boolean;
   /** Which calendars the Calendar page shows (src/core/calendar/calendars.ts). */
   calendar?: import('@/shared/calendar').CalendarPreferences;
 }

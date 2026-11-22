@@ -3,6 +3,7 @@ import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository
 import type { SkillView } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
 import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions, type ExternalSkill } from './external-loader';
+import { noteRunSkillUse } from './run-skill-use';
 import { recordSkillUsage } from './usage-tracker';
 
 function buildPromptFragment(skill: SkillView): string {
@@ -150,6 +151,7 @@ export class SkillRegistry {
     const found = await this.getByIds(skillIds, userId);
     if (found.length === 0) return '';
     recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
+    noteRunSkillUse(found.length);
     return found.map(buildPromptFragment).join('\n\n');
   }
 
@@ -186,6 +188,7 @@ export class SkillRegistry {
     const skill = await this.get(skillId, userId);
     if (!skill) return null;
     if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
+    noteRunSkillUse(1);
     const content = buildPromptFragment(skill);
     const external = this.external.get(skill.id);
     if (!external) return content;
@@ -207,6 +210,7 @@ For packaged scripts, use run_skill_script with this skill_id, the relative scri
     const found = await this.getActiveSkillsForTopic(topic);
     if (found.length === 0) return '';
     recordSkillUsage(found.map((s) => s.id));
+    noteRunSkillUse(found.length);
     return found.map(buildPromptFragment).join('\n\n');
   }
 }

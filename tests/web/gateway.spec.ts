@@ -47,7 +47,7 @@ test('a message sent from one tab goes out as chat.send with the workspace', asy
   await input.fill('Hello there');
   await input.press('Enter');
   await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send'))
-    .toEqual({ type: 'chat.send', sessionId: 'sess-1', content: 'Hello there', workspaceId: 'ws-1', renders: ['inline_ui'] });
+    .toEqual({ type: 'chat.send', sessionId: 'sess-1', content: 'Hello there', workspaceId: 'ws-1', renders: ['inline_ui', 'skill_nudge'] });
 });
 
 test('an in-app delivery shows in its session', async ({ authenticatedPage: page }) => {

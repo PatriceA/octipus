@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+774 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -97,6 +97,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/auth/channel-bindings` | `src/api/routes/channel-bindings.ts` |
 | DELETE | `/api/auth/channel-bindings/:channelType/:externalId` | `src/api/routes/channel-bindings.ts` |
 | POST | `/api/auth/channel-bindings/redeem` | `src/api/routes/channel-bindings.ts` |
+| PUT | `/api/auth/distill-nudge` | `src/api/routes/distill-nudge.ts` |
 | POST | `/api/auth/link` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/login` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/login-mobile` | `src/api/routes/auth.ts` |
@@ -609,6 +610,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/sessions/:id/changes/diff` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/complete` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/context` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/:id/distill-nudge` | `src/api/routes/distill-nudge.ts` |
+| POST | `/api/sessions/:id/distill-nudge/:messageId` | `src/api/routes/distill-nudge.ts` |
 | GET | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
 | PUT | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/files` | `src/api/routes/sessions.ts` |
@@ -808,19 +811,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 252 |
-| `api` | `db` | 152 |
+| `api` | `core` | 254 |
+| `api` | `db` | 154 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 188 |
+| `api` | `security` | 190 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 31 |
+| `api` | `shared` | 32 |
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 78 |
+| `api` | `utils` | 79 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
@@ -846,21 +849,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 76 |
-| `core` | `db` | 542 |
+| `core` | `config` | 77 |
+| `core` | `db` | 551 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 250 |
+| `core` | `security` | 251 |
 | `core` | `services` | 4 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 87 |
-| `core` | `skills` | 17 |
-| `core` | `tools` | 36 |
-| `core` | `utils` | 264 |
+| `core` | `shared` | 89 |
+| `core` | `skills` | 18 |
+| `core` | `tools` | 37 |
+| `core` | `utils` | 265 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -936,7 +939,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `utils` | 7 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
-| `skills` | `core` | 8 |
+| `skills` | `core` | 9 |
 | `skills` | `db` | 17 |
 | `skills` | `models` | 2 |
 | `skills` | `security` | 4 |

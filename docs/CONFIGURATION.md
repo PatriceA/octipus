@@ -206,6 +206,10 @@ Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARN
 | `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. |
 | `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals are one skill; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
 | `learning.candidateTtlDays` | 30 | A candidate not seen again for this many days, and never seen in `recurrenceSessions` sessions or backed by a correction, is deleted by consolidation. One that qualified and only waits for room under a cap is kept. Min 1. |
+| `learning.distillNudge` | true | After a complex, successful turn, offer in the web chat to distil it into a skill proposal ([the offer](SESSION-LEARNING.md#offer-to-distil-a-finished-task)). Nothing is distilled until the user accepts; each user can also turn it off under Settings → Profile. |
+| `learning.distillNudgeMinToolCalls` | 8 | Tool calls, child agents' included, a turn needs to be offered, unless it delegated (to a child agent or a pipeline). Min 1. |
+| `learning.distillNudgeMinDistinctTools` | 3 | Different tools a turn needs to be offered, whether or not it delegated. Min 1. |
+| `learning.distillNudgeCooldownHours` | 24 | At most one offer per user in this many hours. Only an offer that is made starts it. 0: no cool-down. |
 
 ## Gateway Config
 

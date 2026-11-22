@@ -37,6 +37,8 @@ import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { type InlineUiAcceptedAction, inlineUiActionLine, inlineUiGuardInput } from '@/core/inline-ui/turn-input';
 import type { JsonObject } from '@/shared/inline-ui';
+import { DISTILL_NUDGE_RENDER } from '@/shared/distill-nudge';
+import type { DistillNudgeTurn } from '@/core/learning/distill-nudge-service';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -80,6 +82,8 @@ export interface TurnResult {
   media?: import('@/core/media/turn-media').TurnMediaItem[];
   /** The reply is read aloud: a voice conversation on this session speaks it. */
   spoken?: boolean;
+  /** The answer carries an offer to distil the run into a skill (docs/SESSION-LEARNING.md). */
+  skillNudge?: { messageId: string };
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -1302,6 +1306,19 @@ export class AgentService {
         } catch (err) { coreLogger.error({ err, sessionId: resolvedSessionId }, 'Could not enqueue learning check'); }
       }
       recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
+      // The offer to distil this run into a skill: read from what the run
+      // recorded, no model call; a failure to read never fails the answer.
+      const skillNudge = await this.offerDistillNudge({
+        sessionId: resolvedSessionId, userId, rootAgentId: agentId, answerMessageId: persistedAnswer.id, startedAt: new Date(startTime),
+        facts: {
+          trigger: scope.trigger, channel, spoken: spokenTurn || channel === 'mobile-voice' || getRunContext()?.spoken === true,
+          clientRendersNudge: getRunContext()?.renders?.includes(DISTILL_NUDGE_RENDER) === true,
+          oneShot: !!session.context?.oneShot, synthetic: !!syntheticCoordination,
+          shared: isRoom || !!scope.space || sharedAudience || !!session.groupChannelId || !!groupTurn,
+          contentStorageOff: audience.contentStorageOff, outcome, limited: !!limit,
+          replaced: outputCheck.action === 'replace' || withheld,
+        },
+      });
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
@@ -1309,6 +1326,7 @@ export class AgentService {
         outcome,
         classification,
         ...(turnMedia.length && { media: turnMedia }),
+        ...(skillNudge && { skillNudge }),
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
@@ -1316,6 +1334,19 @@ export class AgentService {
       // A stopped or dropped room turn ends here; the queue announces it.
       if (isRoom && (signal?.aborted || (error as Error)?.name === 'RoomTurnDropped')) throw error;
       return this.turnFailed(error, { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved, isRoom, requesterId: userId });
+    }
+  }
+
+  /** `offerDistillNudge` for the ambient run; logged, never thrown (the answer is already stored). */
+  private async offerDistillNudge(turn: Omit<DistillNudgeTurn, 'runId'>): Promise<{ messageId: string } | undefined> {
+    const runId = getRunContext()?.runId;
+    if (!runId) return undefined;
+    try {
+      const { offerDistillNudge } = await import('@/core/learning/distill-nudge-service');
+      return (await offerDistillNudge({ ...turn, runId })) ?? undefined;
+    } catch (err) {
+      coreLogger.error({ err, sessionId: turn.sessionId, runId }, 'Could not decide the distil offer');
+      return undefined;
     }
   }
 
