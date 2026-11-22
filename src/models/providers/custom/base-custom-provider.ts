@@ -1,4 +1,4 @@
-import { classifyError } from '@/core/errors/classification';
+import { ClassifiedError, classifyError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { CustomProviderConfig, ModelConfigEntry, ModelMetadata } from '@/db/schema/models';
 import type { CompletionOptions } from '../../litellm-client';
 import { getExtensionRoute, isExtensionModel } from '@/models/extension-models';
@@ -42,7 +42,8 @@ export abstract class BaseCustomProvider {
 
   /**
    * Resolve the model row, endpoint, key, and custom-provider config.
-   * Throws a classified AUTH_FAILED if the row is missing required fields.
+   * Throws a ClassifiedError: AUTH_FAILED when no key resolves, the
+   * classified cause when the row is missing or lacks its endpoint or config.
    *
    * If options.customProviderOverride is set, returns that directly without
    * consulting the DB. Used by the test-model endpoint when the model hasn't
@@ -121,7 +122,7 @@ export abstract class BaseCustomProvider {
   private async resolvePersonalApiKey(model: ModelConfigEntry, requesterId: string | undefined): Promise<string> {
     const { resolveModelKey } = await import('@/models/model-key');
     const key = await resolveModelKey(model, requesterId);
-    if (!key) throw classifyError(new Error(`Custom provider: personal model '${model.name}' has no API key`), this.providerName);
+    if (!key) throw this.missingKey(`Custom provider: personal model '${model.name}' has no API key`);
     return key;
   }
 
@@ -138,7 +139,7 @@ export abstract class BaseCustomProvider {
     }
     const { getVault } = await import('@/security/vault');
     const key = await getVault().getByName('system', ref);
-    if (!key) throw classifyError(new Error(`Custom provider: vault secret '${ref}' for extension model '${model.name}' is not set`), this.providerName);
+    if (!key) throw this.missingKey(`Custom provider: vault secret '${ref}' for extension model '${model.name}' is not set`);
     return key;
   }
 
@@ -165,10 +166,7 @@ export abstract class BaseCustomProvider {
         const envName = apiKeyRef.slice(4);
         const v = process.env[envName];
         if (v) return v;
-        throw classifyError(
-          new Error(`Custom provider: env var ${envName} not set (referenced by apiKeyRef)`),
-          this.providerName,
-        );
+        throw this.missingKey(`Custom provider: env var ${envName} not set (referenced by apiKeyRef)`);
       }
 
       try {
@@ -187,10 +185,12 @@ export abstract class BaseCustomProvider {
     const fallback = process.env[`${this.providerName.toUpperCase().replace(/-/g, '_')}_API_KEY`];
     if (fallback) return fallback;
 
-    throw classifyError(
-      new Error(`Custom provider: no API key resolved (apiKeyRef='${apiKeyRef ?? '<none>'}')`),
-      this.providerName,
-    );
+    throw this.missingKey(`Custom provider: no API key resolved (apiKeyRef='${apiKeyRef ?? '<none>'}')`);
+  }
+
+  /** No key to send: an auth failure, like the 401 the request would have earned. */
+  private missingKey(message: string): ClassifiedError {
+    return new ClassifiedError({ reason: FailoverReason.AUTH_FAILED, recovery: RecoveryAction.ROTATE_CREDENTIAL, message, providerHint: this.providerName });
   }
 
   /**

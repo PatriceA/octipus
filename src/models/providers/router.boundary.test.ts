@@ -255,6 +255,17 @@ describe('a custom OpenAI-compatible endpoint', () => {
   });
 
   test.each([
+    ['no key anywhere', {}],
+    ['an env: reference to an unset variable', { apiKeyRef: 'env:GATEWAY_KEY_FROM_ENV' }],
+  ])('%s fails before any request, as an auth failure', async (_label, over) => {
+    registryDouble.add(customRow(over));
+    const err = await rejection(router.complete({ model: 'wire-model', messages: hi }));
+    expect(err.reason).toBe(FailoverReason.AUTH_FAILED);
+    expect(err.providerHint).toBe('custom-openai');
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  test.each([
     ['no endpoint', { endpoint: null }],
     ['no customProvider metadata', { metadata: {} }],
   ])('a row with %s fails before any request', async (_label, over) => {
