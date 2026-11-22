@@ -27,7 +27,7 @@ const gw = (entry: Omit<OctipusSlashCommand, 'source'>): OctipusSlashCommand => 
 export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   // ── TUI-local ───────────────────────────────────────────────────
   tui({ name: 'attach', description: 'Attach an image from clipboard or file', argumentHint: '[image-path]' }),
-  tui({ name: 'copy', description: 'Copy the last response or the loaded transcript to the clipboard', argumentHint: '[last|transcript]' }),
+  tui({ name: 'copy', description: 'Copy the last response or the loaded transcript to the clipboard', argumentHint: '[last|transcript|code]' }),
   tui({ name: 'export', description: 'Write the transcript to a Markdown file', argumentHint: '[path]' }),
   tui({ name: 'scrollback', description: 'Show the transcript in the terminal scrollback; any key returns' }),
   tui({ name: 'theme', description: 'Switch the theme and save it (auto follows the terminal background)', argumentHint: '[auto|dark|light|high-contrast]' }),

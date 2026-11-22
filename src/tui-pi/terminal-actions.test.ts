@@ -91,3 +91,17 @@ test('non-wheel mouse reports never reach a component; wheel notches reach the a
   expect(filter('\x1b[<64;10;5M')).toEqual({ consume: true });
   expect(filter('a')).toBeUndefined();
 });
+
+test('copy code takes the last code block of the latest reply that has one, raw', async () => {
+  const f = fixture();
+  f.run('/copy code');
+  expect(f.notify).toHaveBeenLastCalledWith('No code block in the replies yet.');
+  f.messages.push({ role: 'assistant', content: 'Run:\n```sh\nnpm ci\n```\nthen\n~~~ts\nconst a = `x`;\n\tindented();\n~~~', timestamp: new Date() });
+  f.messages.push({ role: 'assistant', content: 'No code here.', timestamp: new Date() });
+  f.run('/copy code'); await settled();
+  expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe('const a = `x`;\n\tindented();');
+  // Still streaming: the open block counts, up to what arrived.
+  f.messages.setLive('Next:\n```py\nprint(1)');
+  f.run('/copy code'); await settled();
+  expect(Buffer.from(f.write.mock.lastCall?.[0].slice(7, -1), 'base64').toString()).toBe('print(1)');
+});

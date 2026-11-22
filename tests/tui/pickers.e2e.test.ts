@@ -50,6 +50,7 @@ describe.skipIf(process.platform === 'win32')('pickers in a real terminal', () =
     await tui.waitFor('Show the chat shell keybindings');
     const row = (await tui.text()).split('\n').findIndex(line => line.includes('› /hotkeys')) + 1;
     tui.send(`\x1b[<0;20;${row}M\x1b[<0;20;${row}m`);
-    await tui.waitFor('Hotkeys (override in');
+    // The list is longer than the screen: its rows, not its heading, are what shows.
+    await tui.waitFor('Show hotkeys');
   });
 });

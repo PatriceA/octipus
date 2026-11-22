@@ -101,7 +101,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
 /** Two Escapes within this long, with no turn running, clear the draft. */
@@ -266,6 +266,7 @@ export class OctipusTuiApp {
       if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
       if (kb.matches(data, 'app.queue.edit') && this.queue.size) { this.editQueued(); return { consume: true }; }
       if (kb.matches(data, 'app.history.search')) { this.openHistoryPicker(); return { consume: true }; }
+      if (kb.matches(data, 'app.copy.code')) { handleTerminalCommand('/copy code', this.tui, this.messages, text => this.pushMessage('system', text), this.copy); return { consume: true }; }
       if (kb.matches(data, 'app.tools.toggle')) {
         this.messages.setDetail(!this.messages.getDetail());
         this.tui.requestRender();

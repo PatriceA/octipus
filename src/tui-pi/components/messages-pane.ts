@@ -64,6 +64,27 @@ export function stripTranscriptRails(text: string): string {
   return text.split('\n').map(line => line.replace(RAIL, '')).join('\n');
 }
 
+/**
+ * The fenced code blocks of a Markdown text, their contents only, in order.
+ * A fence still open at the end (a reply streaming) runs to the end.
+ */
+export function codeBlocks(markdown: string): string[] {
+  const blocks: string[] = [];
+  let fence: { mark: string; lines: string[] } | null = null;
+  for (const line of markdown.split('\n')) {
+    if (!fence) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (open && !(open[1]?.startsWith('`') && line.slice(open[0].length).includes('`'))) fence = { mark: open[1] as string, lines: [] };
+      continue;
+    }
+    const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+    if (close && close[1]?.[0] === fence.mark[0] && (close[1]?.length ?? 0) >= fence.mark.length) { blocks.push(fence.lines.join('\n')); fence = null; continue; }
+    fence.lines.push(line);
+  }
+  if (fence) blocks.push(fence.lines.join('\n'));
+  return blocks;
+}
+
 const isMessage = (item: TranscriptItem): item is ChatMessage => item.kind === undefined || item.kind === 'message';
 
 export class MessagesPane implements Component {
@@ -228,9 +249,17 @@ export class MessagesPane implements Component {
   }
   scrollToBottom(): void { this.offset = 0; this.frozen = null; this.frozenMessages = []; this.newer = 0; this.trimWindow(); }
   /** Raw text, independent of viewport width/scroll and rendered ANSI styling. */
-  getCopyText(scope: 'last' | 'transcript'): string {
+  getCopyText(scope: 'last' | 'transcript' | 'code'): string {
     const all = this.entries();
     if (scope === 'last') return all.findLast(message => message.role === 'assistant' && message.content.length > 0)?.content ?? '';
+    if (scope === 'code') {
+      for (const message of all.toReversed()) {
+        if (message.role !== 'assistant') continue;
+        const blocks = codeBlocks(message.content);
+        if (blocks.length) return blocks.at(-1) ?? '';
+      }
+      return '';
+    }
     return all.map(message => `${message.role}:\n${message.content}`).join('\n\n');
   }
   /**

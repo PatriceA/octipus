@@ -30,4 +30,14 @@ describe.skipIf(process.platform === 'win32')('streaming Markdown in a real term
     const transcript = (rows: string[]) => rows.slice(0, rows.findIndex(row => row.includes('Fixed in one line.')) + 1);
     expect(transcript(done)).toEqual(transcript(streamed));
   });
+
+  test('Alt+C copies the last code block of the reply, as written', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 34);
+    await tui.waitFor('connected');
+    tui.event('chat.response', { response: REPLY });
+    await tui.waitFor('Fixed in one line.');
+    tui.send('\x1bc');
+    await tui.waitFor('OSC 52');
+    expect(tui.clipboardRequests.map(request => Buffer.from(request.split(';')[1] ?? '', 'base64').toString())).toEqual(['parse("a,,b");']);
+  });
 });
