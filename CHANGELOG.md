@@ -7,6 +7,28 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal clients start faster.** `octi edit` drew its first frame after
+  about 2 s and now after about 0.5 s: it no longer loads the MCP bridge
+  (some 200 server modules) at start, only when the MCP list (`/mcp`) is
+  opened; the status row's MCP count appears from then on, as it effectively
+  did before. `octi tui` and `octi edit` are launched with Node directly
+  instead of through `npm run`, which saved about 0.4 s more, and the stored
+  login no longer loads the server logger. Measured in a PTY on a loaded
+  container, from `bin/octi`'s launch command to the first full frame: chat
+  0.9–1.0 s → 0.5 s, editor 2.0 s → 0.55 s. `bin/octi.cmd` on Windows still
+  goes through npm.
+- **Terminal clients refuse a terminal they cannot draw on.** With
+  `TERM=dumb` (an Emacs shell buffer, a CI log), or with input or output
+  piped, `octi tui` and `octi edit` exit with status 2 and say why, instead
+  of filling the output with escape sequences.
+- **Terminal compatibility documented and tested.** `docs/guides/tui.md`
+  has a "Terminal compatibility" section: tmux (with recommended `mouse`,
+  `set-clipboard` and `allow-passthrough` settings), SSH, the Linux console,
+  small windows, Windows, screen readers, and what is not tested. Contributors:
+  the terminal suites fail at once with a message when the PTY relay's Python
+  is missing (`TUI_PTY_PYTHON` picks another), and golden screens
+  (`tests/tui/goldens/`, `UPDATE_TUI_GOLDENS=1`) guard the main states of both
+  clients.
 - **Terminal editor: review the agent's edits hunk by hunk.** The diff box
   accepts (`y`) or rejects (`n`) each change on its own, moves between them
   with `]` / `[`, folds unchanged lines (`z`), highlights the words that

@@ -738,6 +738,56 @@ Not done, and why: Up/Down move by buffer lines with soft wrap on (as vim's `j`/
 4. Startup time budget (first frame under 150 ms on the reference machine);
    lazy-load voice and tree-sitter, which are already deferred or should be.
 
+**Phase 6 — shipped in part.** Item 1 is not done as written (no Python-free
+relay); items 2–4 are, with the limits below. Measured and tested on Linux
+only (a shared container, load average 2–3).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Windows | `7f8e29b` | The product needs no Python: both clients read the terminal through Node's TTY (ConPTY on Windows); only `tests/tui/pty.py` does. The harness now probes the relay's Python once and fails at once with what is missing (no `python3`, no `os.forkpty`, Windows → WSL) instead of crashing the worker or waiting out every `waitFor`; `TUI_PTY_PYTHON` picks another interpreter. `harness.e2e.test.ts` |
+| 2. tmux, SSH, Linux console, small windows, screen readers | `75a6faa`, `63875f4`, `57a27aa`; docs in `docs/guides/tui.md`, "Terminal compatibility" | `terminals.e2e.test.ts`: both clients in tmux 3.4 with the recommended settings and with its defaults (frame above tmux's status, clicks, drag, wheel, copy into the tmux buffer and on to the outer terminal as OSC 52), SSH environment (OSC 52, no remote clipboard tool), `TERM=linux`, `TERM=dumb` (now refused with exit 2), 20×5. `terminal-check.test.ts` |
+| 3. Visual regression | `9a27f68` | `golden.e2e.test.ts`: five scenes (chat idle, mid-turn with tools, command palette; editor with a file and the tree, hunk review) compared with `tests/tui/goldens/*.txt`, text plus a per-cell style map and legend; `UPDATE_TUI_GOLDENS=1` rewrites; a mismatch prints the differing rows. Ran three times unchanged |
+| 4. Startup | `f25c4fb`, `143c601`, `9b02ccf` | `startup-imports.test.ts` (structural: esbuild's static import graph of each entry holds no pino, tree-sitter, model SDK, database, `src/voice`, `src/mcp`, …), `startup.test.ts` (the editor loads the MCP bridge only for the MCP list), `bin/octi.test.ts` (the launcher execs Node, not npm) |
+
+Startup, PTY, launch command to first full frame, medians of 12 runs:
+chat 0.9–1.0 s → 0.5 s, editor 2.0 s → 0.55 s. The causes: the editor's
+constructor imported `@/mcp/bridge` (about 200 server modules, about a second)
+for a status count that is 0 of 0 until the MCP list connects something;
+`bin/octi` went through `npm run` and the tsx CLI (about 0.4 s); the stored
+login pulled in pino and pino-pretty through `utils/file-acl.ts` (40–60 ms).
+Voice and tree-sitter were already deferred and still are (the structural
+test keeps them so).
+
+Flaky test found and fixed (`18a7048`): `editor-mouse.e2e` "tabs, the tree…"
+failed about one run in ten under load. It read the tree row's position while
+the client was still authenticating; when the gateway's plan arrived the
+status area at the top grew from three rows to six, every pane moved down,
+and the click landed on the Files title. A test bug, not a product one:
+`TuiHarness.ready()` waits for the final status height, and the tests read
+coordinates after it.
+
+Not done, and untested:
+
+- No Python-free PTY relay: driving ConPTY from Node needs a native module
+  (`node-pty`); not added. The PTY suites stay skipped on Windows, and
+  nothing in this phase was run on Windows or macOS. `bin/octi.cmd` still
+  launches through `npm run`.
+- The 150 ms budget is not met from source: Node with the TypeScript loader,
+  pi-tui (about 0.1 s) and zod (about 0.06 s, for `tui.json` in
+  `src/tui-pi/settings.ts`) are most of the remaining 0.45 s. Not changed
+  here: that file belongs to the Phase 3 work in progress.
+- `NO_COLOR` is not honoured (the theme forces 24-bit colour) — Phase 3
+  item 7. No reduced-motion setting: the activity line's spinner is the only
+  animation, and that component is being reworked in Phase 3.
+- Real terminal emulators, GNU screen, Zellij, mosh, a real SSH session, the
+  kernel console and screen readers are documented, not tested.
+- The golden screens of the chat will change with the Phase 3 rework; update
+  them with `UPDATE_TUI_GOLDENS=1` and review.
+- Seen on the way, left for Phase 3 (chat surface): a message sent while the
+  transcript is scrolled up does not return to the bottom, so its reply (and a
+  `/copy` notice) arrive out of view; and while authenticating the plan row
+  reads "Unavailable · connection lost".
+
 ## 8. Risks
 
 | Risk | Handling |

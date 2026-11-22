@@ -13,6 +13,7 @@ import { OctipusTuiApp } from './app';
 import { createRuntime } from './runtime';
 import { stripTranscriptRails } from './components/messages-pane';
 import { readThemeSetting, resolveTerminalSettings, type TerminalSettings } from './settings';
+import { terminalProblem } from '@/tui-kit/terminal-check';
 
 export interface LaunchOptions {
   gatewayUrl?: string;
@@ -92,6 +93,11 @@ export function parseSessionArg(args: string[]): string | undefined {
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
+  const problem = terminalProblem('octi tui');
+  if (problem) {
+    process.stderr.write(`${problem}\n`);
+    process.exit(2);
+  }
   let terminal: TerminalSettings;
   try {
     terminal = resolveTerminalSettings(argv);

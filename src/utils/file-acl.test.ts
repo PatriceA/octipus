@@ -8,8 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test, vi } from 'vitest';
 import { restrictToOwner } from './file-acl';
+
+const warnings = vi.hoisted(() => [] as Array<{ details: Record<string, unknown>; message: string }>);
+vi.mock('./logger', () => ({ coreLogger: { warn: (details: Record<string, unknown>, message: string) => { warnings.push({ details, message }); } } }));
 
 const dir = mkdtempSync(join(tmpdir(), 'file-acl-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -25,8 +28,11 @@ describe('restrictToOwner', () => {
     expect(restrictToOwner(secretAt('ok.json'))).toBe(true);
   });
 
-  test('does not throw on a path that is not there', () => {
-    expect(restrictToOwner(join(dir, 'absent.json'))).toBe(false);
+  test('does not throw on a path that is not there, and says so at warn', async () => {
+    const path = join(dir, 'absent.json');
+    expect(restrictToOwner(path)).toBe(false);
+    // The logger is loaded on the first failure, so the line lands a moment later.
+    await vi.waitFor(() => expect(warnings).toContainEqual(expect.objectContaining({ details: expect.objectContaining({ path }) })));
   });
 
   test.skipIf(process.platform === 'win32')('POSIX: the file is 0600 and the directory 0700', () => {

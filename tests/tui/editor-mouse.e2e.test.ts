@@ -23,7 +23,7 @@ async function find(h: TuiHarness, needle: string): Promise<{ row: number; col: 
 }
 
 async function openExample(h: TuiHarness): Promise<void> {
-  await h.waitFor('focus:editor');
+  await h.waitFor('focus:editor'); await h.ready();
   h.send(KEY.CtrlO); await h.waitFor('Open file');
   h.send('example.ts'); h.send(KEY.Enter); await h.waitFor('const greeting');
 }
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === 'win32')('the mouse in the editor', () => {
     tui = await TuiHarness.start('src/tui-editor/index.ts', 120, 28);
     writeFileSync(join(tui.project, 'long.txt'), Array.from({ length: 200 }, (_, i) => `row ${i}`).join('\n'));
     writeFileSync(join(tui.project, 'other.md'), '# other\n');
-    await tui.waitFor('focus:editor');
+    await tui.waitFor('focus:editor'); await tui.ready();
     // A click on a tree row opens the file.
     const row = await find(tui, 'long.txt');
     tui.send(click(row.col, row.row)); await tui.waitFor('row 0');

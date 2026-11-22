@@ -35,6 +35,8 @@ export interface EditorOverlayDeps {
   openFile: (path: string) => void;
   /** Run a palette command as if it had been typed in the composer. */
   runCommand: (text: string) => void;
+  /** The MCP list loaded the bridge: from here on its connections are worth showing. */
+  onMcpBridgeLoaded?: (bridge: typeof import('@/mcp/bridge')) => void;
 }
 
 export class EditorOverlays {
@@ -75,6 +77,7 @@ export class EditorOverlays {
       overlays.loading.delete('mcp');
     }
     if (this.ctx.exiting() || overlays.isOpen('mcp')) return;
+    this.deps.onMcpBridgeLoaded?.(bridge);
     const { getMCPBridge } = bridge;
     const provider = bridgeProvider(getMCPBridge() as unknown as Parameters<typeof bridgeProvider>[0]);
     overlays.show('mcp', new MCPServerList({ provider, onClose: () => overlays.close('mcp') }));

@@ -1,5 +1,5 @@
 /** Runs the shipped Node entry in a real PTY and parses the CURRENT terminal screen. */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,6 +19,42 @@ export interface HarnessOptions {
   wrap?: string[];
   /** What the fixture gateway answers to a command, by name, instead of its default text. */
   commandResults?: Record<string, { result: unknown; data?: unknown; error?: string }>;
+  /** The Python that runs `pty.py`. Default: `TUI_PTY_PYTHON`, else `python3`. */
+  python?: string;
+}
+
+const probed = new Map<string, string | null>();
+
+/**
+ * Why this machine cannot run the PTY relay, or null when it can.
+ *
+ * The relay is `pty.py`: Python's standard library `pty`, `termios` and
+ * `fcntl`, which exist on Linux and macOS only. Without this check a missing
+ * `python3` surfaced as an unhandled spawn error in the test worker, and a
+ * Python without `os.forkpty` (Windows) as an 8-second wait for a screen that
+ * never came. The product itself needs no Python: only these suites do.
+ */
+export function ptyRelayProblem(python: string, platform: NodeJS.Platform = process.platform): string | null {
+  const key = `${platform}\0${python}`;
+  const known = probed.get(key);
+  if (known !== undefined) return known;
+  let problem: string | null = null;
+  if (platform === 'win32') {
+    problem = 'The terminal suites drive the program through tests/tui/pty.py, which needs a POSIX pseudo-terminal '
+      + '(Python\'s pty, termios and fcntl). Windows has none: run `npm run test:tui` under WSL, Linux or macOS.';
+  } else {
+    const probe = spawnSync(python, ['-c', 'import fcntl, os, pty, termios; os.forkpty'], { encoding: 'utf8', timeout: 10_000 });
+    if (probe.error) {
+      const code = (probe.error as NodeJS.ErrnoException).code;
+      problem = code === 'ENOENT'
+        ? `The terminal suites need Python 3 for their PTY relay (tests/tui/pty.py), and \`${python}\` is not on PATH. Install python3 or set TUI_PTY_PYTHON.`
+        : `The PTY relay's Python (\`${python}\`) could not be run: ${probe.error.message}`;
+    } else if (probe.status !== 0) {
+      problem = `\`${python}\` cannot run the PTY relay (tests/tui/pty.py needs fcntl, os.forkpty, pty and termios): ${probe.stderr.trim() || `exit ${probe.status}`}`;
+    }
+  }
+  probed.set(key, problem);
+  return problem;
 }
 
 export class TuiHarness {
@@ -37,7 +73,7 @@ export class TuiHarness {
   private error = '';
   private stopped = false;
 
-  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions) {
+  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions, python: string) {
     this.server = server;
     mkdirSync(this.project);
     // The TUI signs in with the stored CLI login and nothing else; without
@@ -72,7 +108,7 @@ export class TuiHarness {
       });
       socket.on('close', () => this.sockets.delete(socket));
     });
-    this.proc = spawn('python3', [resolve('tests/tui/pty.py'), String(cols), String(rows), ...(options.wrap ?? []), process.execPath,
+    this.proc = spawn(python, [resolve('tests/tui/pty.py'), String(cols), String(rows), ...(options.wrap ?? []), process.execPath,
       '--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', this.project, ...args], {
       cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
       // No display, multiplexer or SSH session from the machine running the tests: the
@@ -84,7 +120,11 @@ export class TuiHarness {
       },
     });
     createInterface({ input: this.proc.stdout }).on('line', line => {
-      const message = JSON.parse(line);
+      let message: { data?: string };
+      try { message = JSON.parse(line); } catch {
+        this.error += `PTY relay wrote a line that is not JSON: ${line}\n`;
+        return;
+      }
       if (message.data) {
         const data = Buffer.from(message.data, 'base64');
         this.output.push(data);
@@ -92,12 +132,19 @@ export class TuiHarness {
       }
     });
     this.proc.stderr.on('data', data => { this.error += data; });
-    this.exited = new Promise(resolve => this.proc.once('exit', resolve));
+    this.exited = new Promise(resolve => {
+      this.proc.once('exit', resolve);
+      // Not left unhandled: an 'error' with no listener kills the test worker instead of failing the test.
+      this.proc.once('error', error => { this.error += `PTY relay failed: ${error.message}\n`; resolve(null); });
+    });
   }
   static async start(entry: string, cols = 100, rows = 28, args: string[] = [], options: HarnessOptions = {}): Promise<TuiHarness> {
+    const python = options.python ?? process.env.TUI_PTY_PYTHON ?? 'python3';
+    const problem = ptyRelayProblem(python);
+    if (problem) throw new Error(problem);
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-    return new TuiHarness(entry, server, cols, rows, args, options);
+    return new TuiHarness(entry, server, cols, rows, args, options, python);
   }
   /** The terminal's normal buffer — scrollback and screen — as text, whichever buffer is showing. */
   async normalBuffer(): Promise<string> {
@@ -132,6 +179,20 @@ export class TuiHarness {
       await new Promise(resolve => setTimeout(resolve, 30));
     }
     throw new Error(`Screen did not ${absent ? 'remove' : 'show'} ${JSON.stringify(needle)}:\n${await this.text()}\n${this.error}`);
+  }
+  /**
+   * Connected, and the plan this fixture's server answers with is drawn.
+   *
+   * Until then the status area is still growing: "authenticating" with a
+   * two-row plan placeholder, then the full plan. In the editor that area is
+   * at the top, so every pane moves down when the plan lands, and a click
+   * aimed at coordinates read before that hits the row above its target —
+   * which is how `editor-mouse.e2e`'s tree click failed about one run in
+   * ten on a loaded machine. Read screen coordinates after this.
+   */
+  async ready(): Promise<void> {
+    await this.waitFor('connected');
+    await this.waitFor('[pending] Verify');
   }
   async saveScreen(name: string): Promise<void> {
     const dir = process.env.TUI_SCREENSHOTS_DIR;

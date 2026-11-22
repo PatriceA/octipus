@@ -21,7 +21,21 @@
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { chmodSync } from 'node:fs';
-import { coreLogger } from './logger';
+
+/**
+ * Log a failed restriction at warn.
+ *
+ * The logger is loaded here, on the first failure, not at import: it brings
+ * pino and pino-pretty, and the terminal clients reach this module through the
+ * CLI session file on every start, where a successful chmod logs nothing. That
+ * import was a large part of the time before their first frame.
+ */
+function warn(details: Record<string, unknown>, message: string): void {
+  import('./logger').then(
+    ({ coreLogger }) => coreLogger.warn(details, message),
+    (error: unknown) => process.stderr.write(`${message} (${String(details.path)}); the logger failed to load: ${String(error)}\n`),
+  );
+}
 
 /**
  * OWNER RIGHTS — the well-known SID S-1-3-4, which names whoever owns the file.
@@ -63,7 +77,7 @@ export function restrictToOwnerAsync(path: string, kind: 'file' | 'directory' = 
       [path, '/inheritance:r', '/grant:r', `${OWNER_RIGHTS_SID}:${permission}`],
       { windowsHide: true },
       (err) => {
-        if (err) coreLogger.warn({ path, err }, 'icacls could not restrict the file to its owner');
+        if (err) warn({ path, err }, 'icacls could not restrict the file to its owner');
         done(!err);
       },
     );
@@ -76,7 +90,7 @@ export function restrictToOwner(path: string, kind: 'file' | 'directory' = 'file
       chmodSync(path, kind === 'directory' ? 0o700 : 0o600);
       return true;
     } catch (err) {
-      coreLogger.warn({ err, path }, 'Could not restrict file to its owner');
+      warn({ err, path }, 'Could not restrict file to its owner');
       return false;
     }
   }
@@ -93,7 +107,7 @@ export function restrictToOwner(path: string, kind: 'file' | 'directory' = 'file
     { stdio: 'ignore', windowsHide: true },
   );
   if (result.error || result.status !== 0) {
-    coreLogger.warn(
+    warn(
       { path, status: result.status, err: result.error },
       'icacls could not restrict the file to its owner',
     );

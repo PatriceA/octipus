@@ -1,0 +1,70 @@
+00|· Welcome to Octipus. Project: project  Type a message or /help. Wheel: scroll · drag: select and
+01|· copy · /copy last: copy reply.
+02|
+03|You
+04|│ Run the build
+05|
+06|· ▸ 2 tool calls · 1 running · <time> — shell, read_file
+07|
+08|Octipus
+09|  A streaming reply
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|⠿ read_file — src/index.ts
+19|────────────────────────────────────────────────────────────────────────────────────────────────────
+20|
+21|────────────────────────────────────────────────────────────────────────────────────────────────────
+22|Plan · 1/3 steps done · Check rendering
+23|[done] Inspect
+24|[active] Check rendering
+25|[pending] Verify
+26|/plan-hide · /plan-feedback <change>
+27|● Octipus  connected  @tester  · project
+
+--- styles
+00|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+01|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+02|
+03|ccc
+04|ddeeeeeeeeeeeee
+05|
+06|a
+07|
+08|fffffff
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|dbbbbbbbbbbaaaaaaaaaaaaaaa
+19|gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+20|bh
+21|gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+22|ddddddddddddddddddddddddddddddddddddddd
+23|iiiiiiiiiiiiii
+24|iiiiiiiiiiiiiiiiiiiiiiii
+25|iiiiiiiiiiiiiiii
+26|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+27|jbcccccccbbaaaaaaaaabbjjjjjjjbbiiiiiiiii
+
+--- legend
+a = fg #a6babd bg default
+b = fg default bg default
+c = fg #92c9c5 bg default bold
+d = fg #92c9c5 bg default
+e = fg #edf5f3 bg default
+f = fg #edf5f3 bg default bold
+g = fg #5e8590 bg default
+h = fg default bg default inverse
+i = fg #b9ded9 bg default
+j = fg #7fd39a bg default

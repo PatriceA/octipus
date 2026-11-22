@@ -338,14 +338,75 @@ Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own
 
 If either surface stops on an error, or the terminal closes under it, it first turns mouse reporting off, shows the cursor and leaves raw mode, then prints the error and exits with a non-zero status, so the shell you return to works normally.
 
+## Terminal compatibility
+
+Both clients write ANSI sequences directly (pi-tui does not read terminfo): the alternate screen, cursor addressing, SGR mouse reports, bracketed paste, 24-bit colour. Any terminal that understands xterm's sequences can run them.
+
+### What is tested, and how
+
+Every terminal test runs the shipped entry point in a real pseudo-terminal on Linux and reads the screen with xterm's own model (`@xterm/headless`). So the outer terminal is always "xterm"; what varies is what sits between it and the program, and the environment the program sees.
+
+| Environment | Covered by | What is checked |
+| --- | --- | --- |
+| xterm (the model) | every suite in `tests/tui/` | Layout, scrolling, selection, mouse, clipboard, resizes, exit paths, golden screens |
+| tmux 3.4 | `terminals.e2e`, `tmux.e2e` | Both clients inside a real tmux: the frame sits above tmux's status line through resizes; clicks, drags and the wheel reach the client through tmux; a copy lands in the tmux buffer and tmux passes it on to the outer terminal as OSC 52. Run with the settings below and with tmux's defaults |
+| SSH | `terminals.e2e` (environment only) | With `SSH_CONNECTION` / `SSH_TTY` set, a copy goes out as OSC 52 to your local terminal, not to a clipboard tool on the remote host. No real SSH connection is made |
+| Linux console | `terminals.e2e` (`TERM=linux`, no `COLORTERM`) | Both clients draw, keep their last row and quit cleanly. The kernel console itself is not run |
+| `TERM=dumb`, pipes | `terminals.e2e`, `terminal-check.test` | Both clients refuse to start, exit 2 and say why, writing no screen |
+| Small windows | `terminals.e2e` (20×5, 30×6), the invariant suites (random sizes) | No row wraps; the chat keeps its status line last and the composer above it, the editor its mode bar last |
+
+Not tested: real terminal emulators (GNOME Terminal and other VTE terminals, Konsole, Kitty, Ghostty, WezTerm, Alacritty, iTerm2, Terminal.app, Windows Terminal, conhost), GNU screen, Zellij, mosh, a real SSH session, the Linux kernel console, macOS, Windows, and screen readers. Emoji width follows Unicode 6 in the test model, so an emoji that a terminal draws wider than Octipus measures would not be caught.
+
+### tmux
+
+```tmux
+set -g mouse on
+set -g set-clipboard on
+set -g allow-passthrough on
+```
+
+- `mouse on`: tmux's own mouse features (selecting panes, resizing them) work beside Octipus's. A pane that asks for mouse reports gets them either way; with tmux 3.4's default (`off`) clicks and the wheel still reached the client in our tests.
+- `set-clipboard on`: copies reach your terminal's clipboard. Octipus copies into the tmux buffer (`tmux load-buffer -w`), and tmux forwards it as OSC 52; that also worked with the default (`external`), but `on` lets programs' own clipboard requests through as well. Your terminal must accept OSC 52 too.
+- `allow-passthrough on`: lets sequences tmux would otherwise drop reach the terminal (inline images). Octipus does not depend on it today.
+
+Inside tmux, GNU screen or Zellij the clients ask for mouse reports only while a button is held (`?1002`), not on every movement, so there is no hover highlighting (the scrollbar) there. tmux needs its RGB feature for 24-bit colour (`set -as terminal-features ',xterm-256color:RGB'` if colours look wrong).
+
+### SSH
+
+Run the clients on the remote host as usual. A clipboard tool there would copy on the remote machine, so over SSH the copy goes to your local terminal as an OSC 52 request; allow clipboard writes in your terminal. Shift+drag (Option+drag on macOS) is your terminal's own selection and always works. Mouse reports are ordinary input and travel over SSH with the keys.
+
+### Linux console
+
+`TERM=linux` works, with limits that come from the console itself: it has 16 colours (24-bit colours are approximated or ignored), its font may lack the box-drawing, braille spinner and `●` glyphs (set `OCTIPUS_TUI_ICONS=ascii` for the file and status icons), and it has no clipboard for OSC 52 — use `/export` or `/scrollback`. It sends no mouse reports to programs (`gpm` serves them through its own library), so use the keyboard; set `tui.mouse` to `off`.
+
+### Windows
+
+The clients themselves need no Python or other extra runtime on Windows: they read the console through Node's own TTY support (ConPTY in Windows Terminal and conhost). Copy uses `clip.exe`, paste `Get-Clipboard`. `octi tui` and `octi edit` from `bin/octi.cmd` still go through `npm run`. None of this has been run as part of this work; native Windows rendering is untested.
+
+The terminal test suites need a POSIX pseudo-terminal (`tests/tui/pty.py`, Python's `pty`, `termios`, `fcntl`). On Windows they are skipped, and the harness refuses with a message pointing at WSL; run `npm run test:tui` under WSL, Linux or macOS. A relay that drives ConPTY from Node would need a native module (`node-pty`) and has not been added.
+
+### Screen readers and reduced motion
+
+The alternate screen redraws rows in place, which screen readers follow poorly. For a screen reader:
+
+- `octi tui --inline --mouse off` draws in the terminal's normal buffer and leaves the mouse and selection to the terminal;
+- `/scrollback` (`Alt+O`) prints the whole transcript into the terminal's scrollback as plain text, and `/export` writes it to a Markdown file;
+- the exit summary prints the last exchange to the normal buffer.
+
+The activity line animates a spinner (every 80 ms) while a tool or the model is working; there is no setting to stop it yet. Nothing else moves on its own.
+
+### Startup
+
+Time from the launch command to the first full frame, in a PTY on a shared Linux container (load average about 2–3), median of 12 runs: chat about 0.5 s, editor about 0.55 s (before this release: 0.9–1.0 s and 2.0 s). The plan's 150 ms target is not met when running from source: starting Node with the TypeScript loader and loading pi-tui (about 0.1 s) and zod (about 0.06 s, for `tui.json`) make up most of what is left. `src/tui-kit/startup-imports.test.ts` fails if something heavy (the server logger, tree-sitter, a model SDK, the database, voice, MCP) is imported before the first frame.
+
 ## Testing
 
 ```bash
 npm run test:tui
 ```
 
-This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
+This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** (`tests/tui/pty.py`; `TUI_PTY_PYTHON` picks the interpreter) plus a Node terminal emulator. Without a Python that can open a PTY they fail at once with a message saying what is missing, rather than hanging. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
 
-The tests assert current screen contents, including streaming Markdown, tool groups, stopping and queueing turns, search, pickers, notifications and the title, themes (OSC 11, `/theme`, `NO_COLOR`), links and images, pushed plan status, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps (its random mix includes tool groups, thinking items, queued messages, pickers and link-carrying rows); its editor counterpart (`tests/tui/editor-invariants.e2e.test.ts`) drives the editor through random keys, clicks, drags, wheel notches, resizes, agent edits and files changed on disk, and checks that no row wraps, the mode bar stays on the last row, the cursor stays in the editor pane (or an open box), and no control byte reaches the terminal outside an escape sequence. The chat suite runs 8 seeds by default and the editor's 6; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
+The tests assert current screen contents, including streaming Markdown, tool groups, stopping and queueing turns, search, pickers, notifications and the title, themes (OSC 11, `/theme`, `NO_COLOR`), links and images, pushed plan status, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. Two suites run the clients inside a real tmux when it is installed; `terminals.e2e.test.ts` covers the cases in [Terminal compatibility](#terminal-compatibility). Golden screens (`tests/tui/golden.e2e.test.ts`) compare five states of both clients — chat idle, mid-turn with tool output, the command palette, the editor with a file and the tree, a hunk review — with text-and-style snapshots in `tests/tui/goldens/`; a mismatch prints the rows that differ, and `UPDATE_TUI_GOLDENS=1` rewrites the files after an intended change (review the diff). `TUI_SCREENSHOTS_DIR=<dir>` also writes HTML pictures of them. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps (its random mix includes tool groups, thinking items, queued messages, pickers and link-carrying rows); its editor counterpart (`tests/tui/editor-invariants.e2e.test.ts`) drives the editor through random keys, clicks, drags, wheel notches, resizes, agent edits and files changed on disk, and checks that no row wraps, the mode bar stays on the last row, the cursor stays in the editor pane (or an open box), and no control byte reaches the terminal outside an escape sequence. The chat suite runs 8 seeds by default and the editor's 6; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: real terminal emulators are not exercised (see [Terminal compatibility](#terminal-compatibility)). Tests do not establish compatibility with every terminal or font.
 
 See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.
