@@ -10,6 +10,7 @@
  */
 import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
 import { chalk, getPalette } from '../theme/defaults';
+import { displayLine } from '../terminal-text';
 
 export interface PermissionPromptOptions {
   toolName: string;
@@ -47,7 +48,7 @@ export class PermissionPrompt implements Component, Focusable {
     const bold = (text: string) => chalk.bold.hex(palette.warn)(text);
 
     const header = bold('⚠ Permission required');
-    const detail = this.options.detail;
+    const detail = displayLine(this.options.detail);
     const hint = dim('y/Enter approve · n deny · Esc cancel');
 
     const maxInner = Math.max(1, width - 4);

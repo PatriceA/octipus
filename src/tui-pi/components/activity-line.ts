@@ -15,6 +15,7 @@
 import { type Component, truncateToWidth, type TUI } from '@mariozechner/pi-tui';
 import { chalk, getPalette } from '../theme/defaults';
 import type { ToolEventState, ToolState } from '../gateway-adapter';
+import { displayLine } from '../terminal-text';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;
@@ -89,18 +90,18 @@ export class ActivityLine implements Component {
     if (tool) {
       const symbol = symbolFor(tool.state, this.frame);
       const colour = colourFor(tool.state, palette);
-      const badge = tool.mcpServer ? chalk.hex(palette.accent)(`[mcp:${tool.mcpServer}] `) : '';
-      const preview = tool.preview ? chalk.hex(palette.dim)(` — ${tool.preview}`) : '';
-      const line = `${colour(symbol)} ${badge}${tool.name}${preview}`;
+      const badge = tool.mcpServer ? chalk.hex(palette.accent)(`[mcp:${displayLine(tool.mcpServer)}] `) : '';
+      const preview = tool.preview ? chalk.hex(palette.dim)(` — ${displayLine(tool.preview)}`) : '';
+      const line = `${colour(symbol)} ${badge}${displayLine(tool.name)}${preview}`;
       return [truncateToWidth(line, width)];
     }
     if (this.thinking) {
       const symbol = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length];
       const elapsed = Math.round((Date.now() - this.thinkingSince) / 1000);
-      const model = this.thinking.model ? ` · ${this.thinking.model}` : '';
+      const model = this.thinking.model ? ` · ${displayLine(this.thinking.model)}` : '';
       const line =
         `${chalk.hex(palette.accent)(symbol)} ` +
-        `${chalk.hex(palette.dim)(`thinking · ${this.thinking.role} · iter ${this.thinking.iter} · ${elapsed}s${model}`)}`;
+        `${chalk.hex(palette.dim)(`thinking · ${displayLine(this.thinking.role)} · iter ${this.thinking.iter} · ${elapsed}s${model}`)}`;
       return [truncateToWidth(line, width)];
     }
     return [];

@@ -1,6 +1,7 @@
 import { fitStatusRows } from './status-bar';
 import { CURSOR_MARKER, type Component, truncateToWidth } from '@mariozechner/pi-tui';
 import type { MessagesPane } from './messages-pane';
+import { frameRow } from '../terminal-text';
 
 export function cropComposer(lines: string[], rows: number): string[] {
   if (rows <= 0) return [];
@@ -29,5 +30,6 @@ export function renderChatFrame(width: number, height: number, parts: {
   parts.messages.setHeight(headBudget);
   const head = parts.messages.render(width);
   return [...head, ...Array(Math.max(0, headBudget - head.length)).fill(''), ...activity, ...agents, ...composer, ...statusRows]
-    .slice(0, height).map(line => truncateToWidth(line, width, ''));
+    // One rendered row is one terminal row, whatever a component was handed.
+    .slice(0, height).map(line => truncateToWidth(frameRow(line), width, ''));
 }

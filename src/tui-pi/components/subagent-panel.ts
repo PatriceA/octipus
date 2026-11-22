@@ -13,6 +13,7 @@
 import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
 import { chalk, getPalette } from '../theme/defaults';
 import type { ToolEventState } from '../gateway-adapter';
+import { displayLine } from '../terminal-text';
 
 /**
  * How long a *running* row may go without any event before it is dropped as
@@ -75,7 +76,7 @@ export class SubagentPanel implements Component {
 
   start(id: string, role: string, model?: string): void {
     this.agents.set(id, {
-      id, role, model,
+      id, role: displayLine(role), model: model === undefined ? undefined : displayLine(model),
       iteration: 0,
       toolCount: 0,
       tool: null,
@@ -161,8 +162,8 @@ export class SubagentPanel implements Component {
     if (entry.toolCount > 0) parts.push(`${entry.toolCount} tool${entry.toolCount === 1 ? '' : 's'}`);
     parts.push(formatElapsed((entry.endedAt ?? this.now()) - entry.startedAt));
     if (entry.tool) {
-      const preview = entry.tool.preview ? ` → ${entry.tool.preview}` : '';
-      parts.push(chalk.hex(palette.dim)(`${entry.tool.name}${preview}`));
+      const preview = entry.tool.preview ? ` → ${displayLine(entry.tool.preview)}` : '';
+      parts.push(chalk.hex(palette.dim)(`${displayLine(entry.tool.name)}${preview}`));
     }
     return `${symbol} ${parts.join(chalk.hex(palette.dim)(' · '))}`;
   }

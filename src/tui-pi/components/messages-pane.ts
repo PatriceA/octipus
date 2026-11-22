@@ -2,6 +2,7 @@
 import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
+import { displayText } from '../terminal-text';
 
 export interface ChatMessage {
   role: Role;
@@ -53,11 +54,12 @@ export class MessagesPane implements Component {
     return false;
   }
   push(message: ChatMessage): void {
-    this.history.push(message);
+    this.history.push({ ...message, content: displayText(message.content) });
     if (this.frozen) this.newer++;
     this.revision++;
   }
-  setLive(text: string | null): void {
+  setLive(raw: string | null): void {
+    const text = raw === null ? null : displayText(raw);
     if (this.live !== text) { this.live = text; this.revision++; }
   }
   reset(): void {

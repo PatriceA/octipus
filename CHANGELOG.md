@@ -7,6 +7,16 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal chat and editor: the composer no longer vanishes during a turn.**
+  A tool call whose preview spanned lines (a multi-line shell command, a
+  carriage return or tab in a result, an escape sequence in tool output) was
+  painted as one row but took several, so the bottom of the screen — the input
+  line and status — scrolled out of the window until the turn ended or the
+  window was resized. Text from the model, tools and the server is now reduced
+  to printable text before it is drawn, one rendered row is always one
+  terminal row, and escape sequences in tool output can no longer reach your
+  terminal. An agent question that spans lines shows every line in its box.
+
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
   - Skills → Proposals shows one proposal per topic: a new suggestion on the

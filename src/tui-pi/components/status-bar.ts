@@ -6,6 +6,7 @@ import { type Component, truncateToWidth, wrapTextWithAnsi } from '@mariozechner
 import type { ConnectionStatus } from '@/core/gateway/client';
 import { chalk, getPalette } from '../theme/defaults';
 import { getGlyphs } from '../theme/glyphs';
+import { displayLine, displayText } from '../terminal-text';
 
 export interface CumulativeStats { tokens: number; cost: number; turns: number }
 
@@ -28,22 +29,22 @@ export class StatusBar implements Component {
   private mode: string | null = null;
   private plan: string | null = null;
   private planDetails: string | null = null;
-  setPlanDetails(text: string | null): void { this.planDetails = text; }
+  setPlanDetails(text: string | null): void { this.planDetails = text === null ? null : displayText(text); }
   isPlanExpanded(): boolean { return this.planDetails !== null; }
-  setPlan(plan: string | null): void { this.plan = plan; if (plan === null) this.planDetails = null; }
+  setPlan(plan: string | null): void { this.plan = plan === null ? null : displayLine(plan); if (plan === null) this.planDetails = null; }
 
   setStatus(status: ConnectionStatus): void { this.status = status; }
-  setProject(project: string | undefined): void { this.project = project; }
-  setExpert(expert: string | null): void { this.expert = expert; }
+  setProject(project: string | undefined): void { this.project = project === undefined ? undefined : displayLine(project); }
+  setExpert(expert: string | null): void { this.expert = expert === null ? null : displayLine(expert); }
   setStats(stats: CumulativeStats): void { this.stats = stats; }
   setMcp(summary: McpSummary | null): void { this.mcp = summary; }
   setContext(fill: ContextFill | null): void { this.context = fill; }
   /** Signed-in username, or null while signed out. */
-  setUser(user: string | null): void { this.user = user; }
+  setUser(user: string | null): void { this.user = user === null ? null : displayLine(user); }
   /** Model of the current or last root turn. Kept after the turn ends: the
    *  activity line that used to carry it disappears with the turn, so which
    *  model answered was only visible while it was still answering. */
-  setModel(model: string | null): void { this.model = model; }
+  setModel(model: string | null): void { this.model = model === null ? null : displayLine(model); }
   /** Free-form status segment; null hides it. Not wired to anything today —
    *  the run-mode badge it used to carry named a routing hop that no longer
    *  exists, and derived the prompt tier from a second, divergent threshold. */

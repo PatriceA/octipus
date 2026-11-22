@@ -19,6 +19,7 @@
  */
 import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
 import { chalk, getPalette } from '../theme/defaults';
+import { displayLine, displayText } from '../terminal-text';
 
 export interface ApprovalPromptOptions {
   summary: string;
@@ -87,9 +88,10 @@ export class ApprovalPrompt implements Component, Focusable {
 
     const choices = this.choices;
     const lines: string[] = [bold('? Your decision')];
-    if (this.options.summary) lines.push(dim(this.options.summary));
-    lines.push(this.options.question);
-    for (const [i, choice] of choices.entries()) lines.push(`  ${i + 1}. ${choice}`);
+    if (this.options.summary) lines.push(dim(displayLine(this.options.summary)));
+    // A question may span lines; each one is its own row of the box.
+    lines.push(...displayText(this.options.question).split('\n'));
+    for (const [i, choice] of choices.entries()) lines.push(`  ${i + 1}. ${displayLine(choice)}`);
     lines.push(
       dim(choices.length > 0
         ? `1-${choices.length} choose · Enter first · Esc decline`
