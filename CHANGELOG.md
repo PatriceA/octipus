@@ -20,20 +20,29 @@ labels reflect blast radius, not contract guarantees.
     `---:` for a right-aligned column, empty cells kept, `|` escaped, a
     wrapped cell joined to its row when rows are spaced wider than lines.
   - A page where neither reading holds comes out exactly as before. Label/value
-    forms keep their `Label:  value` lines. Not handled: merged or spanning
-    cells, tables whose columns do not line up or whose cells are long text,
+    forms, bullet lists, tables of contents and tables without a header row
+    keep their lines; a gutter under three glyphs wide needs six lines, not
+    three; a page of over 10,000 fragments (or a line of over 500) skips
+    detection. Not handled: merged or spanning cells, tables whose columns
+    do not line up or whose cells are long text,
     wrapped cells in tables without row spacing, columns that never share a
     baseline, tables continuing onto the next page (read as two tables),
     rotated and right-to-left text.
   - Fixed: the gap between two runs of text on a line was lost on real PDFs,
     because pdfjs reports it as a whitespace item as wide as the gap; column
-    and cell gaps came out as one space. Whitespace-only items are now dropped.
-  - A Markdown table longer than one knowledge-base chunk (from a PDF, an
-    `.xlsx` sheet or a `.docx`) is split between rows, and each piece repeats
-    the header row. It used to be cut as prose, which could split a row at a
-    `. ` inside a cell and left every piece after the first without column
-    names. Documents indexed before this keep their old text and chunks
-    until they are uploaded again.
+    and cell gaps came out as one space. Whitespace-only items no longer count
+    as text, but still mark a space, so words either side of a font change
+    (bold, italic, inline code) stay apart.
+  - A Markdown table longer than one knowledge-base chunk (from a PDF or an
+    `.xlsx` sheet) is split between rows, and each piece repeats the header
+    row. It used to be cut as prose, which could split a row at a `. ` inside
+    a cell and left every piece after the first without column names. The
+    chunk size still holds: a row that does not fit under the header is cut
+    like prose, and a header over a quarter of a chunk is not repeated (that
+    table is cut like prose, as before). `.docx` tables are not affected:
+    mammoth's Markdown output has no tables, so they arrive one paragraph per
+    cell. Documents indexed before this keep their old text and chunks until
+    they are uploaded again.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),

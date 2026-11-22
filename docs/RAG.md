@@ -106,10 +106,14 @@ ON DELETE CASCADE FK reaps the chunks with the parent.
 PDF text reaches the chunker already in reading order: a two- or
 three-column page is emitted column by column, and a table as a
 Markdown table ([Documents → PDF — Text Layer](DOCUMENTS.md#pdf--text-layer)).
-A Markdown table longer than one chunk — from a PDF, an `.xlsx` sheet
-or a `.docx` — is split between rows, and each piece opens with the
-table's header row and separator, so a chunk retrieved from the middle
-of a table still says what its columns are.
+A Markdown table longer than one chunk — from a PDF or an `.xlsx`
+sheet (`.docx` tables reach the chunker one paragraph per cell, since
+mammoth's Markdown output has no tables) — is split between rows, and
+each piece opens with the table's header row and separator, so a chunk
+retrieved from the middle of a table still says what its columns are.
+The chunk size still holds: a row that does not fit under the header is
+cut like prose, and a header over a quarter of a chunk (a sheet dozens
+of columns wide) is not repeated — that table is cut like prose.
 
 ### Manual indexing
 
