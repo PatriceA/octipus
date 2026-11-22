@@ -65,7 +65,9 @@ import {
   type SelectItem,
   Spacer,
   Text,
-  TUI,
+  type Component,
+  type TUI,
+  TuiMainScreen,
 } from '@/tui-kit';
 import { httpReachable, probeAllServices } from '@/setup/probes';
 import { PROVIDERS, getProvider, type ProviderId } from '@/setup/providers';
@@ -116,12 +118,12 @@ interface WizardCtx {
   terminal: ProcessTerminal;
 }
 
-function mountStep(ctx: WizardCtx, title: string, components: { render(width: number): string[] }[]): void {
+function mountStep(ctx: WizardCtx, title: string, components: Component[]): void {
   while (ctx.body.children.length > 1) ctx.body.removeChild(ctx.body.children[1]);
   ctx.body.addChild(new Spacer(1));
   ctx.body.addChild(new Text(`\x1b[1;36m▸ ${title}\x1b[0m`));
   ctx.body.addChild(new Spacer(1));
-  for (const c of components) ctx.body.addChild(c as Parameters<typeof ctx.body.addChild>[0]);
+  for (const c of components) ctx.body.addChild(c);
   ctx.tui.requestRender();
 }
 
@@ -983,7 +985,7 @@ async function main() {
     cfg = await runPreBackend(null);
   } else {
     const terminal = new ProcessTerminal();
-    const tui = new TUI(terminal, false);
+    const tui = new TuiMainScreen(terminal, false);
     terminal.setTitle('Octipus setup');
     const body = new Container();
     body.addChild(new Text('\x1b[1;36mOctipus\x1b[0m — installing your octopus-machine.'));

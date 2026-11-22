@@ -13,6 +13,6 @@ test('nothing outside src/tui-kit imports pi-tui', () => {
     .map(file => file.replaceAll('\\', '/'))
     .filter(file => !file.startsWith('src/tui-kit/'));
   expect(files.length).toBeGreaterThan(100);
-  const offenders = files.filter(file => /['"`]@mariozechner\/pi-tui(?:\/[^'"`]*)?['"`]/.test(readFileSync(file, 'utf8')));
+  const offenders = files.filter(file => /['"`]@(?:mariozechner|earendil-works)\/pi-tui(?:\/[^'"`]*)?['"`]/.test(readFileSync(file, 'utf8')));
   expect(offenders).toEqual([]);
 });
