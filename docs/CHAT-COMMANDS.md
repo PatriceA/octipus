@@ -18,7 +18,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/plan [on|off]` | Toggle plan-first mode: explore and propose before implementation |
 | `/capture <text>` | Append a timestamped line to today's daily note; `[[wikilinks]]` and `#tags` in the text are wired into the [knowledge graph](KNOWLEDGE-GRAPH.md) immediately |
 | `/cost` | Show token usage and cost for the session |
-| `/sessions` | List your recent sessions (the TUI's `/resume <n|id>` reopens one) |
+| `/sessions` | List your recent sessions (in the TUI, `/sessions` alone opens a picker; `/sessions list` prints the list and `/resume <n|id>` reopens one) |
 | `/history` | Replay the current session's last 50 user/assistant messages |
 | `/cancel` | Abort an active multi-step command |
 | `/eval` | Run evaluation scenarios or compare models |
@@ -68,7 +68,7 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 |---------|---------|-------------|
 | `/work-plan` | — | Show the visible plan, evidence, and feedback |
 | `/plan-feedback <change>` | — | Save feedback on the current plan |
-| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version) |
+| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version). Every running agent of yours, in every session |
 | `/status` | `/s` | Show session status and agents (gateway version) |
 | `/cost` | — | Show cumulative token usage and cost |
 | `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
@@ -79,6 +79,20 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 | `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `~/.octipus/extensions/` (admins only) |
 | `/persona` | — | Configure the root agent persona — name, tone, narration, free-form facts |
 | `/version` | `/v` | Show Octipus version and build info |
+
+### Terminal chat only
+
+Handled by `octi tui` itself ([guide](guides/tui.md#chat-shortcuts-and-commands)):
+
+| Command | Description |
+|---------|-------------|
+| `/resume [n\|id]` | Alone: a session picker. With a number or id: reopen that session |
+| `/skills` (alone) | A skill picker, then how the skill is used (Automatic, Always, This session); with arguments it is the gateway command above |
+| `/theme [auto\|dark\|light\|high-contrast]` | Switch the theme and save it in `~/.octipus/tui.json`; alone, a picker |
+| `/search` | Search the transcript (also `Ctrl+F`) |
+| `/copy [last\|transcript\|code]`, `/export [path]`, `/scrollback` | Take the conversation out (`code`: the latest reply's last code block, also `Alt+C`) |
+
+`Esc` stops the running turn of this chat's session only — never `/abort`'s every agent of yours: its root agent (`agent.stop`), or, before the root is known, the session (`session.stop`). Messages typed while a turn runs, or while the connection is down, wait above the composer and are sent when it ends (or the connection is back).
 
 ### Channel-Specific
 

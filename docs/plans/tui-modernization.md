@@ -1,0 +1,808 @@
+# Terminal chat and editor: modernization plan
+
+Status: in progress (2026-11-22). Phase 0 shipped with this document;
+Phases 1 and 2 are on the modernization branch (§7).
+
+Scope: `octi tui` (`src/tui-pi/`, 5.4k lines with tests) and `octi edit`
+(`src/tui-editor/`, 6.5k lines with tests), their shared pieces, the
+`@mariozechner/pi-tui` dependency (now `@earendil-works/pi-tui`), and `tests/tui/`.
+
+Goal: the terminal is a first-class way to use Octipus, comparable with Claude
+Code, Codex CLI, Grok Build and the pi coding agent in how it reads, scrolls,
+selects and stays out of the way.
+
+How to read the evidence: **[code]** means read in this repository or in the
+installed pi-tui 0.73.1 source; **[run]** means reproduced in the PTY harness
+or a unit test; **[upstream]** means taken from npm registry metadata, the
+upstream changelog or a vendor's documentation and not exercised here;
+**[unverified]** means reported but not confirmed.
+
+## 1. Summary
+
+1. The vanishing composer was a real bug with one cause, now fixed (§2).
+2. It was possible because of how the screen is drawn today: a full-height
+   frame painted into the terminal's normal buffer by a renderer built for
+   growing documents. That mismatch is behind most of the remaining roughness —
+   Shift-to-select, lost scrollback on resize, a frame left behind on exit — and
+   no amount of patching on the current base removes it (§3).
+3. `@mariozechner/pi-tui` is deprecated; development continues as
+   `@earendil-works/pi-tui` (1.6.0), which has since added exactly what is
+   missing here: an alternate-screen renderer, pinned layout regions, mouse,
+   in-app selection (§4).
+4. Recommendation: **keep pi-tui, move to the maintained package, adopt its
+   alternate-screen renderer behind a thin module of our own**, and decide by
+   a time-boxed spike with written exit criteria. Do not write our own
+   terminal layer unless the spike fails; if it does, replace only the screen
+   layer and keep pi-tui's editor, Markdown and key parsing (§4).
+5. The editor needs correctness work before features: several basic
+   behaviours are wrong or unreachable today (§5.2).
+6. Work is ordered in six phases; each is shippable on its own (§7).
+
+## 2. Phase 0 — shipped with this plan
+
+| Fix | Cause | Commit |
+| --- | --- | --- |
+| Composer and status scroll out of the window during a turn | A rendered row containing `\n`, `\r`, a tab or an escape sequence occupies more than one terminal row. pi-tui moves the cursor relatively and assumes one row per rendered line, so every later row is painted one row low and the bottom of the frame leaves the window. It returned on a full repaint: turn end (the activity row disappears) or a resize — and broke again on the next spinner tick, which is why resizing only helped "sometimes". A tool call with a multi-line shell command was enough. **[run]** | `ea95cba` |
+| Escape sequences in tool output reached the terminal (a result containing `ESC[2J` cleared the screen) | Same path. **[run]** | `ea95cba` |
+| A multi-line agent question was cut to its first line and could break its box | Same class, in the overlay. **[run]** | `ea95cba` |
+| Editor: Down onto a shorter line skipped a line; Up stayed on the current line | Vertical moves took the end-of-line overflow branch meant for Right. **[run]** | `d82427e` |
+| Editor: a control byte in a file (CRLF `\r`, an escape sequence in a log) corrupted the screen | File content was written raw. Now drawn as a control picture (`␍`, `␛`); the file is unchanged. **[run]** | `6f7062e` |
+
+What the composer fix consists of (`src/tui-pi/terminal-text.ts`):
+
+- `displayText` / `displayLine` reduce outside text to printable text where it
+  enters the transcript, activity line, subagent panel, status bar and the
+  decision prompts.
+- `frameRow` in the shared `renderChatFrame` is the backstop: whatever a
+  component was handed, one rendered row is one terminal row. Both surfaces
+  use that frame.
+- `tests/tui/composer-sticky.e2e.test.ts` drives the real entry point in a PTY
+  and asserts the composer, status line and transcript positions.
+
+Not covered by the fix, and listed as work below: pi-tui overlays are composited
+after our frame, so the backstop does not see them (each prompt sanitizes its
+own input instead); and width disagreements between pi-tui and the terminal
+(§3.3) can still wrap a row. Both were addressed in Phase 1 (§7).
+
+## 3. Why the current base is fragile
+
+### 3.1 What is drawn today
+
+pi-tui 0.73.1 has one renderer **[code: `dist/tui.js` `doRender`]**. It treats
+the UI as a document that grows downwards in the terminal's normal buffer,
+remembers the previous lines, and rewrites the changed range with relative
+cursor movement (`ESC[nA` / `ESC[nB`). It has no alternate screen, no absolute
+positioning, no pinned region and no mouse support.
+
+Octipus wants a fixed frame: transcript above, composer and status pinned
+below. It gets one by rendering exactly `terminal.rows` lines every time
+(`renderChatFrame`, and `.slice(0, rows)` in the editor's root) and scrolling
+the transcript inside the app (`MessagesPane`). Mouse wheel is added by writing
+`ESC[?1000h ESC[?1006h` directly and parsing SGR mouse reports by regex
+(`terminal-actions.ts`, `messages-pane.ts`).
+
+So the app runs a full-screen layout on a renderer that does not know the
+screen is full. Consequences, all **[code]**:
+
+| Consequence | Mechanism |
+| --- | --- |
+| Any cursor movement pi-tui does not know about corrupts the frame until the next full repaint | Relative positioning from a remembered row. The Phase 0 bug was one instance; a stray `console.log`, a row the terminal wraps, or a write from a child process are others. |
+| Resizing erases the user's terminal history from before launch | A width or height change calls `fullRender(true)`, which writes `ESC[2J ESC[H ESC[3J`. `3J` clears scrollback. |
+| Quitting leaves a dead frame in the scrollback | `stop()` moves below the content and prints a newline; there is no screen to restore. |
+| Click-drag does not select text without Shift | Wheel events only arrive with mouse reporting on (mode 1000), and mode 1000 also takes clicks. There is no mode that reports the wheel but not buttons in the normal buffer. |
+| A row wider than the terminal ends the program | `doRender` throws "Rendered line exceeds terminal width" after stopping the terminal. `renderChatFrame` truncates; overlays and the editor's root do not go through it. |
+| A crash can leave the shell in raw mode with mouse reporting on | `runtime.ts` restores the terminal on SIGINT and SIGTERM only; there is no handler for an uncaught exception, an unhandled rejection or a plain `process.exit`. |
+
+### 3.2 The selection and scrolling conflict
+
+This is the constraint the previous attempts ran into, stated once:
+
+- Normal buffer, no mouse reporting: selection is native, the wheel scrolls the
+  terminal's own scrollback, which holds painted frames rather than the
+  conversation.
+- Normal buffer, mouse reporting: the wheel reaches the app, and so does every
+  click. Native selection needs the terminal's override key (Shift in xterm
+  and most others, Option in iTerm2/Terminal.app, Fn in some).
+- Alternate screen, alternate-scroll mode (`ESC[?1007h`), no mouse reporting:
+  the wheel arrives as Up/Down keys, selection stays native. The app cannot
+  tell a wheel notch from an arrow key. Codex CLI defines this mode
+  **[upstream]**.
+- Alternate screen, mouse reporting, selection drawn by the app: drag selects,
+  release copies (OSC 52 or a native clipboard tool), the override key still
+  gives native selection. Selection can follow the transcript past the
+  viewport and can leave out the rail, borders and line numbers. Claude Code's
+  fullscreen mode, pi 1.x fullscreen and opencode work this way **[upstream]**.
+
+There is no fifth option. "Native selection and wheel scrolling together, no
+modifier" exists only in the two alternate-screen rows, and both need a
+renderer that owns the screen.
+
+### 3.3 Width
+
+pi-tui measures with `get-east-asian-width` plus its own rules; terminals use
+their own tables. Where they disagree a row wraps and the frame shifts — the
+same failure as Phase 0 from a different cause. Known disagreements **[code]**:
+tabs are counted as three cells (handled now by expanding them); the app
+strips variation selectors from chat text (`sanitize` in `app.ts`) for this
+reason. Not yet handled: emoji ZWJ sequences, regional-indicator flags and
+ambiguous-width characters in CJK locales **[unverified]**. An
+alternate-screen renderer that positions every row absolutely confines such
+an error to the row it happens on.
+
+## 4. pi-tui: stay, upgrade or replace
+
+### 4.1 Facts
+
+- Installed: `@mariozechner/pi-tui` 0.73.1, about 9,000 lines of JavaScript,
+  MIT. Dependencies: `chalk`, `marked`, `mime-types`, `get-east-asian-width`,
+  optional `koffi`. **[code]**
+- The npm package is deprecated: "please use @earendil-works/pi-tui instead
+  going forward". 0.73.1 is the last release under the old name.
+  **[upstream: `npm view`]**
+- `@earendil-works/pi-tui` 1.6.0 (2026-11-20), MIT, Node >= 22.19. About 65
+  releases since 0.74; breaking changes still land in minor versions after
+  1.0. It vendors prebuilt native helpers for clipboard and modifier keys.
+  **[upstream]**
+- Since 0.84 it ships two renderers, `TuiMainScreen` (the model we have) and
+  `TuiAltScreen`, with `VStack` / `HStack` / `ScrollView` layouts, sticky
+  regions, scrollbars, SGR mouse, drag selection with OSC 52 copy, and
+  transcript search. **[upstream: changelog, 1.6.0 tarball]**
+
+What Octipus uses from pi-tui **[code]**:
+
+| Used | From pi-tui | Own code that duplicates or works around it |
+| --- | --- | --- |
+| Chat composer | `Editor`, `CombinedAutocompleteProvider` (2.5k lines) | — |
+| Markdown | `Markdown` (0.7k) | — |
+| Keys | `matchesKey`, `KeybindingsManager` (1.2k) | Editor's vim layer compares raw bytes (`toVimKey`) |
+| Width and wrapping | `visibleWidth`, `truncateToWidth`, `wrapTextWithAnsi` (1k) | `sliceByColumn` imported from `dist/utils.js`, a private path |
+| Overlays, focus | `showOverlay`, `setFocus` | Seven hand-drawn boxes with their own `padTo` |
+| Frame and diffing | `TUI`, `Container`, `ProcessTerminal` | Full-height frame, viewport budgeting, in-app scrolling, split panes, mouse enable and parsing — all ours |
+| File editing | — | Buffer, cursor, undo, vim, search, diff, highlighting — all ours |
+
+So the custom code is concentrated in exactly the layer where pi-tui 0.73 is
+weakest (screen ownership, layout, mouse), and the parts pi-tui does well
+(composer, Markdown, key decoding) are used as shipped.
+
+### 4.2 Options
+
+| | A. Stay on 0.73.1 | B. Move to `@earendil-works/pi-tui` 1.x | C. Own screen layer, keep pi-tui widgets | D. Own everything |
+| --- | --- | --- | --- | --- |
+| Fixes §3.1 | No | Yes, if `TuiAltScreen` does what its changelog says | Yes | Yes |
+| New code to write | None | Migration across ~65 releases of API change | Est. 1.5–2.5k lines: cell buffer and diff, alt screen, mouse, layout, selection | Est. 7–9k lines, including a key decoder (kitty protocol, modifyOtherKeys, IME) — the riskiest part |
+| Ongoing cost | A dead dependency | A fast-moving one, driven by one product, breaking in minors | Our own renderer to maintain; still on pi-tui for widgets | Everything is ours |
+| Supply chain | Unmaintained | Prebuilt native binaries enter the tree | As B, or stay on 0.73 for widgets only | None |
+| Other agent TUIs | — | The pi coding agent itself | Claude Code and Gemini CLI built their own layer over Ink **[upstream]** | Codex, Grok Build (Rust) |
+
+### 4.3 Recommendation
+
+**B, behind a seam, with C as the fallback. Not A, not D.**
+
+- A is not an option: the package is dead and cannot deliver §3.2.
+- D rebuilds 4–5k lines that already work (composer, Markdown, keys) for no
+  user-visible gain, and the key decoder is where terminal apps accumulate
+  bugs for years.
+- B gets the missing layer from the people who needed the same thing for the
+  same kind of product. Its risk is churn, which the seam and an exact version
+  pin contain.
+
+The seam: one module, `src/tui-kit/`, is the only place that imports pi-tui.
+Today 46 files import it directly, one of them from a private path. With the
+seam, an upgrade, a fork or a swap of the screen layer touches one directory.
+It also becomes the home of what the two apps duplicate (box drawing, text
+fields, the overlay open/close pattern).
+
+### 4.4 The spike that decides it
+
+Time-boxed to a few days, on a branch, chat surface only. Port `octi tui` to
+1.6.0 with `TuiAltScreen`, a `ScrollView` transcript and sticky composer and
+status.
+
+Go if all hold:
+
+1. The existing `tests/tui/*.e2e` suites pass, with the Phase 0 test, at 80×24
+   and 200×60, through 50 random resizes.
+2. Drag selects transcript text and copies it; the terminal's override key
+   still gives native selection; the wheel scrolls with nothing held.
+3. A 5,000-message transcript scrolls and streams without visible lag
+   (measure: frame time under 16 ms at 200×60).
+4. Works in: a VTE terminal, Kitty or Ghostty, iTerm2, Windows Terminal,
+   tmux, and over SSH. Degrades without corruption in the Linux console.
+5. An uncaught exception restores the terminal.
+6. The prebuilt native helpers can be disabled or are acceptable to ship
+   (review what they do; check the Docker image and Windows).
+
+No-go on any of 1–3 → option C: write the screen layer in `src/tui-kit/`
+against the same component contract (`render(width): string[]`,
+`handleInput`), which is already what every Octipus component implements, and
+stay on pi-tui for the composer, Markdown and keys.
+
+Open questions the spike answers: whether `TuiAltScreen`'s selection can
+exclude decorations (rail, line numbers); whether the 1.x `Editor` still
+supports the autocomplete and paste-marker behaviour the composer relies on;
+whether overlays take part in layout or are still composited afterwards.
+
+#### Spike result (2026-11-22): go, option B
+
+`@earendil-works/pi-tui` 1.6.0 (exact pin) replaced 0.73.1, and both
+surfaces run on `TuiAltScreen`. The port was small: `TUI` became an
+interface (`TuiMainScreen` / `TuiAltScreen` are the renderers),
+`Component.render` returns `readonly string[]`, `sliceByColumn` is public,
+and `chalk` is no longer a pi-tui dependency (it was ours all along, now
+declared). Typecheck errors after the swap: four in `src/`, seven in the
+setup wizard. `Editor`, `CombinedAutocompleteProvider`, `Markdown`,
+`SelectList`, `Input` and the keybindings manager kept the API the app uses;
+the composer's autocomplete, history and paste markers pass their tests
+unchanged. **[code, run]**
+
+| Criterion | Result |
+| --- | --- |
+| 1. e2e suites at 80×24 and 200×60 through 50 random resizes | Pass. Every pre-existing suite passes on the alternate screen; the expectations that changed are the ones the plan changes (mouse mode `any` instead of `vt200`, a scrollbar beside the rows, no PgUp hint row). `screen.e2e` adds the two sizes with 50 resizes each; the invariant fuzzer ran 150 seeds clean, a quarter of them `--inline`. **[run]** |
+| 2. Drag selects and copies; override key; wheel with nothing held | Pass in the harness: a drag with no modifier selects across transcript rows, copies on release (rail left out through the `copySelection` hook) and the wheel scrolls. The Shift/Option override is the terminal's own and cannot be exercised in xterm-headless; the app uses standard SGR any-motion reporting (button-motion inside tmux/screen), which xterm, VTE, Kitty and Windows Terminal override with Shift **[upstream]**. |
+| 3. 5,000 messages, frame time < 16 ms at 200×60 | Pass: p95 about 1 ms per streaming frame, about 7 ms per page scroll that pages older messages into the window (`frame-time.e2e`, real app on the real renderer over a counting terminal). **[run]** |
+| 4. Terminal matrix | Approximated only: xterm-headless for every suite, plus the chat inside a real tmux 3.4 (`tmux.e2e`: layout through resizes, copy to the tmux buffer, clean quit). VTE, Kitty/Ghostty, iTerm2, Windows Terminal, SSH and the Linux console were not available and are **not verified**. |
+| 5. Uncaught exception restores the terminal | Pass, alternate and inline: `exit-paths.e2e` checks the normal buffer is back with the pre-launch text, mouse and bracketed paste off, cursor shown, cooked mode, and the error printed after `?1049l`. **[run]** |
+| 6. Native helpers | Acceptable. Prebuilt `.node` files (16–72 kB each, C/Objective-C sources shipped beside them, no install script) for clipboard reads and modifier-key state on macOS, Windows and Linux/X11. They load lazily: Linux only through `getNativeClipboard()`, which Octipus never calls, so the Docker image and Linux never load one; on macOS only to tell Shift+Enter apart in Terminal.app; on Windows to enable VT input and for Shift+Enter. There is no switch to disable them short of patching the package; each load is wrapped in `try`, so a missing or blocked binary degrades to the plain behaviour. Windows itself was not run. **[code]** |
+
+Open questions: selection cannot leave out decorations by itself — it copies
+the source rows — but its `copySelection` hook lets the app strip the rail,
+which is what the chat does; the editor's line numbers and tree are not
+stripped. The 1.x `Editor` keeps autocomplete and paste markers. Overlays are
+still composited over the layout, so `FramedOverlay` stays the backstop.
+
+Two costs of the renderer, accepted: a `ScrollView` needs every row of its
+content, so the transcript renders a window of the newest messages and grows
+it as the reader reaches its top (`transcript-view.ts`); and the alternate
+screen consumes viewport keys (PageUp, Ctrl+Home, Ctrl+Up/Down) before the
+app sees them, so the editor, which scrolls its own panes, unbinds them.
+
+## 5. Findings
+
+### 5.1 Chat (`src/tui-pi/`)
+
+Structure is sound: a gateway adapter that turns protocol events into a small
+event type, a presenter shared by both surfaces, and components that render
+strings. Tests are good for this size (unit tests per component, three PTY
+suites). The problems are in what it does not yet do, and in a few places
+where the code has drifted. All **[code]** unless marked.
+
+Defects and risks
+
+- No terminal restore on crash (§3.1).
+- Overlays bypass the frame backstop (§2) and can still throw on an over-wide
+  row.
+- Mouse press and release reports that are not wheel events fall through to
+  the focused component; the regex also matches presses only (`M`), so
+  releases (`m`) always fall through. Effect on the composer **[unverified]**.
+- `MessagesPane` keeps every message and rebuilds the full line list on each
+  change. Per-message rendering is cached, but the concatenation is
+  O(total rows) per frame and history is unbounded.
+- The plan status is polled every 4 s over the socket rather than pushed.
+- `app.ts`: orphaned doc comments left by earlier extractions (lines 195,
+  268–273, 412–418, 528–540), and comments that describe an alternate screen
+  that does not exist (lines 44–47, 238–240). `status-bar.ts` documents a
+  "one-line top status bar"; it is multi-row and at the bottom.
+- `handleCommand` and the `command.result` handling exist in near-identical
+  form in `tui-pi/app.ts` and `tui-editor/app.ts`.
+
+Experience gaps against current agent TUIs
+
+The "Today" column is the state before Phase 2; "Now" is after Phase 3 (§7).
+
+| Area | Today | Expected | Now |
+| --- | --- | --- | --- |
+| Stop a turn | `/abort` typed into the composer | Esc interrupts; second Esc clears the draft | As expected (Phase 3.1) |
+| Typing during a turn | Sent immediately as a new message | Queue shown above the composer; edit or remove before it is sent | As expected (3.1) |
+| Streaming | Plain text until the reply completes, then re-rendered as Markdown (visible jump) | Markdown while streaming, stable block by block | As expected (3.3) |
+| Tool calls | One flat `→ tool → preview` system line each; result preview is 80 characters | Grouped per turn, collapsed by default, expandable; duration and status; diffs for edits; full output on demand | As expected (3.2); "full output" is what the gateway sends: a CLI agent's whole output, a native tool's capped preview |
+| Thinking / reasoning | Pre-tool text becomes an ordinary message | Dim, collapsible block | As expected (3.2) |
+| Selection and copy | Shift+drag; `/copy last` | Drag to select, copy on release; copy a code block with one key | As expected (Phase 2; `Alt+C` / `/copy code` in Phase 3) |
+| Search | None | `/` or Ctrl+F in the transcript; Ctrl+R in input history | As expected (3.4) on the alternate screen: `Ctrl+F`, `Ctrl+Shift+F`, `/search` (a bare `/` is the command prefix); not with `--inline` |
+| Sessions, models, skills | Text lists and `/resume <n>` | Pickers with fuzzy filter and preview | Sessions, skills, commands, themes, input history (3.5). **Models not done**: the gateway's command registry has no model or lane command to list from |
+| Mentions | `@` file completion via `fd` | Also agents, skills, sessions; pasted paths become chips | **Not done**: not among Phase 3's items; needs an autocomplete provider of our own beside pi-tui's file provider |
+| Images | Attach from clipboard or path | Also show images and diagrams inline where the terminal can (pi-tui has Kitty and iTerm2 support that is unused) | Attached images (3.8): Kitty graphics on the alternate screen, iTerm2 with `--inline` (pi-tui does not draw iTerm2 images on the alternate screen), text elsewhere. Diagrams not done |
+| Links | Printed as text | OSC 8 hyperlinks for URLs and `file:line` | As expected (3.8), where the terminal shows links |
+| Attention | Nothing when the window is in the background | Bell or OSC 9/777 notification when a turn ends or a decision is waiting; title shows state | As expected (3.6) |
+| Theme | One dark palette | Follows terminal background (OSC 11), light and high-contrast variants, `NO_COLOR` | As expected (3.7) |
+| Exit | Frame left in scrollback | Screen restored; a short summary and the resume command printed | As expected (Phase 2) |
+| Long sessions | Unbounded | Virtualised transcript; older turns loaded on demand | Virtualised and capped (Phase 2). **Loading older turns not done**: the gateway's `history` takes no cursor (Phase 2 note) |
+
+### 5.2 Editor (`src/tui-editor/`)
+
+The editor has more surface than its correctness supports. Several features
+exist in code and cannot be reached or seen. Before adding anything, it needs
+the first two groups below fixed. Items marked **[run]** were reproduced; the
+rest are **[code]**.
+
+The first two groups were fixed in Phase 4 (§7); each item names the commit
+and the test that fails without it.
+
+Wrong today
+
+- Columns are UTF-16 units: Backspace after an emoji leaves half a character;
+  Left/Right split graphemes. **[run]**
+  Fixed `bda32a8`: `buffer.test.ts` (graphemes), `text-editor.test.ts`, e2e CRLF/emoji.
+- Replace-all records one undo step per match; with more matches than the
+  200-step limit, the rest cannot be undone. **[run]**
+  Fixed `bda32a8`: `search.test.ts`, `buffer.test.ts` (grouped undo), `replace-overlay.test.ts`.
+- Backspace at the start of the file marks the buffer dirty and clears redo.
+  **[run]**
+  Fixed `bda32a8`, `aea0441`: `buffer.test.ts`, `buffer-store.test.ts`.
+- Dirty is a flag, not a comparison with what was saved; undoing back to the
+  saved text still shows unsaved changes.
+  Fixed `aea0441`: `buffer-store.test.ts`.
+- Save is `writeFileSync` straight onto the file: not atomic, no check that
+  the file changed on disk since it was opened. Invalid UTF-8 is rewritten on
+  save.
+  Fixed `aea0441`: `workspace-fs-bridge.test.ts`, `app-flow.test.ts`, e2e external-change and CRLF.
+- Syntax highlighting is parsed when a file is opened and not after edits; the
+  parse cache is per language, so two TypeScript files evict each other.
+  Fixed `aea0441`: `highlight-tree-sitter.test.ts`.
+- The Tab key inserts two spaces; tabs in a file display four wide.
+  Fixed `aea0441`: `text-editor.test.ts`, `buffer-store.test.ts`.
+- Find does not highlight matches in the buffer and hides the cursor while its
+  box is open; it always starts from the top of the file.
+  Fixed `44d365a`, `aea0441`: `find-overlay.test.ts`, `text-editor.test.ts`, `app-flow.test.ts`, e2e find.
+- The diff overlay is 25 rows tall and is clipped on terminals of about 29
+  rows or fewer.
+  Fixed `95da4df`: `diff-overlay.test.ts`. Since Phase 1 the frame kept the keys on screen; PageDown still skipped the rows it had cut.
+- Double-pressing the workspace or MCP picker key while the first request is
+  in flight opens two overlays and loses the handle to one; the request has
+  no timeout.
+  Fixed `aea0441`: `app-flow.test.ts`, `api-client.test.ts`.
+- The file picker shows the first 1,000 files alphabetically to depth 6,
+  ignores `.gitignore`, and walks the tree synchronously.
+  Fixed `4c5bc11`: `project-files.test.ts`, `file-picker.test.ts`.
+- Subscriptions (stores, input listeners, the adapter) are never released.
+  Fixed `aea0441`: `app-flow.test.ts`.
+
+Present but unreachable or invisible
+
+- Vim mode: the mode can only be set by a persisted layout file; there is no
+  command or key to turn it on. In NORMAL mode Ctrl+S is swallowed and there
+  is no `:w`. With the kitty keyboard protocol active, Escape may arrive as
+  `ESC[27u`, which the vim layer does not recognise **[unverified]**.
+  Fixed `79520b0`, `aea0441`: `text-editor.vim.test.ts` (`ESC[27u` confirmed unrecognised before), `app-flow.test.ts`, e2e vim.
+- Selection: the buffer tracks one, the renderer never draws it. VISUAL mode
+  is invisible.
+  Fixed `aea0441`: `text-editor.test.ts`, `text-editor.vim.test.ts`, e2e vim.
+- Merge lock mode, `AgentStore`, the persisted `theme`, `LayoutStore.overlay`:
+  code with no caller.
+- Scratch buffers cannot be saved: there is no Save As.
+  Fixed `aea0441`: `app-flow.test.ts`, e2e Save As.
+
+Missing for a usable editor
+
+All but the last were done in Phase 5 (§7, the table there names the commits
+and tests).
+
+- Mouse: click to place the cursor, drag to select, click tabs and tree rows,
+  drag the pane divider, wheel in the focused pane. Done; the wheel goes to
+  the pane under the pointer.
+- Selection with Shift+arrows, cut/copy/paste to the system clipboard. Done.
+- PageUp/PageDown, Ctrl+Home/End, go to line, soft wrap, auto-indent, bracket
+  matching, a scrollbar. Done.
+- New file, rename, delete, reload on external change. Done; open files are
+  watched.
+- In-buffer search highlights, replace one at a time, search across the
+  project. Done.
+- Agent edits: accept or reject per hunk rather than per file; edits to files
+  that are not open are skipped silently today. Done; such an edit opens a
+  review tab.
+- Diagnostics (LSP), git change markers. Not started (Phase 5 item 7).
+
+Structure
+
+- `app.ts` (728 lines) wires everything: stores, gateway, eight overlays,
+  persistence, hotkeys. Eight near-identical overlay open/close pairs.
+  Fixed in Phase 5: `app.ts` is the composition root and the work is in
+  `src/tui-editor/shell/`; the overlays are named slots with one close, and
+  the seven boxes share `tui-kit/overlay-frame.ts`.
+- Three hand-written text fields accept one byte at a time (no paste, no
+  emoji, no IME) while pi-tui's `Input` goes unused. Fixed in Phase 4: one
+  `TextField` over `Input`.
+- `walk` and its skip list are duplicated between the tree and the picker.
+  Fixed in Phase 4: `project-files.ts`.
+- Untested: `FileTree`, `TabStrip`, `ModeBar`, the hotkeys and unsaved-changes
+  overlays, `ChatPane`, the API client, the file bridge, two stores. Tested
+  in Phase 4.
+
+A question to settle before Phase 4: what the editor is for. It will not
+compete with an IDE, and should not try. Its distinctive job is **reviewing
+and steering what the agent changes** — open the file the agent touched, see
+the diff, accept or reject hunks, make a small correction, hand back. The plan
+below builds that well and keeps general editing basic but correct.
+
+### 5.3 Dependencies
+
+| Package | Use | Note |
+| --- | --- | --- |
+| `@mariozechner/pi-tui` ~0.73.1 | Both surfaces | Deprecated (§4) |
+| `chalk` | Colour | Fine. pi-tui 1.x no longer depends on it; we do directly |
+| `web-tree-sitter` + grammars | Editor highlighting | Grammar packages run install scripts (`node-gyp-build`); only useful once re-parsing after edits works |
+| `@xterm/headless` (dev) | PTY tests | Good; keep |
+| `python3` (test only) | PTY relay `tests/tui/pty.py` | POSIX only: the PTY suites are skipped on Windows, so Windows has no end-to-end coverage |
+| `fd` (optional, runtime) | File completion | Probed at four fixed paths, not on `PATH` |
+
+### 5.4 Tests
+
+The PTY harness is the most valuable asset here: it runs the shipped entry
+point in a real pseudo-terminal, parses the screen with xterm, and can save
+screenshots. What is missing is tests that state invariants rather than
+scenarios. The Phase 0 bug would have been caught by one property: "after any
+sequence of gateway events, the screen has exactly one status line on the last
+row and the composer above it".
+
+## 6. Target design
+
+One screen model for both surfaces:
+
+```
+┌──────────────────────────────────────────────┐
+│ transcript (ScrollView, virtualised)         │  grows upward, app-scrolled
+│   turn → message / tool group / diff / image │
+├──────────────────────────────────────────────┤
+│ queued messages (0..n rows)                  │  sticky
+│ activity row (0..1)                          │  sticky
+│ composer (1..40% of height)                  │  sticky, never clipped below 1 row
+│ status row(s)                                │  sticky
+└──────────────────────────────────────────────┘
+```
+
+- Alternate screen, absolute positioning per row. A bad row damages itself
+  only.
+- Mouse: wheel scrolls the pane under the pointer; drag selects in the app and
+  copies on release; the terminal's override key gives native selection;
+  click focuses a pane, places the editor cursor, expands a tool group.
+- `tui.mouse` setting: `app` (default), `native` (no mouse reporting,
+  alternate-scroll mode: wheel scrolls, selection is the terminal's, no click
+  targets), `off`.
+- Clipboard chain: native tool when local (`pbcopy`, `wl-copy`, `xclip`,
+  `clip.exe`), tmux buffer inside tmux, OSC 52 otherwise; report which one was
+  used, and say plainly when none is available.
+- Leaving the alternate screen must not lose the conversation: on exit, print
+  the last exchange and `octi tui --session <id>` to the normal buffer;
+  `/export` writes the transcript to a file; a key dumps the transcript to
+  scrollback for terminals where people want native search.
+- `--inline` keeps a main-screen mode (the current behaviour, with the Phase 0
+  guard) for terminals and habits where the alternate screen is unwelcome.
+- Transcript is a list of typed items (message, tool group, diff, notice,
+  image), each rendering itself and caching by width. Tool calls and results
+  pair by call id instead of by name.
+- Everything from outside passes through `terminal-text.ts` at the boundary;
+  the frame backstop stays.
+
+## 7. Phases
+
+Sizes are relative: S is days, M is one to two weeks, L is several weeks for
+one person. Each phase ends with the PTY suites green and a `CHANGELOG.md`
+entry.
+
+### Phase 1 — Safety net (S)
+
+No visible change; makes the rest safe to do.
+
+1. Restore the terminal on every exit path: uncaught exception, unhandled
+   rejection, `process.exit`, SIGHUP. Print the error after the screen is
+   restored.
+2. Sanitize inside the overlay registry so every overlay is covered, not each
+   prompt by itself; truncate overlay rows to the terminal width.
+3. Invariant tests in the PTY harness: random gateway event sequences
+   (including control bytes, wide characters, 10 kB single lines) and random
+   resizes; assert status on the last row, composer above it, no row wider
+   than the terminal, cursor inside the composer.
+4. Swallow non-wheel mouse reports before they reach a component; match
+   release reports.
+5. Remove dead code and stale comments listed in §5.1 and §5.2.
+6. Width audit: a table-driven test of `visibleWidth` against xterm's cell
+   count for emoji sequences, flags, CJK and combining marks; expand or
+   replace what disagrees in `displayText`.
+
+Done when: the invariant suite runs 500 seeds clean in CI.
+
+**Phase 1 — shipped.**
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Terminal restored on every exit path | `af30f7e` | `tests/tui/exit-paths.e2e.test.ts` drives the real runtime through an uncaught exception, an unhandled rejection, `process.exit` and SIGHUP from a test-only fixture entry; checks mouse mode, bracketed paste, cursor shown last, raw mode off, error printed after the restore, exit status. `runtime.test.ts` checks the order with a fake process. |
+| 2. Overlays framed in the registry | `d8245e0` | `overlays/registry.test.ts`. Every overlay, the editor's modals included, is wrapped in `FramedOverlay`: `frameRow`, truncation to the overlay width, and (since `c9c73d5`) never taller than the rows pi-tui gives it. |
+| 3. Invariant suite | `46d167e` | `tests/tui/invariants.e2e.test.ts`, chat surface only. Default 8 seeds × 30 steps (~25 s); `TUI_FUZZ_SEEDS`, `TUI_FUZZ_SEED`, `TUI_FUZZ_STEPS`. CI runs the default; the 500-seed run was made locally. |
+| 4. Non-wheel mouse reports swallowed, releases matched | `9a2d9e9` | `terminal-actions.test.ts`, `app-flow.test.ts`. No component was seen to misread a report before the change; the path is closed rather than an observed corruption fixed. |
+| 5. Dead code and stale comments | `c588414` | `AgentStore`, `LayoutStore.overlay`, the persisted `theme`, merge lock mode, `void chalk`, orphaned and alt-screen comments, the status bar doc. Vim mode and selection kept. |
+| 6. Width audit | `5df61ea`, `d55d1b2`, `658876e`, `2bd5d76` | `src/tui-kit/terminal-text.width.test.ts`. `displayText` drops invisible format characters, unjoins emoji (ZWJ, skin tones), puts a base-less combining mark on a no-break space and turns half a surrogate pair into U+FFFD. |
+
+Bugs the invariant suite found, each fixed with its own deterministic test:
+an approval question taller than the window pushed the choices and keys off
+screen and covered the status line (`c9c73d5`); a combining mark with no base
+was measured as no cells and drawn as one, wrapping the row (`d55d1b2`), and
+`displayLine`'s trim took the base away again (`2bd5d76`); text cut by UTF-16
+length (the adapter's 80-character previews, a model name) left half a
+surrogate pair, measured as no cells and drawn as one (`658876e`). The last
+two came from a 500-seed run (3 of 500 failed); rerun on `2bd5d76`: 500 of 500 seeds clean (local, about 22 minutes; CI runs the 8-seed default, so the Done-when line is met locally, not in CI).
+Found on the way: `/copy` copied the screen's cleaned text rather than the
+reply (`e18486c`).
+
+Still open, pinned in the width audit rather than fixed: spacing marks (Mc) in
+Devanagari, Tibetan and similar scripts are measured as no cells and drawn as
+one, so such a row can still wrap — the suite leaves them out of its input.
+`@xterm/headless` has Unicode 6 tables and draws emoji one cell, so the PTY
+suites cannot catch an emoji measured too narrow; only too wide. The editor
+surface is not under the invariant suite.
+
+Update after the move to `@earendil-works/pi-tui` 1.6.0 (Phase 2): the new
+package measures these spacing marks as the terminal draws them; the three
+pinned cases in `terminal-text.width.test.ts` now assert equality.
+
+### Phase 2 — Foundation (M)
+
+1. Create `src/tui-kit/`; route every pi-tui import through it; delete the
+   private-path import. **Shipped** (`97b6705`): `src/tui-kit/index.ts`
+   re-exports by name; the `dist/utils.js` path for `sliceByColumn` now
+   exists only there (0.73 does not export it); `seam.test.ts` fails on any
+   other importer. Module augmentation goes through `declare module
+   '@/tui-kit'`.
+2. Run the §4.4 spike; record the result in this file; take B or C.
+3. Move the chat surface to the alternate-screen layout of §6, with `--inline`
+   as the fallback mode.
+4. Mouse and selection as in §6, with the clipboard chain.
+5. Exit behaviour as in §6.
+6. Virtualise the transcript; cap what is kept in memory and page older turns
+   from the server on scroll.
+
+Done when: the §4.4 criteria hold on `main`; the user-reported symptoms
+(composer off screen, Shift to select, history lost on resize) are each
+covered by a PTY test.
+
+**Shipped** on the modernization branch (not yet on `main`), option B:
+
+| Item | Commit | Covered by |
+| --- | --- | --- |
+| 1. `src/tui-kit/` seam | `97b6705`; package move `4456ebd` | `seam.test.ts` (either package name) |
+| 2. Spike | this section, §4.4 "Spike result" | — |
+| 3. Alternate screen, sticky footer, `--inline` | `79a2c66`, `a23dc70` | `screen.e2e` (scrollback through resizes, both modes; 50 resizes at 80×24 and 200×60), `composer-sticky.e2e`, `invariants.e2e` |
+| 4. Mouse, selection, clipboard chain, `tui.mouse` | `4456ebd`, `79a2c66`, `a23dc70` | `selection.e2e` (drag without modifier, wheel, native/off, fake `xclip`, OSC 52), `tmux.e2e`, `clipboard.test.ts`, `settings.test.ts` |
+| 5. Exit summary, `/export`, `/scrollback` / `Alt+O` | `a23dc70` | `screen.e2e`, `exit-paths.e2e` (crash restores the screen), `transcript-export.test.ts` |
+| 6. Virtualised, capped transcript | `a23dc70` | `transcript-view.test.ts`, `frame-time.e2e` |
+
+Tests: `af190f7`; docs `2f05c4e`; `MouseRegion` in the seam `e28b2db`. Server paging of older turns is **not done**: the
+gateway's `history` command returns the last 50 messages and takes no
+cursor, so it needs a gateway change (a `before` message id or offset on
+`history`) before the transcript can load older turns on scroll. Until then
+the client keeps up to 5,000 messages and says when it dropped older ones.
+
+API for the next phases:
+
+- Mouse click targets: implement `handleMouse(event: TuiMouseEvent)` on a
+  component, or wrap one in `MouseRegion` from `@/tui-kit`; return
+  `{ handled: true }` for a click, `{ capture: true }` to receive the drag
+  and release. Unhandled drags fall through to text
+  selection, unhandled wheels to the scroll view under the pointer.
+- A sticky row above the composer: pass a component as `sticky` in the
+  `ChatFooterParts` the app hands `ChatFooter` / `renderChatFrame`
+  (`components/chat-frame.ts`). It gets up to a quarter of the screen, the
+  newest rows kept, and gives way to the composer and status first.
+- Transcript item types: add a member to `TranscriptItem` in
+  `components/messages-pane.ts`, a case in `renderItem`, and decide what
+  `entries()` (copy, export, exit summary) takes from it; add it with
+  `pushItem`. Rendering is cached per item and width.
+
+### Phase 3 — Chat experience (L)
+
+In the order users will feel them:
+
+1. Esc interrupts the turn; messages typed during a turn queue visibly.
+2. Tool groups: collapsed summary per turn, expand for arguments and full
+   output, durations, error state; edits shown as diffs.
+3. Markdown while streaming.
+4. Transcript search; input history search.
+5. Pickers (sessions, models, skills, commands) from one fuzzy list component.
+6. Notifications and terminal title state.
+7. Themes: detect background, light and high-contrast palettes, `NO_COLOR`.
+8. Hyperlinks; inline images where supported.
+9. Plan status pushed by the gateway instead of polled.
+
+Done when: each row of the table in §5.1 reads "Expected".
+
+**Phase 3 — shipped** on the modernization branch, except where the §5.1
+table's "Now" column says otherwise (models picker, mentions, diagrams,
+older turns from the server).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Esc stops the turn; typing during a turn queues | `5b191b5` | `app-turn.test.ts`, `chat-frame.test.ts` (clicks on sticky rows), `client.test.ts`; `turn.e2e` (queue rows above the composer, sent with `mode: 'queue'` when the turn ends, Esc sends `agent.stop` for the root and returns queued messages, second Esc clears, a click takes one back) |
+| 2. Tool groups, diffs, thinking | `5862305` | `tool-group.test.ts` (pairing by id, by name only without one, summary, expansion, sanitising), `gateway-adapter.test.ts`, `app-commands.test.ts`; `tool-group.e2e` (click and Ctrl+O, diff, failed call) |
+| 3. Markdown while streaming | `c7319a4` | `messages-pane.test.ts` (every prefix renders, the completed reply equals the streamed rows, earlier blocks keep their rows, open fence); `streaming.e2e` |
+| 4. Transcript search; Ctrl+R | `31671a1` | `transcript-search.test.ts`, `fuzzy-list.test.ts`, `command-palette.test.ts`; `search.e2e` (count, highlight, next, Escape back to the reading position, `/search`, Ctrl+R) |
+| 5. Pickers | `4b172de` | `app-pickers.test.ts`; `pickers.e2e` (sessions with preview and resume, skills then mode, palette click) |
+| 6. Notifications, title | `10e5408` | `attention.test.ts`; `attention.e2e` (OSC 777 only while unfocused, decision waiting, title states, focus reports kept out of the composer inline, `?1004l` on exit) |
+| 7. Themes | `d91cba9` | `theme.test.ts` (WCAG contrast of every role on every background a palette is for), `settings.test.ts`; `theme.e2e` (OSC 11 reply switches to light, `/theme` saves, saved theme from the first frame, `NO_COLOR`) |
+| 8. Links, images | `019cd30` | `hyperlinks.test.ts` (schemes, injection, wrap), `links.test.ts`; `links.e2e` (links only where shown, no other scheme, image fallback text, Kitty and iTerm2 sequences) |
+| 9. Plan status pushed | `6442e41` | `work-plan-store.test.ts`, `app-plan.test.ts`; `plan.e2e` (no fetch over 4.5 s, one on `session.plan_updated`) |
+
+Also: `str_replace_editor`'s fragment is no longer reported as the whole
+file (`a6f4024`, `gateway-adapter.write.test.ts`, found in Phase 4); the
+invariant suite fuzzes the new items, the queue, the pickers and link
+rows (`350d346`; 80 seeds clean locally); a reply's code block is copied
+with `Alt+C` / `/copy code` (`54866ee`).
+
+Server-side changes: the gateway client (`stopAgent`, an optional send
+mode — client code, no protocol change) and one new event,
+`session.plan_updated`, published by `saveWorkPlan` from the four places a
+plan is saved. Queueing is client-side: the gateway still steers a
+`chat.send` into a running turn, so the TUI holds messages until the turn
+ends and sends them with `mode: 'queue'` rather than changing that.
+
+Not verifiable here: notifications, focus reports, OSC 11, OSC 8 and inline
+images were checked as the bytes written and the colours drawn in
+xterm-headless, which reports neither focus nor its background and draws no
+images; how GNOME Terminal, kitty, iTerm2, Windows Terminal and tmux show
+them was not observed.
+
+### Phase 4 — Editor correctness (M)
+
+1. Grapheme-aware cursor, deletion and selection; one width function shared
+   with the renderer.
+2. Undo as grouped operations (one step per replace-all, per paste, per typing
+   burst) instead of whole-buffer snapshots per key.
+3. Dirty state from comparison with the saved text.
+4. Atomic save (write temp, rename), external-change detection, Save As,
+   preserve line endings and report non-UTF-8 files instead of rewriting them.
+5. Re-parse highlighting after edits, cache per buffer.
+6. Draw the selection; make vim mode switchable, give it `:w`, decode Escape
+   through the key layer.
+7. Fix the overlay race, the diff overlay height and the picker's file limit
+   (index with `git ls-files` where available, asynchronously).
+8. Release subscriptions on shutdown.
+9. Tests for the untested components.
+
+Done when: every item under "Wrong today" in §5.2 has a failing-then-passing
+test.
+
+**Phase 4 — shipped.** Every item under "Wrong today" and "Present but
+unreachable or invisible" in §5.2 has a test; a sample was run against the
+code before the fix and failed (graphemes, undo, replace-all, `$1`, case
+columns, the diff overlay paging, kitty Escape, Ctrl+S in NORMAL, the
+relative agent path, the MCP double-open, released subscriptions, `start()`).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Grapheme-aware cursor, deletion, selection; one width function | `bda32a8` | `buffer.test.ts`, `text-editor.test.ts`; `editor/columns.ts` is used by both the cursor maths and the renderer |
+| 2. Grouped undo | `bda32a8` | `buffer.test.ts` (burst, pause, transaction past the limit, no-op), `search.test.ts`, `text-editor.test.ts` |
+| 3. Dirty by comparison | `aea0441` | `buffer-store.test.ts` |
+| 4. Atomic save, external change, Save As, line endings, non-UTF-8 | `aea0441` | `workspace-fs-bridge.test.ts` (real files: rename, mode, symlink, hard link, CRLF, BOM, Latin-1), `app-flow.test.ts`, e2e |
+| 5. Re-parse after edits, cache per buffer | `aea0441` | `highlight-tree-sitter.test.ts` (two buffers, re-parse, late parse) |
+| 6. Selection drawn; vim switchable, `:w`, key-layer Escape | `79520b0`, `aea0441` | `text-editor.test.ts`, `text-editor.vim.test.ts`, `hotkeys-overlay.test.ts`, `mode-bar.test.ts`, e2e |
+| 7. Overlay race and timeout, diff height, picker index; Tab indent, shared text field, find highlight/cursor, `$1` | `4c5bc11`, `44d365a`, `95da4df`, `aea0441` | `app-flow.test.ts`, `api-client.test.ts`, `diff-overlay.test.ts`, `project-files.test.ts`, `file-picker.test.ts`, `find-overlay.test.ts`, `replace-overlay.test.ts`, `search.test.ts` |
+| 8. Release on shutdown | `aea0441` | `app-flow.test.ts` |
+| 9. Tests for untested components | `d61a1eb`, `4c5bc11`, `79520b0`, `aea0441` | `file-tree`, `tab-strip`, `mode-bar`, `hotkeys-overlay`, `prompts` (unsaved, external change, Save As), `chat-pane`, `api-client`, `workspace-fs-bridge`, `workspace-store` (with `use-store`) tests |
+
+The two suspicions in §5.2: an `agent.write` with a path relative to the
+project was matched against absolute keys and dropped — fixed, and after
+Accept or Reject the buffer's baseline follows the disk if the agent already
+wrote the file, so Reject leaves the tab unsaved rather than looking in sync
+(`aea0441`, `app-flow.test.ts`). `start()` when `adapter.connect()` rejects:
+since Phase 1 the process-level guard already restored the terminal (as an
+unhandled rejection); `start()` now stops the app and restores the terminal
+itself, and the entry point prints the error and exits 1.
+
+New on the way: `/new` (open a scratch buffer), keys arriving in one chunk
+in vim NORMAL mode (`:w` typed fast) are read one by one, a picker Enter
+typed before the index arrives opens the best match.
+
+Not done: the file is not watched while open (a change is noticed at save
+and after agent edits); parsing is a debounced full parse, not incremental.
+Found and left, outside `src/tui-editor/`: `gateway-adapter.ts` treats
+`str_replace_editor`'s `new_str` (a fragment) as the whole new file, so the
+diff offers to replace the file with the fragment.
+
+### Phase 5 — Editor as the review surface (L)
+
+1. Mouse in the editor: cursor, selection, tabs, tree, divider.
+2. Hunk-level accept and reject of agent edits, with context folding and
+   jump to next change; edits to unopened files open a review tab instead of
+   being dropped.
+3. In-buffer search highlights, replace one by one, project search.
+4. Navigation basics: paging, go to line, soft wrap, scrollbar, auto-indent.
+5. Files: new, rename, delete, reload.
+6. Split `app.ts` by responsibility; overlays share one frame and one text
+   field from `tui-kit`.
+7. Later, separately decided: diagnostics through LSP, git change markers.
+
+**Phase 5 — shipped (items 1–6; item 7 not started, as planned).** Every
+visible behaviour has a PTY test driving the real entry point.
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Mouse: click places the cursor, drag selects in buffer coordinates (the copy is the file's text, without gutter or tree — the Phase 2 limitation), double/triple click, Shift+click; tabs (click, `×`), tree rows, pane titles, divider drag; the wheel scrolls the pane under the pointer whatever has the focus; the chat pane selects inside itself only. Shift+motion selects; Ctrl+X/Ctrl+V/Ctrl+C through the clipboard chain (`tui-kit/clipboard-read.ts` reads it) | `af71286`, `c631f53` | `text-editor.view.test.ts`, `view.test.ts`, `pane-mouse.test.ts`, `tab-strip.test.ts`, `clipboard-read.test.ts`, `app-flow.test.ts`, `editor-mouse.e2e` (SGR click, drag, double click, tree, tabs, wheel, divider) |
+| 2. Hunk review: y/n per hunk, a/r for all, folding (`z`), `]`/`[`, intra-line highlighting; unopened files open a review tab; partial accept written as one undo step; Myers with a work budget and a stated fallback | `00356f6`, `8da2b09` | `diff.test.ts` (random inputs against the LCS length; 50,000 lines), `hunks.test.ts` (adjacent hunks, start/end of file, final newline, every subset), `diff-overlay.test.ts`, `app-flow.test.ts` (review tab, CRLF, a file changed on disk meanwhile), `editor-review.e2e` (partial accept of a CRLF file saved CRLF) |
+| 3. Replace one at a time with a preview; project search (ripgrep, else the project index file by file), results with a preview, Enter opens at the match | `33e9284`, `e8b35c3` | `replace-overlay.test.ts`, `project-search.test.ts` (both engines), `project-search-overlay.test.ts`, `editor-search.e2e` (with and without `rg` on PATH) |
+| 4. PageUp/PageDown, Ctrl+Home/End, go to line, soft wrap, scrollbar (click and drag), auto-indent, bracket matching, scrolloff | `af71286`, `7a32e97` | `text-editor.view.test.ts`, `view.test.ts`, `app-flow.test.ts` |
+| 5. New file, rename, delete (confirmed), reload (`/revert`); open files watched, a clean one reloaded, a dirty one asked about once | `9229b8c` | `file-commands.test.ts` (real files), `editor-files.e2e` (new, rename, delete, external change clean and dirty) |
+| 6. `app.ts` split into `shell/` (overlay slots and actions, file operations, agent review, commands, persistence, parses); the seven boxes draw with `tui-kit/overlay-frame.ts`, the text field is `tui-kit/text-field.ts` | `1d885a9`, `a1e0e66` | No behaviour change: the existing app-flow and PTY suites pass unchanged on both commits |
+
+Also: the F5 shortcuts list the keys that are not rebindable (`ea26a0f`).
+
+The editor is now under an invariant fuzzer (`tests/tui/editor-invariants.e2e.test.ts`, `028a8e7`): random typing, keys and shortcuts, clicks, drags, double clicks and wheel notches anywhere, resizes, agent edits (control bytes, CRLF, 10 kB lines) answered with random review keys, and files changed on disk. After each step: no wrapped row, the mode bar on the last row, the cursor inside the screen and inside the editor pane when it has the focus and no box is open, no control byte written outside an escape sequence, the alternate screen kept. Default 6 seeds × 30 steps (CI); 150 seeds × 40 steps ran clean locally after the fix below. Bug found and fixed: C1 control characters in a file (U+009B is CSI to a terminal) were written raw (`1b5a962`, `text-editor.test.ts`); it failed 10 of the first 12 seeds.
+
+Found and fixed on the way (in `8da2b09`): after a review the buffer took whatever was on disk as its saved text, so a file changed by something other than the agent meanwhile was overwritten by the next Ctrl+S without asking; and the diff overlay drew file text raw.
+
+Not done, and why: Up/Down move by buffer lines with soft wrap on (as vim's `j`/`k`), not by screen rows; divider positions are not kept across launches; the watcher polls once a second rather than being pushed changes (an atomic save replaces the file by rename, which `fs.watch` loses). Still open from Phase 4: `gateway-adapter.ts` takes `str_replace_editor`'s `new_str` (a fragment) as the whole new file — outside `src/tui-editor/`, and the hunk review now shows plainly that it would replace the file with the fragment.
+
+### Phase 6 — Reach (M)
+
+1. Windows: a PTY relay that does not need Python (ConPTY through a small
+   Node helper) so the suites run there; fix what they find.
+2. tmux, SSH, Linux console and screen readers: documented behaviour and a
+   test where a harness can express it.
+3. Screenshot-based visual regression from `saveScreen` for the main states.
+4. Startup time budget (first frame under 150 ms on the reference machine);
+   lazy-load voice and tree-sitter, which are already deferred or should be.
+
+**Phase 6 — shipped in part.** Item 1 is not done as written (no Python-free
+relay); items 2–4 are, with the limits below. Measured and tested on Linux
+only (a shared container, load average 2–3).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Windows | `7f8e29b` | The product needs no Python: both clients read the terminal through Node's TTY (ConPTY on Windows); only `tests/tui/pty.py` does. The harness now probes the relay's Python once and fails at once with what is missing (no `python3`, no `os.forkpty`, Windows → WSL) instead of crashing the worker or waiting out every `waitFor`; `TUI_PTY_PYTHON` picks another interpreter. `harness.e2e.test.ts` |
+| 2. tmux, SSH, Linux console, small windows, screen readers | `75a6faa`, `63875f4`, `57a27aa`; docs in `docs/guides/tui.md`, "Terminal compatibility" | `terminals.e2e.test.ts`: both clients in tmux 3.4 with the recommended settings and with its defaults (frame above tmux's status, clicks, drag, wheel, copy into the tmux buffer and on to the outer terminal as OSC 52), SSH environment (OSC 52, no remote clipboard tool), `TERM=linux`, `TERM=dumb` (now refused with exit 2), 20×5. `terminal-check.test.ts` |
+| 3. Visual regression | `9a27f68` | `golden.e2e.test.ts`: five scenes (chat idle, mid-turn with tools, command palette; editor with a file and the tree, hunk review) compared with `tests/tui/goldens/*.txt`, text plus a per-cell style map and legend; `UPDATE_TUI_GOLDENS=1` rewrites; a mismatch prints the differing rows. Ran three times unchanged |
+| 4. Startup | `f25c4fb`, `143c601`, `9b02ccf` | `startup-imports.test.ts` (structural: esbuild's static import graph of each entry holds no pino, tree-sitter, model SDK, database, `src/voice`, `src/mcp`, …), `startup.test.ts` (the editor loads the MCP bridge only for the MCP list), `bin/octi.test.ts` (the launcher execs Node, not npm) |
+
+Startup, PTY, launch command to first full frame, medians of 12 runs:
+chat 0.9–1.0 s → 0.5 s, editor 2.0 s → 0.55 s. The causes: the editor's
+constructor imported `@/mcp/bridge` (about 200 server modules, about a second)
+for a status count that is 0 of 0 until the MCP list connects something;
+`bin/octi` went through `npm run` and the tsx CLI (about 0.4 s); the stored
+login pulled in pino and pino-pretty through `utils/file-acl.ts` (40–60 ms).
+Voice and tree-sitter were already deferred and still are (the structural
+test keeps them so).
+
+Flaky test found and fixed (`18a7048`): `editor-mouse.e2e` "tabs, the tree…"
+failed about one run in ten under load. It read the tree row's position while
+the client was still authenticating; when the gateway's plan arrived the
+status area at the top grew from three rows to six, every pane moved down,
+and the click landed on the Files title. A test bug, not a product one:
+`TuiHarness.ready()` waits for the final status height, and the tests read
+coordinates after it.
+
+Not done, and untested:
+
+- No Python-free PTY relay: driving ConPTY from Node needs a native module
+  (`node-pty`); not added. The PTY suites stay skipped on Windows, and
+  nothing in this phase was run on Windows or macOS. `bin/octi.cmd` still
+  launches through `npm run`.
+- The 150 ms budget is not met from source: Node with the TypeScript loader,
+  pi-tui (about 0.1 s) and zod (about 0.06 s, for `tui.json` in
+  `src/tui-pi/settings.ts`) are most of the remaining 0.45 s. Not changed
+  here: that file belongs to the Phase 3 work in progress.
+- `NO_COLOR` is not honoured (the theme forces 24-bit colour) — Phase 3
+  item 7. No reduced-motion setting: the activity line's spinner is the only
+  animation, and that component is being reworked in Phase 3.
+- Real terminal emulators, GNU screen, Zellij, mosh, a real SSH session, the
+  kernel console and screen readers are documented, not tested.
+- The golden screens of the chat will change with the Phase 3 rework; update
+  them with `UPDATE_TUI_GOLDENS=1` and review.
+- Seen on the way, left for Phase 3 (chat surface): a message sent while the
+  transcript is scrolled up does not return to the bottom, so its reply (and a
+  `/copy` notice) arrive out of view; and while authenticating the plan row
+  reads "Unavailable · connection lost".
+
+## 8. Risks
+
+| Risk | Handling |
+| --- | --- |
+| pi-tui 1.x keeps breaking in minors | Exact pin, the `tui-kit` seam, upgrades as their own PRs with the PTY suites as the gate |
+| The spike shows `TuiAltScreen` cannot do selection or layout as needed | Option C, sized in §4.2; the component contract does not change, so Phase 3 onward is unaffected |
+| People who rely on terminal scrollback dislike the alternate screen | `--inline` mode, dump-to-scrollback, exit summary, `tui.mouse: native` |
+| OSC 52 is refused by the terminal or by tmux | Clipboard chain with a native tool first; state what happened instead of claiming success |
+| Phase 3 grows without end | The §5.1 table is the scope; anything else is a new item |
+| Editor ambition outruns its users | §5.2's question is answered first; Phase 5 items 1–3 are the product, the rest is hygiene |
+
+## 9. Not planned
+
+- Writing a key decoder or a Markdown renderer of our own.
+- Moving to Ink, OpenTUI or a Rust front end. OpenTUI needs Bun or Node 26
+  with experimental FFI **[upstream]**; Ink would replace the component model
+  for both surfaces; a second language would split the codebase.
+- Multi-cursor editing, a plugin system for the editor, or a debugger.

@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@/core/agent-base';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
+import { saveWorkPlan } from './work-plan-store';
 import { expandWorkPlanPatch, planPatchSchema, planUpdateSchema, reviseWorkPlan } from '@/shared/work-plan';
 import { canActInSession } from '@/core/rooms/access';
 
@@ -42,7 +43,7 @@ export async function submitWorkPlan(
     summary: 'Submitted the detailed implementation plan for review.',
     feedbackResponses: [],
   }));
-  await workPlanRepository.save(sessionId, userId, state.revision, next);
+  await saveWorkPlan(sessionId, userId, state.revision, next);
   return { planId: next.current!.id, revision: next.revision };
 }
 
@@ -107,7 +108,7 @@ export function createWorkPlanTools(): ToolHandler[] {
         ...input,
         kind,
       });
-      await workPlanRepository.save(context.sessionId, context.userId, input.revision, next);
+      await saveWorkPlan(context.sessionId, context.userId, input.revision, next);
       const plan = next.current!;
       return {
         revision: next.revision, planId: plan.id, kind: plan.kind,

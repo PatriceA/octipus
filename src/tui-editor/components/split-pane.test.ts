@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { type Component, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, visibleWidth } from '@/tui-kit';
 import { LayoutStore } from '../stores/layout-store';
 import { SplitPane } from './split-pane';
 

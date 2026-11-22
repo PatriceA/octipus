@@ -6,7 +6,7 @@
  * would put the password in the transcript, the scrollback and the terminal's
  * own history. Typed here, the password is masked and never rendered.
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
+import { type Component, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@/tui-kit';
 import { chalk, getPalette } from '../theme/defaults';
 
 export interface LoginPromptOptions {

@@ -8,13 +8,11 @@
  * if already collapsed) and Right expands it (or descends if already
  * expanded).
  */
-import { type Component, type Focusable, matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
-import { readdirSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { type Component, displayLine, type Focusable, matchesKey, truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
+import { basename } from 'node:path';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 import { getGlyphs } from '@/tui-pi/theme/glyphs';
-
-const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.octipus', '.next', '.cache']);
+import { listFolder } from '../project-files';
 const MAX_ENTRIES = 2000;
 
 interface Entry {
@@ -23,11 +21,21 @@ interface Entry {
   depth: number;
   isDir: boolean;
   parent?: string;
+  /** A row that says a folder could not be read: shown, never opened, renamed or deleted. */
+  note?: true;
 }
 
 export interface FileTreeOptions {
   root: string;
   onOpen: (absolutePath: string) => void;
+  /** The tree was clicked: give it the focus. */
+  onFocus?: () => void;
+  /** n: a new file in `folder` (the selected folder, or the selected file's). */
+  onNewFile?: (folder: string) => void;
+  /** m: rename (move) the selected file or folder. */
+  onRename?: (path: string) => void;
+  /** d / Delete: delete the selected file. */
+  onDelete?: (path: string) => void;
 }
 
 export class FileTree implements Component, Focusable {
@@ -63,7 +71,7 @@ export class FileTree implements Component, Focusable {
     if (matchesKey(data, 'end'))   { this.selected = Math.max(0, this.entries.length - 1); this.scrollIntoView(); return; }
     if (matchesKey(data, 'enter')) {
       const entry = this.entries[this.selected];
-      if (!entry) return;
+      if (!entry || entry.note) return;
       if (entry.isDir) this.toggle(entry);
       else this.options.onOpen(entry.path);
       return;
@@ -95,8 +103,41 @@ export class FileTree implements Component, Focusable {
       }
       return;
     }
-    if (matchesKey(data, 'r') && this.focused) { this.refresh(); }
+    if (matchesKey(data, 'r') && this.focused) { this.refresh(); return; }
+    const entry = this.entries[this.selected];
+    if (!entry || entry.note) return;
+    if (matchesKey(data, 'n')) { this.options.onNewFile?.(entry.isDir ? entry.path : entry.parent ?? this.options.root); return; }
+    // The root itself is not renamed or deleted from here.
+    if (entry.path === this.options.root) return;
+    if (matchesKey(data, 'm')) { this.options.onRename?.(entry.path); return; }
+    if (matchesKey(data, 'd') || matchesKey(data, 'delete')) this.options.onDelete?.(entry.path);
   }
+
+  /**
+   * The mouse: a click on a row selects it and opens the file or expands
+   * (collapses) the folder; the wheel scrolls without moving the selection.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === 'wheel') { if (event.wheelDelta) this.scrollBy(event.wheelDelta); return { handled: true }; }
+    if (event.type === 'press' && event.button === 'left') { this.options.onFocus?.(); return { handled: true }; }
+    if (event.type !== 'click' || event.button !== 'left') return { handled: true };
+    const index = this.scrollTop + event.y;
+    const entry = this.entries[index];
+    if (!entry) return { handled: true };
+    this.selected = index;
+    if (entry.note) return { handled: true };
+    if (entry.isDir) this.toggle(entry);
+    else this.options.onOpen(entry.path);
+    return { handled: true };
+  }
+
+  /** Scroll the rows shown by `delta`, leaving the selection where it is. */
+  scrollBy(delta: number): void {
+    this.scrollTop = Math.max(0, Math.min(Math.max(0, this.entries.length - this.height), this.scrollTop + delta));
+  }
+
+  /** Paths of the folders shown expanded (tests, and keeping them open across a refresh). */
+  isExpanded(path: string): boolean { return this.expanded.has(path); }
 
   render(width: number): string[] {
     const palette = getPalette();
@@ -109,7 +150,7 @@ export class FileTree implements Component, Focusable {
       // Show ▾ for expanded dirs, ▸ for collapsed, file glyph for files.
       const dirMarker = entry.isDir ? (this.expanded.has(entry.path) ? '▾ ' : '▸ ') : '';
       const icon = entry.isDir ? glyphs.dir : glyphs.file;
-      const text = `${indent}${dirMarker}${icon}${entry.label}`;
+      const text = `${indent}${dirMarker}${icon}${displayLine(entry.label)}`;
       const styled = entry.isDir ? chalk.hex(palette.accent)(text) : chalk.hex(palette.fg)(text);
       const isSelected = this.focused && i === this.selected;
       const line = isSelected ? chalk.bgHex(palette.selection)(styled) : styled;
@@ -145,19 +186,12 @@ function walk(root: string, expanded: Set<string>): Entry[] {
 }
 
 function visit(dir: string, depth: number, out: Entry[], expanded: Set<string>): void {
-  if (out.length >= MAX_ENTRIES) return;
-  let names: string[];
-  try {
-    names = readdirSync(dir).sort();
-  } catch { return; }
-  for (const name of names) {
-    if (SKIP.has(name)) continue;
+  const listing = listFolder(dir);
+  if (listing.error) out.push({ path: dir, label: `⚠ ${listing.error}`, depth, isDir: false, parent: dir, note: true });
+  for (const entry of listing.entries) {
     if (out.length >= MAX_ENTRIES) return;
-    const full = join(dir, name);
-    let isDir = false;
-    try { isDir = statSync(full).isDirectory(); } catch { continue; }
-    out.push({ path: full, label: basename(full), depth, isDir, parent: dir });
+    out.push({ path: entry.path, label: entry.name, depth, isDir: entry.isDir, parent: dir });
     // Lazy expansion — only descend into directories the user has opened.
-    if (isDir && expanded.has(full)) visit(full, depth + 1, out, expanded);
+    if (entry.isDir && expanded.has(entry.path)) visit(entry.path, depth + 1, out, expanded);
   }
 }

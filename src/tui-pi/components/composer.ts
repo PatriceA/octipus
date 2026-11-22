@@ -15,7 +15,7 @@
  * a custom AutocompleteProvider here would conflict with the file
  * provider's `@` handling.
  */
-import { CombinedAutocompleteProvider, Editor, type EditorOptions, type TUI } from '@mariozechner/pi-tui';
+import { CombinedAutocompleteProvider, Editor, type EditorOptions, type TUI } from '@/tui-kit';
 import { existsSync } from 'node:fs';
 import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
 import { getEditorTheme } from '../theme/defaults';

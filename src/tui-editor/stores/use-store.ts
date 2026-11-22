@@ -8,7 +8,7 @@
  * The previous React/Ink implementation used `useSyncExternalStore`;
  * pi-tui has no hooks, so we expose a tiny imperative bridge instead.
  */
-import type { Component } from '@mariozechner/pi-tui';
+import type { Component } from '@/tui-kit';
 
 export interface SubscribableStore<T> {
   get(): T;

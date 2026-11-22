@@ -1,13 +1,14 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Container, TUI } from '@mariozechner/pi-tui';
+import type { Container, TUI } from '@/tui-kit';
 import { OctipusTuiApp } from './app';
 import { StatusBar } from './components/status-bar';
 import type { AgentSessionEvent } from './gateway-adapter';
 
-const gateway = vi.hoisted(() => ({ listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn() }));
+const gateway = vi.hoisted(() => ({ listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn((..._args: unknown[]) => true) }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
   sendCommand = gateway.sendCommand;
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null }));
@@ -89,5 +90,25 @@ it('keeps a collapsed plan closed when an automatic detail request fails', async
     bar.setPlanDetails(null);
     gateway.listener({ kind: 'command.result', name: 'work-plan', result: null, error: 'Connection lost' });
     expect(bar.isPlanExpanded()).toBe(false);
+  } finally { await app.stop(); }
+});
+
+it('fetches the plan status on connect and when the gateway says the plan changed, never on a timer', async () => {
+  vi.useFakeTimers();
+  gateway.sendCommand.mockClear();
+  let root!: Container;
+  const tui = { addChild: (child: Container) => { root = child; }, setFocus: vi.fn(), addInputListener: vi.fn(), requestRender: vi.fn() } as unknown as TUI;
+  const app = new OctipusTuiApp(tui, {});
+  try {
+    const statusFetches = () => gateway.sendCommand.mock.calls.filter(call => call[0] === 'work-plan-status').length;
+    gateway.listener({ kind: 'status', status: 'connected' });
+    expect(statusFetches()).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(statusFetches()).toBe(1);
+    gateway.listener({ kind: 'plan.updated', revision: 3 });
+    expect(statusFetches()).toBe(2);
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: '2/3 steps done · Verify' });
+    const bar = root.children.find(child => child instanceof StatusBar)!;
+    expect(bar.render(120).join('\n')).toContain('2/3 steps done');
   } finally { await app.stop(); }
 });

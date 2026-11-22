@@ -9,6 +9,7 @@
  * `kind` without re-parsing payload shapes.
  */
 import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
+import type { SendMode, SendOutcome } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -16,9 +17,25 @@ export type ToolState = 'pending' | 'executing' | 'completed' | 'error';
 
 export interface ToolEventState {
   state: ToolState;
+  /** What to show: the server's title when it sent one ("Read poem.md"), else the tool name. */
   name: string;
   preview?: string;
   mcpServer?: string;
+  /** The tool's own name, for pairing a result with its call when `name` is a title. */
+  toolName?: string;
+  /** The call id, when the gateway sends one (CLI agents' `id`, `tool_call_complete`'s `toolCallId`). */
+  callId?: string;
+  /** The call's arguments as sent. */
+  args?: Record<string, unknown>;
+  /** The server's one-line summary of the input (`tool_call_complete`), for calls announced without arguments. */
+  input?: string;
+  /** The result's text, as much as the gateway sent. */
+  output?: string;
+  /** A unified diff of what the call changed (`+` / `-` / ` ` lines). */
+  diff?: string;
+  durationMs?: number;
+  /** The server's title, once the call completed. */
+  title?: string;
 }
 
 export interface AgentEndStats {
@@ -40,23 +57,52 @@ export interface SessionStats {
 
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
-  | { kind: 'message';        role: Role; content: string; messageId?: string; progress?: boolean }
+  /** `turnId`: on a turn's reply, the id its `chat.send` carried (echoed by the server). */
+  | { kind: 'message';        role: Role; content: string; messageId?: string; progress?: boolean; turnId?: string }
   | { kind: 'delta';          delta: string; iteration: number }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'permission.resolved'; requestId: string; status: 'approved' | 'denied' | 'expired' }
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
-  | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
-  | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
+  /**
+   * An agent started. `root`: the turn's root agent (the server marks it
+   * `root: true`); `subagent`: anything else it spawned (a swarm node or a
+   * worker), which gets a row of its own.
+   */
+  | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean; root?: boolean }
+  /** An agent finished; `root` only for the turn's root (never inferred from a missing id). */
+  | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string; root?: boolean }
+  /** An agent was stopped on request (`agent.stop`, Esc). */
+  | { kind: 'agent.stopped';  agentId: string; root?: boolean }
+  /** A turn of this session failed or was dropped (`chat.error`, sent to every tab). */
+  | { kind: 'chat.error';     message: string; cancelled: boolean; turnId?: string }
+  /** What became of this client's `chat.send` (`chat.delivery`). */
+  | { kind: 'delivery';       outcome: SendOutcome; turnId?: string; reason?: string }
+  /**
+   * A `session.stop` was handled: `stopped` running agents of this user in the
+   * session, `droppedQueued` of their queued messages (both 0: nothing had started).
+   */
+  | { kind: 'session.stopped'; stopped: number; droppedQueued: number; rootAgentId?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
+  /** The session's work plan was saved; the summary is stale. */
+  | { kind: 'plan.updated';   revision: number }
   | { kind: 'identity';       user: string | null }
   /** No usable CLI login: the client will not connect until one is stored. */
   | { kind: 'login_required'; reason: string }
   | { kind: 'tool';           tool: ToolEventState; agentId?: string }
   | { kind: 'command.result'; name: string; result: unknown; error?: string; data?: unknown }
+  /** The agent proposes the whole new text of a file. */
   | { kind: 'agent.write';    path: string; newText: string }
+  /** The agent replaces `oldText` with `newText` somewhere in a file (`str_replace`, `edit`): a fragment, not the file. */
+  | { kind: 'agent.edit';     path: string; oldText: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
-  | { kind: 'error';          message: string };
+  /**
+   * An error to show. `code` and `turnId` are set for a gateway `error` frame
+   * (`turnId` when it answers a chat.send that carried one); only such an
+   * error can end a turn — a dropped socket, a rate limit or a stale
+   * permission answer are not the turn failing.
+   */
+  | { kind: 'error';          message: string; code?: string; turnId?: string };
 
 export interface GatewayAdapterOptions {
   url?: string;
@@ -98,7 +144,12 @@ export class GatewayAdapter {
       getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
       onStatusChange: (status) => this.emit({ kind: 'status', status }),
       onCommandResult: (name, result, error, data) => this.emit({ kind: 'command.result', name, result, error, data }),
-      onError: (message) => this.emit({ kind: 'error', message }),
+      onError: (message, frame) => this.emit({ kind: 'error', message, ...(frame ? { code: frame.code } : {}), ...(frame?.turnId ? { turnId: frame.turnId } : {}) }),
+      onDelivery: (delivery) => {
+        const mine = this.getSessionId?.();
+        if (mine && delivery.sessionId !== mine) return;
+        this.emit({ kind: 'delivery', outcome: delivery.outcome, ...(delivery.turnId ? { turnId: delivery.turnId } : {}), ...(delivery.reason ? { reason: delivery.reason } : {}) });
+      },
       onEvent: (event) => this.decode(event),
       onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
       onLoginRequired: (reason) => this.emit({ kind: 'login_required', reason }),
@@ -152,8 +203,21 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
-    this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  /** False when the message did not go out (not connected, or over the frame cap — `onError` said why). */
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): boolean {
+    return this.client.sendChat(sessionId, content, projectPath, fileRefs, mode, turnId);
+  }
+
+  isConnected(): boolean { return this.client.getStatus() === 'connected'; }
+
+  /** Stop an agent of this user (the running turn's root, for Esc). */
+  stopAgent(agentId: string): boolean {
+    return this.client.stopAgent(agentId);
+  }
+
+  /** Stop this user's turn in one session — never their agents elsewhere (Esc before the root is known). */
+  stopSession(sessionId: string): boolean {
+    return this.client.stopSession(sessionId);
   }
 
   /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
@@ -161,16 +225,16 @@ export class GatewayAdapter {
     return this.client.uploadAttachments(sessionId, attachments, title);
   }
 
-  sendCommand(name: string, args?: Record<string, string>): void {
-    this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
+  sendCommand(name: string, args?: Record<string, string>): boolean {
+    return this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
   }
 
-  respondApproval(requestId: string, approved: boolean, response: string): void {
-    this.client.respondApproval(requestId, approved, response);
+  respondApproval(requestId: string, approved: boolean, response: string): boolean {
+    return this.client.respondApproval(requestId, approved, response);
   }
 
-  respondPermission(requestId: string, approved: boolean): void {
-    this.client.respondPermission(requestId, approved);
+  respondPermission(requestId: string, approved: boolean): boolean {
+    return this.client.respondPermission(requestId, approved);
   }
 
   // ── Internals ───────────────────────────────────────────────────
@@ -282,15 +346,40 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model')
         ?? pickString(asRecord(payload.data), 'model')
         ?? '';
-      const nodeId = pickString(payload, 'agentId')
-        ?? pickString(asRecord(payload.data), 'agentId');
-      out.push({ kind: 'agent.start', role, model, nodeId });
+      // The root names itself `agentId` (root-runner.ts), a worker `workerId`
+      // (worker-spawner.ts); only the root says `root: true`.
+      const nodeId = pickString(payload, 'agentId') ?? pickString(payload, 'workerId')
+        ?? pickString(asRecord(payload.data), 'agentId') ?? pickString(asRecord(payload.data), 'workerId');
+      const root = payload.root === true || asRecord(payload.data)?.root === true;
+      out.push(root ? { kind: 'agent.start', role, model, nodeId, root } : { kind: 'agent.start', role, model, nodeId, root, subagent: nodeId !== undefined });
       out.push({
         kind: 'message', role: 'system',
         content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
       });
       return out;
     }
+
+    case 'agent.stopped': {
+      const agentId = pickString(payload, 'agentId');
+      if (agentId) out.push({ kind: 'agent.stopped', agentId, ...(typeof payload.root === 'boolean' ? { root: payload.root } : {}) });
+      return out;
+    }
+
+    case 'chat.error': {
+      const turnId = pickString(payload, 'turnId');
+      out.push({ kind: 'chat.error', message: pickString(payload, 'error') ?? 'The turn failed', cancelled: payload.cancelled === true, ...(turnId ? { turnId } : {}) });
+      return out;
+    }
+
+    case 'session.stopped': {
+      const rootAgentId = pickString(payload, 'rootAgentId');
+      out.push({ kind: 'session.stopped', stopped: pickNumber(payload, 'stopped') ?? 0, droppedQueued: pickNumber(payload, 'droppedQueued') ?? 0, ...(rootAgentId ? { rootAgentId } : {}) });
+      return out;
+    }
+
+    case 'session.plan_updated':
+      out.push({ kind: 'plan.updated', revision: pickNumber(payload, 'revision') ?? 0 });
+      return out;
 
     case 'session.stats': {
       out.push({
@@ -307,14 +396,20 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     }
 
     case 'agent.completed': {
-      const stats = asRecord(payload.stats) ?? asRecord(payload.data) ?? {};
+      // `worker_completed` carries its counts at the top (`WorkerResult`).
+      const stats = asRecord(payload.stats) ?? asRecord(payload.data) ?? payload;
       const tokens = pickNumber(stats, 'totalTokens') ?? pickNumber(stats, 'total_tokens') ?? 0;
       const cost = pickNumber(stats, 'totalCostUsd') ?? pickNumber(stats, 'total_cost_usd') ?? 0;
       const durationMs = pickNumber(stats, 'durationMs') ?? pickNumber(stats, 'duration_ms');
       const iterations = pickNumber(stats, 'iterations') ?? pickNumber(asRecord(payload.data), 'iterations');
       const role = pickString(payload, 'role') ?? pickString(asRecord(payload.data), 'role');
-      const nodeId = pickString(payload, 'agentId') ?? pickString(asRecord(payload.data), 'agentId');
-      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs, iterations }, nodeId, role });
+      // `worker_completed` names every agent `workerId` — the root too, marked
+      // `root: true`. Reading only `agentId` left every id undefined, and the
+      // app took any worker finishing for the root ending the turn.
+      const nodeId = pickString(payload, 'workerId') ?? pickString(payload, 'agentId')
+        ?? pickString(asRecord(payload.data), 'workerId') ?? pickString(asRecord(payload.data), 'agentId');
+      const root = payload.root === true || asRecord(payload.data)?.root === true;
+      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs, iterations }, nodeId, role, root });
       // Show runtime + iteration count for parity with the web chat sidepanel.
       const parts: string[] = ['Agent completed'];
       if (role) parts.push(role);
@@ -352,7 +447,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
       const topicPath = pickString(payload, 'topicPath');
-      out.push({ kind: 'agent.start', role, model, nodeId, subagent: true });
+      out.push({ kind: 'agent.start', role, model, nodeId, subagent: true, root: false });
       const label = topicPath && topicPath !== 'root' ? `${role} → ${topicPath}` : role;
       out.push({
         kind: 'message', role: 'system',
@@ -369,7 +464,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const durationMs = pickNumber(payload, 'durationMs');
       const status = pickString(payload, 'status') ?? 'completed';
       const nodeId = pickString(payload, 'nodeId');
-      out.push({ kind: 'agent.end', stats: { tokens, cost: 0, durationMs }, nodeId, role });
+      out.push({ kind: 'agent.end', stats: { tokens, cost: 0, durationMs }, nodeId, role, root: false });
       const parts: string[] = [`Subagent ${status}`, role];
       if (durationMs != null) parts.push(formatDurationMs(durationMs));
       if (tokens > 0) parts.push(`${tokens} tok`);
@@ -415,20 +510,22 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         // Prefer the adapter-supplied human title (e.g. codex "git status")
         // over a re-derived arg summary.
         const preview = pickString(data, 'title') ?? summarizeToolArgs(name, args);
-        out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer } });
+        const callId = pickString(data, 'id') ?? pickString(data, 'toolCallId');
+        out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer, toolName: name, ...(callId ? { callId } : {}), ...(args ? { args } : {}) } });
         const write = extractAgentWrite(name, args);
-        if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
+        if (write) out.push(write);
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
         const isError = Boolean(data.error || data.isError);
         // CLI adapters emit the captured output on `output` (codex/claude);
         // fall back to the legacy `result` string for older servers.
-        const output = pickString(data, 'output') ?? pickString(data, 'result');
+        const output = pickString(data, 'output') ?? pickString(data, 'result') ?? pickString(data, 'error');
         const preview = output?.split('\n')[0]?.slice(0, 80);
+        const callId = pickString(data, 'id') ?? pickString(data, 'toolCallId');
         out.push({
           kind: 'tool',
           agentId: actor,
-          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
+          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer, toolName: name, ...(callId ? { callId } : {}), ...(output !== undefined ? { output } : {}) },
         });
       } else if (type === 'tool_call_complete') {
         // Phase 5 per-tool completion event. Web chat uses it for the
@@ -443,7 +540,6 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const title = pickString(data, 'title');
         const label = title ?? name;
         const status = pickString(data, 'status') ?? 'ok';
-        const role = pickString(data, 'role');
         const durationMs = pickNumber(data, 'durationMs');
         const error = pickString(data, 'error');
         const resultPreview = pickString(data, 'resultPreview');
@@ -452,24 +548,24 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const preview = isError
           ? (error ? error.slice(0, 80) : status)
           : (resultSummary ?? (resultPreview ? resultPreview.slice(0, 80) : undefined));
+        const result = asRecord(data.result);
+        const output = isError ? error ?? status : resultText(result) ?? resultPreview;
+        const diff = pickString(result, 'kind') === 'diff' ? pickString(result, 'patch') : undefined;
+        const inputRecord = asRecord(data.input);
+        const inputValue = pickString(inputRecord, 'value');
+        const input = inputValue ? `${inputValue}${pickString(inputRecord, 'detail') ? ` (${pickString(inputRecord, 'detail')})` : ''}` : undefined;
+        const callId = pickString(data, 'toolCallId') ?? pickString(data, 'id');
+        // How long it took is on the tool group's row now; the "<role> arm ·
+        // <title> · 0.2s" line this used to add said it once more per call.
         out.push({
           kind: 'tool',
           agentId: actor,
-          tool: { state: isError ? 'error' : 'completed', name: label, preview, mcpServer },
+          tool: {
+            state: isError ? 'error' : 'completed', name: label, preview, mcpServer, toolName: name,
+            ...(callId ? { callId } : {}), ...(title ? { title } : {}), ...(durationMs !== undefined ? { durationMs } : {}),
+            ...(output !== undefined ? { output } : {}), ...(diff ? { diff } : {}), ...(input ? { input } : {}),
+          },
         });
-        // Surface a one-liner narration too so the activity log shows
-        // who did what with what timing — matches the web chat's
-        // transient bubble ("data arm · Read poem.md · 0.2s").
-        if (role) {
-          const dur = durationMs != null
-            ? ` · ${(durationMs / 1000).toFixed(durationMs >= 1000 ? 1 : 2)}s`
-            : '';
-          if (isError && error) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label} failed: ${error}` });
-          } else if (!isError) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label}${dur}` });
-          }
-        }
       }
       return out;
     }
@@ -492,12 +588,25 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     case 'chat.response': {
       const response = payload.response;
       const content = typeof response === 'string' ? response : response && typeof response === 'object' ? (response as { response?: unknown }).response : '';
-      if (typeof content === 'string') out.push({ kind: 'message', role: 'assistant', content });
+      const turnId = pickString(payload, 'turnId');
+      if (typeof content === 'string') out.push({ kind: 'message', role: 'assistant', content, ...(turnId ? { turnId } : {}) });
       return out;
     }
   }
 
   return out;
+}
+
+/** The text a structured result preview carries, for the expanded tool group. */
+function resultText(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) return undefined;
+  switch (pickString(result, 'kind')) {
+    case 'text': return pickString(result, 'text');
+    case 'exit': return [`exit ${pickNumber(result, 'code') ?? '?'}`, pickString(result, 'tail')].filter(Boolean).join('\n');
+    case 'list': return Array.isArray(result.items) ? result.items.filter((item): item is string => typeof item === 'string').join('\n') : undefined;
+    case 'file': return pickString(result, 'path');
+    default: return undefined;
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -548,25 +657,30 @@ function summarizeResultPreview(result: Record<string, unknown> | undefined): st
 const WRITE_TOOL_NAMES = new Set(['write_file', 'write', 'edit', 'apply_patch', 'str_replace_editor']);
 
 /**
- * Recognise write-style tool calls and pull out the proposed text.
- * Returns null when the tool isn't a known editor write or required
- * fields are missing.
+ * Recognise write-style tool calls and pull out what they propose: the whole
+ * new text of a file (`agent.write`), or a replacement of one fragment by
+ * another (`agent.edit`). Returns null when the tool isn't a known editor
+ * write or the call does not say enough to know either.
+ *
+ * A fragment is never reported as the file: `str_replace_editor`'s `new_str`
+ * replaces `old_str`, and treating it as the new file made the editor offer
+ * to replace the whole file with it. An insert (`new_str` at a line) or a
+ * lone `replacement` names no text to replace and is left out.
  *
  * Conservative on purpose: keeps the diff overlay from triggering on
- * unrelated tool calls (read_file, bash). Extensions can broaden the
- * set in Phase 7 once the registration API exists.
+ * unrelated tool calls (read_file, bash).
  */
-function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): { path: string; newText: string } | null {
+export function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): Extract<AgentSessionEvent, { kind: 'agent.write' | 'agent.edit' }> | null {
   if (!args) return null;
   if (!WRITE_TOOL_NAMES.has(toolName)) return null;
   const path = pickString(args, 'path') ?? pickString(args, 'file_path') ?? pickString(args, 'filename');
   if (!path) return null;
-  const newText = pickString(args, 'content')
-    ?? pickString(args, 'text')
-    ?? pickString(args, 'new_str')
-    ?? pickString(args, 'replacement');
-  if (newText === undefined) return null;
-  return { path, newText };
+  const whole = pickString(args, 'content') ?? pickString(args, 'text') ?? pickString(args, 'file_text');
+  if (whole !== undefined) return { kind: 'agent.write', path, newText: whole };
+  const oldText = pickString(args, 'old_str') ?? pickString(args, 'old_string');
+  const newText = pickString(args, 'new_str') ?? pickString(args, 'new_string');
+  if (oldText !== undefined && newText !== undefined) return { kind: 'agent.edit', path, oldText, newText };
+  return null;
 }
 
 const ARG_PREVIEW_MAX = 80;

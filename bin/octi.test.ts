@@ -266,3 +266,29 @@ describe('octi stop/restart from inside the backend', () => {
     }
   }, 30_000);
 });
+
+describe('octi tui / octi edit', () => {
+  // No npm or tsx CLI in front of the client: each was a process and about 0.3 s before the first frame.
+  test.skipIf(process.platform === 'win32').each([
+    ['tui', 'src/tui-pi/index.ts'],
+    ['edit', 'src/tui-editor/index.ts'],
+  ])('octi %s runs the client with Node from the project, pinned to the directory it was run from', (command, entry) => {
+    const { root, script } = isolatedBashProject('API_PORT=4123\n');
+    const fakes = join(root, 'fake-bin');
+    mkdirSync(fakes);
+    writeFileSync(join(fakes, 'curl'), '#!/bin/sh\nexit 0\n');
+    writeFileSync(join(fakes, 'node'), '#!/bin/sh\necho "cwd=$PWD"\necho "port=$API_PORT"\nfor a in "$@"; do echo "arg=$a"; done\n');
+    writeFileSync(join(fakes, 'npm'), '#!/bin/sh\necho npm-was-run\nexit 9\n');
+    for (const name of ['curl', 'node', 'npm']) chmodSync(join(fakes, name), 0o755);
+    const here = mkdtempSync(join(tmpdir(), 'octi-cli-cwd-'));
+    const out = execFileSync('bash', [script, command, '--session', 'abc'], {
+      cwd: here, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: `${fakes}:${process.env.PATH}`, HOME: here, NO_COLOR: '1', API_PORT: '4123', OCTIPUS_INSIDE_PID: '' },
+    });
+    expect(out).not.toContain('npm-was-run');
+    const args = out.split('\n').filter(line => line.startsWith('arg=')).map(line => line.slice(4));
+    expect(args).toEqual(['--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', here, '--session', 'abc']);
+    expect(out).toContain(`cwd=${root}`);
+    expect(out).toContain('port=4123');
+  });
+});

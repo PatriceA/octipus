@@ -18,6 +18,22 @@ describe('BufferStore', () => {
     expect(s.get().buffers.length).toBe(1);
   });
 
+  // Ids used to be `file:<path>` and kept across Save As: saving a.ts as b.ts and opening a.ts
+  // again gave two buffers one id, so saving, closing and highlighting reached the wrong one.
+  test('ids never repeat and never follow the path: Save As then reopening the old path gives two buffers', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/abs/a.ts', 'one');
+    s.rebind(a.id, '/abs/b.ts', 'one', { mtimeMs: 1, size: 3, eol: '\n', bom: false, mode: 0o644 });
+    const again = s.openFile('/abs/a.ts', 'two');
+    expect(again.id).not.toBe(a.id);
+    expect(new Set(s.get().buffers.map((b) => b.id)).size).toBe(2);
+    expect(s.byId(a.id)?.path).toBe('/abs/b.ts');
+    expect(s.byId(again.id)?.path).toBe('/abs/a.ts');
+    s.close(again.id);
+    expect(s.get().buffers.map((b) => b.path)).toEqual(['/abs/b.ts']);
+    expect(a.id).not.toContain('/abs');
+  });
+
   test('openScratch creates an unbacked buffer', () => {
     const s = new BufferStore();
     const a = s.openScratch();
@@ -50,12 +66,66 @@ describe('BufferStore', () => {
     s.cycle(-1); expect(s.get().activeId).toBe(c.id);
   });
 
-  test('markDirty updates flag', () => {
+  test('dirty compares the text with what was saved: undoing back to it is clean (docs/plans/tui-modernization.md §5.2)', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'saved');
+    expect(a.dirty).toBe(false);
+    a.buffer.moveLineEnd();
+    a.buffer.type('!');
+    expect(s.active()?.dirty).toBe(true);
+    a.buffer.undo();
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('an edit that changes nothing does not dirty the buffer', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'text');
+    a.buffer.deleteBackward(); // at 0,0
+    a.buffer.setText('text');
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('markSaved moves the baseline; revert goes back to it', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a', 'one');
+    a.buffer.setText('two');
+    s.markSaved(a.id, 'two', null);
+    expect(s.active()?.dirty).toBe(false);
+    a.buffer.setText('three');
+    s.revert(a.id);
+    expect(a.buffer.text()).toBe('two');
+    expect(s.active()?.dirty).toBe(false);
+  });
+
+  test('rebind gives a scratch buffer a file and keeps its id', () => {
+    const s = new BufferStore();
+    const a = s.openScratch();
+    a.buffer.insert('notes');
+    expect(s.active()?.dirty).toBe(true);
+    s.rebind(a.id, '/p/notes.md', 'notes', { mtimeMs: 1, size: 5, eol: '\n', bom: false, mode: 0o644 });
+    const r = s.active();
+    expect(r?.id).toBe(a.id);
+    expect(r?.path).toBe('/p/notes.md');
+    expect(r?.label).toBe('notes.md');
+    expect(r?.language).toBe('markdown');
+    expect(r?.dirty).toBe(false);
+  });
+
+  test('the Tab indent follows the file', () => {
+    const s = new BufferStore();
+    expect(s.openFile('/t.go', 'func f() {\n\treturn\n}').indent).toBe('\t');
+    expect(s.openFile('/f.py', 'def f():\n    if x:\n        pass').indent).toBe('    ');
+    expect(s.openFile('/n.txt', 'no indentation').indent).toBe('  ');
+  });
+
+  test('a closed buffer stops notifying', () => {
     const s = new BufferStore();
     const a = s.openFile('/a', '');
-    expect(a.dirty).toBe(false);
-    s.markDirty(a.id, true);
-    expect(s.active()?.dirty).toBe(true);
+    s.close(a.id);
+    let fires = 0;
+    s.subscribe(() => { fires++; });
+    a.buffer.insert('late');
+    expect(fires).toBe(0);
   });
 
   test('subscribe fires on change', () => {
@@ -78,45 +148,13 @@ describe('BufferStore', () => {
     expect(s.get().activeId).toBeNull();
   });
 
-  test('lockMode defaults to "lock"', () => {
-    const s = new BufferStore();
-    const a = s.openFile('/a.ts', 'foo');
-    expect(a.lockMode).toBe('lock');
-  });
-
-  test('setLockMode toggles', () => {
-    const s = new BufferStore();
-    const a = s.openFile('/a.ts', 'foo');
-    s.setLockMode(a.id, 'merge');
-    expect(s.active()?.lockMode).toBe('merge');
-  });
-
-  test('applyAgentEdit in lock mode takes lock and does not modify text', () => {
+  test('setAgentLocked takes and releases the lock without touching the text', () => {
     const s = new BufferStore();
     const a = s.openFile('/a.ts', 'before');
-    const applied = s.applyAgentEdit(a.id, 'after');
-    expect(applied).toBe(false);
+    s.setAgentLocked(a.id, true);
     expect(s.active()?.agentLocked).toBe(true);
     expect(a.buffer.text()).toBe('before');
-  });
-
-  test('applyAgentEdit in merge mode rewrites text + marks dirty', () => {
-    const s = new BufferStore();
-    const a = s.openFile('/a.ts', 'before');
-    s.setLockMode(a.id, 'merge');
-    const applied = s.applyAgentEdit(a.id, 'after');
-    expect(applied).toBe(true);
-    expect(a.buffer.text()).toBe('after');
-    expect(s.active()?.dirty).toBe(true);
-  });
-
-  test('merge-mode edit pushes onto undo stack so user can rollback', () => {
-    const s = new BufferStore();
-    const a = s.openFile('/a.ts', 'before');
-    s.setLockMode(a.id, 'merge');
-    s.applyAgentEdit(a.id, 'after');
-    expect(a.buffer.text()).toBe('after');
-    a.buffer.undo();
-    expect(a.buffer.text()).toBe('before');
+    s.setAgentLocked(a.id, false);
+    expect(s.active()?.agentLocked).toBe(false);
   });
 });
