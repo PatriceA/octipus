@@ -12,6 +12,7 @@ import type { ArtifactStore } from '@/db/repositories/space';
 import type { Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import type { Artifact } from '@/db/schema/artifacts';
+import { isEmbedOrigin } from '@/core/artifacts/csp';
 import { mintShareLink } from '@/core/artifacts/share-link';
 import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
@@ -251,6 +252,11 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { error: 'not found' };
       }
       store.assertWrite();
+      const badOrigin = body.allowedEmbedOrigins?.find((o) => !isEmbedOrigin(o));
+      if (badOrigin !== undefined) {
+        set.status = 400;
+        return { error: `allowedEmbedOrigins: "${badOrigin}" is not an origin (https://host[:port] or https://*.host)` };
+      }
       const patch: Partial<Artifact> = {};
       if (body.title !== undefined) patch.title = body.title;
       if (body.visibility !== undefined) patch.visibility = body.visibility;
