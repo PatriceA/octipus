@@ -37,7 +37,7 @@ export interface ContextHookStats {
   /** …of those where recall injected passages, and of those where it found nothing. */
   searchedAfterInjection: Rate;
   searchedAfterAbstain: Rate;
-  /** Turns with injected passages whose answer named at least one of them. */
+  /** Finished turns with recall passages whose answer named at least one of them (by title or id). */
   cited: Rate;
   byModel: Array<{ model: string; cli: boolean | null; turns: number; injected: Rate; searched: Rate; cited: Rate }>;
   recent: Array<Pick<ContextTurnRow, 'id' | 'event' | 'role' | 'channel' | 'model' | 'cli' | 'tokens' | 'latencyMs' | 'knowledgeToolCalls' | 'notesToolCalls' | 'citedItems' | 'outcome'> & {
@@ -56,6 +56,14 @@ function recallStatus(row: ContextTurnRow): 'injected' | 'abstained' | 'none' {
   if (recall.some((h) => h.status === 'abstained')) return 'abstained';
   return 'none';
 }
+
+/**
+ * Recall passages shown on this turn, read from its hook records, so rows
+ * written before `used_items` count the same way. A context note is not
+ * one: it is shown every turn as guidance, not a source to name.
+ */
+const recallPassages = (row: ContextTurnRow) =>
+  row.hooks.reduce((n, h) => n + (h.kind === 'recall' && h.status === 'injected' ? h.items.length : 0), 0);
 
 const searchedIn = (row: ContextTurnRow) => (row.knowledgeToolCalls ?? 0) + (row.notesToolCalls ?? 0) > 0;
 
@@ -89,7 +97,7 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
   const finished = rows.filter((r) => r.finishedAt);
   const injected = finished.filter((r) => recallStatus(r) === 'injected');
   const abstainedRows = finished.filter((r) => recallStatus(r) === 'abstained');
-  const withItems = finished.filter((r) => r.injectedItems > 0);
+  const withPassages = finished.filter((r) => recallPassages(r) > 0);
 
   const models = new Map<string, ContextTurnRow[]>();
   for (const r of finished) {
@@ -114,14 +122,14 @@ export async function contextHookStats(userId: string, days = 30): Promise<Conte
     searched: rate(finished.filter(searchedIn).length, finished.length),
     searchedAfterInjection: rate(injected.filter(searchedIn).length, injected.length),
     searchedAfterAbstain: rate(abstainedRows.filter(searchedIn).length, abstainedRows.length),
-    cited: rate(withItems.filter((r) => (r.citedItems ?? 0) > 0).length, withItems.length),
+    cited: rate(withPassages.filter((r) => (r.citedItems ?? 0) > 0).length, withPassages.length),
     byModel: [...models.values()].map((list) => ({
       model: list[0].model ?? 'unknown',
       cli: list[0].cli,
       turns: list.length,
-      injected: rate(list.filter((r) => r.injectedItems > 0).length, list.length),
+      injected: rate(list.filter((r) => recallPassages(r) > 0).length, list.length),
       searched: rate(list.filter(searchedIn).length, list.length),
-      cited: rate(list.filter((r) => (r.citedItems ?? 0) > 0).length, list.filter((r) => r.injectedItems > 0).length),
+      cited: rate(list.filter((r) => recallPassages(r) > 0 && (r.citedItems ?? 0) > 0).length, list.filter((r) => recallPassages(r) > 0).length),
     })).sort((a, b) => b.turns - a.turns),
     recent: rows.slice(0, 25).map((r) => ({
       id: r.id, event: r.event, role: r.role, channel: r.channel, model: r.model, cli: r.cli, tokens: r.tokens, latencyMs: r.latencyMs,

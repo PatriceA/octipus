@@ -21,7 +21,7 @@ import { coreLogger } from '@/utils/logger';
 import { withDeadline } from '@/utils/concurrency';
 import type { RepeatableBlock } from '@/core/agent/repeated-context';
 import { KIND_RUNNERS } from './kinds';
-import { usedPassages } from './measure';
+import { citedItems, usedPassages } from './measure';
 import { listContextHooks } from './store';
 import { agentUsageKey, toolUseSnapshot, type ToolUseCount } from './tool-usage';
 import type { ContextHookInput, ContextHookItem, ContextHookResult } from './types';
@@ -34,7 +34,10 @@ export interface ContextTurnHandle {
   /** Whose tool calls count: the session (a root turn and its workers) or one agent (`bindTurnToAgent`). */
   usageKey: string;
   startUse: ToolUseCount;
-  /** What the answer can cite: recall passages and context notes, not the index. */
+  /**
+   * What the answer can name: the recall passages. Not a context note (shown
+   * every turn as guidance, not a source to name) nor the index.
+   */
   citable: ContextHookItem[];
   /**
    * The recall passages shown, each with its excerpt and the query it was
@@ -146,13 +149,15 @@ export async function runContextHooks(
   const labelledBlocks: ContextHooksOutcome['labelledBlocks'] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
+  let injectedItems = 0;
   const shown: ContextTurnHandle['shown'] = [];
   for (const { hook, latencyMs, result } of kept) {
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
       repeatable.push(result.repeatable ?? result.text);
       labelledBlocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
-      if (hook.kind !== 'notes_index') citable.push(...result.items);
+      if (hook.kind !== 'notes_index') injectedItems += result.items.length;
+      if (hook.kind === 'recall') citable.push(...result.items);
       if (result.shown) shown.push(...result.shown.excerpts.map((excerpt) => ({ excerpt, query: result.shown?.query ?? '' })));
     }
     records.push({
@@ -179,7 +184,7 @@ export async function runContextHooks(
       role: input.role ?? null,
       channel: input.channel ?? null,
       hooks: records,
-      injectedItems: citable.length,
+      injectedItems,
       tokens: records.reduce((n, r) => n + r.tokens, 0),
       latencyMs: Date.now() - started,
     }).returning({ id: contextTurns.id });
@@ -198,17 +203,6 @@ export function bindTurnToAgent(turn: ContextTurnHandle | null, agentId: string)
   if (!turn) return;
   turn.usageKey = agentUsageKey(agentId);
   turn.startUse = toolUseSnapshot(turn.usageKey);
-}
-
-/** The citable items the answer names: by title (four characters or more) or by id. */
-export function citedItems(response: string, items: ContextHookItem[]): number {
-  if (!response) return 0;
-  const text = response.toLowerCase();
-  return items.filter((item) => {
-    const title = item.title.trim().toLowerCase();
-    const bare = title.replace(/\.(md|markdown|txt|pdf|docx?)$/, '');
-    return (bare.length >= 4 && text.includes(bare)) || text.includes(item.id.toLowerCase()) || text.includes(item.sourceId.toLowerCase());
-  }).length;
 }
 
 async function describeModel(agentId: string | undefined): Promise<{ model: string | null; cli: boolean | null }> {

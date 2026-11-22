@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { estimateTokens } from '@/utils/token-count';
 import { contentWords, fenceSafe, fitTokens, KIND_CONFIG, parseKindConfig, RECALL_HEAD, RECALL_TAIL } from './kinds';
-import { citedItems } from './run';
 import { agentUsageKey, noteToolUse, resetToolUse, toolUseSnapshot } from './tool-usage';
 
 describe('fenceSafe', () => {
@@ -58,24 +57,6 @@ describe('recall defaults fit each other', () => {
     expect(estimateTokens(block)).toBeLessThanOrEqual(recall.tokenBudget);
     const index = KIND_CONFIG.notes_index.parse({}).tokenBudget;
     expect(recall.tokenBudget + index).toBeLessThanOrEqual(2000);
-  });
-});
-
-describe('citedItems', () => {
-  const items = [
-    { id: '11111111-1111-1111-1111-111111111111', sourceId: 'note:a', title: 'Pricing 2026', score: 0.7 },
-    { id: '22222222-2222-2222-2222-222222222222', sourceId: 'file:b', title: 'contract.pdf', score: 0.6 },
-    { id: '33333333-3333-3333-3333-333333333333', sourceId: 'note:c', title: 'AI', score: 0.6 },
-  ];
-
-  test('an answer names a source by its title, a file by its name without the extension', () => {
-    expect(citedItems('From the note "pricing 2026": €900.', items)).toBe(1);
-    expect(citedItems('See the Contract for the terms; also Pricing 2026.', items)).toBe(2);
-  });
-
-  test('titles under four characters do not count as named by chance', () => {
-    expect(citedItems('AI is mentioned here.', items)).toBe(0);
-    expect(citedItems('', items)).toBe(0);
   });
 });
 

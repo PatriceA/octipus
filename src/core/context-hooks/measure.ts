@@ -18,6 +18,9 @@
  *
  * A passage counts as used with one strong token or two different weak ones.
  * One shared long word, or a year, is not enough.
+ *
+ * "Named" (`citedItems`): the answer names a passage by its title, as a
+ * whole word or phrase, or by its id.
  */
 
 /** A word of this many letters or more is distinctive (weak). */
@@ -115,4 +118,44 @@ export function passageUsed(answer: string, excerpt: string, query: string): boo
 /** How many of the shown passages the answer used. */
 export function usedPassages(answer: string, passages: ReadonlyArray<{ excerpt: string; query: string }>): number {
   return passages.filter((p) => passageUsed(answer, p.excerpt, p.query)).length;
+}
+
+// ── Named ───────────────────────────────────────────────────────────────────
+
+/** A title shorter than this (after its extension is stripped) is not counted as named: "AI" is in too many answers. */
+export const MIN_TITLE_CHARS = 4;
+const FILE_EXTENSION = /\.(md|markdown|txt|pdf|docx?)$/;
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+const UNSPACED_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+const normal = (text: string) => text.normalize('NFC').toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Whether `text` names `title` on word boundaries: "Pricing" is named in
+ * 'from the note "Pricing":' but not in "repricing" or "Pricings". A file
+ * is named without its extension ("contract.pdf" by "the contract"). Any
+ * script: the boundary is a letter or digit of any language, and none is
+ * asked for next to a character of a script written without spaces, where
+ * a title sits inside a run of text.
+ */
+export function namesTitle(text: string, title: string): boolean {
+  const bare = normal(title.trim()).replace(FILE_EXTENSION, '').trim();
+  const chars = [...bare];
+  if (chars.length < MIN_TITLE_CHARS) return false;
+  const hay = normal(text);
+  const needsBefore = !UNSPACED_CHAR.test(chars[0]);
+  const needsAfter = !UNSPACED_CHAR.test(chars[chars.length - 1]);
+  for (let at = hay.indexOf(bare); at >= 0; at = hay.indexOf(bare, at + 1)) {
+    const before = [...hay.slice(0, at)].pop() ?? '';
+    const after = [...hay.slice(at + bare.length)][0] ?? '';
+    if ((!needsBefore || !WORD_CHAR.test(before)) && (!needsAfter || !WORD_CHAR.test(after))) return true;
+  }
+  return false;
+}
+
+/** The items the answer names: by title (`namesTitle`) or by id. */
+export function citedItems(response: string, items: ReadonlyArray<{ id: string; sourceId: string; title: string }>): number {
+  if (!response) return 0;
+  const text = response.toLowerCase();
+  return items.filter((item) => namesTitle(response, item.title) || text.includes(item.id.toLowerCase()) || text.includes(item.sourceId.toLowerCase())).length;
 }

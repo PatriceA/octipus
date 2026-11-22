@@ -72,7 +72,11 @@ export const contextTurns = pgTable('context_turns', {
   knowledgeToolCalls: integer('knowledge_tool_calls'),
   /** Note reads (search_notes, read_note, …) while the turn ran. */
   notesToolCalls: integer('notes_tool_calls'),
-  /** Injected sources the answer named. */
+  /**
+   * Recall passages the answer named by title or id (`citedItems`). Rows
+   * written before it was limited to recall passages may also count a
+   * context note named.
+   */
   citedItems: integer('cited_items'),
   /**
    * Recall passages the answer used: it repeats distinctive content of the

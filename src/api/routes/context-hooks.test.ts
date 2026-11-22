@@ -269,6 +269,32 @@ describe('a run', () => {
   });
 });
 
+describe('"named" counts recall passages only', () => {
+  test('a context note named is not a source named, and a turn with only the note is not in the denominator', async () => {
+    await note(userId, 'Pricing', 'Website pricing: a five page website costs 900 euro.');
+    await note(userId, 'About me', 'I run a two-person design studio in Ghent.', { slug: 'about-me' });
+    await send(userApp, 'POST', '/api/context-hooks', { name: 'About me', kind: 'note', config: { slug: 'about-me' } });
+    await send(userApp, 'PATCH', '/api/context-hooks/builtin:notes-index', { enabled: false });
+    const { finishContextTurn, runContextHooks } = await import('@/core/context-hooks');
+    const run = (query: string) => runContextHooks({ event: 'turn_start', userId, workspaceId: null, sessionId: 'sess-named', query, role: 'general', channel: 'web' });
+    // Recall shows Pricing; the answer names only the note.
+    const first = await run('website pricing');
+    expect(first.text).toContain('Note "Pricing"');
+    await finishContextTurn(first.turn, { response: 'As your note About me says, you are in Ghent.', outcome: 'success' });
+    // Recall finds nothing; only the note is shown, and named.
+    const second = await run('quarterly tax deadline');
+    expect(second.text).not.toContain('<recalled-knowledge>');
+    await finishContextTurn(second.turn, { response: 'About me: you run a studio.', outcome: 'success' });
+
+    const { rows } = await queryRaw('SELECT cited_items, injected_items FROM context_turns ORDER BY created_at');
+    expect(rows).toEqual([{ cited_items: 0, injected_items: 2 }, { cited_items: 0, injected_items: 1 }]);
+    const stats = (await send(userApp, 'GET', '/api/context-hooks/stats')).body;
+    expect(stats.cited).toEqual({ n: 0, of: 1 });
+    expect(stats.byModel[0].cited).toEqual({ n: 0, of: 1 });
+    expect(stats.byModel[0].injected).toEqual({ n: 1, of: 2 });
+  });
+});
+
 describe('the recall eval', () => {
   test('scores found sources, their rank, and questions that should find nothing', async () => {
     await note(userId, 'Pricing', 'Website pricing: a five page website costs 900 euro.');
