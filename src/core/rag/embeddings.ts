@@ -455,8 +455,10 @@ export class EmbeddingService {
         // which is exactly what `last_verified_at` records — so a nightly
         // re-crawl keeps unchanged facts fresh without rewriting a row.
         // Metadata is refreshed as well, so a re-index re-tags a row written
-        // before its source carried a provenance tag.
-        set: { lastAccessedAt: sql`now()`, lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id`, metadata: sql`excluded.metadata` },
+        // before its source carried a provenance tag. `last_accessed_at` is
+        // left alone: indexing is not a read (it says when a search last
+        // returned the row, which lesson expiry relies on).
+        set: { lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id`, metadata: sql`excluded.metadata` },
       })
       .returning({ id: embeddings.id });
     return result[0].id;

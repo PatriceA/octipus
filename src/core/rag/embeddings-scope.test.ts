@@ -182,3 +182,18 @@ describe('EmbeddingService repository visibility', () => {
     expect(await sources()).toEqual(['allowed', 'hidden', 'ordinary']);
   });
 });
+
+describe('re-indexing identical content', () => {
+  test('re-verifies the row but does not count as a read (last_accessed_at stays unset)', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    await executeRaw('TRUNCATE TABLE embeddings');
+    const owner = { ownerUserId: randomUUID(), workspaceId: null };
+    const source = `note:${randomUUID()}`;
+    const id = await svc.store(owner, 'lesson', source, 'kiln cools overnight', vec);
+    await executeRaw(`UPDATE embeddings SET last_verified_at = now() - interval '30 days' WHERE id = '${id}'`);
+    // The same owner, source and text again: the conflict path.
+    expect(await svc.store(owner, 'lesson', source, 'kiln cools overnight', vec)).toBe(id);
+    const { rows } = await queryRaw('SELECT last_accessed_at, access_count, last_verified_at > now() - interval \'1 minute\' AS verified FROM embeddings WHERE id = $1', [id]);
+    expect(rows[0]).toMatchObject({ last_accessed_at: null, access_count: 0, verified: true });
+  });
+});
