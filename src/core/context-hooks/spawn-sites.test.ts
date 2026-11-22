@@ -259,7 +259,7 @@ function managerRuns(code: string, blocks: ReturnType<typeof braceBlocks>): numb
   for (const m of code.matchAll(MANAGER_GET)) {
     const bound = m.index ?? 0;
     const scope = blocks.filter((b) => b.open < bound && bound < b.close).sort((a, b) => b.open - a.open)[0] ?? { open: 0, close: code.length };
-    const name = m[1].replace(/\$/g, '\\$');
+    const name = m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const run of code.slice(bound, scope.close).matchAll(new RegExp(`(?<![\\w$.])${name}\\s*\\??\\.\\s*run\\s*\\(`, 'g'))) at.push(bound + (run.index ?? 0));
   }
   for (const m of code.matchAll(MANAGER_GET_RUN)) at.push(m.index ?? 0);
