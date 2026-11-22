@@ -103,6 +103,22 @@ export interface SearchResult {
   ageDays?: number;
 }
 
+/** A candidate of `hybridSearchAnyTerm`, with the evidence to qualify it on. */
+export interface AnyTermCandidate extends SearchResult {
+  /** Raw cosine similarity to the query; null when the query could not be embedded. `similarity` is this, or 0. */
+  cosine: number | null;
+  /** The query's lexemes this chunk contains (English configuration, as `content_tsv`). */
+  matchedLexemes: string[];
+}
+
+export interface AnyTermSearch {
+  candidates: AnyTermCandidate[];
+  /** Every lexeme of the query, in `content_tsv`'s terms. */
+  queryLexemes: string[];
+  /** Why the query has no embedding (the keyword leg ran alone), or null. */
+  embeddingError: string | null;
+}
+
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
 /**
  * Chunks embedded per provider call. `client.embed` already takes an array and
@@ -139,9 +155,9 @@ export interface SearchScope {
   allowedRepoIds?: string[];
   /**
    * Do not count the returned rows as accessed. For callers that fetch more
-   * than they use (the recall context hook over-fetches and filters): they
-   * call `recordAccess` with the rows they did use, so LFU retention keeps
-   * counting what was actually read.
+   * than they use: they call `recordAccess` with the rows they did use, so
+   * LFU retention keeps counting what was actually read. (`hybridSearchAnyTerm`,
+   * recall's search, never counts: recall counts the passages it shows.)
    */
   skipAccess?: boolean;
 }
@@ -872,6 +888,156 @@ export class EmbeddingService {
       .map(({ hasFtsMatch: _hasFtsMatch, ...rest }) => rest);
     if (!scope?.skipAccess) this.recordAccess(out.map((r) => r.id));
     return out;
+  }
+
+  /**
+   * Hybrid search in its "any term" keyword mode: the candidates of the
+   * keyword leg share at least one lexeme with the query (`hybridSearch`
+   * needs all of them, which a sentence never meets), ranked by
+   * `ts_rank_cd`, fused with the vector leg by RRF as in `hybridSearch`.
+   *
+   * Matching one term is no evidence of relevance, so nothing is dropped
+   * here for a similarity bar and nothing passes one for a keyword hit: each
+   * candidate carries its evidence — the raw cosine (null without a query
+   * embedding) and the query lexemes it contains — and the caller qualifies
+   * it (context-hooks `qualifyHit`). Access is never counted here: the caller
+   * counts what it uses.
+   *
+   * When the query cannot be embedded, the keyword leg runs alone and
+   * `embeddingError` says why: a caller that needs the vector leg has to know
+   * it is missing, not get keyword hits passed off as the usual result.
+   */
+  async hybridSearchAnyTerm(
+    knowledge: KnowledgeScope,
+    query: string,
+    limit = 5,
+    options: { purpose?: EmbeddingPurpose; alpha?: number; scope?: Omit<SearchScope, 'skipAccess'> } = {},
+  ): Promise<AnyTermSearch> {
+    const { purpose, alpha = 0.6, scope } = options;
+    let queryEmbedding: number[] | null = null;
+    let embeddingError: string | null = null;
+    try {
+      queryEmbedding = await this.generateEmbedding(query, 'query');
+    } catch (err) {
+      embeddingError = err instanceof Error ? err.message : String(err);
+      coreLogger.warn({ err, queryLength: query.length }, 'Hybrid search (any term): embedding failed, keyword leg only — the caller is told');
+    }
+
+    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
+    const scopeFilter = globalDocsScopeSql(scope);
+    const repoFilter = repoScopeSql(scope);
+    const k = 60;
+    // The query's lexemes, OR-ed into a tsquery. Built from the lexeme array
+    // with the tsquery input syntax (each lexeme quoted, quotes and
+    // backslashes escaped) so a lexeme is matched as it is: going through
+    // to_tsquery would parse and stem it again.
+    const lexemes = sql`q AS (SELECT tsvector_to_array(to_tsvector('english', ${query})) AS lx),
+      qt AS (
+        SELECT array_to_string(ARRAY(
+          SELECT '''' || replace(replace(l, '\\', '\\\\'), '''', '''''') || '''' FROM unnest(q.lx) l
+        ), ' | ')::tsquery AS tq FROM q
+      ),
+      fts AS (
+        SELECT id,
+               row_number() OVER (ORDER BY ts_rank_cd(content_tsv, (SELECT tq FROM qt)) DESC) AS rank_fts
+        FROM embeddings
+        WHERE numnode((SELECT tq FROM qt)) > 0
+          AND content_tsv @@ (SELECT tq FROM qt)
+          ${purposeFilter}
+          ${userFilter}
+          ${scopeFilter}
+          ${repoFilter}
+        ORDER BY ts_rank_cd(content_tsv, (SELECT tq FROM qt)) DESC
+        LIMIT 50
+      )`;
+    const columns = sql`e.id, e.content, e.abstract, e.purpose, e.source_id, e.metadata,
+             e.section_path, e.heading_level, e.repo_id, e.last_verified_at,
+             ${ageInDaysSql('e')} AS age_days,
+             (SELECT lx FROM q) AS query_lexemes,
+             ARRAY(SELECT unnest((SELECT lx FROM q)) INTERSECT SELECT unnest(tsvector_to_array(e.content_tsv))) AS matched_lexemes`;
+
+    let results: unknown;
+    if (queryEmbedding) {
+      const vecLiteral = `[${queryEmbedding.join(',')}]`;
+      results = await withFilteredVectorScan('embeddings', (q) => q.execute(sql`
+        WITH ${lexemes},
+        vec AS (
+          SELECT id, row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec
+          FROM embeddings
+          WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter} ${repoFilter}
+          ORDER BY embedding <=> ${vecLiteral}::vector
+          LIMIT 50
+        ),
+        combined AS (
+          SELECT COALESCE(f.id, v.id) AS id,
+                 COALESCE(1.0 / (${k} + f.rank_fts), 0) * ${1 - alpha} +
+                 COALESCE(1.0 / (${k} + v.rank_vec), 0) * ${alpha} AS rrf_score
+          FROM fts f
+          FULL OUTER JOIN vec v ON f.id = v.id
+        )
+        -- The cosine of every returned row, not only of the vector leg's top
+        -- rows: a keyword candidate is qualified on it too.
+        SELECT 1 - (e.embedding <=> ${vecLiteral}::vector) AS cosine, ${columns}
+        FROM combined c
+        JOIN embeddings e ON e.id = c.id
+        ORDER BY c.rrf_score * ${freshnessFactorSql('e')} DESC
+        LIMIT ${limit}
+      `));
+    } else {
+      results = await getDb().execute(sql`
+        WITH ${lexemes}
+        SELECT NULL::float8 AS cosine, ${columns}
+        FROM fts f
+        JOIN embeddings e ON e.id = f.id
+        ORDER BY (1.0 / (${k} + f.rank_fts)) * ${freshnessFactorSql('e')} DESC
+        LIMIT ${limit}
+      `);
+    }
+
+    const list = rows<{
+      cosine: number | string | null;
+      id: string;
+      content: string;
+      abstract: string | null;
+      purpose: string;
+      source_id: string;
+      metadata: unknown;
+      section_path: string[] | null;
+      heading_level: number | null;
+      repo_id: string | null;
+      last_verified_at: Date | null;
+      age_days: number | string;
+      query_lexemes: string[] | null;
+      matched_lexemes: string[] | null;
+    }>(results);
+    const candidates: AnyTermCandidate[] = list.map((r) => {
+      const cosine = r.cosine === null || r.cosine === undefined ? null : Number(r.cosine);
+      return {
+        id: r.id,
+        content: r.content,
+        abstract: r.abstract,
+        purpose: r.purpose as EmbeddingPurpose,
+        sourceId: r.source_id,
+        similarity: cosine ?? 0,
+        cosine: cosine !== null && Number.isFinite(cosine) ? cosine : null,
+        matchedLexemes: r.matched_lexemes ?? [],
+        metadata: (r.metadata || {}) as EmbeddingMetadata,
+        sectionPath: r.section_path,
+        headingLevel: r.heading_level,
+        repoId: r.repo_id,
+        lastVerifiedAt: r.last_verified_at,
+        ageDays: Math.round(Number(r.age_days) || 0),
+      };
+    });
+    const queryLexemes = list[0]?.query_lexemes ?? await this.queryLexemes(query);
+    return { candidates, queryLexemes, embeddingError };
+  }
+
+  /** The lexemes `content_tsv` would hold for `text` (English configuration). */
+  async queryLexemes(text: string): Promise<string[]> {
+    const result = await getDb().execute(sql`SELECT tsvector_to_array(to_tsvector('english', ${text})) AS lx`);
+    return rows<{ lx: string[] | null }>(result)[0]?.lx ?? [];
   }
 
   /**
