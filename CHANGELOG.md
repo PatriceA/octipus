@@ -28,7 +28,10 @@ labels reflect blast radius, not contract guarantees.
     API show a view as text instead of the one-line placeholder.
   - **Wire and API:** `chat.send` / `room.post` take `inlineUi.action`
     (`{ blockId, name, componentId, context, data? }`); an answer that fails a
-    check is refused (`INVALID_MESSAGE`; rooms `INVALID_INPUT` / 400).
+    check is refused (`INVALID_MESSAGE`; rooms `INVALID_INPUT` / 400); a
+    `data` over 16 000 characters is not a refusal (the view's own data is
+    stored). A room post that answers a view needs the `api:chat` token
+    scope, as an addressed post does.
     `GET /api/sessions/:id/inline-ui/:blockId` adds `kind`, `view`, `state`;
     promoting a view answers 409. `inline-ui__source` adds `kind`.
   - **Migration** `0198_inline_ui_views` adds `kind` (default `html`), `view`

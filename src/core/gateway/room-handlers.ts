@@ -198,8 +198,9 @@ async function remoteRoomPost(
     sendError(hub, connectionId, 'FORBIDDEN', 'Room commands are for members of this install');
     return;
   }
-  const { guardInput } = await import('@/core/agent/input-guard');
-  const guard = guardInput(content);
+  // A view answer's values reach the host model's prompt: they pass the guard with the content.
+  const [{ guardInput }, { inlineUiGuardInput }] = await Promise.all([import('@/core/agent/input-guard'), import('@/core/inline-ui/turn-input')]);
+  const guard = guardInput(inlineUiGuardInput(content, message.inlineUi?.action.context));
   if (guard.action === 'block') {
     coreLogger.warn({ connectionId, userId: context.userId, flags: guard.flags }, 'Input guard refused a post from another install');
     sendError(hub, connectionId, 'POST_REFUSED', guard.blockReason ?? 'This post was refused');

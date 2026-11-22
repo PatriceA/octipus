@@ -398,7 +398,7 @@ describe('views (docs/plans/inline-ui-views-spec.md)', () => {
     expect(out.action?.state).toMatchObject({ data: { plan: 'basic', seats: 3 }, action: { name: 'plan_chosen', componentId: 'go' } });
   });
 
-  test('an answer is refused, with what is wrong, for another session, an HTML block, an unknown component, an undeclared key or oversize data', async () => {
+  test('an answer is refused, with what is wrong, for another session, an HTML block, an unknown component, an undeclared key or data that is not an object', async () => {
     const { resolveInlineUiTurnNotes, InlineUiActionRefused } = await import('@/core/inline-ui/turn-input');
     const html = (await store(chatId, fence('Html answer', '<p>x</p>'))).stored[0];
     const base = { blockId: viewId, name: 'plan_chosen', componentId: 'go', context: { plan: 'pro' } };
@@ -408,7 +408,8 @@ describe('views (docs/plans/inline-ui-views-spec.md)', () => {
       ['an unknown component', { action: { ...base, componentId: 'nope' } }, /no component "nope"/],
       ['an event the component does not carry', { action: { ...base, name: 'other_event' } }, /no event "other_event"/],
       ['an undeclared context key', { action: { ...base, context: { plan: 'pro', admin: true } } }, /not declared: admin/],
-      ['oversize data', { action: { ...base, data: { blob: 'x'.repeat(16_001) } } }, /answer data is .* the limit is 16000/],
+      ['data that is not an object', { action: { ...base, data: ['x'] as never } }, /answer data must be a JSON object/],
+      ['data that is not plain JSON', { action: { ...base, data: { at: new Date() } } }, /answer data must be a JSON object/],
       ['oversize context', { action: { ...base, context: { plan: 'x'.repeat(4_001) } } }, /context is .* the limit is 4000/],
     ];
     for (const [what, input, message, session] of cases) {
@@ -416,6 +417,16 @@ describe('views (docs/plans/inline-ui-views-spec.md)', () => {
       await expect(attempt, what).rejects.toBeInstanceOf(InlineUiActionRefused);
       await expect(attempt, what).rejects.toThrow(message);
     }
+  });
+
+  test('an answer whose data is over the limit is accepted, with the view’s own data as its state', async () => {
+    const { resolveInlineUiTurnNotes } = await import('@/core/inline-ui/turn-input');
+    const out = await resolveInlineUiTurnNotes(chatId, {
+      action: { blockId: viewId, name: 'plan_chosen', componentId: 'go', context: { plan: 'basic' }, data: { plan: 'basic', rows: 'x'.repeat(16_001) } },
+    });
+    expect(out.action?.record).toEqual({ blockId: viewId, name: 'plan_chosen', context: { plan: 'basic' } });
+    expect(out.action?.state.data).toEqual({ plan: 'pro', seats: 3 });
+    expect(out.notes.at(-1)).toContain('values: {"plan":"basic"}');
   });
 
   test('the user row of the turn stores the answer, and the block its state', async () => {
@@ -458,6 +469,8 @@ describe('views (docs/plans/inline-ui-views-spec.md)', () => {
     const { postRoomMessage } = await import('@/core/rooms/service');
     const posted = await postRoomMessage({ userId: ownerId }, roomId, { content: 'Pro, please', inlineUiAction: action });
     expect(posted.addressed).toBe(true);
+    // Addressed through the answer alone: it runs with the member's companion, as an addressed post does.
+    expect(posted.message.metadata.companion?.ownerUserId).toBe(ownerId);
     expect(posted.message.metadata.inlineUiAction).toEqual({ blockId: roomView, name: 'plan_chosen', context: { plan: 'pro' } });
     const { inlineUiRepository } = await import('@/db/repositories/inline-ui-repository');
     expect((await inlineUiRepository.getInSession(roomView, roomId))!.state).toMatchObject({ data: { plan: 'pro' }, action: { name: 'plan_chosen' } });
@@ -480,5 +493,17 @@ describe('views (docs/plans/inline-ui-views-spec.md)', () => {
     await recordInlineUiAction(chatId, await checkInlineUiAction(chatId, { blockId: viewId, name: 'plan_chosen', componentId: 'go', context: { plan: 'basic' }, data: { plan: 'basic', seats: 3 } }));
     const answered = await inlineUiFallbackTextResolved(`[[octi-ui:${viewId}|Pick a plan]]`, chatId);
     expect(answered).toContain('Plan: Basic');
+  });
+
+  test('a view whose text rendering fails keeps its one line; the rest of the reply is written', async () => {
+    const { inlineUiFallbackTextResolved } = await import('@/core/inline-ui/fallback');
+    const broken = await store(chatId, fence('Broken text', JSON.stringify({ root: { component: 'Text', text: 'fine' } })));
+    const fine = await store(chatId, fence('Fine text', JSON.stringify({ root: { component: 'Text', text: 'still here' } })));
+    // A stored view the text writer throws on (here a relative path outside a template, which the lint never stores).
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE inline_ui_blocks SET view = jsonb_set(view, '{components,0,text}', '{"@path":"rel"}'::jsonb) WHERE id = '${broken.stored[0]}'`);
+    const text = await inlineUiFallbackTextResolved(`${broken.text}\n${fine.text}`, chatId);
+    expect(text).toContain('▸ Interactive answer “Broken text” — open this conversation in the Octipus web app to use it.');
+    expect(text).toContain('▸ Interactive answer “Fine text”:\n\nstill here');
   });
 });

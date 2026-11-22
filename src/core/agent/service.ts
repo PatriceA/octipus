@@ -35,7 +35,7 @@ import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
-import { type InlineUiAcceptedAction, inlineUiActionLine } from '@/core/inline-ui/turn-input';
+import { type InlineUiAcceptedAction, inlineUiActionLine, inlineUiGuardInput } from '@/core/inline-ui/turn-input';
 import type { JsonObject } from '@/shared/inline-ui';
 import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
@@ -98,6 +98,8 @@ interface TurnInput {
   postedMessageId?: string;
   /** A room turn: fires when the turn is stopped (`/stop`, removal, approval timeout). */
   signal?: AbortSignal;
+  /** A room turn whose post answers a view: the answer's values, guarded with the message. */
+  inlineUiContext?: Record<string, unknown>;
 }
 
 /** A room turn that failed; its message is for the requester only. */
@@ -480,7 +482,10 @@ export class AgentService {
             if (noModel) throw new Error(noModel.response);
             await maybeCompactSession(roomId, { requesterId, before: { id: posted.id, createdAt: posted.createdAt.toISOString() } });
             signal.throwIfAborted();
-            return this.runTurn({ session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged });
+            return this.runTurn({
+              session, requesterId, message: posted.content, channel: 'room', trigger, postedMessageId, signal, groupTurn: bridged,
+              ...(answer ? { inlineUiContext: answer.context } : {}),
+            });
           }),
         );
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
@@ -799,8 +804,9 @@ export class AgentService {
         }
       }
 
-      // Input guard
-      const inputGuard = guardInput(message);
+      // Input guard: a view answer's values reach the prompt too (the
+      // system-note line), so they pass the guard with the message.
+      const inputGuard = guardInput(inlineUiGuardInput(message, input.inlineUiContext ?? getRunContext()?.inlineUiAction?.record.context));
       if (inputGuard.action === 'block') {
         coreLogger.warn({ flags: inputGuard.flags, sessionId }, 'Input guard blocked message');
         const blockResponse = `I can't process this request: ${inputGuard.blockReason}`;

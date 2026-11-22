@@ -189,6 +189,14 @@ describe('lint', () => {
 
   it('allows dynamic values only where the catalog says so', () => {
     expect(messages(one({ component: 'Slider', label: 'x', value: { '@path': '/x' }, min: 0, max: { '@path': '/m' } }))).toContain('Slider "root_0".max is not dynamic');
+    // A Slider needs its starting number in data: otherwise it shows min while the answer sends null.
+    const slider = (data: JsonObject, path = '/tb') => ({ data, root: { component: 'Slider', label: 'TB', value: { '@path': path }, min: 1, max: 50 } });
+    for (const data of [{}, { tb: null }, { tb: '5' }] as JsonObject[]) {
+      expect(lint(slider(data)).issues).toContainEqual({ code: 'bad-data', severity: 'fatal', message: 'Slider "root": set an initial number at /tb in data, between min and max (1 to 50)' });
+    }
+    expect(lint(slider({ tb: 5 })).issues).toEqual([]);
+    // A template's relative path is the item's key: not checked.
+    expect(lint({ data: { rows: [{}] }, root: { component: 'Column', children: { path: '/rows', template: { component: 'Slider', label: 'n', value: { '@path': 'n' }, min: 0, max: 9 } } } }).issues).toEqual([]);
     expect(messages(one({ component: 'Text', text: { '@path': '/t', extra: 1 } }))).toContain('is not a dynamic value; write exactly');
     expect(codes({ data: { t: 'x' }, root: { component: 'Text', text: { '@path': '/t' }, visible: { '@expr': 't != ""' } } })).toEqual([]);
   });
@@ -444,6 +452,13 @@ describe('text rendering', () => {
     const v = view({ data: { list: [] }, root: { component: 'Text', text: { '@expr': 'sum(list) + sum(list)' } } });
     // Data grows past what the lint saw, e.g. from an answer's stored state.
     expect(inlineUiViewText(v, { data: { list: Array.from({ length: 6_000 }, (_, i) => i) } })).toContain('⚠ the expression took more than');
+  });
+
+  it('shows a date column value past the range of a date as the no-value dash', () => {
+    const v = view(one({ component: 'Table', columns: [{ key: 'at', label: 'At', format: 'date' }], rows: [{ at: 9e15 }, { at: -9e15 }, { at: 0 }] }));
+    const t = inlineUiViewText(v);
+    expect(t).toContain('| — |');
+    expect(t).toContain('| Jan 1, 1970 |');
   });
 });
 

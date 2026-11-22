@@ -348,6 +348,23 @@ function noteWrites(components: InlineUiViewComponent[], lint: ViewLinter): void
   }
 }
 
+/**
+ * A Slider shows `min` when its value is not a number, while expressions and
+ * the sent answer read null: its absolute path needs a number in `data`. A
+ * relative path (a template item's key) is read per item and not checked.
+ */
+function checkSliderStart(c: InlineUiViewComponent, lint: ViewLinter): void {
+  const value = (c as unknown as Record<string, unknown>).value;
+  if (!isPathRef(value)) return;
+  const path = value['@path'];
+  if (!path.startsWith('/') || pathProblem(path, { inTemplate: false })) return;
+  const start = lint.initialAt(path);
+  if (typeof start === 'number' && Number.isFinite(start)) return;
+  const { min, max } = c as unknown as { min?: unknown; max?: unknown };
+  const range = typeof min === 'number' && typeof max === 'number' ? ` (${min} to ${max})` : '';
+  lint.add(fatal('bad-data', `${componentLabel(c)}: set an initial number at ${path} in data, between min and max${range}`));
+}
+
 /** Cap the list so a repair message stays readable. */
 function capIssues(issues: InlineUiIssue[]): InlineUiIssue[] {
   if (issues.length <= L.lintIssues) return issues;
@@ -386,6 +403,7 @@ export function lintInlineUiView(body: string, opts: { closed: boolean }): Inlin
       const spec = prop === 'id' || prop === 'component' ? undefined : inlineUiPropSpec(c.component, prop);
       if (spec) lint.checkValue(spec, value, `${componentLabel(c)}.${prop}`, place, LIST_LIMITS[c.component]?.[prop]);
     }
+    if (c.component === 'Slider') checkSliderStart(c, lint);
   }
   lint.checkComputed();
 

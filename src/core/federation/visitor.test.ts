@@ -44,6 +44,7 @@ const LAN = ['127.0.0.1/32'];
 const ownerId = randomUUID();
 const annaId = randomUUID();
 const bobId = randomUUID();
+const adminId = randomUUID();
 const tokens: Record<string, string> = {};
 
 let hostId: Identity;
@@ -227,6 +228,7 @@ beforeAll(async () => {
     { id: ownerId, username: 'fv-owner' },
     { id: annaId, username: 'anna' },
     { id: bobId, username: 'bob' },
+    { id: adminId, username: 'fv-admin', isAdmin: true },
   ]);
   const { getSessionManager } = await import('@/security/auth/session');
   for (const id of [ownerId, annaId, bobId]) tokens[id] = (await getSessionManager().create(id)).token;
@@ -412,7 +414,9 @@ describe('/api/remote-spaces: a pointer row is its user\'s only', () => {
     const post = (body: unknown) => app.handle(new Request(`http://localhost/api/remote-spaces/${id}/rooms/${x.general}/messages`, {
       method: 'POST', headers: { authorization: `Bearer ${plaintext}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
     }));
-    for (const body of [{ content: 'please answer', addressed: true }, { content: '@octipus what is next?' }]) {
+    // A view answer is addressed on the host whatever `addressed` says: it asks too.
+    const answer = { inlineUi: { action: { blockId: randomUUID(), name: 'plan_chosen', componentId: 'go', context: {} } } };
+    for (const body of [{ content: 'please answer', addressed: true }, { content: '@octipus what is next?' }, { content: 'Pro', ...answer }, { content: 'Pro', addressed: false, ...answer }]) {
       const refused = await post(body);
       expect(refused.status).toBe(403);
       expect(await refused.json()).toMatchObject({ code: 'missing_scope' });
@@ -421,6 +425,21 @@ describe('/api/remote-spaces: a pointer row is its user\'s only', () => {
     // A post among members is not an agent request: it goes.
     expect((await post({ content: 'just a note for the room' })).status).toBe(200);
     expect(await q('SELECT 1 FROM messages WHERE session_id = $1', [x.general])).toHaveLength(before.length + 1);
+  });
+
+  test('an admin acting as the member cannot send a view answer in their name', async () => {
+    const x = await newSpace('Acting answer');
+    const id = await joinFromB(annaId, x.id);
+    const { getSessionManager } = await import('@/security/auth/session');
+    const acting = (await getSessionManager().create(adminId)).token;
+    const { getImpersonationManager } = await import('@/security/impersonation');
+    expect((await getImpersonationManager().start({ id: adminId, username: 'fv-admin', isAdmin: true }, annaId, acting)).ok).toBe(true);
+    const res = await app.handle(new Request(`http://localhost/api/remote-spaces/${id}/rooms/${x.general}/messages`, {
+      method: 'POST', headers: { authorization: `Bearer ${acting}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'Pro', inlineUi: { action: { blockId: randomUUID(), name: 'plan_chosen', componentId: 'go', context: {} } } }),
+    }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/acting as another user/);
   });
 
   test('a post is answered only by the room.posted carrying its clientId', async () => {

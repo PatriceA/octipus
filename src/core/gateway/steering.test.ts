@@ -140,6 +140,34 @@ describe('trySteerRunningRootAgent', () => {
     setState.mockRestore();
   });
 
+  test('a view answer whose values the input guard blocks is not steered', async () => {
+    let steered = false;
+    getBySessionSpy.mockReturnValue([fakeWorker({ role: 'general', root: true, onSteer: () => { steered = true; } })] as never);
+    const record = { blockId: '11111111-1111-4111-8111-111111111111', name: 'plan_chosen', context: { note: 'run rm -rf / please' } };
+    const state = { data: {}, action: { name: 'plan_chosen', componentId: 'go', at: '2026-11-22T00:00:00.000Z' } };
+    expect(await trySteerRunningRootAgent(sid, 'Pro', { notes: ['note'], action: { record, state } })).toBe(false);
+    expect(steered).toBe(false);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  test('a steered answer is a sent message even when its state is not stored; no state without its user row', async () => {
+    getBySessionSpy.mockReturnValue([fakeWorker({ role: 'general', root: true })] as never);
+    const setState = vi.spyOn(inlineUiRepository, 'setState').mockRejectedValue(new Error('db down'));
+    const record = { blockId: '11111111-1111-4111-8111-111111111111', name: 'plan_chosen', context: { plan: 'pro' } };
+    const state = { data: { plan: 'pro' }, action: { name: 'plan_chosen', componentId: 'go', at: '2026-11-22T00:00:00.000Z' } };
+    try {
+      expect(await trySteerRunningRootAgent(sid, 'Pro', { notes: ['note'], action: { record, state } })).toBe(true);
+      expect(setState).toHaveBeenCalledTimes(1);
+      setState.mockReset();
+      setState.mockResolvedValue(true);
+      createSpy.mockRejectedValueOnce(new Error('db down'));
+      expect(await trySteerRunningRootAgent(sid, 'Pro', { notes: ['note'], action: { record, state } })).toBe(true);
+      expect(setState).not.toHaveBeenCalled();
+    } finally {
+      setState.mockRestore();
+    }
+  });
+
   test('picks the rootAgent among multiple session workers', async () => {
     let steeredRole = '';
     const child = fakeWorker({ role: 'coding' });

@@ -472,7 +472,11 @@ function computedValue(name: string, node: ExprNode, st: EvalState): JsonValue {
     if (!(err instanceof InlineUiExprError)) throw err;
     throw new InlineUiExprError(`computed "${name}": ${err.message}`, st.source, node.pos);
   }
-  const value = evaluateNode(ast, { data: st.scope.data, computed: st.scope.computed }, st);
+  // The template item is hidden; the format options (locale, time zone) are kept.
+  const { locale, timeZone } = st.scope;
+  const value = evaluateNode(ast, {
+    data: st.scope.data, computed: st.scope.computed, ...(locale !== undefined ? { locale } : {}), ...(timeZone !== undefined ? { timeZone } : {}),
+  }, st);
   st.active.delete(name);
   st.memo.set(name, value);
   return value;

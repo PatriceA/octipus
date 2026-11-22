@@ -186,7 +186,8 @@ interactive answer <uuid> — event "<name>", values: <json>)`.
    { blockId, name, componentId, context, data? }` (rooms: `room.post` or
    `POST …/rooms/:roomId/messages` with `inlineUi.action`).
    `resolveInlineUiTurnNotes` checks it against the stored view of this
-   session (`validateViewAction`, `validateViewData`); a failed check refuses
+   session (`validateViewAction`; `data` must be a JSON object, and one over
+   16 000 characters is dropped for the view's own); a failed check refuses
    the send (an `error` frame `INVALID_MESSAGE`; a room post answers
    `INVALID_INPUT`, or 400 over REST) instead of dropping the values. An
    accepted answer becomes the model's note, `metadata.inlineUiAction =

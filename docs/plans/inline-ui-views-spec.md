@@ -245,7 +245,11 @@ so the existing repair round and notices apply unchanged.
   a prop of the wrong type, an unknown child id, a cycle, an input whose
   `value` is not a `@path`, an expression that does not parse (with the
   expression and position), a bad event name, a URL literal that is not
-  `https:`, a limit exceeded.
+  `https:`, a limit exceeded, a `Slider` whose `value` is an absolute path
+  with no finite number at it in `data` (`bad-data`: "Slider "<id>": set an
+  initial number at /tb in data, between min and max"; it would show `min`
+  while expressions and the answer read null; a template's relative path is
+  not checked).
 - **repairable**: an unknown prop or top-level key (named; it is ignored), a
   component no parent reaches, a name an expression outside a template reads
   that is neither a data key, a computed name, nor a key an input or `set`
@@ -281,8 +285,11 @@ Server (`resolveInlineUiTurnNotes`): the block must be a view of this
 session, the component must exist and carry an event of that name, the
 context keys must be the declared ones, the context is JSON of at most 4 000
 characters and depth 4 (a flat object is depth 1) — `validateViewAction`
-in the shared module; `validateViewData` checks the `data` sent for the
-state. The web builds the payload with `runViewActions` /
+in the shared module; `data`, when sent, must be a JSON object (anything else
+refuses the answer). A `data` over 16 000 characters (`validateViewData`; a
+selectable Table copies whole rows into the data model) does not refuse it:
+it is dropped with a debug log and the view's own `data` is stored, as when
+none is sent. The web builds the payload with `runViewActions` /
 `resolveEventAction`: context values resolved, numbers that are not finite
 sent as null, `userMessage` (else the label, else the event name) cleaned
 like a suggestion and capped at 1 000 characters. A request that fails any check is refused with a
@@ -300,13 +307,21 @@ refused with `INVALID_INPUT` (gateway) or 400 (REST), same message. Then:
   it; the bubble shows "from an interactive answer" and the values;
 - the block row stores `state = { data, action: { name, componentId, at } }`
   when the user row is written (a room: when the post is). The web sends
-  `data` (the data model at the click, ≤ 16 000 characters) with the action;
-  without it the view's own `data` is stored. A reload shows the answer as
+  `data` (the data model at the click) with the action and leaves it out
+  when it is over 16 000 characters; without it, or over the limit, the
+  view's own `data` is stored. A reload shows the answer as
   given, its event buttons disabled, with **Change answer** to enable them
   again.
-- In a room the post is addressed to Octipus whatever `addressed` says, and
-  the room turn reads the same note line from the post's
-  `metadata.inlineUiAction`.
+- In a room the post is addressed to Octipus whatever `addressed` says (so
+  an API token needs `api:chat` for it, here and through a remote room, and
+  it runs with the member's companion like any addressed post), and the room
+  turn reads the same note line from the post's `metadata.inlineUiAction`.
+- The context's string values reach the prompt, so they pass the input guard
+  with the message content, wherever the content does (a turn, a steer, a
+  post from another install): a value it blocks refuses the message as
+  blocked content would be. The note is one line whatever the values hold
+  (JSON-encoded; U+2028/U+2029 escaped; control, bidi and zero-width
+  characters stripped).
 
 **What a click may send (S6, T7, T13).** A view's button is drawn by the chat
 page, and the bubble shows exactly what was sent. The values are the user's
@@ -315,8 +330,10 @@ values of an answer, never as instructions. Where the block is `tainted` (the
 session had read outside content, private data or a secret when it was
 written), the click opens part 1's suggestion strip (full text, **Send** /
 **Edit in composer** / **Dismiss**) instead of sending at once. Events are
-off while an admin acts as the user. In a room the message is the clicking
-member's own, addressed to the agent, as for a suggestion.
+off while an admin acts as the user: a REST room post with one, local or
+remote, answers 403 (the gateway socket never acts as another user). In a
+room the message is the clicking member's own, addressed to the agent, as
+for a suggestion.
 
 For a blocking yes/no in the middle of a task, `request_user_approval`
 stays the tool; a view is for structured answers at the end of a reply.
@@ -341,12 +358,14 @@ stays the tool; a view is for structured answers at the end of a reply.
   markdown (headings, text, `label: value`, tables of at most 20 rows, a
   chart as its table, inputs with their current value, buttons as a list of
   choices; locale `en-US` and `UTC` unless given; `opts.data` shows a stored
-  answer's data; an expression that fails at render shows as `⚠ <reason>`).
+  answer's data; an expression that fails at render shows as `⚠ <reason>`;
+  a date past the range of a JavaScript date shows as `—`).
   `inlineUiFallbackTextResolved(text, sessionId)`
   (`src/core/inline-ui/fallback.ts`) writes a view's marker as
   `▸ Interactive answer “T”:`, a blank line and that text (with the stored
   answer's data), and keeps part 1's line for an HTML block, a block of
-  another session and a stray fence. Server-side surfaces that know the
+  another session, a stray fence and a view whose text rendering throws
+  (logged per block: the reply is never lost to it). Server-side surfaces that know the
   session use it: channel replies, monitor delivery, the group bridge relay,
   hook owner notifications, room notifications, `POST /api/chat` without
   `renders`, the OpenAI-compatible API. Clients that only hold the marker

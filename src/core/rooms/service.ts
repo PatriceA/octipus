@@ -410,7 +410,8 @@ export async function postRoomMessage(
     throw new SpaceError('invalid_input', 'Only a post from another install carries an agent label or input guard flags');
   }
   const answer = input.inlineUiAction ? await roomInlineUiAnswer(roomId, input.inlineUiAction) : undefined;
-  const companion = !access.remote && (input.addressed || content.includes('@'))
+  // A view answer is addressed too (below): it runs with the member's companion like any addressed post.
+  const companion = !access.remote && (input.addressed || !!answer || content.includes('@'))
     ? await companionIdentity(actor.userId) : undefined;
   const addressed = input.addressed === true || !!answer || mentionsOctipus(content)
     || (!!companion && await mentionsOwnCompanion(content, companion, access.room.workspaceId));

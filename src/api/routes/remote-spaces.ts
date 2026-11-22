@@ -232,12 +232,17 @@ export const remoteSpaceRoutes = new Elysia({ prefix: '/remote-spaces' })
     const row = await ownRemoteSpace(user.id, ctx.params.id);
     // A post that asks the host's agent drives it: the token needs the chat
     // scope, as for a room here (`rooms.ts`) and the gateway's `remote.frame`
-    // (`frameScopeError`).
+    // (`frameScopeError`). A view answer is addressed whatever `addressed` says.
     const content = ctx.body.content.trim();
     const { mentionsOctipus } = await import('@/core/rooms/service');
-    if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+    if ((ctx.body.inlineUi || (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)))) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
       ctx.set.status = 403;
       return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
+    }
+    // Answering a view is the member's own message: never while an admin acts as them (as in `rooms.ts`).
+    if (ctx.body.inlineUi && ctx.principal.actorUserId) {
+      ctx.set.status = 403;
+      return { error: 'Interactive answers do not answer while acting as another user.' };
     }
     // One host-side connection per user for REST posts, closed after each.
     const conn = `rest:${user.id}`;

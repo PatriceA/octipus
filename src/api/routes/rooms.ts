@@ -100,7 +100,8 @@ export const roomRoutes = new Elysia({ prefix: '/spaces' })
       const content = ctx.body.content.trim();
       // WS6: a post that asks the agent drives it (tools, spend) like a chat
       // message, so an API token needs `api:chat` for it, as on /api/chat.
-      if (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
+      // A view answer is addressed whatever `addressed` says (postRoomMessage).
+      if ((ctx.body.inlineUi || (!content.startsWith('/') && (ctx.body.addressed === true || mentionsOctipus(content)))) && !requireScope(ctx.principal, API_SCOPES.CHAT)) {
         ctx.set.status = 403;
         return { error: `API token missing required scope "${API_SCOPES.CHAT}"`, code: 'missing_scope' };
       }

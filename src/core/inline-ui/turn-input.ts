@@ -15,6 +15,8 @@ import {
   inlineUiProvenanceLine,
   inlineUiReportLine,
   type InlineUiReport,
+  isJsonObject,
+  isJsonValue,
   type InlineUiViewState,
   type JsonObject,
   stripUnsafeChars,
@@ -65,9 +67,35 @@ export class InlineUiActionRefused extends Error {
   override readonly name = 'InlineUiActionRefused';
 }
 
-/** The model's line for an accepted answer: ids, the event name and the values, labelled as values. */
+/**
+ * The model's line for an accepted answer: ids, the event name and the values, labelled as values.
+ * One line whatever the values hold: JSON escapes newlines, quotes and control characters,
+ * `stripUnsafeChars` drops bidi and zero-width ones, and the two line separators JSON leaves
+ * raw (U+2028, U+2029) are written as their escapes.
+ */
 export function inlineUiActionLine(record: InlineUiActionRecord): string {
-  return `(system note: the user answered interactive answer ${record.blockId} — event "${record.name}", values: ${stripUnsafeChars(JSON.stringify(record.context))})`;
+  const values = stripUnsafeChars(JSON.stringify(record.context)).replace(/[\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
+  return `(system note: the user answered interactive answer ${record.blockId} — event "${record.name}", values: ${values})`;
+}
+
+/**
+ * What the input guard reads for a message that answers a view: the content,
+ * then every string value of the answer's context on a line of its own. The
+ * values reach the model's prompt (`inlineUiActionLine`), so they pass the
+ * guard the content passes, read raw (the note line holds them JSON-encoded,
+ * which a pattern would not see through). Bounded: a context deeper than the
+ * validated depth is read to 8 levels.
+ */
+export function inlineUiGuardInput(content: string, context: Record<string, unknown> | undefined): string {
+  if (!context) return content;
+  const values: string[] = [];
+  const walk = (value: unknown, depth: number): void => {
+    if (typeof value === 'string') values.push(value);
+    else if (depth >= 8 || value === null || typeof value !== 'object') return;
+    else for (const v of Array.isArray(value) ? value : Object.values(value)) walk(v, depth + 1);
+  };
+  walk(context, 0);
+  return values.length ? [content, ...values].join('\n') : content;
 }
 
 /**
@@ -81,13 +109,29 @@ export async function checkInlineUiAction(sessionId: string, action: InlineUiAct
   if (block.kind !== 'view' || !block.view) throw new InlineUiActionRefused(`interactive answer ${block.id} has no buttons that answer`);
   const problem = validateViewAction(block.view, { blockId: block.id, name: action.name, componentId: action.componentId, context: action.context as JsonObject });
   if (problem) throw new InlineUiActionRefused(problem);
-  const data = action.data ?? block.view.data;
-  const dataProblem = validateViewData(data);
-  if (dataProblem) throw new InlineUiActionRefused(dataProblem);
+  const data = answerData(action.data, block.view.data, { sessionId, blockId: block.id });
   return {
     record: { blockId: block.id, name: action.name, context: action.context as JsonObject },
-    state: { data: data as JsonObject, action: { name: action.name, componentId: action.componentId, at: now.toISOString() } },
+    state: { data, action: { name: action.name, componentId: action.componentId, at: now.toISOString() } },
   };
+}
+
+/**
+ * The data model to store with an answer (§4): the one sent, or the view's
+ * own when none was sent or the sent one is over the limit (a selectable
+ * Table's row copies can grow it past a limit the answer itself never
+ * needed; the web leaves it out then). Only data that is not a JSON object
+ * refuses the answer.
+ */
+function answerData(sent: Record<string, unknown> | undefined, own: JsonObject, where: { sessionId: string; blockId: string }): JsonObject {
+  if (sent === undefined) return own;
+  if (!isJsonObject(sent) || !isJsonValue(sent)) throw new InlineUiActionRefused('the answer data must be a JSON object');
+  const oversize = validateViewData(sent);
+  if (oversize) {
+    coreLogger.debug({ ...where, reason: oversize }, 'Interactive answer data over the limit — the view\'s own data is stored');
+    return own;
+  }
+  return sent;
 }
 
 /** Store an accepted answer on its block (the reload shows it as given). */

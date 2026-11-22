@@ -375,6 +375,13 @@ describe('a room post that asks the agent needs api:chat', () => {
     expect(frameScopeError(readOnly, post('just chatting'))).toBeNull();
     expect(frameScopeError(readOnly, post('/status', true))).toBeNull();
     expect(frameScopeError(readOnly, { type: 'room.subscribe', roomId: randomUUID() } as Row)).toBeNull();
+    // A view answer is addressed whatever `addressed` says: here and through a remote room.
+    const inlineUi = { action: { blockId: randomUUID(), name: 'plan_chosen', componentId: 'go', context: {} } };
+    expect(frameScopeError(readOnly, { ...post('Pro', false), inlineUi } as Row)).toMatch(/api:chat/);
+    const remote = (frame: Row) => ({ type: 'remote.frame', remoteSpaceId: randomUUID(), frame }) as Row;
+    expect(frameScopeError(readOnly, remote({ ...post('Pro', false), inlineUi } as Row))).toMatch(/api:chat/);
+    expect(frameScopeError(readOnly, remote(post('ask', true)))).toMatch(/api:chat/);
+    expect(frameScopeError(readOnly, remote(post('just chatting')))).toBeNull();
     // Unscoped (a browser session, an unscoped token) and chat-scoped connections pass.
     expect(frameScopeError({}, send)).toBeNull();
     expect(frameScopeError({ scopes: ['api:chat'] }, post('ask', true))).toBeNull();

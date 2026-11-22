@@ -157,6 +157,10 @@ describe('expression evaluation', () => {
     expect(ev("formatDate('2026-03-01')")).toBe('Mar 1, 2026');
     expect(ev("formatDate('2026-03-01T15:30:00Z', 'datetime')")).toBe('Mar 1, 2026, 3:30 PM');
     expect(ev("formatDate('nope')")).toBe('—');
+    // Past ±8.64e15 ms Intl throws; that is no value, not an error.
+    expect(ev('formatDate(8.64e15 + 1)')).toBe('—');
+    expect(formatDate(-9e15, 'datetime')).toBe('—');
+    expect(formatDate(8.64e15, 'long')).toBe('September 13, 275760');
   });
 
   it('reports bad format arguments with the position of the call', () => {
@@ -172,6 +176,9 @@ describe('expression evaluation', () => {
   it('formats with a locale and time zone the caller chooses', () => {
     expect(ev('formatNumber(1234.5, 1)', {}, {}, { locale: 'de-DE' })).toBe('1.234,5');
     expect(ev("formatDate('2026-03-01T23:30:00Z', 'datetime')", {}, {}, { timeZone: 'Asia/Tokyo' })).toBe('Mar 2, 2026, 8:30 AM');
+    // A computed name formats with them too (number → text inside its formula), and still never sees the item.
+    expect(ev('label', {}, { label: "'Total: ' + 1234.5" }, { locale: 'de-DE' })).toBe('Total: 1234,5');
+    expect(ev('label', { n: 0.5 }, { label: "'' + n + ' ' + $index" }, { locale: 'de-DE', item: { n: 9 }, index: 3 })).toBe('0,5 ');
     // A calendar date never shifts with the time zone.
     expect(formatDate('2026-03-01', 'medium', { timeZone: 'America/Los_Angeles' })).toBe('Mar 1, 2026');
   });

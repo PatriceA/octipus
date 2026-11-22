@@ -8,7 +8,7 @@ import type { JsonValue, ValueFormat } from './types';
 
 export const INLINE_UI_DEFAULT_LOCALE = 'en-US';
 export const INLINE_UI_DEFAULT_TIME_ZONE = 'UTC';
-/** What a number that is not finite (or a date that does not parse) renders as. */
+/** What a number that is not finite (or a date that does not parse or is out of range) renders as. */
 export const INLINE_UI_NO_VALUE = '—';
 
 export interface FormatOptions {
@@ -74,6 +74,9 @@ export function formatPercent(value: JsonValue | undefined, digits = 0, opts: Fo
   return numberFormat(opts.locale ?? INLINE_UI_DEFAULT_LOCALE, { style: 'percent', ...digitsOption(digits) }).format(n);
 }
 
+/** The largest distance from the epoch a JavaScript date holds (±100 000 000 days); `Intl` throws past it. */
+const MAX_DATE_MS = 8.64e15;
+
 export const INLINE_UI_DATE_STYLES = ['short', 'medium', 'long', 'full', 'time', 'datetime'] as const;
 export type DateStyle = (typeof INLINE_UI_DATE_STYLES)[number];
 
@@ -87,7 +90,7 @@ const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 export function formatDate(value: JsonValue | undefined, style: string = 'medium', opts: FormatOptions = {}): string {
   const ms = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : Number.NaN;
-  if (!Number.isFinite(ms)) return INLINE_UI_NO_VALUE;
+  if (!Number.isFinite(ms) || Math.abs(ms) > MAX_DATE_MS) return INLINE_UI_NO_VALUE;
   if (!(INLINE_UI_DATE_STYLES as readonly string[]).includes(style)) {
     throw new RangeError(`"${style.slice(0, 20)}" is not a date style; use one of ${INLINE_UI_DATE_STYLES.join(', ')}`);
   }
