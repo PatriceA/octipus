@@ -36,6 +36,17 @@ export interface TextEditorOptions {
 }
 
 const TAB_WIDTH = 4;
+/**
+ * A control byte in a file (the `\r` of a CRLF file, an ESC in a captured log)
+ * is shown as its one-cell control picture. Written raw it would be obeyed by
+ * the terminal: the cursor moves, later rows land in the wrong place and the
+ * frame is corrupted until the next full repaint. One character maps to one
+ * character, so buffer columns are unchanged.
+ */
+function visibleControls(text: string): string {
+  return text.replace(/[\x00-\x08\x0a-\x1f\x7f]/g, c => String.fromCharCode(c === '\x7f' ? 0x2421 : 0x2400 + c.charCodeAt(0)));
+}
+const displayCells = (text: string): string => visibleControls(text.replace(/\t/g, ' '.repeat(TAB_WIDTH)));
 
 export class TextEditor implements Component, Focusable {
   focused = false;
@@ -143,7 +154,7 @@ export class TextEditor implements Component, Focusable {
     const innerW = Math.max(1, width - gutterW);
 
     const cursorLine = buf.getLine(cursor.line);
-    const cursorCell = visibleWidth(cursorLine.slice(0, cursor.col).replace(/\t/g, ' '.repeat(TAB_WIDTH)));
+    const cursorCell = visibleWidth(displayCells(cursorLine.slice(0, cursor.col)));
     const atCursor = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(cursorLine.slice(cursor.col))][0]?.segment ?? ' ';
     const cursorWidth = Math.min(innerW, Math.max(1, visibleWidth(atCursor)));
     if (cursorCell < this.scrollLeft) this.scrollLeft = cursorCell;
@@ -151,7 +162,7 @@ export class TextEditor implements Component, Focusable {
     const lines: string[] = [];
     const end = Math.min(totalLines, this.scrollTop + this.height);
     for (let i = this.scrollTop; i < end; i++) {
-      const lineText = buf.getLine(i).replace(/\t/g, ' '.repeat(TAB_WIDTH));
+      const lineText = displayCells(buf.getLine(i));
       const isCursorLine = i === cursor.line;
       const gutter = formatGutter(i + 1, gutterW, palette, isCursorLine);
       // Tell the tree-sitter highlighter which row we're about to paint so
@@ -225,7 +236,9 @@ function renderLineTokens(line: string, language: string, palette: ReturnType<ty
   let out = '';
   for (const tok of tokens) {
     const colorKey = TOKEN_COLORS[tok.kind];
-    out += colorKey ? chalk.hex(palette[colorKey])(tok.text) : tok.text;
+    // The tree-sitter cache hands back its own copy of the source text.
+    const text = visibleControls(tok.text);
+    out += colorKey ? chalk.hex(palette[colorKey])(text) : text;
   }
   return out;
 }

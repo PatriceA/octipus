@@ -16,6 +16,13 @@ labels reflect blast radius, not contract guarantees.
   to printable text before it is drawn, one rendered row is always one
   terminal row, and escape sequences in tool output can no longer reach your
   terminal. An agent question that spans lines shows every line in its box.
+- **Terminal editor: Up and Down keep their column, and odd bytes in a file are
+  shown.** Moving onto a shorter line used to skip a line (Down) or stay put
+  (Up); the cursor now lands at the end of the shorter line and returns to its
+  column on the next long one. A control byte in a file — the `\r` of a CRLF
+  file, an escape sequence in a captured log — is drawn as its control picture
+  (`␍`, `␛`) instead of being sent to the terminal, where it corrupted the
+  screen. The file itself is unchanged.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
