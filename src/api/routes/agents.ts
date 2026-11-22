@@ -389,10 +389,28 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         });
 
         // Start the agent with initial message if provided
+        // The caller's own task in their own session: the context hooks run
+        // against it as for any agent start (`contextForAgentStart`, the
+        // turn's audience rule), after the response is sent. The block goes
+        // before the message, as a root turn's context does.
         if (message) {
-          withAgentUsage(user.id, scope, () => agent.run(message)).catch((error) => {
-            apiLogger.error({ error, agentId: agent.getContext().id }, 'Agent run failed');
-          });
+          const userId = user.id;
+          void (async () => {
+            const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+            const agentId = agent.getContext().id;
+            const hooks = await contextForAgentStart({
+              event: 'worker_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+              query: message, role: agent.getContext().role, channel: 'api', session,
+            });
+            bindTurnToAgent(hooks.turn, agentId);
+            try {
+              const out = await withAgentUsage(userId, scope, () => agent.run(hooks.text ? `${hooks.text.trim()}\n\n${message}` : message));
+              void finishContextTurn(hooks.turn, { agentId, response: out, outcome: 'success' });
+            } catch (error) {
+              void finishContextTurn(hooks.turn, { agentId, outcome: 'error' });
+              apiLogger.error({ error, agentId }, 'Agent run failed');
+            }
+          })();
         }
 
         const context = agent.getContext();

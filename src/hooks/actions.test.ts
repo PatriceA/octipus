@@ -21,16 +21,29 @@ vi.mock('@/core/agent', () => ({
   }),
 }));
 // The direct (non-orchestrated) spawn: the options are observed, nothing runs.
-const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>>, runImpl: undefined as undefined | (() => Promise<string>), spawnError: undefined as Error | undefined }));
+const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>>, runImpl: undefined as undefined | (() => Promise<string>), spawnError: undefined as Error | undefined, runMessages: [] as string[] }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
     stop: (id: string, options: unknown) => { direct.stops.push({ id, options }); return true; },
     spawn: async (options: Record<string, unknown>) => {
       if (direct.spawnError) throw direct.spawnError;
       direct.spawns.push(options);
-      return { run: () => (direct.runImpl ? direct.runImpl() : Promise.resolve('')), getContext: () => ({ id: 'agent-1' }) };
+      return { run: (message: string) => { direct.runMessages.push(message); return direct.runImpl ? direct.runImpl() : Promise.resolve(''); }, getContext: () => ({ id: 'agent-1' }) };
     },
   }),
+}));
+// The context hooks of a direct spawn: `contextForAgentStart` is real, the hooks are stood in for.
+const hooks = vi.hoisted(() => ({ text: '', runs: [] as Array<Record<string, unknown>>, finished: [] as unknown[][], turns: new Map<string, { id: string; usageKey: string; startUse: { knowledge: number; notes: number }; citable: [] }>() }));
+vi.mock('@/core/context-hooks/run', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  runContextHooks: async (input: Record<string, unknown>) => {
+    hooks.runs.push(input);
+    const sessionId = input.sessionId as string;
+    const turn = { id: `turn-${sessionId}`, usageKey: sessionId, startUse: { knowledge: 0, notes: 0 }, citable: [] as [] };
+    hooks.turns.set(sessionId, turn);
+    return { text: hooks.text, blocks: [], labelledBlocks: [], repeatable: [], turn: hooks.text ? turn : null };
+  },
+  finishContextTurn: async (...args: unknown[]) => { hooks.finished.push(args); },
 }));
 vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
@@ -144,6 +157,42 @@ describe('executeSpawnAgent: direct spawn', () => {
     expect(r.success).toBe(true);
     expect(direct.spawns).toHaveLength(1);
     expect(direct.spawns[0]).toMatchObject({ sessionId: 'hook-sess', workspaceId: 'ws-1' });
+  });
+
+  test("the hook's task gets the context hooks' block before its message; the record is the agent's and is finished", async () => {
+    hooks.text = '\n\n<recalled-knowledge>\nThe triage rota.\n</recalled-knowledge>\n';
+    hooks.runs.length = 0;
+    hooks.finished.length = 0;
+    direct.runImpl = async () => 'triaged';
+    try {
+      const { agentUsageKey } = await import('@/core/context-hooks/tool-usage');
+      const r = await executeAction(hook({
+        userId: '77777777-7777-4777-8777-777777777777', trigger: 'webhook', action: 'spawn_agent', sessionId: 'hook-sess-ctx',
+        actionConfig: { orchestrated: false, agentPrompt: 'triage the new issue' },
+      } as Partial<Hook>), ctx());
+      expect(r.success).toBe(true);
+      const ours = () => hooks.finished.filter(([turn]) => turn && turn === hooks.turns.get('hook-sess-ctx'));
+      await vi.waitFor(() => expect(ours()).toHaveLength(1));
+      expect(hooks.runs.find((run) => run.sessionId === 'hook-sess-ctx')).toMatchObject({ event: 'worker_start', userId: '77777777-7777-4777-8777-777777777777', sessionId: 'hook-sess-ctx', query: 'triage the new issue', channel: 'hook' });
+      expect(direct.runMessages).toContain('<recalled-knowledge>\nThe triage rota.\n</recalled-knowledge>\n\ntriage the new issue');
+      expect(hooks.turns.get('hook-sess-ctx')?.usageKey).toBe(agentUsageKey('agent-1'));
+      expect(ours()[0]).toEqual([hooks.turns.get('hook-sess-ctx'), { agentId: 'agent-1', response: 'triaged', outcome: 'success' }]);
+    } finally {
+      direct.runImpl = undefined;
+      hooks.text = '';
+    }
+  });
+
+  test('a hook with no user behind it gets no context hooks', async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    hooks.runs.length = 0;
+    const r = await executeAction(hook({
+      userId: 'system', trigger: 'schedule', action: 'spawn_agent', sessionId: 'hook-sess-system',
+      actionConfig: { orchestrated: false, agentPrompt: 'tidy up' },
+    } as Partial<Hook>), ctx());
+    expect(r.success).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(hooks.runs).toHaveLength(0);
   });
 
   test('runs a burst of deliveries to one hook session one after another, not in parallel', async () => {

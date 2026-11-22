@@ -665,7 +665,29 @@ async function executeSpawnAgent(
   // queued worker does not count as running until its turn starts.
   if (message) {
     const { withSessionTurn } = await import('@/core/session-turn-lock');
-    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message)), { owner: userId }).then(async (result) => {
+    // The hook runs its owner's task for its owner: the context hooks run
+    // against it as for any agent start (`contextForAgentStart`: the turn's
+    // audience rule, nothing for a hook with no user behind it), inside the
+    // session's turn so a queued run does not search before it starts. The
+    // block goes before the message, as a root turn's context does.
+    const runWithContext = async (): Promise<string> => {
+      const { bindTurnToAgent, contextForAgentStart, finishContextTurn } = await import('@/core/context-hooks');
+      const agentId = agent.getContext().id;
+      const hooks = await contextForAgentStart({
+        event: 'worker_start', userId, workspaceId: scope.workspaceId, sessionId, space: scope.space,
+        query: message, role: agent.getContext().role, channel: hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook', session,
+      });
+      bindTurnToAgent(hooks.turn, agentId);
+      try {
+        const out = await withAgentUsage(userId, scope, () => agent.run(hooks.text ? `${hooks.text.trim()}\n\n${message}` : message));
+        void finishContextTurn(hooks.turn, { agentId, response: out, outcome: 'success' });
+        return out;
+      } catch (err) {
+        void finishContextTurn(hooks.turn, { agentId, outcome: 'error' });
+        throw err;
+      }
+    };
+    withSessionTurn(sessionId, runWithContext, { owner: userId }).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result, sessionId);
