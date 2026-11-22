@@ -125,6 +125,17 @@ export class TuiHarness {
     }
     for (const socket of this.sockets) socket.send(JSON.stringify({ type: 'event', event: { type, payload, sessionId } }));
   }
+  /** Send a raw server frame (an `error`, `events_dropped`, …). */
+  frame(frame: Record<string, unknown>): void {
+    for (const socket of this.sockets) socket.send(JSON.stringify(frame));
+  }
+  /** The `turnId` of the latest `chat.send`, which a reply that names none answers. */
+  latestTurnId(): string | undefined { return this.lastTurnId; }
+  /** Drop every connection as a crashed server would (no close frame): the client reconnects with backoff. */
+  dropConnections(): void {
+    for (const socket of this.sockets) socket.terminate();
+    this.sockets.clear();
+  }
   async text(): Promise<string> {
     await this.writes;
     const b = this.screen.buffer.active;
