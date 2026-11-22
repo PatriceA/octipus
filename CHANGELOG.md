@@ -43,6 +43,35 @@ labels reflect blast radius, not contract guarantees.
     mammoth's Markdown output has no tables, so they arrive one paragraph per
     cell. Documents indexed before this keep their old text and chunks until
     they are uploaded again.
+- **Pipelines: a missing QA verdict block is repaired, and the repair no longer
+  spends a retry** ([reference](docs/AGENT-ARCHITECTURE.md#qa-retry-loop),
+  [status](docs/plans/quality-loop-status.md)).
+  - A QA stage that writes its report but leaves out the `json` verdict block
+    is asked for the block alone. So is a pass that accounts for every stage
+    and every acceptance criterion but leaves out `whatIDidNotCheck` or
+    `confidence`. The auditor gets its own report back and runs nothing.
+    This takes no retry edge and has its own bound of 2 per audit round. If the
+    block is still unusable after that, the pipeline stops as failed at that
+    stage, as before.
+  - Everything else still gets a full re-audit on the stage's `maxRetries`: a
+    pass that skips a stage in scope, any acceptance-criterion fault (a
+    missing entry, a met entry with no evidence, a non-json pass on an item
+    with criteria), and a pass whose own prose says FAIL.
+  - Previously a pass missing only `whatIDidNotCheck` or `confidence` caused
+    a full re-audit, and a missing block used up the auditor's `maxRetries`.
+  - The verdict parser accepts a `JSON`/`jsonc`/`json5`/`js`/untagged fence
+    and prose after the block. An unfenced object inside prose is still not
+    read as a verdict, and no missing field is filled in.
+  - `audit_coverage` evidence rows carry `detail.fault` (`report` or
+    `coverage`) and, on a repaired reply, `detail.repairAttempt`. A repair
+    visit's `spawn` run event has a `startReason` starting with
+    `verdict_repair n/2`.
+  - `scripts/run-health.ts` no longer counts replies with no readable verdict
+    (`source: unparseable`) as rejected passes; it reports them on a separate
+    "no verdict" line. Over a window that includes such rows, the rubber-stamp
+    rate will read lower than before. A parsed pass rejected for leaving out
+    `whatIDidNotCheck` or `confidence` still counts as rejected, and is also
+    shown as its own sub-number.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),

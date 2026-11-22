@@ -8,6 +8,7 @@
  */
 import { describe, expect, test, vi } from 'vitest';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
+import { auditFault } from './audit-coverage';
 import { auditScopeBefore, handoffConfidenceByStage, PipelineManager } from './pipeline-manager';
 import type { QAValidationResult } from './types';
 
@@ -94,6 +95,44 @@ describe('handoffConfidenceByStage', () => {
       { name: 'Code Review', producesArtifacts: false, confidence: 'low' },
       { name: 'Implementation', producesArtifacts: true, confidence: undefined },
     ]);
+  });
+});
+
+// ── Which rejection a verdict repair may fix ────────────────────────────────
+
+describe('auditFault — one row per gate reason', () => {
+  const SCOPE = [{ name: 'Implementation', producesArtifacts: true }];
+  const AC = ['returns 0 for empty input', 'rejects negatives'];
+  const full = {
+    passed: true,
+    issues: [],
+    feedback: 'Implementation checked end to end.',
+    retryCount: 0,
+    confidence: 'high' as const,
+    whatIDidNotCheck: ['performance'],
+    source: 'json' as const,
+    criteria: AC.map((criterion) => ({ criterion, met: true, evidence: 'npm test exit 0' })),
+  };
+  const v = (over: Partial<QAValidationResult>): QAValidationResult => ({ ...full, ...over });
+
+  test.each<[string, QAValidationResult, string[], boolean, 'coverage' | 'report' | null]>([
+    ['an accountable pass', v({}), AC, false, null],
+    ['a failing verdict', v({ passed: false }), AC, false, null],
+    ['missing whatIDidNotCheck only', v({ whatIDidNotCheck: [] }), AC, false, 'report'],
+    ['missing confidence only', v({ confidence: undefined }), AC, false, 'report'],
+    ['an uncovered stage', v({ feedback: 'Looks fine.' }), AC, false, 'coverage'],
+    ['a criterion with no entry', v({ criteria: [full.criteria[0]] }), AC, false, 'coverage'],
+    ['a met criterion with no evidence', v({ criteria: [full.criteria[0], { criterion: AC[1], met: true, evidence: '' }] }), AC, false, 'coverage'],
+    ['a non-json pass on an item with criteria', v({ source: 'prose', criteria: undefined }), AC, false, 'coverage'],
+    ['a thin pass whose prose says FAIL', v({ whatIDidNotCheck: [] }), AC, true, 'coverage'],
+    ['a thin pass AND an unreported criterion', v({ whatIDidNotCheck: [], criteria: undefined }), AC, false, 'coverage'],
+  ])('%s', (_name, verdict, acceptance, proseFail, expected) => {
+    expect(auditFault(verdict, SCOPE, acceptance, proseFail)).toBe(expected);
+  });
+
+  test('a low-confidence stage the verdict ignores is coverage', () => {
+    const scope = [...SCOPE, { name: 'Research', producesArtifacts: false, confidence: 'low' as const }];
+    expect(auditFault(v({}), scope, AC)).toBe('coverage');
   });
 });
 
@@ -318,6 +357,65 @@ describe('PipelineManager.gateQaVerdict', () => {
     const [row] = auditRows();
     expect(row).toMatchObject({ kind: 'audit_coverage', passed: false });
     expect((row.detail as { source: string }).source).toBe('unparseable');
+    spy.mockRestore();
+  });
+
+  // Which rejections a verdict repair may fix. Getting this wrong in either
+  // direction is costly: a coverage fault sent to repair can only re-word, and
+  // a missing field sent to a full re-audit pays for the audit twice.
+  test('a covered pass missing only a required field is a REPORT fault', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(
+      verdictBlock({ passed: true, issues: [], feedback: 'Implementation and Testing are both fine.', confidence: 'high' }),
+    );
+    expect(result).toMatchObject({ passed: false, auditGateFailed: true, auditGateReason: 'report' });
+    expect(auditRows()[0].detail).toMatchObject({ fault: 'report' });
+    spy.mockRestore();
+  });
+
+  test('an uncovered stage makes it a COVERAGE fault, even with fields missing too', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(verdictBlock({ passed: true, issues: [], feedback: 'Implementation is fine.' }));
+    expect(result).toMatchObject({ auditGateFailed: true, auditGateReason: 'coverage' });
+    // Every reason still reaches the re-audit at once.
+    expect(result?.issues.join(' ')).toContain('Testing');
+    expect(result?.issues.join(' ')).toContain('did NOT check');
+    expect(auditRows()[0].detail).toMatchObject({ fault: 'coverage' });
+    spy.mockRestore();
+  });
+
+  test('an unreadable verdict is tagged a report fault, and a repair attempt is recorded', async () => {
+    const { auditRows, spy } = setup();
+    const result = await (new PipelineManager() as unknown as {
+      gateQaVerdict: (o: string, s: typeof SCOPE, e: typeof evidence & { repairAttempt?: number }) => Promise<QAValidationResult | null>;
+    }).gateQaVerdict('Prose only.', SCOPE, { ...evidence, repairAttempt: 2 });
+    expect(result).toMatchObject({ auditGateReason: 'unparseable' });
+    expect(auditRows()[0].detail).toMatchObject({ source: 'unparseable', fault: 'report', repairAttempt: 2 });
+    spy.mockRestore();
+  });
+
+  test('a pass whose own prose says FAIL is never repaired — it is re-judged', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(
+      `Overall status: FAIL\n\n${verdictBlock({ passed: true, issues: [], feedback: 'Implementation and Testing are fine.', confidence: 'high' })}`,
+    );
+    expect(result).toMatchObject({ auditGateFailed: true, auditGateReason: 'coverage' });
+    expect(auditRows()[0].detail).toMatchObject({ fault: 'coverage' });
+    spy.mockRestore();
+  });
+
+  test('an accepted pass carries no fault', async () => {
+    const { auditRows, spy, call } = setup();
+    await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing both check out.',
+        confidence: 'high',
+        whatIDidNotCheck: ['the migration path'],
+      }),
+    );
+    expect((auditRows()[0].detail as Record<string, unknown>).fault).toBeUndefined();
     spy.mockRestore();
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { fmt, percentile, rubberStampRate } from './run-health';
+import { fmt, percentile, rubberStampRate, tallyAudits } from './run-health';
 
 describe('percentile (nearest-rank)', () => {
   test('returns a value that a real run actually had', () => {
@@ -52,5 +52,28 @@ describe('rubberStampRate', () => {
   test('reports 0 when nothing was audited — no audits is not a clean record', () => {
     expect(rubberStampRate(0, 0)).toBe(0);
     expect(rubberStampRate(-1, 0)).toBe(0);
+  });
+});
+
+describe('tallyAudits', () => {
+  const row = (passed: boolean, fault: string | null = null, source: string | null = 'json') => ({ passed, fault, source });
+
+  test('a reply with no verdict and its repair count as ONE accepted verdict, not a rejection', () => {
+    const t = tallyAudits([row(false, 'report', 'unparseable'), row(true)]);
+    expect(t).toEqual({ total: 1, rejected: 0, thinRejected: 0, unparseable: 1 });
+  });
+
+  test('an unparseable row written before `fault` existed is set aside too', () => {
+    expect(tallyAudits([row(false, null, 'unparseable')])).toEqual({ total: 0, rejected: 0, thinRejected: 0, unparseable: 1 });
+  });
+
+  test('a parsed thin pass is still a rejected pass, shown as its own sub-number', () => {
+    // Rejected for leaving out whatIDidNotCheck, then repaired into a pass.
+    expect(tallyAudits([row(false, 'report'), row(true)])).toEqual({ total: 2, rejected: 1, thinRejected: 1, unparseable: 0 });
+  });
+
+  test('a coverage rejection counts, and so does an untagged older one', () => {
+    expect(tallyAudits([row(false, 'coverage'), row(false, null, 'json'), row(true)]))
+      .toEqual({ total: 3, rejected: 2, thinRejected: 0, unparseable: 0 });
   });
 });
