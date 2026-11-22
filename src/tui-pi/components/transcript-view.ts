@@ -11,7 +11,7 @@
  * window this view lets older items in and moves the scroll position down by
  * the rows they added, in the same frame, so what is on screen stays put.
  */
-import { type Component, ScrollView } from '@/tui-kit';
+import { type Component, ScrollView, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
 
 export class TranscriptScroll extends ScrollView {
@@ -52,6 +52,19 @@ export class TranscriptDocument implements Component {
       this.pane.trimWindow();
     }
     return this.pane.documentLines(width);
+  }
+
+  /**
+   * A click on a tool group's or a thinking item's summary row folds or
+   * unfolds it. Only those rows take the press; anywhere else a drag still
+   * selects text.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.button !== 'left') return undefined;
+    const item = this.pane.foldableAt(event.y);
+    if (!item) return undefined;
+    if (event.type === 'click') { this.pane.toggle(item); return { handled: true }; }
+    return event.type === 'press' || event.type === 'release' ? { handled: true } : undefined;
   }
 
   invalidate(): void { this.pane.invalidate(); }

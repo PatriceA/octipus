@@ -19,6 +19,7 @@ import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wr
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 import { wheelDirection } from '../terminal-actions';
+import { renderThinking, renderToolGroup, type ThinkingItem, type ToolGroupItem, toolGroupText } from './tool-group';
 
 export interface ChatMessage {
   kind?: 'message';
@@ -31,11 +32,14 @@ export interface ChatMessage {
 /** A dim line that belongs to no one: what the transcript itself has to say (dropped history, more above). */
 export interface TranscriptNotice { kind: 'notice'; text: string }
 /**
- * What the transcript holds. A new kind (tool group, diff, image) is a new
- * member here plus a case in `renderItem`; `copyText` decides what `/copy`
- * and `/export` take from it.
+ * What the transcript holds. A new kind (diff, image) is a new member here
+ * plus a case in `renderItem`; `entries()` decides what `/copy` and
+ * `/export` take from it.
  */
-export type TranscriptItem = ChatMessage | TranscriptNotice;
+export type TranscriptItem = ChatMessage | TranscriptNotice | ToolGroupItem | ThinkingItem;
+/** Items that fold: one row collapsed, everything expanded. */
+export type FoldableItem = ToolGroupItem | ThinkingItem;
+const isFoldable = (item: TranscriptItem): item is FoldableItem => item.kind === 'tools' || item.kind === 'thinking';
 
 export interface MessagesPaneOptions {
   /** Initial viewport height in terminal rows. */
@@ -58,7 +62,7 @@ export function stripTranscriptRails(text: string): string {
   return text.split('\n').map(line => line.replace(RAIL, '')).join('\n');
 }
 
-const isMessage = (item: TranscriptItem): item is ChatMessage => item.kind !== 'notice';
+const isMessage = (item: TranscriptItem): item is ChatMessage => item.kind === undefined || item.kind === 'message';
 
 export class MessagesPane implements Component {
   private history: TranscriptItem[] = [];
@@ -92,6 +96,10 @@ export class MessagesPane implements Component {
   /** Items dropped from memory over `maxItems`. */
   private dropped = 0;
   private notice: { text: string; item: TranscriptNotice } | null = null;
+  /** Where each item of the rendered window starts, in `documentLines` rows. */
+  private itemRows: Array<{ item: TranscriptItem; start: number; end: number }> = [];
+  /** Whether new tool groups and thinking items start expanded (`app.tools.toggle`). */
+  private detail = false;
 
   constructor(private readonly options: MessagesPaneOptions = {}) {
     this.height = options.maxVisible ?? 30;
@@ -136,6 +144,30 @@ export class MessagesPane implements Component {
     if (this.readingLatest() && this.history.length - this.windowStart > this.windowSize * 2) this.windowStart = this.history.length - this.windowSize;
     if (this.frozen) this.newer++;
     this.changed();
+  }
+  /** An item already in the transcript changed (a tool call finished): draw it again. False when it is not (any more) in the transcript. */
+  update(item: TranscriptItem): boolean {
+    this.messageCache.delete(item);
+    if (!this.history.includes(item)) return false;
+    this.changed();
+    return true;
+  }
+  /** Expand or collapse every tool group and thinking item, and the ones still to come. */
+  setDetail(expanded: boolean): void {
+    this.detail = expanded;
+    for (const item of this.history) if (isFoldable(item) && item.expanded !== expanded) { item.expanded = expanded; this.messageCache.delete(item); }
+    this.changed();
+  }
+  getDetail(): boolean { return this.detail; }
+  /** Expand or collapse one item. */
+  toggle(item: FoldableItem): void {
+    item.expanded = !item.expanded;
+    this.update(item);
+  }
+  /** The foldable item whose first (summary) row is `row` of `documentLines`, if any. */
+  foldableAt(row: number): FoldableItem | null {
+    const hit = this.itemRows.find(entry => entry.start === row);
+    return hit && isFoldable(hit.item) ? hit.item : null;
   }
   setLive(raw: string | null): void {
     const text = raw === null ? null : displayText(raw);
@@ -193,9 +225,19 @@ export class MessagesPane implements Component {
     if (scope === 'last') return all.findLast(message => message.role === 'assistant' && message.content.length > 0)?.content ?? '';
     return all.map(message => `${message.role}:\n${message.content}`).join('\n\n');
   }
-  /** Every message kept, as received, oldest first — with the reply still streaming, if any. */
+  /**
+   * Every message kept, as received, oldest first — with the reply still
+   * streaming, if any. A tool group is a system entry, one line per call; a
+   * thinking item is a system entry too, so `/copy last` still takes the
+   * reply and not the reasoning before it.
+   */
   entries(): Array<{ role: Role; content: string; timestamp: Date }> {
-    const all = this.history.filter(isMessage).map(message => ({ role: message.role, content: this.raw.get(message) ?? message.content, timestamp: message.timestamp }));
+    const all = this.history.flatMap(item => {
+      if (isMessage(item)) return [{ role: item.role, content: this.raw.get(item) ?? item.content, timestamp: item.timestamp }];
+      if (item.kind === 'tools' && item.calls.length) return [{ role: 'system' as const, content: toolGroupText(item), timestamp: new Date(item.calls[0]?.startedAt ?? Date.now()) }];
+      if (item.kind === 'thinking') return [{ role: 'system' as const, content: `Thinking:\n${item.text}`, timestamp: new Date() }];
+      return [];
+    });
     if (this.liveRaw) all.push({ role: 'assistant', content: this.liveRaw, timestamp: new Date() });
     return all;
   }
@@ -234,7 +276,7 @@ export class MessagesPane implements Component {
     if (width === this.cachedWidth && this.revision === this.cachedRevision) return this.cachedLines;
     // Rendering the history is the expensive part; streaming re-renders only the live reply below it.
     if (this.historyWidth !== width || this.historyRevision !== this.itemsRevision) {
-      this.historyLines = this.renderMessages(this.windowItems(), width);
+      this.historyLines = this.renderMessages(this.windowItems(), width, this.itemRows = []);
       this.historyWidth = width;
       this.historyRevision = this.itemsRevision;
     }
@@ -275,6 +317,10 @@ export class MessagesPane implements Component {
     const lines: string[] = [];
     if (item.kind === 'notice') {
       for (const line of wrapTextWithAnsi(item.text, inner)) lines.push(chalk.hex(p.dim)(`· ${line}`));
+    } else if (item.kind === 'tools') {
+      lines.push(...renderToolGroup(item, width));
+    } else if (item.kind === 'thinking') {
+      lines.push(...renderThinking(item, width));
     } else {
       const error = item.tone === 'error';
       const colour = error ? p.error : item.role === 'user' ? p.accent : p.dim;
@@ -294,11 +340,12 @@ export class MessagesPane implements Component {
     return lines;
   }
 
-  private renderMessages(all: TranscriptItem[], width: number): string[] {
+  private renderMessages(all: TranscriptItem[], width: number, rows?: Array<{ item: TranscriptItem; start: number; end: number }>): string[] {
     const lines: string[] = [];
     for (const [index, item] of all.entries()) {
       if (index) lines.push('');
       const rendered = this.renderItem(item, width);
+      rows?.push({ item, start: lines.length, end: lines.length + rendered.length });
       for (const line of rendered) lines.push(line);
     }
     return lines;

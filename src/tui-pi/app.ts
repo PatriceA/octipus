@@ -80,7 +80,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
 /** Two Escapes within this long, with no turn running, clear the draft. */
@@ -224,6 +224,11 @@ export class OctipusTuiApp {
       }
       if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
       if (kb.matches(data, 'app.queue.edit') && this.queue.size) { this.editQueued(); return { consume: true }; }
+      if (kb.matches(data, 'app.tools.toggle')) {
+        this.messages.setDetail(!this.messages.getDetail());
+        this.tui.requestRender();
+        return { consume: true };
+      }
       if (matchesKey(data, 'escape') && !this.composer.isShowingAutocomplete()) return this.escape();
       if (this.transcript) return this.transcriptKey(this.transcript, data);
       if (this.messages.handleScrollInput(data)) {

@@ -1,11 +1,13 @@
 /** Session presentation shared by both terminal surfaces. */
 import type { TUI } from '@/tui-kit';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
-import type { AgentSessionEvent, GatewayAdapter } from './gateway-adapter';
+import type { AgentSessionEvent, GatewayAdapter, ToolEventState } from './gateway-adapter';
 import type { MessagesPane } from './components/messages-pane';
 import type { StatusBar, CumulativeStats } from './components/status-bar';
 import type { ActivityLine } from './components/activity-line';
 import type { SubagentPanel } from './components/subagent-panel';
+import { applyToolEvent, newToolGroup, type ToolGroupItem } from './components/tool-group';
+import type { TranscriptItem } from './components/messages-pane';
 
 export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
@@ -18,7 +20,8 @@ export class ChatSessionPresenter {
   private activeAgentModel: string | undefined;
   private streamText = '';
   private streamIteration = -1;
-  private lastStreamedTool: string | null = null;
+  /** This turn's tool calls: one transcript item, created by the first call. */
+  private toolGroup: ToolGroupItem | null = null;
   private seenMessageIds = new Set<string>();
   constructor(private readonly tui: TUI, private readonly adapter: GatewayAdapter,
     private readonly messages: MessagesPane, private readonly status: StatusBar,
@@ -30,7 +33,7 @@ export class ChatSessionPresenter {
     this.seenMessageIds.clear();
     this.refreshingPlan = false;
     this.discoveredPlan = false;
-    this.clearStream(); this.subagents.reset(); this.cumulative = { tokens: 0, cost: 0, turns: 0 };
+    this.clearStream(); this.toolGroup = null; this.subagents.reset(); this.cumulative = { tokens: 0, cost: 0, turns: 0 };
     this.status.setStats(this.cumulative); this.status.setContext(null);
     this.activeAgentModel = undefined; this.status.setModel(null);
     this.lastPlanSummary = null; this.status.setPlan(null); this.status.setPlanDetails(null);
@@ -87,10 +90,10 @@ export class ChatSessionPresenter {
         return false;
       case 'delta':
         // A new iteration means the previous text was reasoning before a tool
-        // call, not the reply: keep it as its own message so the trail stays
-        // visible, then start the next live block.
+        // call, not the reply: keep it as a folded thinking item so the trail
+        // stays visible without reading as an answer, then start the next live block.
         if (event.iteration !== this.streamIteration) {
-          if (this.streamText.trim()) this.pushMessage('assistant', this.streamText);
+          if (this.streamText.trim()) this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
           this.streamText = '';
           this.streamIteration = event.iteration;
         }
@@ -102,7 +105,7 @@ export class ChatSessionPresenter {
       case 'message':
         if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
         if (event.messageId) this.seenMessageIds.add(event.messageId);
-        if (event.role === 'assistant' && !event.progress) this.clearStream();
+        if (event.role === 'assistant' && !event.progress) { this.clearStream(); this.toolGroup = null; }
         this.pushMessage(event.role, event.content);
         return true;
       case 'agent.start':
@@ -121,6 +124,7 @@ export class ChatSessionPresenter {
         this.activeAgentModel = event.model || undefined;
         if (this.activeAgentModel) this.status.setModel(this.activeAgentModel);
         this.clearStream(); // a new turn: whatever a failed one left half-streamed is not history
+        this.toolGroup = null;
         this.activity.setThinking({ role: event.role, iter: 0, model: this.activeAgentModel });
         return true;
       case 'agent.iteration':
@@ -181,6 +185,7 @@ export class ChatSessionPresenter {
         this.activeAgentRole = null;
         this.activeAgentModel = undefined;
         this.clearStream();
+        this.toolGroup = null;
         this.tui.requestRender();
         return true;
       case 'tool':
@@ -193,7 +198,7 @@ export class ChatSessionPresenter {
           return true;
         }
         this.activity.setTool(event.tool);
-        this.streamToolEvent(event.tool);
+        this.recordTool(event.tool);
         return true;
       case 'error':
         this.activity.setThinking(null); this.activity.setTool(null);
@@ -213,21 +218,21 @@ export class ChatSessionPresenter {
     this.messages.setLive(null);
   }
 
-  private streamToolEvent(tool: { state: string; name: string; preview?: string; mcpServer?: string }): void {
-    const mcp = tool.mcpServer ? `[mcp:${tool.mcpServer}] ` : '';
-    const preview = tool.preview ? ` → ${tool.preview}` : '';
-    if (tool.state === 'pending' || tool.state === 'executing') {
-      this.lastStreamedTool = `${tool.name}${preview}`;
-      this.pushMessage('system', `→ ${mcp}${this.lastStreamedTool}`);
-    } else if (tool.state === 'error') {
-      this.pushMessage('system', `✗ ${mcp}${tool.name}${preview}`);
-      this.lastStreamedTool = null;
-    } else if (tool.state === 'completed') {
-      // Only echo a completion line when there's an output preview worth
-      // showing; the pending line already named the call.
-      if (tool.preview) this.pushMessage('system', `✓ ${mcp}${tool.name} ${tool.preview}`);
-      this.lastStreamedTool = null;
-    }
+  /** A root agent tool event: into this turn's tool group, which the first call puts in the transcript. */
+  private recordTool(tool: ToolEventState): void {
+    const group = this.toolGroup ?? (this.toolGroup = { ...newToolGroup(), expanded: this.messages.getDetail() });
+    applyToolEvent(group, tool);
+    // The first call puts the group in the transcript (again, after /clear emptied it).
+    if (this.messages.update(group)) this.tui.requestRender();
+    else this.pushItem(group);
+  }
+
+  /** Add an item, following the end only when the reader is already there (as `pushMessage` does). */
+  private pushItem(item: TranscriptItem): void {
+    const wasAtBottom = this.messages.getScrollOffset() === 0;
+    this.messages.pushItem(item);
+    if (wasAtBottom) this.messages.scrollToBottom();
+    this.tui.requestRender();
   }
 
 }
