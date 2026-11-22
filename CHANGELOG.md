@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: escape sequences in file names stay text.** A file named
+  with ESC, OSC or BEL bytes reached the terminal through the tab strip, the
+  unsaved-changes prompt and the rename / Save As fields prefilled with its
+  path, so a file name could change the window title, clear the screen or ring
+  the bell, and its tab's clickable `×` drifted. Tab labels, prompt labels and
+  errors are drawn without escape sequences, and text fields show control
+  bytes as pictures (`␛`, `␇`).
 - **Terminal editor: auto-reload no longer grows memory without bound.** Every
   reload of a changed file kept a full copy of the old and new text in the
   undo history (up to 200 steps), so a log file appended to every second could

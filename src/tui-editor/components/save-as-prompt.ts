@@ -41,7 +41,7 @@ export class SaveAsPrompt implements Component, Focusable {
     return [
       chalk.bold.hex(p.accent)(`Save ${displayLine(this.options.label)} as`),
       label + this.field.render(Math.max(1, width - 6), true),
-      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(this.error), Math.max(1, width)) : []),
+      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(displayLine(this.error)), Math.max(1, width)) : []),
       chalk.hex(p.dim)('Relative to the project, or absolute · Enter save · Esc cancel'),
     ].map(line => truncateToWidth(line, width, ''));
   }

@@ -1,4 +1,4 @@
-import { type Component, matchesKey, wrapTextWithAnsi, truncateToWidth } from '@/tui-kit';
+import { type Component, displayLine, matchesKey, wrapTextWithAnsi, truncateToWidth } from '@/tui-kit';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export class UnsavedPrompt implements Component {
@@ -14,8 +14,8 @@ export class UnsavedPrompt implements Component {
   render(width: number): string[] {
     const p = getPalette();
     return [chalk.bold.hex(p.warn)('Unsaved changes'),
-      ...wrapTextWithAnsi(this.labels.join(', '), Math.max(1, width)).slice(0, 4),
-      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(this.error), Math.max(1, width)) : []),
+      ...wrapTextWithAnsi(this.labels.map(displayLine).join(', '), Math.max(1, width)).slice(0, 4),
+      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(displayLine(this.error)), Math.max(1, width)) : []),
       chalk.hex(p.accent)('s Save · d Discard · Enter/Esc Cancel')].map(line => truncateToWidth(line, width, ''));
   }
 }
