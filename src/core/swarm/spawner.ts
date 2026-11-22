@@ -2486,6 +2486,8 @@ export class SwarmSpawner {
       const discoveredRaw = await discoverSkillIds({
         topic: childRole,
         message: childMessage,
+        userId,
+        inSpace,
       });
       // Dedup against the expert's own skills — otherwise the same skill's
       // domain-knowledge block is injected twice (once as "expert", once as
