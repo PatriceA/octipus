@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { Skill } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
-import { markdownToSkill, type PortableSkill } from './markdown';
+import { type ParsedSkillMarkdown, parseSkillMarkdown } from './markdown';
 
 /**
  * Filesystem skill discovery (agentskills.io spec).
@@ -147,33 +147,24 @@ function walk(root: string, flatRootMd: boolean): FoundFile[] {
   return out;
 }
 
-function hasFrontmatterField(md: string, field: string): boolean {
-  // Look only inside the first --- ... --- block.
-  const trimmed = md.trim();
-  if (!trimmed.startsWith('---')) return false;
-  const end = trimmed.indexOf('\n---', 3);
-  if (end === -1) return false;
-  const fm = trimmed.slice(3, end);
-  const re = new RegExp(`^\\s*${field}\\s*:\\s*\\S`, 'm');
-  return re.test(fm);
-}
-
 /**
- * A SKILL.md document (agentskills.io): its skill, or null when `name` or
- * `description` is missing from the frontmatter — the spec requires both, so
- * the parser's defaults never stand in for them. Mounting and the skill
- * exchange import (./exchange.ts) read a SKILL.md through this one function.
+ * A SKILL.md document (agentskills.io), parsed once: its skill and every
+ * top-level frontmatter key, or null when `name` or `description` is missing
+ * from the frontmatter — the spec requires both, so the parser's defaults
+ * never stand in for them. Mounting and the skill exchange import
+ * (./exchange.ts) read a SKILL.md through this one function.
  */
-export function parseSkillMd(md: string): PortableSkill | null {
-  if (!hasFrontmatterField(md, 'name') || !hasFrontmatterField(md, 'description')) return null;
-  return markdownToSkill(md);
+export function parseSkillMd(md: string): Pick<ParsedSkillMarkdown, 'skill' | 'frontmatterKeys'> | null {
+  const parsed = parseSkillMarkdown(md);
+  if (!parsed.hasName || !parsed.hasDescription) return null;
+  return { skill: parsed.skill, frontmatterKeys: parsed.frontmatterKeys };
 }
 
 function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
   const md = safeReadFile(found.filePath);
   if (!md) return undefined;
 
-  const portable = parseSkillMd(md);
+  const portable = parseSkillMd(md)?.skill;
   if (!portable) {
     logger.warn(`[skills/external] ${found.filePath}: missing name/description in frontmatter, skipping`);
     return undefined;

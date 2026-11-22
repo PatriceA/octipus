@@ -14,6 +14,7 @@ import {
   SkillBundleError,
   toBundleSkill,
 } from './exchange';
+import { parseFrontmatter } from './markdown';
 
 const skill = (over: Partial<BundleSkill> = {}): BundleSkill => ({
   name: 'Release notes',
@@ -242,5 +243,32 @@ describe('SKILL.md interop', () => {
     policy({ requireSignature: true });
     const parsed = parseSkillMdImport('---\nname: x\ndescription: y\n---\nbody');
     expect(checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }).refusal).toMatch(/requireSignature/);
+  });
+});
+
+/** A few hundred bytes of nested YAML anchors: each level references the one before nine times. */
+function aliasBomb(): string {
+  const levels = 'abcdefgh'.split('');
+  const lines = [`a: &a [${Array.from({ length: 9 }, () => '"xxxxxxxxxx"').join(', ')}]`];
+  for (let i = 1; i < levels.length; i++) lines.push(`${levels[i]}: &${levels[i]} [${Array.from({ length: 9 }, () => `*${levels[i - 1]}`).join(', ')}]`);
+  return `---\nname: bomb\ndescription: nested anchors\n${lines.join('\n')}\n---\nbody`;
+}
+
+describe('frontmatter with nested aliases', () => {
+  test('is read in bounded time and memory: nested values are named, never stringified', () => {
+    const md = aliasBomb();
+    expect(md.length).toBeLessThan(1000);
+    const started = performance.now();
+    const { meta, keys } = parseFrontmatter(md);
+    const parsed = parseSkillMdImport(md);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(keys).toEqual(['name', 'description', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+    expect(meta).toEqual({ name: 'bomb', description: 'nested anchors' });
+    expect(parsed.skills[0]).toMatchObject({ name: 'bomb', description: 'nested anchors', content: 'body' });
+    expect(parsed.warnings[0]).toMatch(/"a", "b", "c", "d", "e", "f", "g", "h" not imported/);
+  });
+
+  test('a nested name or description is not a name or description', () => {
+    expect(refusal(() => parseSkillMdImport('---\nname: [a, b]\ndescription: y\n---\nbody'))).toMatch(/no name or no description/);
   });
 });

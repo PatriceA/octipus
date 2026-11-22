@@ -104,30 +104,40 @@ export function skillsToMarkdown(skills: (SkillView | PortableSkill)[]): string 
 // Import / parsing helpers
 // ---------------------------------------------------------------------------
 
-/** Parse YAML frontmatter from a markdown string. Returns { meta, body }. */
-export function parseFrontmatter(md: string): { meta: Record<string, string>; body: string } {
+/**
+ * Parse YAML frontmatter from a markdown string: `meta` holds the top-level
+ * SCALAR values (strings, numbers, booleans, dates) as strings, `keys` every
+ * top-level key, `body` the rest.
+ *
+ * A nested value (a list or a mapping) is never turned into a string, only
+ * named in `keys`: js-yaml keeps aliases as shared references, so a few
+ * hundred bytes of nested anchors (`b: &b [*a, *a, …]`) stringify to
+ * gigabytes. Nothing reads a nested value here, so it is left alone.
+ */
+export function parseFrontmatter(md: string): { meta: Record<string, string>; keys: string[]; body: string } {
   const meta: Record<string, string> = {};
+  const keys: string[] = [];
   const trimmed = md.trim();
 
   if (!trimmed.startsWith('---')) {
-    return { meta, body: trimmed };
+    return { meta, keys, body: trimmed };
   }
 
   const endIndex = trimmed.indexOf('---', 3);
   if (endIndex === -1) {
-    return { meta, body: trimmed };
+    return { meta, keys, body: trimmed };
   }
 
   const frontmatter = trimmed.slice(3, endIndex).trim();
   const body = trimmed.slice(endIndex + 3).trim();
 
   try {
-    const parsed = yaml.load(frontmatter) as Record<string, any>;
-    if (parsed && typeof parsed === 'object') {
+    const parsed: unknown = yaml.load(frontmatter);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       for (const [key, value] of Object.entries(parsed)) {
-        if (value !== null && value !== undefined) {
-          meta[key] = typeof value === 'string' ? value : String(value);
-        }
+        keys.push(key);
+        if (typeof value === 'string') meta[key] = value;
+        else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || value instanceof Date) meta[key] = String(value);
       }
     }
   } catch (err) {
@@ -136,7 +146,7 @@ export function parseFrontmatter(md: string): { meta: Record<string, string>; bo
     logger.warn({ err: (err as Error).message }, 'skill frontmatter YAML parse failed — ignoring meta');
   }
 
-  return { meta, body };
+  return { meta, keys, body };
 }
 
 /** Extract bullet items from a section body (lines starting with - or *) */
@@ -168,9 +178,32 @@ function parseSections(body: string): Map<string, string> {
   return sections;
 }
 
+/** A markdown skill document as read: the skill, every top-level frontmatter key, and whether name and description were given. */
+export interface ParsedSkillMarkdown {
+  skill: PortableSkill;
+  frontmatterKeys: string[];
+  hasName: boolean;
+  hasDescription: boolean;
+}
+
 /** Parse a single markdown document (with frontmatter) into a PortableSkill */
 export function markdownToSkill(md: string): PortableSkill {
-  const { meta, body } = parseFrontmatter(md);
+  return parseSkillMarkdown(md).skill;
+}
+
+/** `markdownToSkill`, with what the frontmatter held: parsed once. */
+export function parseSkillMarkdown(md: string): ParsedSkillMarkdown {
+  const { meta, keys, body } = parseFrontmatter(md);
+  const parsed: ParsedSkillMarkdown = {
+    skill: buildSkill(meta, body),
+    frontmatterKeys: keys,
+    hasName: (meta.name ?? '').trim().length > 0,
+    hasDescription: (meta.description ?? '').trim().length > 0,
+  };
+  return parsed;
+}
+
+function buildSkill(meta: Record<string, string>, body: string): PortableSkill {
 
   const skill: PortableSkill = {
     name: meta.name ?? 'Untitled Skill',

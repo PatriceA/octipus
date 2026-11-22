@@ -45,7 +45,6 @@ import {
 } from '@/shared/skill-exchange';
 import { coreLogger } from '@/utils/logger';
 import { parseSkillMd } from './external-loader';
-import { parseFrontmatter } from './markdown';
 
 /** The largest bundle (or SKILL.md) read, in bytes, from an upload, a paste or a URL. */
 export const MAX_BUNDLE_BYTES = 1024 * 1024;
@@ -234,8 +233,10 @@ const SKILL_MD_FIELDS = new Set(['name', 'description', 'category']);
  */
 export function parseSkillMdImport(md: string): ParsedImport {
   checkSize(md, 'SKILL.md');
-  const portable = parseSkillMd(md);
-  if (!portable) throw new SkillBundleError('The SKILL.md has no name or no description in its frontmatter (both are required by the agentskills.io spec)');
+  // Parsed once: the skill and its frontmatter keys come from the same read.
+  const parsedMd = parseSkillMd(md);
+  if (!parsedMd) throw new SkillBundleError('The SKILL.md has no name or no description in its frontmatter (both are required by the agentskills.io spec)');
+  const portable = parsedMd.skill;
   const skill = toBundleSkill({
     name: portable.name,
     category: portable.category ?? 'general',
@@ -248,7 +249,7 @@ export function parseSkillMdImport(md: string): ParsedImport {
   });
   const result = bundleSkillSchema.safeParse(skill);
   if (!result.success) throw new SkillBundleError(`Not a valid skill: ${describeIssues(result.error)}`);
-  const ignored = Object.keys(parseFrontmatter(md).meta).filter((key) => !SKILL_MD_FIELDS.has(key));
+  const ignored = parsedMd.frontmatterKeys.filter((key) => !SKILL_MD_FIELDS.has(key));
   const warnings = ignored.length > 0
     ? [`Frontmatter ${ignored.map((k) => `"${k}"`).join(', ')} not imported: Octipus stores a skill's name, category, description and body only, and an imported skill grants no tools`]
     : [];
