@@ -108,3 +108,287 @@ describe('reconstructPageText', () => {
     expect(text).toContain('b');
   });
 });
+
+// ── Column bands and tables ─────────────────────────────────────────────────
+//
+// Pages here are US Letter-ish: 10pt text with 5pt glyphs, a 12pt line pitch.
+// A body column runs x=50..275 (45 characters), its neighbour from x=320, so
+// the gutter between them is 45pt — nine glyphs — wide.
+
+const FILLER = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor';
+
+/** A prose line of exactly `chars` characters starting with `tag`. */
+const prose = (tag: string, chars = 45): string => `${tag} ${FILLER}`.slice(0, chars);
+
+/** `count` prose lines of one column at `x`, from baseline `top` down by `pitch`. */
+const column = (tag: string, x: number, top: number, count: number, chars = 45, pitch = 12): PdfTextItem[] =>
+  Array.from({ length: count }, (_, k) => item(prose(`${tag}${k + 1}`, chars), x, top - k * pitch));
+
+const lines = (text: string) => text.split('\n');
+
+/** First word of each line, or the whole line for a table row: the reading order at a glance. */
+const order = (text: string) => lines(text).map((l) => (l.startsWith('|') ? l : l.split(' ')[0]));
+
+describe('reconstructPageText — column bands', () => {
+  test('a two-column page reads the left column, then the right, not across', () => {
+    const text = reconstructPageText([...column('L', 50, 700, 6), ...column('R', 320, 700, 6)]);
+    expect(lines(text)).toEqual([
+      ...Array.from({ length: 6 }, (_, k) => prose(`L${k + 1}`)),
+      ...Array.from({ length: 6 }, (_, k) => prose(`R${k + 1}`)),
+    ]);
+    // A body is not a table, however well its rows line up.
+    expect(text).not.toContain('|');
+  });
+
+  test('full-width title, caption and footer interrupt the body and split it into bands', () => {
+    const text = reconstructPageText([
+      item('A Study of Layout', 250, 760), // centred: crosses the gutter
+      ...column('A', 50, 730, 4),
+      ...column('B', 320, 730, 4),
+      item(`Figure 1: ${FILLER} ${FILLER}`.slice(0, 100), 50, 670), // full width
+      ...column('C', 50, 640, 3),
+      ...column('D', 320, 640, 3),
+      item('Page 3', 290, 560), // centred footer, well below
+    ]);
+    expect(order(text)).toEqual([
+      'A', '', 'A1', 'A2', 'A3', 'A4', 'B1', 'B2', 'B3', 'B4', '',
+      'Figure', '', 'C1', 'C2', 'C3', 'D1', 'D2', 'D3', '', 'Page',
+    ]);
+  });
+
+  test('three columns read in order', () => {
+    // Columns of 30 characters (150pt) at x=50, 230, 410: 30pt gutters.
+    const text = reconstructPageText([
+      ...column('P', 50, 700, 5, 30),
+      ...column('Q', 230, 700, 5, 30),
+      ...column('S', 410, 700, 5, 30),
+    ]);
+    expect(order(text)).toEqual(['P1', 'P2', 'P3', 'P4', 'P5', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'S1', 'S2', 'S3', 'S4', 'S5']);
+  });
+
+  test('a paragraph break inside a column survives', () => {
+    const text = reconstructPageText([
+      ...column('L', 50, 700, 3),
+      ...column('M', 50, 652, 3), // a 24pt step after L3: a new paragraph
+      ...column('R', 320, 700, 6),
+    ]);
+    expect(order(text)).toEqual(['L1', 'L2', 'L3', '', 'M1', 'M2', 'M3', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6']);
+  });
+
+  test('columns whose baselines drift apart still read as columns once three lines line up', () => {
+    // The first three lines share baselines; after that the right column is
+    // offset by half a line, so its lines group on their own.
+    const text = reconstructPageText([
+      ...column('L', 50, 700, 6),
+      ...column('R', 320, 700, 3),
+      ...column('S', 320, 658, 3),
+    ]);
+    expect(order(text)).toEqual(['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'R1', 'R2', 'R3', 'S1', 'S2', 'S3']);
+  });
+
+  test('a page with no columns comes out exactly as before', () => {
+    const text = reconstructPageText([...column('A', 50, 700, 3, 90), item('B1 the next paragraph', 50, 650)]);
+    expect(text).toBe(`${prose('A1', 90)}\n${prose('A2', 90)}\n${prose('A3', 90)}\n\nB1 the next paragraph`);
+  });
+
+  test('a wide inter-word gap on a justified line is not a gutter', () => {
+    // One item per word, as producers that justify by word spacing emit them.
+    const words = (text: string, y: number, stretchAfter = -1): PdfTextItem[] => {
+      let x = 50;
+      return text.split(' ').map((w, k) => {
+        const it = item(w, x, y);
+        x += w.length * 5 + (k === stretchAfter ? 15 : 5);
+        return it;
+      });
+    };
+    const text = reconstructPageText([
+      ...words('the quick brown fox jumps over the lazy dog again', 700),
+      ...words('and so the story goes on for a while longer here', 688, 3),
+      ...words('until the end of the paragraph is finally reached', 676, 3),
+      ...words('with nothing much else to say about it at all now', 664),
+    ]);
+    // Two lines with a wide gap, and not in the same place: no gutter.
+    expect(lines(text)).toEqual([
+      'the quick brown fox jumps over the lazy dog again',
+      'and so the story  goes on for a while longer here',
+      'until the end of  the paragraph is finally reached',
+      'with nothing much else to say about it at all now',
+    ]);
+  });
+
+  test('two columns of short lines are neither columns nor a table', () => {
+    // A list set in two columns: too short for prose, no header for a table.
+    const names = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin'];
+    const text = reconstructPageText(names.flatMap((n, k) => [item(n, 50, 700 - k * 12), item(`${n} Jr`, 320, 700 - k * 12)]));
+    expect(lines(text)).toEqual(names.map((n) => `${n}  ${n} Jr`));
+  });
+});
+
+/** A table row: each cell [text, x], or [text, x, 'right'] to end at x. Empty text is an empty cell. */
+const row = (y: number, cells: Array<[string, number, 'right'?]>): PdfTextItem[] =>
+  cells.filter(([s]) => s.length > 0).map(([s, x, align]) => item(s, align === 'right' ? x - s.length * 5 : x, y));
+
+describe('reconstructPageText — tables', () => {
+  test('a table with a header, an empty cell and a right-aligned number column becomes a Markdown table', () => {
+    const text = reconstructPageText([
+      item('Stock report', 50, 730),
+      ...row(700, [['Item', 50], ['Colour', 200], ['Qty', 400, 'right']]),
+      ...row(688, [['Widget', 50], ['Red', 200], ['1,200', 400, 'right']]),
+      ...row(676, [['Gadget', 50], ['', 200], ['35', 400, 'right']]),
+      ...row(664, [['Sprocket', 50], ['Blue', 200], ['7', 400, 'right']]),
+      item('Figures as of Monday.', 50, 640),
+    ]);
+    expect(text).toBe(
+      [
+        'Stock report',
+        '',
+        '| Item | Colour | Qty |',
+        '| --- | --- | ---: |',
+        '| Widget | Red | 1,200 |',
+        '| Gadget |  | 35 |',
+        '| Sprocket | Blue | 7 |',
+        '',
+        'Figures as of Monday.',
+      ].join('\n'),
+    );
+  });
+
+  test('a wrapped cell joins its row when rows are spaced wider than lines', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Part', 50], ['Notes', 200], ['Cost', 400, 'right']]),
+      ...row(682, [['Bolt', 50], ['zinc plated', 200], ['4', 400, 'right']]),
+      ...row(672, [['', 50], ['steel', 200]]), // 10pt under its row; rows are 18pt apart
+      ...row(654, [['Nut', 50], ['brass', 200], ['2', 400, 'right']]),
+      ...row(636, [['Washer', 50], ['nylon', 200], ['1', 400, 'right']]),
+    ]);
+    expect(lines(text)).toEqual([
+      '| Part | Notes | Cost |',
+      '| --- | --- | ---: |',
+      '| Bolt | zinc plated steel | 4 |',
+      '| Nut | brass | 2 |',
+      '| Washer | nylon | 1 |',
+    ]);
+  });
+
+  test('a pipe inside a cell is escaped', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Flag', 50], ['Meaning', 200], ['Code', 400]]),
+      ...row(688, [['a|b', 50], ['either', 200], ['1', 400]]),
+      ...row(676, [['c', 50], ['plain', 200], ['2', 400]]),
+      ...row(664, [['d', 50], ['other', 200], ['3', 400]]),
+    ]);
+    expect(lines(text)[2]).toBe('| a\\|b | either | 1 |');
+  });
+
+  test('a two-column table with a header and numbers is a table', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Region', 50], ['Revenue', 300, 'right']]),
+      ...row(688, [['North', 50], ['1,200', 300, 'right']]),
+      ...row(676, [['South', 50], ['950', 300, 'right']]),
+      ...row(664, [['West', 50], ['80', 300, 'right']]),
+    ]);
+    expect(lines(text).slice(0, 2)).toEqual(['| Region | Revenue |', '| --- | ---: |']);
+  });
+
+  test('a label/value form keeps its label  value lines', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Name:', 50], ['Jane Doe', 200]]),
+      ...row(688, [['Invoice:', 50], ['INV-0042', 200]]),
+      ...row(676, [['Date:', 50], ['2026-11-02', 200]]),
+      ...row(664, [['Total:', 50], ['$420.00', 200]]),
+    ]);
+    expect(lines(text)).toEqual(['Name:  Jane Doe', 'Invoice:  INV-0042', 'Date:  2026-11-02', 'Total:  $420.00']);
+  });
+
+  test('a key/value list without colons and without a header stays as lines', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Invoice number', 50], ['INV-0042', 200]]),
+      ...row(688, [['Issued', 50], ['2026-11-02', 200]]),
+      ...row(676, [['Due', 50], ['2026-12-02', 200]]),
+    ]);
+    expect(lines(text)).toEqual(['Invoice number  INV-0042', 'Issued  2026-11-02', 'Due  2026-12-02']);
+  });
+
+  test('two rows are not a table', () => {
+    const text = reconstructPageText([
+      ...row(700, [['Item', 50], ['Colour', 200], ['Qty', 400]]),
+      ...row(688, [['Widget', 50], ['Red', 200], ['12', 400]]),
+    ]);
+    expect(lines(text)).toEqual(['Item  Colour  Qty', 'Widget  Red  12']);
+  });
+
+  test('cells that do not line up are not a table', () => {
+    // Gaps stay clear of each other, but each cell starts and ends somewhere new.
+    const text = reconstructPageText([
+      ...row(700, [['ab', 50], ['cdefgh', 180], ['ij', 400]]),
+      ...row(688, [['klmnopq', 70], ['uv', 260], ['wxyzabcde', 430]]),
+      ...row(676, [['c', 100], ['defghij', 200], ['no', 480]]),
+    ]);
+    expect(text).not.toContain('|');
+  });
+
+  test('a full-width table between two column bands reads band, table, band', () => {
+    const text = reconstructPageText([
+      ...column('A', 50, 760, 3),
+      ...column('B', 320, 760, 3),
+      // The table's middle column sits on the body's gutter.
+      ...row(716, [['Metric', 50], ['Baseline', 280], ['Score (F1)', 500, 'right']]),
+      ...row(704, [['Recall', 50], ['0.61', 280], ['0.74', 500, 'right']]),
+      ...row(692, [['Precision', 50], ['0.58', 280], ['0.69', 500, 'right']]),
+      ...column('C', 50, 670, 3),
+      ...column('D', 320, 670, 3),
+    ]);
+    expect(order(text)).toEqual([
+      'A1', 'A2', 'A3', 'B1', 'B2', 'B3', '',
+      '| Metric | Baseline | Score (F1) |',
+      '| --- | --- | ---: |',
+      '| Recall | 0.61 | 0.74 |',
+      '| Precision | 0.58 | 0.69 |',
+      '', 'C1', 'C2', 'C3', 'D1', 'D2', 'D3',
+    ]);
+  });
+
+  test('a table inside one column of a two-column page is a table within that column', () => {
+    const text = reconstructPageText([
+      ...column('L', 50, 700, 3),
+      ...row(664, [['Key', 50], ['Low', 140], ['High', 240]]),
+      ...row(652, [['a', 50], ['1', 140], ['9', 240]]),
+      ...row(640, [['b', 50], ['2', 140], ['8', 240]]),
+      ...row(628, [['c', 50], ['3', 140], ['7', 240]]),
+      ...column('R', 320, 700, 7),
+    ]);
+    expect(order(text)).toEqual([
+      'L1', 'L2', 'L3', '',
+      '| Key | Low | High |',
+      '| --- | --- | --- |',
+      '| a | 1 | 9 |',
+      '| b | 2 | 8 |',
+      '| c | 3 | 7 |',
+      '', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7',
+    ]);
+  });
+
+  test('a large page stays fast', () => {
+    // 60 lines of two columns over a 40-row table.
+    const big = [
+      ...column('L', 50, 760, 60, 45, 6),
+      ...column('R', 320, 760, 60, 45, 6),
+      ...Array.from({ length: 40 }, (_, k) => row(380 - k * 8, [[`r${k}`, 50], [`${k}`, 200], [`${k * 2}`, 400, 'right']])).flat(),
+    ];
+    const started = performance.now();
+    const text = reconstructPageText(big);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(text).toContain('| r1 | 1 | 2 |');
+  });
+
+  test('a long run that is neither columns nor a table stays fast', () => {
+    // Every line starts a candidate table that runs to the foot of the page
+    // and is then refused (two columns, no header): the worst case for the scan.
+    const list = Array.from({ length: 400 }, (_, k) => row(780 - k * 1.9, [[`name ${k}`, 50], [`other ${k}`, 320]])).flat();
+    const started = performance.now();
+    const text = reconstructPageText(list.map((it) => ({ ...it, height: 1.5 })));
+    // Retried from every line this took ~250ms; bounded retries take ~30ms.
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(text).not.toContain('|');
+  });
+});

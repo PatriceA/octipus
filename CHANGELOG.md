@@ -7,6 +7,34 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **PDF text: columns in reading order, tables as Markdown tables**
+  ([docs](docs/DOCUMENTS.md#pdf--text-layer)).
+  - A two- or three-column page is read column by column instead of line by
+    line across the columns. A title, abstract, figure caption or footer that
+    crosses the gutter is read in its place and splits the columns into bands
+    above and below it. A gutter has to hold over at least three lines with
+    text on both sides, and both sides have to read as prose, so a wide word
+    gap on one justified line is not a gutter.
+  - A table (three or more rows whose short cells line up per column on a
+    left, right or centre edge) comes out as a Markdown table: header row,
+    `---:` for a right-aligned column, empty cells kept, `|` escaped, a
+    wrapped cell joined to its row when rows are spaced wider than lines.
+  - A page where neither reading holds comes out exactly as before. Label/value
+    forms keep their `Label:  value` lines. Not handled: merged or spanning
+    cells, tables whose columns do not line up or whose cells are long text,
+    wrapped cells in tables without row spacing, columns that never share a
+    baseline, tables continuing onto the next page (read as two tables),
+    rotated and right-to-left text.
+  - Fixed: the gap between two runs of text on a line was lost on real PDFs,
+    because pdfjs reports it as a whitespace item as wide as the gap; column
+    and cell gaps came out as one space. Whitespace-only items are now dropped.
+  - A Markdown table longer than one knowledge-base chunk (from a PDF, an
+    `.xlsx` sheet or a `.docx`) is split between rows, and each piece repeats
+    the header row. It used to be cut as prose, which could split a row at a
+    `. ` inside a cell and left every piece after the first without column
+    names. Documents indexed before this keep their old text and chunks
+    until they are uploaded again.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).

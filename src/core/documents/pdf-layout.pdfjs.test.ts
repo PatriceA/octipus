@@ -58,4 +58,53 @@ describe('reconstructPageText on pdfjs output', () => {
     ]);
     expect(text).toBe('Widget  in stock');
   });
+
+  test('a two-column page under a title reads title, left column, right column', async () => {
+    const left = [
+      'Layout matters for retrieval because a',
+      'chunk that interleaves two columns says',
+      'nothing a reader could ever have read.',
+      'Each column is its own flow of text.',
+    ];
+    const right = [
+      'The right column continues the thought',
+      'and only makes sense after the left one',
+      'has been read from its top to its foot.',
+      'Reading across mixes the two of them.',
+    ];
+    const text = await extract([
+      ['Reading Order in Two-Column Pages', 220, 760],
+      ...left.map((s, k): Run => [s, 50, 720 - k * 12]),
+      ...right.map((s, k): Run => [s, 320, 720 - k * 12]),
+    ]);
+    expect(text).toBe(['Reading Order in Two-Column Pages', '', ...left, ...right].join('\n'));
+  });
+
+  test('a table comes out as a Markdown table', async () => {
+    const rows: Array<[string, string, string]> = [
+      ['Plan', 'Seats', 'Price'],
+      ['Starter', '5', '$10'],
+      ['Team', '25', '$45'],
+      ['Business', '100', '$160'],
+    ];
+    const text = await extract([
+      ['Pricing', 50, 760],
+      ...rows.flatMap(([a, b, c], k): Run[] => [
+        [a, 50, 730 - k * 14],
+        [b, 200, 730 - k * 14],
+        [c, 350, 730 - k * 14],
+      ]),
+    ]);
+    expect(text).toBe(
+      [
+        'Pricing',
+        '',
+        '| Plan | Seats | Price |',
+        '| --- | --- | --- |',
+        '| Starter | 5 | $10 |',
+        '| Team | 25 | $45 |',
+        '| Business | 100 | $160 |',
+      ].join('\n'),
+    );
+  });
 });

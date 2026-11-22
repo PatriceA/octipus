@@ -103,6 +103,14 @@ parsing), categorisation, summarisation, and indexing into
 `purpose='image_description'`. Both populate `doc_id` so the
 ON DELETE CASCADE FK reaps the chunks with the parent.
 
+PDF text reaches the chunker already in reading order: a two- or
+three-column page is emitted column by column, and a table as a
+Markdown table ([Documents → PDF — Text Layer](DOCUMENTS.md#pdf--text-layer)).
+A Markdown table longer than one chunk — from a PDF, an `.xlsx` sheet
+or a `.docx` — is split between rows, and each piece opens with the
+table's header row and separator, so a chunk retrieved from the middle
+of a table still says what its columns are.
+
 ### Manual indexing
 
 - **Knowledge tool** — any agent with the `knowledge` tool can call

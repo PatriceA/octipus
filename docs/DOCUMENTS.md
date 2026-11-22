@@ -142,6 +142,33 @@ Three pillars: scale, security, support.
 
 **Failure handling.** Structured extractors fail loud — a corrupted DOCX, an unsupported `.ppt`, or an unknown structured extension surfaces as `status: 'failed'` on the document row with the underlying error message. There is no silent fallback to reading the binary as text (which historically produced garbage that still passed the categorizer).
 
+### PDF — Text Layer
+
+A PDF with a text layer is read with `pdfjs-dist` (first 50 pages; a longer document gets a `[Truncated: …]` note so a partial index does not read as a complete one). `pdfjs` returns positioned fragments, not lines; `src/core/documents/pdf-layout.ts` rebuilds the page from their geometry, with no model and no extra dependency:
+
+- **Lines, gaps, paragraphs.** Fragments on one baseline form a line; a gap wider than about two glyphs becomes two spaces (a cell or column edge), and a vertical step well over the page's line pitch becomes a blank line.
+- **Columns, read in order.** A *column band* is a run of lines that all leave the same vertical strip empty, with text on both sides of it on at least three lines, and whose columns read as prose (lines of 25+ characters that fill most of the column). A band is emitted column by column, left to right, with a single newline between columns so a paragraph running from one column into the next stays one paragraph. A line that crosses the gutter (a title, an abstract, a figure caption, a footer) ends the band and is read in its place, so the page reads band, full-width element, band. An empty strip across the whole page (more than twice the line pitch, such as a figure) also ends a band. Two and three columns are handled; a wide word gap on one justified line is not a gutter.
+- **Tables, as Markdown.** A *table* is a run of at least three rows whose cell gaps line up, whose cells are short (median 20 characters or fewer per column), and whose cells in each column share a left, right or centre edge. The first row is the header; a right-aligned column gets `---:`; an empty cell stays empty; `|` is escaped. When rows are spaced wider than lines, a wrapped cell's second line is joined to its row. A table can sit between column bands or inside one column.
+
+```markdown
+| Item | Colour | Qty |
+| --- | --- | ---: |
+| Widget | Red | 1,200 |
+| Gadget |  | 35 |
+```
+
+Short cells against long lines is what tells a table from a two-column body: both have a persistent gutter and rows that line up. When neither reading holds, the page comes out line by line, as it did before column and table detection existed. Some cases stay line by line on purpose:
+
+- **Forms.** A label/value form (labels ending in `:`) keeps its `Label:  value` lines. A two-column grid is only read as a table when its first row has no digits and one column is mostly numbers; otherwise it is taken as a key/value list and kept as lines.
+- **Merged or spanning cells.** A header cell spanning two columns hides the gap between them, so those columns merge into one.
+- **Irregular tables.** Borderless tables whose columns do not line up, tables with long text cells (descriptions), and tables of fewer than three rows.
+- **Wrapped cells without row spacing.** When rows sit exactly one line apart, a wrapped cell's second line reads as a row of its own with empty cells.
+- **Columns with no shared baselines.** A gutter is found from lines that have text on both sides of it; if the two columns never share a baseline over three lines, the page reads line by line.
+- **Across pages.** Each page is read alone, so a table continuing onto the next page becomes two tables, the second headed by its first row.
+- **Rotated and right-to-left text**, and anything scanned: scanned pages go to OCR (below).
+
+When the extracted text is chunked for the knowledge base, a table too long for one chunk is split between rows, and every piece repeats the header row (see [RAG](RAG.md#document-uploads)).
+
 ### OCR — Vision Model
 
 Only images and PDFs are sent to the OCR model. PDFs first attempt text extraction (checking the printable character ratio); image-heavy PDFs fall back to OCR.
@@ -260,6 +287,7 @@ Status enum: `queued` | `processing` | `completed` | `failed`
 | File | Purpose |
 |------|---------|
 | `src/core/documents/processor.ts` | DocumentProcessor -- 7-step pipeline |
+| `src/core/documents/pdf-layout.ts` | PDF text layer to text: lines, column bands, tables as Markdown |
 | `src/core/documents/queue.ts` | DocumentQueue -- sequential processing over `background_jobs` rows, with events |
 | `src/core/jobs/recover.ts` | Boot sweep: interrupts `running` jobs, repairs their documents, prunes old rows |
 | `src/api/routes/documents.ts` | REST API endpoints (upload, list, detail) |
