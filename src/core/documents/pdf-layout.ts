@@ -96,6 +96,16 @@ const PARAGRAPH_GAP_RATIO = 1.6;
  */
 const MIN_GUTTER_LINES = 3;
 
+/**
+ * A gutter at least this many glyphs wide needs {@link MIN_GUTTER_LINES}; a
+ * narrower one (still over the cell-gap width) needs
+ * {@link MIN_NARROW_GUTTER_LINES}. A loose justified word space reaches about
+ * 2.5 glyphs; a LaTeX two-column gutter is about 2.2, which is why narrow
+ * gutters are not refused outright but asked for more lines.
+ */
+const WIDE_GUTTER_RATIO = 3;
+const MIN_NARROW_GUTTER_LINES = 6;
+
 /** A column region needs at least this many lines to be read as a column. */
 const MIN_COLUMN_LINES = 3;
 
@@ -349,7 +359,11 @@ function findColumnBands(lines: Line[], charWidth: number, pitch: number): Band[
   const edgeStep = pitch > 0 ? pitch * BAND_EDGE_STEP_RATIO : Number.POSITIVE_INFINITY;
   const step = (k: number) => lines[k - 1].y - lines[k].y;
 
-  const runs = followGutters(lines, minWidth, eps, edgeStep).filter((r) => r.evidence >= MIN_GUTTER_LINES);
+  // A strip only a little wider than a loose word space needs twice the
+  // evidence: three justified lines can stretch a space at the same place.
+  const runs = followGutters(lines, minWidth, eps, edgeStep).filter(
+    (r) => r.evidence >= (r.x1 - r.x0 >= charWidth * WIDE_GUTTER_RATIO ? MIN_GUTTER_LINES : MIN_NARROW_GUTTER_LINES),
+  );
   for (const run of runs) {
     // Lines below the last two-sided line belong to the band only while they
     // stay close: a short footer far below the body would otherwise be read

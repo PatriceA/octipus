@@ -226,6 +226,24 @@ describe('reconstructPageText — column bands', () => {
     ]);
   });
 
+  test('three justified lines with a wide word gap in the same place are not two columns', () => {
+    // 12pt is a loose word space at 10pt type, just over the 9pt cell-gap
+    // test; lined up on three lines it looked like a gutter.
+    const left = (k: number) => prose(`J${k}`, 37);
+    const rightPart = (k: number) => `tail ${k} ${FILLER}`.slice(0, 36);
+    const text = reconstructPageText([
+      ...[0, 1, 2].flatMap((k) => [item(left(k), 50, 700 - k * 12), item(rightPart(k), 50 + 37 * 5 + 12, 700 - k * 12)]),
+      item(prose('J3', 75), 50, 664),
+    ]);
+    expect(lines(text)).toEqual([0, 1, 2].map((k) => `${left(k)}  ${rightPart(k)}`).concat(prose('J3', 75)));
+  });
+
+  test('a narrow gutter still makes columns once it holds over six lines', () => {
+    // 11pt, about LaTeX's two-column gutter at 10pt type.
+    const text = reconstructPageText([...column('L', 50, 700, 6), ...column('R', 286, 700, 6)]);
+    expect(order(text)).toEqual(['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6']);
+  });
+
   test('two columns of short lines are neither columns nor a table', () => {
     // A list set in two columns: too short for prose, no header for a table.
     const names = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin'];
