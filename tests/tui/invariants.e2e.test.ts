@@ -19,6 +19,14 @@
  * Mouse traffic is part of the mix on the alternate screen: wheel notches
  * over the transcript and the footer, and drags that select and copy.
  *
+ * So are the chat's own items and areas: tool calls and results paired by
+ * id into a turn's group (expanded and collapsed with Ctrl+O, clicked),
+ * reasoning folded into a thinking item (a delta of a new iteration),
+ * messages typed during a turn queued above the composer (the draft is put
+ * back after each), the input-history and command pickers opened and
+ * closed, plan updates pushed by the gateway, and on a third of the seeds a
+ * terminal that shows OSC 8 links, so rows carry link sequences.
+ *
  *   TUI_FUZZ_SEEDS=500 npm run test:tui -- tests/tui/invariants   # more seeds
  *   TUI_FUZZ_SEED=17 npx vitest run tests/tui/invariants          # one seed
  *
@@ -67,9 +75,48 @@ function textFrom(rand: () => number): string {
 }
 function pick<T>(rand: () => number, items: readonly T[]): T { return items[Math.floor(rand() * items.length)] as T; }
 
-type Step = { label: string; run: (h: TuiHarness) => void; decision?: boolean; answer?: boolean };
+type Step = { label: string; run: (h: TuiHarness) => void; decision?: boolean; answer?: boolean; picker?: 'open' | 'close' };
 
-function stepFrom(rand: () => number, pending: number, agents: string[]): Step {
+let calls = 0;
+
+/** The chat's own items and areas; null when the roll is not one of them. */
+function chatStep(rand: () => number, pending: number): Step | null {
+  const roll = rand();
+  const text = () => textFrom(rand);
+  if (roll < 0.08) {
+    const id = `call-${++calls}`; const tool = pick(rand, ['shell', 'str_replace_editor', text().slice(0, 30)]); const t = text();
+    return { label: `tool call ${id}`, run: h => h.event('agent.action', { agentId: 'root', data: { type: 'cli_tool_use', id, toolName: tool, args: tool === 'str_replace_editor' ? { path: 'a.ts', old_str: t, new_str: text() } : { command: t } } }) };
+  }
+  if (roll < 0.14 && calls) {
+    const id = `call-${1 + Math.floor(rand() * calls)}`; const t = text();
+    return { label: `tool result ${id}`, run: h => h.event('agent.action', { agentId: 'root', data: { type: 'cli_tool_result', id, toolName: 'shell', output: t, isError: rand() < 0.2 } }) };
+  }
+  if (roll < 0.18) {
+    const t = text(); const iteration = 1 + Math.floor(rand() * 4);
+    return { label: `delta, iteration ${iteration}`, run: h => h.event('chat.delta', { delta: t, iteration }) };
+  }
+  if (roll < 0.21 && pending === 0) return { label: 'Ctrl+O', run: h => h.send('\x0f') };
+  if (roll < 0.24) {
+    const row = 1 + Math.floor(rand() * 10);
+    return { label: `click at 4,${row}`, run: h => h.send(`\x1b[<0;4;${row}M\x1b[<0;4;${row}m`) };
+  }
+  if (roll < 0.29 && pending === 0) {
+    const t = text().replace(/\r|\n/g, ' ').slice(0, 200) || 'x';
+    // Ctrl+U takes the draft away, the message is submitted (queued while a turn runs), the draft is typed again.
+    return { label: 'submit a message, then the draft again', run: h => { h.send('\x15'); h.send(`m ${t}\r`); h.send(DRAFT); } };
+  }
+  if (roll < 0.32 && pending === 0) {
+    const key = pick(rand, ['\x12', '\x10']); const filter = pick(rand, ['', 'e', 'zz', '世']);
+    return { label: `open ${key === '\x12' ? 'history' : 'command'} picker`, picker: 'open', run: h => { h.send(key); if (filter) h.send(filter); } };
+  }
+  if (roll < 0.34) return { label: 'plan updated', run: h => h.event('session.plan_updated', { revision: Math.floor(rand() * 9) }) };
+  return null;
+}
+
+function stepFrom(rand: () => number, pending: number, agents: string[], pickerOpen: boolean): Step {
+  if (pickerOpen) return { label: 'close picker (Esc)', picker: 'close', run: h => h.send('\x1b') };
+  const chat = rand() < 0.35 ? chatStep(rand, pending) : null;
+  if (chat) return chat;
   const roll = rand();
   const text = () => textFrom(rand);
   if (pending > 0 && roll < 0.25) return { label: 'answer decision (Esc)', run: h => h.send('\x1b'), answer: true };
@@ -144,20 +191,25 @@ describe.skipIf(process.platform === 'win32')('chat frame invariants under rando
     const rand = random(seed);
     const cols = 40 + Math.floor(rand() * 120); const rows = 12 + Math.floor(rand() * 38);
     const inline = seed % 4 === 0;
-    tui = await TuiHarness.start('src/tui-pi/index.ts', cols, rows, inline ? ['--inline'] : []);
+    // A terminal that shows OSC 8 links: transcript rows carry link sequences.
+    const links = seed % 3 === 1;
+    calls = 0;
+    tui = await TuiHarness.start('src/tui-pi/index.ts', cols, rows, inline ? ['--inline'] : [], links ? { env: { TERM_PROGRAM: 'vscode' } } : {});
     await tui.waitFor('connected');
     tui.send(DRAFT); await tui.waitFor(DRAFT);
-    const log = [`start ${cols}x${rows}${inline ? ' inline' : ''}`];
+    const log = [`start ${cols}x${rows}${inline ? ' inline' : ''}${links ? ' links' : ''}`];
     let pending = 0;
+    let pickerOpen = false;
     const agents: string[] = [];
     for (let n = 0; n < STEPS; n++) {
-      const step = stepFrom(rand, pending, agents);
+      const step = stepFrom(rand, pending, agents, pickerOpen);
       log.push(step.label);
       step.run(tui);
       if (step.decision) pending++;
       if (step.answer) pending--;
+      if (step.picker) pickerOpen = step.picker === 'open';
       await settle();
-      const broken = await violations(tui, pending > 0, inline);
+      const broken = await violations(tui, pending > 0 || pickerOpen, inline);
       if (broken.length) {
         expect.fail(`seed ${seed}, step ${n + 1} (${step.label}): ${broken.join('; ')}\nsteps: ${log.join(' → ')}\nrerun: TUI_FUZZ_SEED=${seed} npx vitest run tests/tui/invariants.e2e.test.ts\n${await tui.text()}`);
       }
