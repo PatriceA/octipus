@@ -14,6 +14,7 @@ import {
   updateContextHook,
 } from '@/core/context-hooks';
 import { getConfig } from '@/config';
+import type { ContextHooksResponse } from '@/shared/context-hooks';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
@@ -55,11 +56,12 @@ export const contextHookRoutes = new Elysia({ prefix: '/context-hooks' })
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const descriptions = Object.fromEntries(BUILTIN_HOOKS.map((b) => [`builtin:${b.builtin}`, b.description]));
     const settings = getConfig().contextHooks;
-    return {
+    const response: ContextHooksResponse = {
       enabled: settings.enabled,
       maxTokens: settings.maxTokens,
       hooks: (await listContextHooks(user.id)).map((h) => ({ ...h, description: descriptions[h.id] ?? null })),
     };
+    return response;
   }, { detail: { tags: ['context-hooks'] } })
 
   .post('/', async ({ user, principal, body, set }) => {

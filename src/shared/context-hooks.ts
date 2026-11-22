@@ -27,6 +27,29 @@ export const RECALL_DEFAULTS = {
 export const NOTE_DEFAULTS = { tokenBudget: 600 } as const;
 export const NOTES_INDEX_DEFAULTS = { limit: 15, tokenBudget: 150 } as const;
 
+/** A hook as GET /api/context-hooks lists it. */
+export interface ContextHookView {
+  /** Row id for a stored hook, `builtin:<key>` for a built-in. */
+  id: string;
+  builtin: string | null;
+  name: string;
+  kind: ContextHookKind;
+  events: ContextHookEvent[];
+  /** What the user set; a setting left out takes its default. */
+  config: Record<string, unknown>;
+  enabled: boolean;
+  /** A built-in's description; null for the user's own hooks. */
+  description: string | null;
+}
+
+export interface ContextHooksResponse {
+  /** The install switch (`contextHooks.enabled`). */
+  enabled: boolean;
+  /** The token budget all hooks of one turn share (`contextHooks.maxTokens`). */
+  maxTokens: number;
+  hooks: ContextHookView[];
+}
+
 export interface Rate { n: number; of: number }
 
 export interface ContextHookStatsHook {
