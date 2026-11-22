@@ -224,16 +224,18 @@ async function calibrationWarnings(userId: string, hookAgg: Map<string, HookAgg>
   return out;
 }
 
-/** Whether any knowledge-base row of the user's (any workspace or space), or a product doc when the hook shows them, is of a purpose the hook searches. One indexed lookup. */
+/**
+ * Whether the user has a knowledge-base row the hook would search: their own
+ * outside a space, of one of its purposes, or a product doc when it
+ * includes them (`hasReadableRows`, the read scope of a personal turn).
+ */
 async function hasSearchableRows(userId: string, config: Pick<RecallConfig, 'purposes' | 'includeProductDocs'>): Promise<boolean> {
-  const { queryRaw } = await import('@/db/postgres');
-  const { PRODUCT_DOCS_SOURCE } = await import('@/core/rag/knowledge-scope');
-  const docs = config.includeProductDocs ? ` OR (user_id IS NULL AND metadata->>'source' = $3)` : '';
-  const res = await queryRaw(
-    `SELECT EXISTS (SELECT 1 FROM embeddings WHERE (user_id = $1 AND purpose = ANY($2::text[]))${docs}) AS found`,
-    config.includeProductDocs ? [userId, config.purposes, PRODUCT_DOCS_SOURCE] : [userId, config.purposes],
-  );
-  return Boolean(res.rows[0]?.found);
+  const { getEmbeddingService } = await import('@/core/rag/embeddings');
+  const { agentKnowledgeScope } = await import('@/core/rag/knowledge-scope');
+  return getEmbeddingService().hasReadableRows(agentKnowledgeScope({ userId, workspaceId: null }), {
+    purposes: config.purposes,
+    excludeProductDocs: !config.includeProductDocs,
+  });
 }
 
 /**

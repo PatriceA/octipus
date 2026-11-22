@@ -1180,6 +1180,24 @@ export class EmbeddingService {
   }
 
   /**
+   * Whether `knowledge` holds any row it may read of one of `purposes`
+   * (the product docs only unless excluded): one indexed lookup, no content
+   * returned. The Recall page's calibration asks it before saying that
+   * nothing clears a recall hook's bar.
+   */
+  async hasReadableRows(knowledge: KnowledgeScope, options: { purposes: readonly EmbeddingPurpose[]; excludeProductDocs: boolean }): Promise<boolean> {
+    if (!options.purposes.length) return false;
+    const productDocsFilter = options.excludeProductDocs ? sql`AND metadata->>'source' IS DISTINCT FROM ${DOCS_SOURCE}` : sql``;
+    const result = await getDb().execute(sql`
+      SELECT 1 AS found FROM embeddings
+      WHERE ${scopePredicate(knowledge, 'read')}
+        AND purpose IN (${sql.join(options.purposes.map((p) => sql`${p}`), sql`, `)}) ${productDocsFilter}
+      LIMIT 1
+    `);
+    return rows(result).length > 0;
+  }
+
+  /**
    * Record that these chunks were checked and are still true.
    *
    * Deliberately NOT on the `recordAccess` path: reading a stale fact does

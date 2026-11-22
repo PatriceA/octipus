@@ -402,8 +402,9 @@ sweep's button, or by hand) starts a new sample. No warning is given under
 30 such runs: a day spent on one project looks like a wrong bar. "Almost
 never" is not given when the user has no knowledge-base row of a purpose the
 hook searches (nor a product doc, when it includes them): then nothing can
-clear any bar. That check looks at the user's own rows in any workspace or
-space, not at rows other members wrote into a space.
+clear any bar. That check reads what a personal turn's recall may read: the
+user's own rows outside a space (and the product docs when the hook
+includes them), not a space's rows.
 
 The warning points at the sweep. The sweep runs with Knowledge recall's
 settings and its button sets that hook, so for another recall hook the
