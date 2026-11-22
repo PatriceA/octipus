@@ -104,6 +104,12 @@ export interface WithoutRepeatedContext {
   leftOut: string[];
   /** Where `REPEATED_CONTEXT_NOTE` starts in `text`; -1 when nothing was left out. */
   noteAt: number;
+  /**
+   * The groups some but not all of whose parts went: the group as it stood
+   * and as it is sent (both trimmed), and how many of its parts went. For the
+   * prompt composition, which would otherwise count the whole group as sent.
+   */
+  shortened: Array<{ from: string; to: string; omittedParts: number; parts: number }>;
 }
 
 /** `omitRepeatedContext`, also naming what it left out. */
@@ -112,7 +118,7 @@ export function withoutRepeatedContext(
   blocks: readonly unknown[] | undefined,
   history: readonly AgentMessage[],
 ): WithoutRepeatedContext {
-  const unchanged: WithoutRepeatedContext = { text: promptContext, omitted: [], fences: [], leftOut: [], noteAt: -1 };
+  const unchanged: WithoutRepeatedContext = { text: promptContext, omitted: [], fences: [], leftOut: [], noteAt: -1, shortened: [] };
   if (!promptContext || !blocks?.length) return unchanged;
   const earlier = userContents(history);
   if (!earlier.length) return unchanged;
@@ -120,6 +126,7 @@ export function withoutRepeatedContext(
   const omitted: string[] = [];
   const fences: OmittedFence[] = [];
   const leftOut: string[] = [];
+  const shortened: WithoutRepeatedContext['shortened'] = [];
   const inView = (block: string, part: boolean) =>
     block.length >= MIN_BLOCK_CHARS && out.includes(block) && earlier.some((content) => holdsBlock(content, block, part));
   for (const raw of blocks) {
@@ -147,12 +154,15 @@ export function withoutRepeatedContext(
       // Nothing left inside: the fence goes too.
       out = out.replace(new RegExp(`${escapeRegExp(raw.head.trim())}\\s*${escapeRegExp(raw.tail.trim())}`), '');
       leftOut.push(whole);
+    } else {
+      const sent = raw.parts.filter((p) => !went.includes(p.trim()));
+      shortened.push({ from: whole, to: `${raw.head}${sent.join('')}${raw.tail}`.trim(), omittedParts: went.length, parts: raw.parts.length });
     }
   }
   if (!omitted.length) return unchanged;
   const rest = out.replace(/\n{3,}/g, '\n\n').trim();
   const text = rest ? `${rest}\n\n${REPEATED_CONTEXT_NOTE}` : REPEATED_CONTEXT_NOTE;
-  return { text, omitted, fences, leftOut, noteAt: text.length - REPEATED_CONTEXT_NOTE.length };
+  return { text, omitted, fences, leftOut, noteAt: text.length - REPEATED_CONTEXT_NOTE.length, shortened };
 }
 
 /** This turn's user message as sent, and the blocks left out of it. */

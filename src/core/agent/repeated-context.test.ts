@@ -125,8 +125,9 @@ describe('a group repeated per part (the recall block)', () => {
     expect(sent.text.endsWith(REPEATED_CONTEXT_NOTE)).toBe(true);
     expect(sent.omitted).toEqual([pricing.trim()]);
     expect(sent.fences).toEqual([{ head, tail, parts: [pricing.trim()] }]);
-    // The hook's block is still partly there: the composition keeps counting it.
+    // The hook's block is still partly there: not left out whole, but counted at what is sent.
     expect(sent.leftOut).toEqual([]);
+    expect(sent.shortened).toEqual([{ from: block(pricing, hosting).trim(), to: block(hosting).trim(), omittedParts: 1, parts: 2 }]);
   });
 
   test('every passage in view: the fence goes too, no empty shell', () => {

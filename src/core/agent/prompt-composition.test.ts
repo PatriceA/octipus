@@ -202,6 +202,19 @@ describe('measureRootRequest', () => {
     expect(turn).toEqual(expect.arrayContaining([['Current date & time', undefined], ['Not repeated (already in the conversation)', 'Long-term memory']]));
   });
 
+  test('a recall block sent in part is counted at what was sent, with a note', () => {
+    const whole = '\n\n<recalled-knowledge>\n' + 'a'.repeat(400) + '\n' + 'b'.repeat(400) + '\n</recalled-knowledge>\n';
+    const sentPart = '<recalled-knowledge>\n' + 'b'.repeat(400) + '\n</recalled-knowledge>';
+    const c = measureRootRequest({
+      staged: { parts: [promptPart('volatile', 'turn', 'Context hook: Knowledge recall', whole)], role: 'general', model: 'm' },
+      tools: [], history: [], userText: 'q',
+      shortened: [{ from: whole.trim(), to: sentPart, omittedParts: 1, parts: 2 }],
+    });
+    const recall = c.sections.find((s) => s.label === 'Context hook: Knowledge recall');
+    expect(recall).toMatchObject({ chars: sentPart.length, note: '1 of 2 not repeated (already in the conversation)' });
+    expect(c.sections.some((s) => s.label === 'Not repeated (already in the conversation)')).toBe(true);
+  });
+
   test('the stored form keeps sizes and drops every text', () => {
     const stored = withoutText(measure());
     expect(JSON.stringify(stored)).not.toContain('rrrr');
