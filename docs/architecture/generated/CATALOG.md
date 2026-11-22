@@ -939,7 +939,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 2 |
 | `skills` | `core` | 8 |
-| `skills` | `db` | 21 |
+| `skills` | `db` | 22 |
 | `skills` | `models` | 2 |
 | `skills` | `plugins` | 2 |
 | `skills` | `security` | 4 |

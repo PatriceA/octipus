@@ -44,8 +44,12 @@ export interface SkillBundleExport {
   note: string;
 }
 
-/** Where an import comes from: a pasted or uploaded bundle, an agentskills.io SKILL.md, or an https URL (admins). */
-export type SkillImportSourceKind = 'bundle' | 'skill_md' | 'url';
+/**
+ * Where an import comes from: a pasted or uploaded bundle, an export from
+ * before bundles (`legacy_export`), an agentskills.io SKILL.md (or several, as
+ * the markdown export writes them), or an https URL (admins).
+ */
+export type SkillImportSourceKind = 'bundle' | 'legacy_export' | 'skill_md' | 'url';
 
 /** A request's source: exactly one of these. */
 export interface SkillImportSource {

@@ -54,6 +54,9 @@ discover from, and Octipus ships none.
 - **Limits:** at most 1 MiB, 50 skills, unique names (case-insensitive); a
   name of at most 200 characters on one line, a description of at most 2,000,
   a body of at most 256 KiB, and at most 100 items of 2,000 characters per list.
+  No text may hold a control character other than tab and line breaks (a
+  name or category not even those): NUL, escape sequences and the like are
+  refused at preview, naming the field.
 - **Versions:** an Octipus reads version 1 and refuses a newer version with a
   message to upgrade.
 
@@ -109,7 +112,13 @@ overwritten silently. For each one, choose:
   read-only and cannot be replaced.
 
 An install that leaves a collision without a choice is refused with `409`,
-and nothing is written.
+and nothing is written. Collisions are what **you** can see: an
+administrator's import no longer matches, or overwrites, another user's
+private skill by name (the removed `POST /api/skills/import` did).
+
+Two installs by the same person at once are serialised, and the names to
+create are checked again inside the transaction: the second is refused with
+`409` ("created since the preview") rather than creating the skills twice.
 
 ### What gets written
 
@@ -122,7 +131,9 @@ and nothing is written.
   cleared when its name or description changes.
 - Every skill written is audited: `settings_changed` on resource `skill`, with
   `op` `skill_imported` or `skill_replaced_by_import`, the source (and URL),
-  the content hash, the signature status, publisher and key id.
+  the content hash, the signature status, publisher and key id. The audit rows
+  are written in the same transaction as the skills: if they cannot be
+  written, nothing is.
 
 ### Trust settings
 
@@ -158,8 +169,25 @@ mounts skill folders (`src/skills/external-loader.ts`): `name` and
 `description` are required in the frontmatter; `category` is read; the body
 becomes the skill's content. Other frontmatter (`allowed-tools`, `license`,
 `metadata`, …) is left out and named in the preview: an imported skill grants
-no tools. A SKILL.md has no signature, so it imports as unsigned, and
-`requireSignature` refuses it.
+no tools. A nested frontmatter value (a list or a mapping) is never read, only
+named, so YAML anchors cannot blow up its size. A SKILL.md has no signature,
+so it imports as unsigned, and `requireSignature` refuses it.
+
+## Older exports
+
+`GET /api/skills/export` and `GET /api/skills/:id/export` still write plain,
+unsigned files, and both import:
+
+- **Their JSON** (`{ "skills": [...] }`, or one skill): paste or upload it as
+  a bundle. It shows as `legacy_export`, unsigned (so `requireSignature`
+  refuses it). Each skill goes through the same strict schema and limits; a
+  field the bundle does not carry (an id, an owner, `isSystem`, …, as older
+  exports may hold) is dropped and named in the preview, never installed.
+- **Their markdown** (`format=markdown`, several skills in one file): paste or
+  upload it as a SKILL.md; every skill in it is read.
+
+Collisions, trust settings, the preview and the audit are the same as for a
+bundle.
 
 How the two relate: a `SKILL.md` folder is how a skill lives on disk, mounted
 read-only with its supporting files. A bundle is how a database skill
@@ -176,4 +204,6 @@ to hand someone skill text with a verifiable publisher, send a signed bundle.
 | POST | `/api/skills/exchange/install` | The same source, plus `contentHash` (from the preview) and `decisions: [{ name, action: "create" \| "skip" \| "rename" (newName) \| "replace" (skillId) }]`. `{ created, replaced, skipped, contentHash, signature }`. `400` refused by the trust settings or a bad decision, `403` replacing what you may not (or a token without `api:write`), `409` a collision without a decision, a taken new name, or a source that changed since the preview. |
 
 These replace `POST /api/skills/import`, which wrote unsigned skills with no
-preview, no trust check and no audit.
+preview, no trust check and no audit. Its inputs still import: the JSON
+`skills` array as `{ bundle: JSON.stringify({ skills }) }`, its markdown as
+`{ skillMd }` ([Older exports](#older-exports)).

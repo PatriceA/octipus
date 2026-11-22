@@ -13,8 +13,11 @@
  * signature. Every skill written is audited.
  */
 import { randomUUID } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { skillRepository } from '@/db/repositories/skill-repository';
+import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
+import { type SkillExec, skillRepository } from '@/db/repositories/skill-repository';
+import { auditLog } from '@/db/schema/audit';
 import { skills } from '@/db/schema/skills';
 import type {
   SkillImportCollision,
@@ -30,6 +33,7 @@ import {
   checkBundleTrust,
   MAX_BUNDLE_BYTES,
   type ParsedImport,
+  parseImportJson,
   parseSkillBundle,
   parseSkillMdImport,
   SkillBundleError,
@@ -63,8 +67,9 @@ async function readSource(source: SkillImportSource, actor: ImportActor): Promis
   const given = (['bundle', 'skillMd', 'url'] as const).filter((k) => source[k] !== undefined);
   if (given.length !== 1) throw new SkillBundleError('Give exactly one of bundle (the JSON text), skillMd (a SKILL.md) or url (an https bundle)');
   if (source.bundle !== undefined) {
-    const parsed = parseSkillBundle(source.bundle);
-    return { kind: 'bundle', url: null, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }) };
+    // A bundle, or the JSON of an export from before bundles (unsigned).
+    const { legacy, parsed } = parseImportJson(source.bundle);
+    return { kind: legacy ? 'legacy_export' : 'bundle', url: null, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }) };
   }
   if (source.skillMd !== undefined) {
     const parsed = parseSkillMdImport(source.skillMd);
@@ -72,6 +77,7 @@ async function readSource(source: SkillImportSource, actor: ImportActor): Promis
   }
   const url = source.url as string;
   if (!actor.admin) throw new SkillBundleError('Only an administrator imports skills from a URL; download the bundle and upload it instead', 403);
+  coreLogger.info({ url, userId: actor.userId }, 'Skill import: fetching a bundle from a URL');
   const { downloadHttps, RemoteFetchError } = await import('@/plugins/packages/remote');
   let bytes: Buffer;
   try {
@@ -178,11 +184,17 @@ function plan(parsed: ParsedImport, decisions: readonly SkillImportDecision[], e
 /**
  * Install an import on the caller's confirmation: the source read and checked
  * again, the content hash the preview showed required, every decision checked,
- * then every write in one transaction. A created skill is the caller's own
- * personal skill (never system, never an organization's), with no embedding
- * yet — the backfill embeds it as it does a skill made on the Skills page; a
- * replaced skill keeps its id, owner and assignments, and its embedding is
- * cleared when its name or description changes (skillRepository.update).
+ * then every write — and its audit rows — in one transaction. A created skill
+ * is the caller's own personal skill (never system, never an organization's),
+ * with no embedding yet — the backfill embeds it as it does a skill made on the
+ * Skills page; a replaced skill keeps its id, owner and assignments, and its
+ * embedding is cleared when its name or description changes
+ * (skillRepository.update).
+ *
+ * Two installs by the same caller at once are serialised by an advisory lock
+ * on the caller, and the names to create are checked again inside the
+ * transaction, so the second finds the first's skills (409) instead of
+ * creating them twice: names have no unique constraint.
  */
 export async function installImport(
   source: SkillImportSource,
@@ -197,10 +209,20 @@ export async function installImport(
   if (read.trust.refusal !== null) throw new SkillBundleError(read.trust.refusal);
   const plans = plan(read.parsed, decisions, await collisions(actor));
   const owner = actor.userId === 'system' ? null : actor.userId;
+  // Built before the transaction: both read through the shared connection.
+  const visible = await skillRepository.visibleWhere(owner);
+  const hidden = owner === null ? new Set<string>() : await hiddenSkillRepository.ids(owner);
   const now = new Date();
   const result: SkillImportResult = { created: [], replaced: [], skipped: [], contentHash: read.parsed.contentHash, signature: read.trust.view };
 
   await getDb().transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`skill-import:${owner ?? 'system'}`}))`);
+    const creating = plans.flatMap((p) => (p.kind === 'create' ? [p.name] : []));
+    // What the caller sees now, minus what they removed from their catalog.
+    const taken = (await skillRepository.findNamed(creating, visible, tx)).filter((r) => !hidden.has(r.id)).map((r) => r.name);
+    if (taken.length > 0) {
+      throw new SkillBundleError(`${taken.map((n) => `"${n}"`).join(', ')} ${taken.length === 1 ? 'is' : 'are'} taken by a skill created since the preview; preview the import again`, 409);
+    }
     for (const p of plans) {
       const skill = read.parsed.skills[p.index];
       if (p.kind === 'skip') {
@@ -227,15 +249,16 @@ export async function installImport(
         result.replaced.push({ id: p.target.id, name: skill.name });
       }
     }
+    await auditImport(tx, read, result, actor);
   });
 
-  await auditImport(read, result, actor);
+  coreLogger.info({ created: result.created.length, replaced: result.replaced.length, skipped: result.skipped.length, source: read.kind, signature: read.trust.view.status }, 'Skill bundle imported');
   return result;
 }
 
-/** One audit row per skill written: what, from where, signed by whom, by whom. */
-async function auditImport(read: ReadSource, result: SkillImportResult, actor: ImportActor): Promise<void> {
-  const { auditRepository } = await import('@/db/repositories/audit-repository');
+
+/** One audit row per skill written, in the install's transaction: what, from where, signed by whom, by whom. */
+async function auditImport(tx: SkillExec, read: ReadSource, result: SkillImportResult, actor: ImportActor): Promise<void> {
   const common = {
     source: read.kind,
     ...(read.url ? { url: read.url } : {}),
@@ -249,11 +272,9 @@ async function auditImport(read: ReadSource, result: SkillImportResult, actor: I
     ...result.created.map((s) => ({ op: 'skill_imported', ...s })),
     ...result.replaced.map((s) => ({ op: 'skill_replaced_by_import', ...s })),
   ];
-  for (const row of rows) {
-    await auditRepository.log({
-      userId: actor.userId, action: 'settings_changed', resourceType: 'skill', resourceId: row.id,
-      details: { op: row.op, name: row.name, ...common },
-    });
-  }
-  coreLogger.info({ created: result.created.length, replaced: result.replaced.length, skipped: result.skipped.length, source: read.kind, signature: read.trust.view.status }, 'Skill bundle imported');
+  if (rows.length === 0) return;
+  await tx.insert(auditLog).values(rows.map((row) => ({
+    userId: actor.userId, action: 'settings_changed' as const, resourceType: 'skill', resourceId: row.id,
+    details: { op: row.op, name: row.name, ...common },
+  })));
 }

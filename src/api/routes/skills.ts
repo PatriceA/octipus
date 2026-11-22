@@ -114,7 +114,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     { detail: { tags: ['skills'] } }
   )
 
-  // ---- Export / Import endpoints (must be before /:id) ----
+  // ---- Plain exports (must be before /:id): JSON or markdown, unsigned. Both
+  // import through /exchange/preview and /exchange/install below
+  // (docs/SKILL-EXCHANGE.md#older-exports). ----
 
   .get(
     '/export',

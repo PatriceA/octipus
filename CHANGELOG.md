@@ -25,10 +25,21 @@ labels reflect blast radius, not contract guarantees.
     unsigned bundle (or SKILL.md) or an unknown key is refused; a URL import
     needs a trusted signature. A bundle naming a privileged field
     (`isSystem`, `userId`, `alwaysInject`, `triggers`, …) is refused.
-  - **Removed:** `POST /api/skills/import`, which wrote unsigned skills without
-    a preview, a trust check or an audit row and overwrote by name on
-    `overwrite: true`. Use the exchange routes. `GET /api/skills/export` and
-    `GET /api/skills/:id/export` are unchanged.
+  - **Breaking — removed `POST /api/skills/import`.** It wrote unsigned skills
+    without a preview, a trust check or an audit row, and overwrote by name on
+    `overwrite: true`. Replaced by `POST /api/skills/exchange/preview` and
+    `/install`, which also read what the unchanged `GET /api/skills/export` and
+    `GET /api/skills/:id/export` write: their JSON (as `bundle`; unsigned,
+    fields other than a skill's content dropped and named) and their
+    multi-skill markdown (as `skillMd`). What changed: a name collision needs
+    an explicit skip, rename or replace instead of `overwrite`; collisions
+    follow the caller's own visibility, so an administrator can no longer
+    overwrite another user's private skill by name; with
+    `plugins.requireSignature` these unsigned files are refused.
+  - Text fields refuse control characters other than tab and line breaks
+    (NUL used to pass and fail at the database). Frontmatter values that are
+    lists or mappings are no longer turned into strings when a SKILL.md is
+    mounted or imported (nested YAML aliases made that exponential).
   - Not built: a hosted registry, browsing community skills, ratings,
     automatic updates.
 

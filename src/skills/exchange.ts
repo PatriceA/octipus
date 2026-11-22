@@ -69,8 +69,16 @@ export class SkillBundleError extends Error {
 }
 
 const NO_CONTROL = /^[^\u0000-\u001f\u007f]*$/;
+/**
+ * Text may hold tabs and line breaks, and no other C0 control character or
+ * DEL: they have no place in prompt text, and Postgres refuses NUL in text
+ * and jsonb, so letting one through only moved the refusal to a 500 at install.
+ */
+const TEXT_CONTROL = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]*$/;
+const TEXT_CONTROL_MESSAGE = 'must not contain control characters other than tab and line breaks';
 const nonBlank = (s: string) => s.trim().length > 0;
-const list = z.array(z.string().max(MAX_LIST_ITEM_CHARS)).max(MAX_LIST_ITEMS);
+const text = (max: number) => z.string().max(max).refine((s) => TEXT_CONTROL.test(s), TEXT_CONTROL_MESSAGE);
+const list = z.array(text(MAX_LIST_ITEM_CHARS)).max(MAX_LIST_ITEMS);
 
 /** A skill name as the import accepts one (a bundle's, or a rename). */
 export const skillNameSchema = z.string().min(1).max(MAX_SKILL_NAME_CHARS)
@@ -79,8 +87,8 @@ export const skillNameSchema = z.string().min(1).max(MAX_SKILL_NAME_CHARS)
 const bundleSkillSchema = z.strictObject({
   name: skillNameSchema,
   category: z.string().min(1).max(MAX_CATEGORY_CHARS).refine(nonBlank, 'must not be blank').refine((s) => NO_CONTROL.test(s), 'must be one line without control characters'),
-  description: z.string().min(1).max(MAX_DESCRIPTION_CHARS).refine(nonBlank, 'must not be blank'),
-  content: z.string().max(MAX_SKILL_CONTENT_CHARS),
+  description: text(MAX_DESCRIPTION_CHARS).refine(nonBlank, 'must not be blank'),
+  content: text(MAX_SKILL_CONTENT_CHARS),
   principles: list,
   bestPractices: list,
   antiPatterns: list,
@@ -210,6 +218,10 @@ export function parseSkillBundle(text: string): ParsedImport {
   } catch (err) {
     throw new SkillBundleError(`The bundle is not valid JSON: ${(err as Error).message}`);
   }
+  return parseBundleJson(json);
+}
+
+function parseBundleJson(json: unknown): ParsedImport {
   const result = bundleSchema.safeParse(json);
   if (!result.success) throw new SkillBundleError(`Not a valid skill bundle: ${describeIssues(result.error)}`);
   const bundle = result.data;
@@ -223,21 +235,30 @@ export function parseSkillBundle(text: string): ParsedImport {
 
 /** Frontmatter fields of a SKILL.md the import reads; any other is reported as left out. */
 const SKILL_MD_FIELDS = new Set(['name', 'description', 'category']);
-
 /**
- * Read an agentskills.io SKILL.md (frontmatter + body) with the parser
- * mounted skills use. It has no signature: it imports as unsigned, so
- * `plugins.requireSignature` refuses it. Frontmatter fields Octipus does not
- * store (`allowed-tools`, `license`, `metadata`, …) are left out, and named
- * in the warnings — an imported skill grants no tools.
+ * Where `GET /api/skills/export?format=markdown` starts the next skill: its
+ * separator (`skillsToMarkdown` joins with `\n---\n\n`) right before a
+ * frontmatter that opens with `name:`, as `skillToMarkdown` writes it. A
+ * horizontal rule inside a body, or a frontmatter's closing line before an
+ * empty body, is not followed by one, so neither splits a skill.
  */
-export function parseSkillMdImport(md: string): ParsedImport {
-  checkSize(md, 'SKILL.md');
-  // Parsed once: the skill and its frontmatter keys come from the same read.
-  const parsedMd = parseSkillMd(md);
-  if (!parsedMd) throw new SkillBundleError('The SKILL.md has no name or no description in its frontmatter (both are required by the agentskills.io spec)');
-  const portable = parsedMd.skill;
-  const skill = toBundleSkill({
+const LEGACY_MARKDOWN_SEPARATOR = /\n---\n\n(?=---\nname:)/;
+
+/** The fields a portable skill (an old export, a SKILL.md) may have before its defaults are filled in. */
+interface LooseSkill {
+  name: string;
+  category?: string;
+  description: string;
+  content?: string;
+  principles?: string[];
+  bestPractices?: string[];
+  antiPatterns?: string[];
+  frameworks?: string[];
+}
+
+/** A skill from a portable object, its absent fields defaulted, through the strict schema. */
+function strictSkill(portable: LooseSkill, where: string): BundleSkill {
+  const result = bundleSkillSchema.safeParse({
     name: portable.name,
     category: portable.category ?? 'general',
     description: portable.description,
@@ -247,13 +268,96 @@ export function parseSkillMdImport(md: string): ParsedImport {
     antiPatterns: portable.antiPatterns ?? [],
     frameworks: portable.frameworks ?? [],
   });
-  const result = bundleSkillSchema.safeParse(skill);
-  if (!result.success) throw new SkillBundleError(`Not a valid skill: ${describeIssues(result.error)}`);
-  const ignored = parsedMd.frontmatterKeys.filter((key) => !SKILL_MD_FIELDS.has(key));
-  const warnings = ignored.length > 0
-    ? [`Frontmatter ${ignored.map((k) => `"${k}"`).join(', ')} not imported: Octipus stores a skill's name, category, description and body only, and an imported skill grants no tools`]
+  if (!result.success) throw new SkillBundleError(`Not a valid skill (${where}): ${describeIssues(result.error)}`);
+  return canonicalSkill(result.data);
+}
+
+/** The parsed skills of an unsigned import, with the checks every import gets: count, unique names, the content hash. */
+function unsignedImport(skills: BundleSkill[], warnings: string[]): ParsedImport {
+  if (skills.length === 0) throw new SkillBundleError('There is no skill in it');
+  refuseDuplicateNames(skills);
+  return { skills, contentHash: bundleContentHash(skills), signature: null, warnings };
+}
+
+function tooMany(count: number): SkillBundleError {
+  return new SkillBundleError(`At most ${MAX_BUNDLE_SKILLS} skills are imported at once; this has ${count}`);
+}
+
+/**
+ * Read an agentskills.io SKILL.md (frontmatter + body) with the parser
+ * mounted skills use — or several, as `GET /api/skills/export?format=markdown`
+ * writes them. Each is parsed once. It has no signature: it imports as
+ * unsigned, so `plugins.requireSignature` refuses it. Frontmatter fields
+ * Octipus does not store (`allowed-tools`, `license`, `metadata`, …) are left
+ * out, and named in the warnings — an imported skill grants no tools.
+ */
+export function parseSkillMdImport(md: string): ParsedImport {
+  checkSize(md, 'SKILL.md');
+  const chunks = md.split(LEGACY_MARKDOWN_SEPARATOR);
+  if (chunks.length > MAX_BUNDLE_SKILLS) throw tooMany(chunks.length);
+  const ignored = new Set<string>();
+  const skills = chunks.map((chunk, i) => {
+    const which = chunks.length === 1 ? 'The SKILL.md' : `Skill ${i + 1}`;
+    const parsed = parseSkillMd(chunk);
+    if (!parsed) throw new SkillBundleError(`${which} has no name or no description in its frontmatter (both are required by the agentskills.io spec)`);
+    for (const key of parsed.frontmatterKeys) if (!SKILL_MD_FIELDS.has(key)) ignored.add(key);
+    return strictSkill(parsed.skill, which.toLowerCase());
+  });
+  const warnings = ignored.size > 0
+    ? [`Frontmatter ${[...ignored].map((k) => `"${k}"`).join(', ')} not imported: Octipus stores a skill's name, category, description and body only, and an imported skill grants no tools`]
     : [];
-  return { skills: [skill], contentHash: bundleContentHash([skill]), signature: null, warnings };
+  return unsignedImport(skills, warnings);
+}
+
+/** The fields an old export may carry that the import keeps. */
+const LEGACY_FIELDS = new Set<string>(BUNDLE_SKILL_FIELDS);
+
+/**
+ * Read what `GET /api/skills/export` (`{ skills: [...] }`) or
+ * `GET /api/skills/:id/export` (one skill) writes — the JSON from before
+ * bundles: no hash, no signature, so it imports as unsigned. Its skills go
+ * through the same strict per-skill schema and limits; any other field (an
+ * id, an owner, a flag an older export carried) is dropped and named in the
+ * warnings — never installed.
+ */
+export function parseLegacyExport(json: unknown): ParsedImport {
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) throw new SkillBundleError('Not a skill bundle or an export of skills');
+  const doc = json as Record<string, unknown>;
+  const many = Array.isArray(doc.skills);
+  const items: unknown[] = many ? doc.skills as unknown[] : [doc];
+  if (items.length > MAX_BUNDLE_SKILLS) throw tooMany(items.length);
+  const dropped = new Set<string>();
+  if (many) for (const key of Object.keys(doc)) if (key !== 'skills') dropped.add(key);
+  const skills = items.map((item, i) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new SkillBundleError(`skills[${i}] is not a skill`);
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(item)) {
+      if (LEGACY_FIELDS.has(key)) kept[key] = value;
+      else dropped.add(key);
+    }
+    return strictSkill(kept as unknown as LooseSkill, many ? `skills[${i}]` : 'the skill');
+  });
+  const warnings = ['An export from before skill bundles: it has no content hash or signature, so it imports as unsigned'];
+  if (dropped.size > 0) {
+    warnings.push(`Not imported: ${[...dropped].map((k) => `"${k}"`).join(', ')} — an import keeps only ${BUNDLE_SKILL_FIELDS.join(', ')}; ids, owners, trust flags, triggers, tool grants and usage data are never installed`);
+  }
+  return unsignedImport(skills, warnings);
+}
+
+/**
+ * Read pasted or uploaded JSON: a skill bundle when it has `format`, else an
+ * export from before bundles (`parseLegacyExport`).
+ */
+export function parseImportJson(text: string): { legacy: boolean; parsed: ParsedImport } {
+  checkSize(text, 'bundle');
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    throw new SkillBundleError(`The bundle is not valid JSON: ${(err as Error).message}`);
+  }
+  const isBundle = typeof json === 'object' && json !== null && !Array.isArray(json) && 'format' in json;
+  return isBundle ? { legacy: false, parsed: parseBundleJson(json) } : { legacy: true, parsed: parseLegacyExport(json) };
 }
 
 /** What the trust settings say of an import: the signature check, and the refusal when they do not accept it. */

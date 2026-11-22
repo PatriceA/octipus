@@ -8,13 +8,14 @@ import {
   checkBundleTrust,
   MAX_BUNDLE_BYTES,
   MAX_BUNDLE_SKILLS,
+  parseImportJson,
   parseSkillBundle,
   parseSkillMdImport,
   signBundle,
   SkillBundleError,
   toBundleSkill,
 } from './exchange';
-import { parseFrontmatter } from './markdown';
+import { parseFrontmatter, skillsToMarkdown, toPortableSkill } from './markdown';
 
 const skill = (over: Partial<BundleSkill> = {}): BundleSkill => ({
   name: 'Release notes',
@@ -244,6 +245,12 @@ describe('SKILL.md interop', () => {
     const parsed = parseSkillMdImport('---\nname: x\ndescription: y\n---\nbody');
     expect(checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }).refusal).toMatch(/requireSignature/);
   });
+
+  test('horizontal rules in a SKILL.md body do not split it into several skills', () => {
+    const parsed = parseSkillMdImport('---\nname: x\ndescription: y\n---\none\n\n---\n\ntwo\n\n---\n\nthree');
+    expect(parsed.skills).toHaveLength(1);
+    expect(parsed.skills[0].content).toContain('three');
+  });
 });
 
 /** A few hundred bytes of nested YAML anchors: each level references the one before nine times. */
@@ -270,5 +277,72 @@ describe('frontmatter with nested aliases', () => {
 
   test('a nested name or description is not a name or description', () => {
     expect(refusal(() => parseSkillMdImport('---\nname: [a, b]\ndescription: y\n---\nbody'))).toMatch(/no name or no description/);
+  });
+});
+
+describe('control characters', () => {
+  const bundleWith = (over: Partial<BundleSkill>) => text(buildBundle([skill(over)]));
+
+  test.each([
+    ['description', { description: 'a\u0000b' }],
+    ['content', { content: 'body\u0000' }],
+    ['principles', { principles: ['ok', 'bad\u0000'] }],
+    ['frameworks', { frameworks: ['esc\u001b[31m'] }],
+    ['content', { content: 'bell\u0007' }],
+  ])('refuses one in %s, naming the field', (field, over) => {
+    const message = refusal(() => parseSkillBundle(bundleWith(over)));
+    expect(message).toContain(field);
+    expect(message).toMatch(/control characters other than tab and line breaks/);
+  });
+
+  test('keeps tabs and line breaks', () => {
+    expect(parseSkillBundle(bundleWith({ content: 'a\tb\r\nc\n' })).skills[0].content).toBe('a\tb\r\nc\n');
+  });
+
+  test('refuses NUL in a SKILL.md body too', () => {
+    expect(refusal(() => parseSkillMdImport('---\nname: x\ndescription: y\n---\nbody\u0000'))).toMatch(/content: must not contain control characters/);
+  });
+});
+
+describe('older exports', () => {
+  const row = { id: 'skill-1', userId: 'u', isSystem: true, createdAt: new Date(), ...skill() };
+
+  test('the JSON of GET /api/skills/export imports unsigned, privileged fields dropped and named', () => {
+    const legacy = { skills: [toPortableSkill(row as never), { name: 'Other', description: 'd', id: 'x', isSystem: true, userId: 'bob', alwaysInject: true }] };
+    const { legacy: isLegacy, parsed } = parseImportJson(text(legacy));
+    expect(isLegacy).toBe(true);
+    expect(parsed.signature).toBeNull();
+    expect(parsed.skills[0]).toEqual(skill());
+    expect(parsed.skills[1]).toEqual({ name: 'Other', category: 'general', description: 'd', content: '', principles: [], bestPractices: [], antiPatterns: [], frameworks: [] });
+    expect(parsed.contentHash).toBe(bundleContentHash(parsed.skills));
+    expect(parsed.warnings.join(' ')).toMatch(/"id", "isSystem", "userId", "alwaysInject".*never installed/);
+    expect(checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }).view.status).toBe('unsigned');
+  });
+
+  test('one skill as GET /api/skills/:id/export writes it', () => {
+    expect(parseImportJson(text(toPortableSkill(row as never))).parsed.skills).toEqual([skill()]);
+  });
+
+  test('the strict per-skill schema and limits still apply', () => {
+    expect(refusal(() => parseImportJson(text({ skills: [{ name: 'x' }] })))).toMatch(/description/);
+    expect(refusal(() => parseImportJson(text({ skills: [{ name: 'x', description: 'y\u0000' }] })))).toMatch(/control characters/);
+    expect(refusal(() => parseImportJson(text({ skills: Array.from({ length: 51 }, (_, i) => ({ name: `s${i}`, description: 'd' })) })))).toMatch(/at most 50/i);
+    expect(refusal(() => parseImportJson(text({ skills: [{ name: 'x', description: 'y' }, { name: 'X', description: 'z' }] })))).toMatch(/twice/);
+    expect(refusal(() => parseImportJson('[1]'))).toMatch(/Not a skill bundle/);
+  });
+
+  test('a file with format is read as a bundle, strictly', () => {
+    expect(refusal(() => parseImportJson(text({ format: 'octipus-skill-bundle', skills: [] })))).toMatch(/Not a valid skill bundle/);
+  });
+
+  test('the multi-skill markdown of GET /api/skills/export?format=markdown imports every skill', () => {
+    const empty = skill({ name: 'Empty', content: '', principles: [], antiPatterns: [] });
+    const md = skillsToMarkdown([empty, skill(), skill({ name: 'Second', content: '', principles: ['p1', 'p2'] }), empty]
+      .map((s, i) => (i === 3 ? { ...s, name: 'Empty again' } : s)));
+    const parsed = parseSkillMdImport(md);
+    expect(parsed.skills.map((s) => s.name)).toEqual(['Empty', 'Release notes', 'Second', 'Empty again']);
+    parsed.skills.splice(0, 1);
+    expect(parsed.skills[0].content).toBe(skill().content);
+    expect(parsed.skills[1].principles).toEqual(['p1', 'p2']);
   });
 });

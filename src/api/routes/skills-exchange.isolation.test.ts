@@ -338,3 +338,79 @@ test('round trip: what one user exports another imports unchanged', async () => 
   expect(copy.userId).toBe(alice.id);
   expect(copy.id).not.toBe(original.id);
 });
+
+test('two installs of the same bundle at once: one creates, the other is refused (409), one skill', async () => {
+  const text = bundleText([portable('Fresh')]);
+  const hash = bundleContentHash([portable('Fresh')]);
+  const results = await Promise.all([install({ bundle: text }, hash), install({ bundle: text }, hash)]);
+  expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+  expect(results.find((r) => r.status === 409)!.body.error).toMatch(/"Fresh" is taken by a skill created since the preview/);
+  expect(await rowsNamed('Fresh')).toHaveLength(1);
+});
+
+test('the audit rows are written in the install\'s transaction: no audit, no skill', async () => {
+  const { queryRaw } = await import('@/db/postgres');
+  const text = bundleText([portable('Fresh')]);
+  await queryRaw('ALTER TABLE audit_log RENAME TO audit_log_moved');
+  let status: number;
+  try {
+    status = (await install({ bundle: text }, bundleContentHash([portable('Fresh')]))).status;
+  } finally {
+    await queryRaw('ALTER TABLE audit_log_moved RENAME TO audit_log');
+  }
+  expect(status).toBe(500);
+  expect(await rowsNamed('Fresh')).toHaveLength(0);
+});
+
+test('NUL in any text field is refused at preview, naming the field, never a 500 at install', async () => {
+  for (const over of [{ description: 'a\u0000' }, { content: 'b\u0000' }, { antiPatterns: ['c\u0000'] }]) {
+    const text = bundleText([portable('Fresh', over)]);
+    const shown = await preview({ bundle: text });
+    expect(shown.status).toBe(400);
+    expect(shown.body.error).toMatch(new RegExp(`skills\\[0\\]\\.${Object.keys(over)[0]}.*control characters`));
+    expect((await install({ bundle: text }, bundleContentHash([portable('Fresh', over)]))).status).toBe(400);
+  }
+  expect((await preview({ skillMd: '---\nname: x\ndescription: y\n---\nbody\u0000' })).status).toBe(400);
+  expect(await rowsNamed('Fresh')).toHaveLength(0);
+});
+
+test('a SKILL.md of nested YAML aliases is previewed quickly', async () => {
+  const lines = [`a: &a [${Array.from({ length: 9 }, () => '"xxxxxxxxxx"').join(', ')}]`];
+  const levels = 'abcdefgh';
+  for (let i = 1; i < levels.length; i++) lines.push(`${levels[i]}: &${levels[i]} [${Array.from({ length: 9 }, () => `*${levels[i - 1]}`).join(', ')}]`);
+  const started = performance.now();
+  const shown = await preview({ skillMd: `---\nname: bomb\ndescription: d\n${lines.join('\n')}\n---\nbody` });
+  expect(performance.now() - started).toBeLessThan(2000);
+  expect(shown.status).toBe(200);
+  expect(shown.body.skills[0].skill.name).toBe('bomb');
+});
+
+test('older exports import: the JSON and the multi-skill markdown of GET /api/skills/export', async () => {
+  const legacyJson = (await call('GET', 'export?ids=alice-own,org-shared')).body;
+  expect(legacyJson.skills).toHaveLength(2);
+  const text = JSON.stringify({ skills: legacyJson.skills.map((s: any) => ({ ...s, id: 'sneaky', isSystem: true, userId: bob.id })) });
+  const shown = await preview({ bundle: text });
+  expect(shown.body).toMatchObject({ source: 'legacy_export', installable: true, signature: { status: 'unsigned' } });
+  expect(shown.body.warnings.join(' ')).toMatch(/"id", "isSystem", "userId".*never installed/);
+  const done = await install({ bundle: text }, shown.body.contentHash, [
+    { name: 'Alice skill', action: 'rename', newName: 'Alice copy' },
+    { name: 'Org skill', action: 'rename', newName: 'Org copy' },
+  ]);
+  expect(done.status).toBe(200);
+  for (const name of ['Alice copy', 'Org copy']) expect((await rowsNamed(name))[0]).toMatchObject({ userId: alice.id, isSystem: false });
+  expect((await auditRepository.findByResource('skill', done.body.created[0].id))[0].details).toMatchObject({ source: 'legacy_export', signature: 'unsigned' });
+
+  const response = await app.handle(new Request('http://localhost/skills/export?ids=alice-own,org-shared&format=markdown'));
+  const md = await response.text();
+  const fromMd = await preview({ skillMd: md });
+  expect(fromMd.body, JSON.stringify(md)).toHaveProperty('skills');
+  expect(fromMd.body.skills.map((i: any) => i.skill.name)).toEqual(['Alice skill', 'Org skill']);
+  const mdDone = await install({ skillMd: md }, fromMd.body.contentHash, [
+    { name: 'Alice skill', action: 'skip' },
+    { name: 'Org skill', action: 'rename', newName: 'Org from markdown' },
+  ]);
+  expect(mdDone.body.created.map((c: any) => c.name)).toEqual(['Org from markdown']);
+
+  policy({ requireSignature: true });
+  expect((await preview({ bundle: text })).body).toMatchObject({ installable: false, refusal: expect.stringMatching(/requireSignature/) });
+});
