@@ -105,7 +105,7 @@ export function skillsToMarkdown(skills: (SkillView | PortableSkill)[]): string 
 // ---------------------------------------------------------------------------
 
 /** Parse YAML frontmatter from a markdown string. Returns { meta, body }. */
-function parseFrontmatter(md: string): { meta: Record<string, string>; body: string } {
+export function parseFrontmatter(md: string): { meta: Record<string, string>; body: string } {
   const meta: Record<string, string> = {};
   const trimmed = md.trim();
 

@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { Skill } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
-import { markdownToSkill } from './markdown';
+import { markdownToSkill, type PortableSkill } from './markdown';
 
 /**
  * Filesystem skill discovery (agentskills.io spec).
@@ -158,18 +158,26 @@ function hasFrontmatterField(md: string, field: string): boolean {
   return re.test(fm);
 }
 
+/**
+ * A SKILL.md document (agentskills.io): its skill, or null when `name` or
+ * `description` is missing from the frontmatter — the spec requires both, so
+ * the parser's defaults never stand in for them. Mounting and the skill
+ * exchange import (./exchange.ts) read a SKILL.md through this one function.
+ */
+export function parseSkillMd(md: string): PortableSkill | null {
+  if (!hasFrontmatterField(md, 'name') || !hasFrontmatterField(md, 'description')) return null;
+  return markdownToSkill(md);
+}
+
 function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
   const md = safeReadFile(found.filePath);
   if (!md) return undefined;
 
-  // Required fields per agentskills.io spec — must be present in frontmatter,
-  // not defaulted by the parser.
-  if (!hasFrontmatterField(md, 'name') || !hasFrontmatterField(md, 'description')) {
+  const portable = parseSkillMd(md);
+  if (!portable) {
     logger.warn(`[skills/external] ${found.filePath}: missing name/description in frontmatter, skipping`);
     return undefined;
   }
-
-  const portable = markdownToSkill(md);
 
   // Synthetic id: external:<loc-key>:<rel-path-without-extension>
   const slug = found.relPath.replace(/\.(md|MD)$/, '').replace(/[/\\]/g, ':');

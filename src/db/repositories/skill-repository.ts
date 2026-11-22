@@ -4,6 +4,11 @@ import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
 import { type Skill, type SkillView, skills } from '../schema/skills';
 
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+/** The database, or a transaction a caller writes several rows in (the skill exchange import). */
+export type SkillExec = Db | Tx;
+
 /**
  * Fields that affect the embedding hash (sha256(name + description)). When
  * any of these change, we must NULL out `description_embedding` and
@@ -99,9 +104,9 @@ export class SkillRepository {
    * Returns the updated row, or undefined if no row matched.
    *
    * Errors propagate to the caller (loud-failure principle); no swallowing.
+   * `db`: a transaction to write in, when the caller writes several rows at once.
    */
-  async update(skillId: string, data: SkillUpdate): Promise<Skill | undefined> {
-    const db = this.db;
+  async update(skillId: string, data: SkillUpdate, db: SkillExec = this.db): Promise<Skill | undefined> {
     const [existing] = await db.select().from(skills).where(eq(skills.id, skillId)).limit(1);
     if (!existing) return undefined;
 

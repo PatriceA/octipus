@@ -23,6 +23,7 @@ import {
   signCommand,
   signIndexCommand,
   signKeysCommand,
+  signSkillBundleCommand,
   unpackCommand,
   validateCommand,
   verifyCommand,
@@ -30,6 +31,8 @@ import {
   verifyKeysCommand,
 } from './plugin-offline';
 import { makeTarGz } from '@/test-helpers/tar';
+import { buildBundle, checkBundleTrust, parseSkillBundle } from '@/skills/exchange';
+import { getConfig } from '@/config';
 
 const ROOT = join(__dirname, '..');
 const FIXTURE = join(ROOT, 'src/plugins/packages/fixtures/echo-plugin');
@@ -181,6 +184,43 @@ describe('encrypted keys', () => {
     expect(await keygenCommand(io(), [prefix])).toBe(1);
     expect(await keygenCommand(io(), [])).toBe(2);
     expect(await signCommand(io(), [fixture()])).toBe(2);
+  });
+});
+
+describe('sign-skill-bundle', () => {
+  const skill = { name: 'Notes', category: 'writing', description: 'Write notes', content: 'Be brief.', principles: [], bestPractices: [], antiPatterns: [], frameworks: [] };
+
+  test('signs an exported bundle in place with an encrypted key; the signature verifies as the publisher', async () => {
+    const { key, pub } = await keys('bundle pass');
+    const file = join(temp(), 'skills.json');
+    writeFileSync(file, JSON.stringify(buildBundle([skill])));
+    const fake = io();
+    expect(await signSkillBundleCommand(fake, [file, '--key', key, '--passphrase-file', passFile('bundle pass'), '--json'])).toBe(0);
+    const out = jsonOut(fake);
+    expect(out).toMatchObject({ file, skills: 1 });
+    const plugins = getConfig().plugins;
+    const saved = plugins.trustedPublishers;
+    plugins.trustedPublishers = [{ name: 'Acme', publicKey: readFileSync(pub, 'utf8') }];
+    try {
+      const parsed = parseSkillBundle(readFileSync(file, 'utf8'));
+      expect(parsed.contentHash).toBe(out.contentHash);
+      expect(checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: true }).view).toMatchObject({ status: 'valid', publisher: 'Acme', keyId: out.keyId });
+    } finally {
+      plugins.trustedPublishers = saved;
+    }
+  });
+
+  test('refuses a tampered bundle and leaves it as it was; a missing --key is a usage error', async () => {
+    const { key } = await keys();
+    const file = join(temp(), 'skills.json');
+    const bundle = buildBundle([skill]);
+    const tampered = JSON.stringify({ ...bundle, skills: [{ ...skill, content: 'changed' }] });
+    writeFileSync(file, tampered);
+    const fake = io();
+    expect(await signSkillBundleCommand(fake, [file, '--key', key])).toBe(1);
+    expect(fake.stderr).toMatch(/changed after it was exported/);
+    expect(readFileSync(file, 'utf8')).toBe(tampered);
+    expect(await signSkillBundleCommand(io(), [file])).toBe(2);
   });
 });
 
