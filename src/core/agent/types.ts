@@ -65,13 +65,22 @@ export interface QAValidationResult {
    *
    * - `unparseable` — the findings stand, only the report's shape is unusable.
    *   Correctable without re-reading anything, which is the cheap path.
-   * - `coverage` — a PASS that does not account for stages in scope, or
-   *   unaddressed low-confidence doubt. The auditor has to go and LOOK; asking
-   *   it to correct the wording instead lets it only re-word, the gate rejects
-   *   the same uncovered stages again, and the retry budget burns down without
-   *   the missing stage ever being examined.
+   * - `report` — a verdict block parsed and accounts for every stage and every
+   *   acceptance criterion, but leaves out `whatIDidNotCheck` or `confidence`,
+   *   the auditor's description of its own audit. Same cheap path as
+   *   `unparseable` (`auditFault` has the exact rule).
+   * - `coverage` — a PASS that does not account for stages in scope,
+   *   unaddressed low-confidence doubt, any acceptance-criterion fault, or a
+   *   pass whose own prose says FAIL. The auditor has to go and LOOK; asking
+   *   it to correct the wording instead lets it only re-word (or invent the
+   *   missing entry), and the gate is no stronger for it. Wins over `report`
+   *   when both apply.
+   *
+   * `unparseable` and `report` are VERDICT REPAIRS: the walker re-asks the
+   * auditor for the block alone under its own bound (`VERDICT_REPAIR_LIMIT`)
+   * and never spends the stage's retry budget on them.
    */
-  auditGateReason?: 'unparseable' | 'coverage';
+  auditGateReason?: 'unparseable' | 'report' | 'coverage';
   /**
    * What the auditor states it did NOT check. jcode's `validate_artifact`
    * calls this the cheat code: forcing an agent to list what it did not
