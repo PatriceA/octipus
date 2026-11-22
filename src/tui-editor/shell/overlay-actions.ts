@@ -10,6 +10,7 @@ import type { OverlayOptions } from '@/tui-kit';
 import { FilePicker } from '../components/file-picker';
 import { FindOverlay } from '../components/find-overlay';
 import { HotkeysOverlay } from '../components/hotkeys-overlay';
+import { ProjectSearchOverlay } from '../components/project-search-overlay';
 import { MCPServerList, bridgeProvider } from '../components/mcp-server-list';
 import { ReplaceOverlay } from '../components/replace-overlay';
 import type { TextEditor } from '../components/text-editor';
@@ -22,6 +23,9 @@ import { APP_OVERLAYS } from './overlay-slots';
 
 /** Find and replace sit in the top-right corner, so the matches they draw in the buffer stay visible. */
 export const SEARCH_OVERLAY: OverlayOptions = { anchor: 'top-right', width: 64, maxHeight: '85%', margin: { top: 2, right: 1 } };
+
+/** Project search takes most of the screen: the list and the preview need the room. */
+export const PROJECT_SEARCH_OVERLAY: OverlayOptions = { anchor: 'center', width: '90%', minWidth: 40, maxHeight: '90%', margin: 1 };
 
 export interface EditorOverlayDeps {
   editor: TextEditor;
@@ -137,6 +141,31 @@ export class EditorOverlays {
       onMatches: (bufferId, matches, current) => { this.deps.editor.setSearchHighlights(bufferId, matches, current); tui.requestRender(); },
     });
     overlays.show('replace', overlay, SEARCH_OVERLAY);
+  }
+
+  /** Search the project's files; `query` starts a search at once. */
+  openProjectSearch(query: string): void {
+    const { overlays, tui, buffers } = this.ctx;
+    if (overlays.isOpen('projectSearch')) return;
+    overlays.hideAll(APP_OVERLAYS);
+    const overlay = new ProjectSearchOverlay({
+      root: this.ctx.projectPath,
+      initialQuery: query,
+      onClose: () => overlays.close('projectSearch'),
+      onUpdate: () => tui.requestRender(),
+      onOpen: (hit) => {
+        overlays.close('projectSearch');
+        this.deps.openFile(hit.path);
+        const record = buffers.findByPath(hit.path);
+        if (!record) return;
+        buffers.setActive(record.id);
+        record.buffer.select({ line: hit.line, col: hit.col + hit.length }, { line: hit.line, col: hit.col });
+        this.ctx.layout.focus('editor');
+        this.ctx.refocus();
+        tui.requestRender();
+      },
+    });
+    overlays.show('projectSearch', overlay, PROJECT_SEARCH_OVERLAY);
   }
 
   openFilePicker(): void {

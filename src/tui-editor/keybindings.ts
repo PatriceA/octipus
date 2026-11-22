@@ -19,6 +19,7 @@ declare module '@/tui-kit' {
     'app.vim.toggle': true;
     'app.view.wrap': true;
     'app.goto.line': true;
+    'app.search.project': true;
   }
 }
 
@@ -27,6 +28,7 @@ export const EDITOR_KEYBINDINGS = {
   'app.vim.toggle':   { defaultKeys: 'alt+m', description: 'Switch vim mode on or off' },
   'app.view.wrap':    { defaultKeys: 'alt+z', description: 'Soft wrap long lines on or off' },
   'app.goto.line':    { defaultKeys: 'ctrl+g', description: 'Go to a line (line or line:column)' },
+  'app.search.project': { defaultKeys: ['ctrl+shift+f', 'alt+g'], description: 'Search the project\'s files' },
 } as const satisfies KeybindingDefinitions;
 
 /**
