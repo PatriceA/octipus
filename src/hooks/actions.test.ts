@@ -240,15 +240,15 @@ describe('executeSpawnAgent: direct spawn', () => {
   });
 
   test('a hook with no user behind it gets no context hooks', async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    hooks.runs.length = 0;
+    const ran = direct.runMessages.length;
     const r = await executeAction(hook({
       userId: 'system', trigger: 'schedule', action: 'spawn_agent', sessionId: 'hook-sess-system',
       actionConfig: { orchestrated: false, agentPrompt: 'tidy up' },
     } as Partial<Hook>), ctx());
     expect(r.success).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(hooks.runs).toHaveLength(0);
+    // The agent runs after the context hooks would have: once it has, none ran for this session.
+    await vi.waitFor(() => expect(direct.runMessages.slice(ran)).toContain('tidy up'));
+    expect(hooks.runs.filter((input) => input.sessionId === 'hook-sess-system')).toHaveLength(0);
   });
 
   test('runs a burst of deliveries to one hook session one after another, not in parallel', async () => {
