@@ -247,7 +247,7 @@ Saving writes a temporary file next to the original and renames it into place, s
 
 If the file changed on disk after you opened or last saved it — another editor, a formatter, the agent — saving asks first: **r** reloads the file (one undo step brings your version back), **o** overwrites it with yours, Enter or Escape cancels. A file deleted on disk can be written again with **o**.
 
-The editor does not open a file it could not save back unchanged: a file that is not valid UTF-8, a binary file (it contains NUL bytes), a folder, or a file over 5 MB is refused with the reason.
+The editor does not open a file it could not save back unchanged: a file that is not valid UTF-8, a binary file (it contains NUL bytes), a folder, a file over 5 MB, or anything that is not a regular file (a named pipe, a device, a socket) is refused with the reason.
 
 Scratch buffers are saved with Save As: Ctrl+S on one asks for a path. Save As refuses a folder that does not exist and a path already open in another tab, and asks for a second Enter before replacing an existing file.
 

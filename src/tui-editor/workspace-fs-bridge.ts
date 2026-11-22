@@ -9,7 +9,9 @@
  * file looked like on disk (line endings, byte-order mark, mode, mtime,
  * size), so saving writes it back the same way. A file the editor would
  * change by saving it unedited — binary, not UTF-8 — is refused with the
- * reason instead of opened.
+ * reason instead of opened, and so is anything that is not a regular file
+ * (a FIFO would block the read until something writes to it, a device
+ * might never end).
  *
  * Saving is atomic: the text goes to a temporary file next to the target,
  * which is flushed and renamed over it, so a crash or a full disk leaves the
@@ -51,6 +53,8 @@ export function readFileForBuffer(absPath: string): ReadResult {
   try {
     stat = statSync(absPath);
     if (stat.isDirectory()) return { ok: false, error: `${absPath} is a folder.` };
+    // A FIFO blocks the read until something writes to it, a device can be endless: only regular files are read.
+    if (!stat.isFile()) return { ok: false, error: `${absPath} is not a regular file (${kindOf(stat)}); not opened.` };
     if (stat.size > MAX_BYTES) return { ok: false, error: `${absPath} is ${(stat.size / 1024 / 1024).toFixed(1)} MB; the editor opens files up to 5 MB.` };
     bytes = readFileSync(absPath);
   } catch (error) {
@@ -164,6 +168,13 @@ export function checkDisk(absPath: string, disk: DiskInfo, savedText: string): {
   const now = readFileForBuffer(absPath);
   if (now.ok && now.text === savedText) return { changed: false, disk: { ...disk, mtimeMs: now.disk.mtimeMs, size: now.disk.size } };
   return { changed: true, deleted: false };
+}
+
+function kindOf(stat: Stats): string {
+  if (stat.isFIFO()) return 'a pipe';
+  if (stat.isCharacterDevice() || stat.isBlockDevice()) return 'a device';
+  if (stat.isSocket()) return 'a socket';
+  return 'not a file';
 }
 
 function isMissing(error: unknown): boolean {

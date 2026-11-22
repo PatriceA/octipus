@@ -7,6 +7,10 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: opening a named pipe or a device no longer hangs it.**
+  The editor read whatever path it was given, so a FIFO blocked it until
+  something wrote to the pipe. Anything that is not a regular file is now
+  refused with the reason.
 - **Terminal editor: vim mode edits the text vim would.** `yyp` put the line
   at the cursor instead of below it; `$` left the cursor after the last
   character, so `$a` appended on the next line; `x` at the end of a line

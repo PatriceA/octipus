@@ -1,4 +1,5 @@
 import { chmodSync, linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -15,6 +16,17 @@ function read(path: string) {
 }
 
 describe('reading', () => {
+  // readFileSync on a FIFO blocks until something writes to it: the editor hung opening one.
+  test.skipIf(process.platform === 'win32')('a FIFO or a device is refused before it is read', () => {
+    const fifo = join(dir, 'pipe');
+    execFileSync('mkfifo', [fifo]);
+    const r = readFileForBuffer(fifo);
+    expect(r).toEqual({ ok: false, error: `${fifo} is not a regular file (a pipe); not opened.` });
+    const dev = readFileForBuffer('/dev/zero');
+    expect(dev.ok).toBe(false);
+    if (!dev.ok) expect(dev.error).toContain('not a regular file (a device)');
+  });
+
   test('a CRLF file comes in without \\r in its lines and is saved back as CRLF', () => {
     const path = join(dir, 'win.txt');
     writeFileSync(path, 'one\r\ntwo\r\n');
