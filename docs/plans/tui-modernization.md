@@ -371,22 +371,31 @@ Present but unreachable or invisible
 
 Missing for a usable editor
 
+All but the last were done in Phase 5 (§7, the table there names the commits
+and tests).
+
 - Mouse: click to place the cursor, drag to select, click tabs and tree rows,
-  drag the pane divider, wheel in the focused pane.
-- Selection with Shift+arrows, cut/copy/paste to the system clipboard.
+  drag the pane divider, wheel in the focused pane. Done; the wheel goes to
+  the pane under the pointer.
+- Selection with Shift+arrows, cut/copy/paste to the system clipboard. Done.
 - PageUp/PageDown, Ctrl+Home/End, go to line, soft wrap, auto-indent, bracket
-  matching, a scrollbar.
-- New file, rename, delete, reload on external change.
+  matching, a scrollbar. Done.
+- New file, rename, delete, reload on external change. Done; open files are
+  watched.
 - In-buffer search highlights, replace one at a time, search across the
-  project.
+  project. Done.
 - Agent edits: accept or reject per hunk rather than per file; edits to files
-  that are not open are skipped silently today.
-- Diagnostics (LSP), git change markers.
+  that are not open are skipped silently today. Done; such an edit opens a
+  review tab.
+- Diagnostics (LSP), git change markers. Not started (Phase 5 item 7).
 
 Structure
 
 - `app.ts` (728 lines) wires everything: stores, gateway, eight overlays,
   persistence, hotkeys. Eight near-identical overlay open/close pairs.
+  Fixed in Phase 5: `app.ts` is the composition root and the work is in
+  `src/tui-editor/shell/`; the overlays are named slots with one close, and
+  the seven boxes share `tui-kit/overlay-frame.ts`.
 - Three hand-written text fields accept one byte at a time (no paste, no
   emoji, no IME) while pi-tui's `Input` goes unused. Fixed in Phase 4: one
   `TextField` over `Input`.
@@ -661,6 +670,26 @@ diff offers to replace the file with the fragment.
 6. Split `app.ts` by responsibility; overlays share one frame and one text
    field from `tui-kit`.
 7. Later, separately decided: diagnostics through LSP, git change markers.
+
+**Phase 5 — shipped (items 1–6; item 7 not started, as planned).** Every
+visible behaviour has a PTY test driving the real entry point.
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Mouse: click places the cursor, drag selects in buffer coordinates (the copy is the file's text, without gutter or tree — the Phase 2 limitation), double/triple click, Shift+click; tabs (click, `×`), tree rows, pane titles, divider drag; the wheel scrolls the pane under the pointer whatever has the focus; the chat pane selects inside itself only. Shift+motion selects; Ctrl+X/Ctrl+V/Ctrl+C through the clipboard chain (`tui-kit/clipboard-read.ts` reads it) | `af71286`, `c631f53` | `text-editor.view.test.ts`, `view.test.ts`, `pane-mouse.test.ts`, `tab-strip.test.ts`, `clipboard-read.test.ts`, `app-flow.test.ts`, `editor-mouse.e2e` (SGR click, drag, double click, tree, tabs, wheel, divider) |
+| 2. Hunk review: y/n per hunk, a/r for all, folding (`z`), `]`/`[`, intra-line highlighting; unopened files open a review tab; partial accept written as one undo step; Myers with a work budget and a stated fallback | `00356f6`, `8da2b09` | `diff.test.ts` (random inputs against the LCS length; 50,000 lines), `hunks.test.ts` (adjacent hunks, start/end of file, final newline, every subset), `diff-overlay.test.ts`, `app-flow.test.ts` (review tab, CRLF, a file changed on disk meanwhile), `editor-review.e2e` (partial accept of a CRLF file saved CRLF) |
+| 3. Replace one at a time with a preview; project search (ripgrep, else the project index file by file), results with a preview, Enter opens at the match | `33e9284`, `e8b35c3` | `replace-overlay.test.ts`, `project-search.test.ts` (both engines), `project-search-overlay.test.ts`, `editor-search.e2e` (with and without `rg` on PATH) |
+| 4. PageUp/PageDown, Ctrl+Home/End, go to line, soft wrap, scrollbar (click and drag), auto-indent, bracket matching, scrolloff | `af71286`, `7a32e97` | `text-editor.view.test.ts`, `view.test.ts`, `app-flow.test.ts` |
+| 5. New file, rename, delete (confirmed), reload (`/revert`); open files watched, a clean one reloaded, a dirty one asked about once | `9229b8c` | `file-commands.test.ts` (real files), `editor-files.e2e` (new, rename, delete, external change clean and dirty) |
+| 6. `app.ts` split into `shell/` (overlay slots and actions, file operations, agent review, commands, persistence, parses); the seven boxes draw with `tui-kit/overlay-frame.ts`, the text field is `tui-kit/text-field.ts` | `1d885a9`, `a1e0e66` | No behaviour change: the existing app-flow and PTY suites pass unchanged on both commits |
+
+Also: the F5 shortcuts list the keys that are not rebindable (`ea26a0f`).
+
+The editor is now under an invariant fuzzer (`tests/tui/editor-invariants.e2e.test.ts`, `028a8e7`): random typing, keys and shortcuts, clicks, drags, double clicks and wheel notches anywhere, resizes, agent edits (control bytes, CRLF, 10 kB lines) answered with random review keys, and files changed on disk. After each step: no wrapped row, the mode bar on the last row, the cursor inside the screen and inside the editor pane when it has the focus and no box is open, no control byte written outside an escape sequence, the alternate screen kept. Default 6 seeds × 30 steps (CI); 150 seeds × 40 steps ran clean locally after the fix below. Bug found and fixed: C1 control characters in a file (U+009B is CSI to a terminal) were written raw (`1b5a962`, `text-editor.test.ts`); it failed 10 of the first 12 seeds.
+
+Found and fixed on the way (in `8da2b09`): after a review the buffer took whatever was on disk as its saved text, so a file changed by something other than the agent meanwhile was overwritten by the next Ctrl+S without asking; and the diff overlay drew file text raw.
+
+Not done, and why: Up/Down move by buffer lines with soft wrap on (as vim's `j`/`k`), not by screen rows; divider positions are not kept across launches; the watcher polls once a second rather than being pushed changes (an atomic save replaces the file by rename, which `fs.watch` loses). Still open from Phase 4: `gateway-adapter.ts` takes `str_replace_editor`'s `new_str` (a fragment) as the whole new file — outside `src/tui-editor/`, and the hunk review now shows plainly that it would replace the file with the fragment.
 
 ### Phase 6 — Reach (M)
 

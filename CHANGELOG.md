@@ -7,6 +7,46 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: review the agent's edits hunk by hunk.** The diff box
+  accepts (`y`) or rejects (`n`) each change on its own, moves between them
+  with `]` / `[`, folds unchanged lines (`z`), highlights the words that
+  changed inside a line, and applies with Enter (`a` / `r` still take or drop
+  everything). An edit to a file that is not open opens it in a tab for review
+  instead of going by unseen. A CRLF file is compared without its CRs and saved
+  CRLF. If the file also changed on disk outside the agent while you review,
+  saving asks before overwriting it — the editor used to take that version as
+  saved. Large files are compared with a bounded Myers diff; one too changed to
+  compare line by line is shown as a single replacement and says so.
+- **Terminal editor: the mouse works.** Click to place the cursor, drag to
+  select (the copy is the file's text, without line numbers or the tree),
+  double-click a word, triple-click a line, Shift+click to extend. Click a tab
+  to switch to it and its `×` to close it, a tree row to open a file or expand
+  a folder, a pane's title to focus it; drag a divider to resize the side
+  panes; the wheel scrolls the pane under the pointer whatever has the focus;
+  the editor's scrollbar takes clicks and drags. A drag in the chat pane copies
+  only the chat's text.
+- **Terminal editor: navigation and editing basics.** PageUp/PageDown,
+  Ctrl+Home/End, Shift with any motion to select, Ctrl+X / Ctrl+V (and Ctrl+C
+  on a selection) through the clipboard, `Ctrl+G` or `/goto` to go to a line,
+  soft wrap (`Alt+Z`, `/wrap`, remembered per project), a scrollbar, Enter that
+  keeps the indentation (one step deeper after an opening bracket), the
+  matching bracket highlighted, and three lines kept around the cursor when it
+  moves.
+- **Terminal editor: search and files.** Replace one match at a time
+  (`Alt+Enter` in the replace box, with a preview of the current match) as well
+  as all at once; search the whole project (`Ctrl+Shift+F` / `Alt+G`,
+  `/search`), with ripgrep when installed and the project index otherwise, a
+  preview of each match, and Enter to open it. New file (`Alt+N`,
+  `/new-file`), rename (`/rename`), delete with confirmation (`/delete`), and
+  reload from disk (`/revert`); in the tree `n`, `m` and `d`. Open files are
+  watched: a file changed on disk is reloaded when you have no unsaved edits,
+  and you are asked when you have.
+- **Terminal editor: C1 control characters in a file are shown.** U+0080 to
+  U+009F (such as U+009B, which terminals treat as the start of an escape
+  sequence) were written to the terminal as they were; they are drawn as
+  `�` now. Found by the new invariant suite for the editor
+  (`tests/tui/editor-invariants.e2e.test.ts`).
+
 - **Terminal chat and editor run on the alternate screen; drag selects
   without Shift.** `octi tui` and `octi edit` now open on the terminal's
   alternate screen. What you had in the terminal before launch survives —

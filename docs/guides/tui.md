@@ -37,7 +37,7 @@ User turns have a **You** heading and a vertical rail on every wrapped line. Rep
 - `Ctrl+Home` jumps to the oldest retained output; `Ctrl+End` — or `End`, while reading history — returns to the latest. A **↓ End: latest** marker shows while you are away from it; clicking it also returns.
 - `Ctrl+Shift+F` searches the transcript.
 - While reading history, new messages and streaming text do not move the rows being read.
-- In the editor, the wheel and the transcript keys apply when the chat pane has focus.
+- In the editor, the wheel scrolls the pane under the pointer (editor, tree or chat) whatever has the focus; the transcript keys apply when the chat pane has focus.
 - Resizing reflows the messages and keeps the reading position.
 
 Long sessions stay fast: only the newest 200 messages are rendered, and scrolling up past them brings older ones in. At most 5,000 messages are kept in memory; beyond that the oldest are dropped and a notice at the top of the transcript says how many. The server keeps the whole session. `/history` reloads its latest 50 messages; loading older turns from the server while scrolling needs a gateway change and is not available yet.
@@ -50,7 +50,7 @@ Both surfaces display streamed responses, identity, backend session usage, permi
 
 ## Selecting and copying text
 
-**Drag** with the left button to select transcript text — no modifier needed. Dragging at the top or bottom edge keeps scrolling and extends the selection past what is on screen. The selection is copied when you release the button; the rail in front of each row is left out. A short message says how the text was copied. Double-click selects a word, triple-click a line.
+**Drag** with the left button to select transcript text — no modifier needed. (In the editor, a drag in the file selects the file's text and one in the chat pane selects only the chat's; see [Working in the editor](#working-in-the-editor).) Dragging at the top or bottom edge keeps scrolling and extends the selection past what is on screen. The selection is copied when you release the button; the rail in front of each row is left out. A short message says how the text was copied. Double-click selects a word, triple-click a line.
 
 Your terminal's own selection is still there behind its override key: **Shift**+drag in xterm, GNOME Terminal, Konsole, Kitty, Windows Terminal and most others; **Option**+drag in iTerm2 and Terminal.app. Then use the terminal's Copy command. **Ctrl+C** remains the app's quit/cancel key.
 
@@ -146,13 +146,51 @@ At 80 columns and wider, the editor shows a file tree, buffer editor and chat. B
 | `Alt+R` | Find and replace |
 | `Ctrl+K` | Workspace picker |
 | `Ctrl+E` | MCP server list |
+| `Ctrl+G` | Go to a line (`line` or `line:column`) |
+| `Alt+Z` | Soft wrap on or off |
+| `Ctrl+Shift+F` / `Alt+G` | Search the project |
+| `Alt+N` | New file |
 | `Ctrl+Q` | Quit, with unsaved-change protection |
 
-Long lines scroll horizontally to keep the cursor visible. Tabs advance to the next stop of four cells, and wide characters are measured in terminal cells. The cursor moves and deletes by whole characters: an emoji with a skin tone, a flag or a letter with its accent is one step. Tab inserts what the file indents with — a tab, or its step of spaces (two in a file with no indentation yet). Bracketed multiline paste inserts text without inserting the terminal control markers.
+In the file:
+
+| Key | Action |
+| --- | --- |
+| `PageUp` / `PageDown`, `Ctrl+Home` / `Ctrl+End` | By a page; to the start or end of the buffer |
+| `Shift` + any motion | Select (arrows, `Home`/`End`, pages, `Ctrl+Left`/`Right`, `Ctrl+Home`/`End`) |
+| `Ctrl+X` / `Ctrl+V` | Cut / paste; `Ctrl+C` copies a selection (with nothing selected it is still the quit key) |
+| `Enter` | New line with the same indentation, one step deeper after an opening bracket |
+
+Long lines scroll horizontally to keep the cursor visible, or break into rows with soft wrap (`Alt+Z` or `/wrap [on|off]`, remembered per project; a wide character is never split). The view keeps three lines between the cursor and its top or bottom while the cursor moves. When the file is longer than the pane a scrollbar is drawn on its right edge. The bracket matching the one at the cursor is underlined. Tabs advance to the next stop of four cells, and wide characters are measured in terminal cells. The cursor moves and deletes by whole characters: an emoji with a skin tone, a flag or a letter with its accent is one step. Tab inserts what the file indents with — a tab, or its step of spaces (two in a file with no indentation yet). Bracketed multiline paste inserts text without inserting the terminal control markers.
 
 Undo (`Ctrl+Z`, redo `Ctrl+Y`) works in steps you would expect: a burst of typing, a paste, a replace-all or an accepted agent edit is one step. The unsaved marker (`●`) compares the buffer with the file as last opened or saved, so undoing back to it clears the marker.
 
-Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode.
+Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode, `/wrap [on|off]` soft wrap, `/goto <line[:column]>` goes to a line, `/search [query]` searches the project, and `/new-file`, `/rename`, `/delete` and `/revert` work on files (below).
+
+### The mouse
+
+| Where | Click | Drag | Wheel |
+| --- | --- | --- | --- |
+| The file | Places the cursor; double click selects a word, triple click the line; Shift+click extends the selection | Selects, scrolling at the edges, and copies on release — the file's text, without line numbers or the tree | Scrolls the file without moving the cursor |
+| The scrollbar | Scrolls there | Scrolls | — |
+| A tab | Switches to it; its `×` closes it (asking about unsaved changes) | — | — |
+| The tree | Opens the file, or expands/collapses the folder | — | Scrolls the tree |
+| The chat | Focuses the composer | Selects inside the chat pane only and copies on release, without the rail | Scrolls the transcript |
+| A pane's title | Focuses the pane | — | — |
+| A divider | — | Resizes the side pane | — |
+
+The wheel scrolls the pane under the pointer, whatever has the focus. While a box is open, the panes behind it take no clicks. Copying uses the clipboard chain described above and says which way the text went; pasting with `Ctrl+V` reads the clipboard with `pbpaste`, PowerShell, `wl-paste`, `xclip`, `xsel` or the tmux buffer, and otherwise pastes what you last copied in the editor (your terminal's own paste, `Ctrl+Shift+V` or `Cmd+V`, always works).
+
+### Files
+
+| Command / key | Action |
+| --- | --- |
+| `Alt+N`, `/new-file [path]`, `n` in the tree | Create an empty file and open it; refuses a path that exists or a folder that does not |
+| `/rename [path]`, `m` in the tree | Rename (move) the file — or, from the tree, a folder — taking its open tabs with it, unsaved edits included |
+| `/delete`, `d` or `Delete` in the tree | Delete the file after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
+| `/revert` | Put the file on disk back into the buffer (one undo step) |
+
+Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone and you are asked once: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.
 
 ### Saving
 
@@ -170,7 +208,9 @@ When closing a dirty buffer or quitting, choose **Save**, **Discard**, or **Canc
 
 `Ctrl+F` searches from the cursor: the first match shown is the first one after it. Matches are highlighted in the buffer, the current one distinct, and the current one is selected. Enter and Shift+Enter move between matches; **Escape** closes the box and puts the cursor back where it was; **Alt+Enter** closes it with the cursor on the match. `Alt+C`, `Alt+R` and `Alt+W` toggle case sensitivity, regular expressions and whole words; an invalid regular expression is reported in the box.
 
-`Alt+R` opens find and replace: Tab switches fields, Enter replaces every match as one undo step. With regular expressions on, the replacement can use `$1`, `$<name>`, `$&` and `$$`.
+`Alt+R` opens find and replace: Tab switches fields. The matches are drawn in the file and the current one is previewed in the box — its line with the match struck through and what replaces it. **Alt+Enter** replaces the current match (one undo step) and moves to the next one after it; Up and Down move between matches without replacing; **Enter** replaces every match as one undo step. Escape closes the box and says how many were replaced. With regular expressions on, the replacement can use `$1`, `$<name>`, `$&` and `$$`, and the preview shows what they expand to.
+
+`Ctrl+Shift+F` or `Alt+G` (or `/search [query]`) searches the whole project: type the query and press Enter. Matches arrive while the search runs, one row per match with its file and line, and a preview of the selected one with the lines around it; Up/Down choose and Enter opens the file with the match selected. `Alt+C`, `Alt+R` and `Alt+W` work as in find. With [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) installed it does the search — `.gitignore` is respected and binary files are skipped, and regular expressions are ripgrep's dialect; without it the editor searches the files the file picker lists, one at a time so the screen stays responsive. The first 1,000 matches are shown, and the box says when there were more.
 
 The query, replacement, file filter and Save As fields accept paste, emoji and input-method text.
 
@@ -205,7 +245,25 @@ Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
 
 The state file is private to its owner. Changes are checkpointed after a short debounce and flushed during orderly shutdown, including SIGTERM. Reopening the editor restores drafts as unsaved buffers for review. A forced kill or machine failure can lose edits since the last successful checkpoint. A checkpoint failure is reported in the mode bar.
 
-Agent file changes to open buffers are queued for diff review in the default lock mode; a change to a file the agent names relative to the project reaches its tab too. The diff box fits the terminal's height and scrolls with Up/Down and PageUp/PageDown. Accept updates the in-memory buffer as one undo step; Reject keeps the current buffer. This review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after Accept it is clean (buffer and disk agree), after Reject it shows as unsaved, and Ctrl+S writes your version back over the agent's.
+### Reviewing the agent's edits
+
+When the agent writes a file, its edit is shown as a diff before it reaches the buffer: the buffer is locked until you decide, and edits to several files are reviewed one after another. A file that is not open is opened in a tab for the review (a new file is compared with nothing); a change to a file the agent names relative to the project reaches its tab too.
+
+The diff is split into **hunks** — runs of changed lines — marked with the current one (`▌`) and your decision (`✓` / `✗`):
+
+| Key | Action |
+| --- | --- |
+| `y` / `n` | Accept / reject this hunk, then go to the next |
+| `]` or Tab, `[` or Shift+Tab | Next / previous hunk |
+| Space | Flip this hunk between accepted and rejected |
+| `z` | Fold or unfold unchanged lines (three lines of context are kept around each hunk) |
+| Enter | Apply: every hunk you did not reject |
+| `a` / `r` or Escape | Accept / reject every hunk and apply |
+| Up/Down, PageUp/PageDown, Home/End | Scroll |
+
+Within a changed line and its replacement, the words that changed are drawn inverted. The result — the accepted hunks from the agent, the rest as they were — replaces the buffer as one undo step. The agent's text is compared without the CRs of a CRLF file, so only the lines that really changed show, and the file is saved CRLF again. A change too large to compare line by line (a file rewritten throughout) is shown as one replacement, and the box says so.
+
+The review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after accepting everything it is clean (buffer and disk agree), after rejecting or a partial accept it shows as unsaved, and Ctrl+S writes your version back over the agent's. If the file changed on disk by something other than the agent while you reviewed, the transcript says so and Ctrl+S asks before overwriting it.
 
 Opening the workspace picker (`Ctrl+K`) or the MCP list (`Ctrl+E`) again while it loads does nothing; a workspace request that gets no answer within 5 seconds, or fails, is shown in the picker with the reason.
 
@@ -236,6 +294,6 @@ npm run test:tui
 
 This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
 
-The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps. It runs 8 seeds by default; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
+The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps; its editor counterpart (`tests/tui/editor-invariants.e2e.test.ts`) drives the editor through random keys, clicks, drags, wheel notches, resizes, agent edits and files changed on disk, and checks that no row wraps, the mode bar stays on the last row, the cursor stays in the editor pane (or an open box), and no control byte reaches the terminal outside an escape sequence. The chat suite runs 8 seeds by default and the editor's 6; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
 
 See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.
