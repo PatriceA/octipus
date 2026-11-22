@@ -166,6 +166,9 @@ put back. Limits:
   only chunks indexed before long paragraphs were split are that long.
 - A part under 120 characters is always sent again: it is too short to be
   recognised safely in earlier messages.
+- In view means the same passage as a whole: a passage edited so that it
+  is now the start of its earlier copy (its last sentence removed) is new
+  text and is sent.
 - Side questions resend their passages: `directResponse` has no cross-turn
   omission.
 

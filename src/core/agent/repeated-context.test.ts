@@ -177,3 +177,43 @@ describe('a group repeated per part (the recall block)', () => {
     expect(next?.fences).toEqual([{ head, tail, parts: [hosting.trim()] }]);
   });
 });
+
+describe('in view means the same block, not a longer one that starts the same way', () => {
+  const head = '\n\n<recalled-knowledge>\nRetrieved automatically from the user\'s own knowledge base and notes because it matches this message.\n';
+  const tail = '</recalled-knowledge>\n';
+  const block = (...parts: string[]) => `${head}${parts.join('')}${tail}`;
+
+  test('a passage edited to drop its last sentence is sent, not taken for its earlier copy', () => {
+    const before = 'Note "Pricing"\nPricing: a website costs 2400 euro. That covers design, build, testing, launch support and one round of changes. Hosting is billed apart at 15 euro.\n';
+    const after = 'Note "Pricing"\nPricing: a website costs 2400 euro. That covers design, build, testing, launch support and one round of changes.\n';
+    expect(after.trim().length).toBeGreaterThan(120);
+    const history = [user(`${turn(date, block(before))}\n\nfirst question`)];
+    const sent = withoutRepeatedContext(turn(date, block(after)), [{ head, tail, parts: [after] }], history);
+    expect(sent.omitted).toEqual([]);
+    expect(sent.text).toContain('one round of changes.\n');
+    expect(sent.text).not.toContain(REPEATED_CONTEXT_NOTE);
+  });
+
+  test('a plain block shortened by its last line is sent', () => {
+    const longer = `${memory}\n- (fact) Moved the export to a nightly schedule.`;
+    expect(memory.trim().length).toBeGreaterThan(120);
+    const history = [user(`${turn(date, longer, note)}\n\nfirst question`)];
+    const out = omitRepeatedContext(turn(date, memory, note), [memory, note], history);
+    expect(out).toContain('billing export pipeline');
+    expect(out).not.toContain('British spelling');
+  });
+
+  test('a restore does not count a longer copy as the block still in view', () => {
+    const before = 'Note "Pricing"\nPricing: a website costs 2400 euro. That covers design, build, testing, launch support and one round of changes. Hosting is billed apart at 15 euro.\n';
+    const after = 'Note "Pricing"\nPricing: a website costs 2400 euro. That covers design, build, testing, launch support and one round of changes.\n';
+    expect(after.trim().length).toBeGreaterThan(120);
+    const earlier = user(`${turn(date, block(after))}\n\nfirst question`);
+    const sent = withoutRepeatedContext(turn(date, block(after)), [{ head, tail, parts: [after] }], [earlier]);
+    expect(sent.omitted).toEqual([after.trim()]);
+    const message = user(`${sent.text}\n\nsecond question`);
+    // The compaction kept only a longer copy of the passage (an older turn).
+    const history = [user(`${turn(date, block(before))}\n\nolder`), message];
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences })).toBeUndefined();
+    expect(message.content).toContain('one round of changes.\n');
+  });
+});

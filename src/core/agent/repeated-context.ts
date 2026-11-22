@@ -64,6 +64,24 @@ function isGroup(raw: unknown): raw is RepeatableGroup {
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * Whether `content` carries `block` as a whole block, not merely as text:
+ * it starts a line there and ends where a block ends. A plain block ends at
+ * a blank line or at the end; a part of a group (`part`) at a line end, since
+ * the next part follows on the next line and a part is one label line and
+ * one excerpt line. A substring test took a shortened copy for the longer
+ * one: a note shown whole, then edited to drop its last sentence, was a
+ * prefix of its earlier copy and was left out, so the model kept the old text.
+ */
+function holdsBlock(content: string, block: string, part: boolean): boolean {
+  for (let at = content.indexOf(block); at >= 0; at = content.indexOf(block, at + 1)) {
+    if (at > 0 && content[at - 1] !== '\n') continue;
+    const after = content.slice(at + block.length);
+    if (after === '' || after === '\n' || after.startsWith('\n\n') || (part && after.startsWith('\n'))) return true;
+  }
+  return false;
+}
+
+/**
  * `promptContext` without the `blocks` an earlier user message in `history`
  * already carries, plus `REPEATED_CONTEXT_NOTE` when any went.
  */
@@ -99,11 +117,12 @@ export function withoutRepeatedContext(
   const omitted: string[] = [];
   const fences: OmittedFence[] = [];
   const leftOut: string[] = [];
-  const inView = (block: string) => block.length >= MIN_BLOCK_CHARS && out.includes(block) && earlier.some((content) => content.includes(block));
+  const inView = (block: string, part: boolean) =>
+    block.length >= MIN_BLOCK_CHARS && out.includes(block) && earlier.some((content) => holdsBlock(content, block, part));
   for (const raw of blocks) {
     if (typeof raw === 'string') {
       const block = raw.trim();
-      if (!inView(block)) continue;
+      if (!inView(block, false)) continue;
       out = out.replace(block, '');
       omitted.push(block);
       leftOut.push(block);
@@ -114,7 +133,7 @@ export function withoutRepeatedContext(
     if (!out.includes(whole)) continue;
     const went: string[] = [];
     for (const part of raw.parts.map((p) => p.trim())) {
-      if (!inView(part)) continue;
+      if (!inView(part, true)) continue;
       out = out.replace(part, '');
       went.push(part);
     }
@@ -159,7 +178,8 @@ export function restoreOmittedContext(history: AgentMessage[], turn: OmittedCont
   const message = history.find((m) => m.role === 'user' && m.content === turn.content);
   if (!message) return undefined;
   const others = userContents(history.filter((m) => m !== message));
-  const missing = turn.omitted.filter((block) => !others.some((content) => content.includes(block)));
+  const isPart = (block: string) => Boolean(turn.fences?.some((f) => f.parts.includes(block)));
+  const missing = turn.omitted.filter((block) => !others.some((content) => holdsBlock(content, block, isPart(block))));
   if (!missing.length) return turn;
   const still = turn.omitted.filter((block) => !missing.includes(block));
   let content = turn.content;
