@@ -646,6 +646,9 @@ labels reflect blast radius, not contract guarantees.
   its path and says so; `http`/`https` links still open in the browser.
 - **Terminal chat: `/clear` keeps the composer and status rows.** On the
   alternate screen `/clear` left them blank until something redrew them.
+- **Terminal chat: transcript search finds every message in memory.** It
+  searched only the rendered window of the newest 200–400 messages, so older
+  ones were neither found nor counted.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

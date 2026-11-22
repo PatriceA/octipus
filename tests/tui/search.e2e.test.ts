@@ -37,6 +37,20 @@ describe.skipIf(process.platform === 'win32')('search in a real terminal', () =>
     expect(historyRows(await rowsOf(tui))).toEqual(reading);
   });
 
+  test('the search finds and counts messages outside the rendered window too', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
+    await tui.waitFor('connected');
+    // More messages than the transcript renders at once (a window of 200, up to 400 while following).
+    for (let n = 0; n < 450; n++) tui.event('chat.response', { response: `Message ${n}${n < 3 ? ' haystack-needle' : ''}` });
+    await tui.waitFor('Message 449');
+    tui.send(CTRL_F);
+    tui.send('haystack-needle');
+    await tui.waitFor('/3');
+    tui.send(KEY.Enter);
+    await tui.waitFor('haystack-needle');
+    expect((await tui.text())).toMatch(/Message [012] haystack-needle/);
+  });
+
   test('/search opens the same search; at the latest, Escape comes back to the latest', async () => {
     tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
     await tui.waitFor('connected');

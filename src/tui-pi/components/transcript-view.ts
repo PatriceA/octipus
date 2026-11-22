@@ -10,6 +10,9 @@
  * The pane renders only a window of the newest items. Near the top of that
  * window this view lets older items in and moves the scroll position down by
  * the rows they added, in the same frame, so what is on screen stays put.
+ * While the transcript search is open (`showAll`) every item in memory is
+ * rendered: the search reads the rendered rows, and a message outside the
+ * window was neither found nor counted.
  */
 import { type Component, ScrollView, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
@@ -34,6 +37,8 @@ export class TranscriptScroll extends ScrollView {
 
 export class TranscriptDocument implements Component {
   private scroll: TranscriptScroll | null = null;
+  /** Render everything in memory, not just the window (the search is open). */
+  showAll: () => boolean = () => false;
 
   constructor(readonly pane: MessagesPane) {}
 
@@ -44,6 +49,14 @@ export class TranscriptDocument implements Component {
 
   render(width: number): string[] {
     const scroll = this.scroll;
+    if (this.showAll()) {
+      if (this.pane.canGrow()) {
+        const before = this.pane.documentLines(width).length;
+        this.pane.growAll();
+        if (scroll && !scroll.isFollowingEnd) scroll.pendingShift += this.pane.documentLines(width).length - before;
+      }
+      return this.pane.documentLines(width);
+    }
     if (scroll && !scroll.isFollowingEnd && scroll.viewportHeight > 0 && scroll.scrollTop < scroll.viewportHeight && this.pane.canGrow()) {
       const before = this.pane.documentLines(width).length;
       this.pane.growWindow();

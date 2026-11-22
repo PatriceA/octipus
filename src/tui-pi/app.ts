@@ -248,6 +248,8 @@ export class OctipusTuiApp {
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
       this.transcript = createTranscriptView(this.messages);
+      // The search reads the rendered rows: while it is open, render every message in memory.
+      this.transcript.document.showAll = () => this.search?.isOpen() ?? false;
       tui.setLayoutRoot(new VStack([
         { component: this.transcript, basis: 0, grow: 1, minSize: 0 },
         { component: new ChatFooter(parts, rows), basis: 'auto', shrink: 0 },

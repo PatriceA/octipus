@@ -216,6 +216,12 @@ export class MessagesPane implements Component {
     this.changed();
     return true;
   }
+  /** Bring every item in memory into view (the search is open). */
+  growAll(): void {
+    if (!this.windowStart) return;
+    this.windowStart = 0;
+    this.changed();
+  }
   /** Back to the latest window; call only while the end is shown. */
   trimWindow(): void {
     const start = Math.max(0, this.history.length - this.windowSize);
