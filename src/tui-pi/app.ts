@@ -13,7 +13,8 @@ import { QueuedMessages } from './components/queued-messages';
 import { FuzzyList } from '@/tui-kit/fuzzy-list';
 import type { TranscriptSearch } from '@/tui-kit/transcript-search';
 import type { Attention } from './attention';
-import { getFuzzyListTheme } from './theme/defaults';
+import { getFuzzyListTheme, getPalette, paletteForBackground, type PaletteName, setPalette, THEME_SETTINGS, type ThemeSetting } from './theme/defaults';
+import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -72,7 +73,18 @@ export interface OctipusTuiAppOptions {
   search?: TranscriptSearch;
   /** Focus, notifications and the window title (`runtime.attention`). */
   attention?: Attention;
+  /** `theme` from `~/.octipus/tui.json`; `auto` asks the terminal for its background. */
+  theme?: ThemeSetting;
+  /** Where `/theme` saves the choice (tests point it elsewhere). */
+  settingsPath?: string;
 }
+
+const THEME_DESCRIPTIONS: Record<ThemeSetting, string> = {
+  auto: 'Dark or light, from the terminal\'s background',
+  dark: 'Light text on a dark background',
+  light: 'Dark text on a light background',
+  'high-contrast': 'White on black, the strongest colours',
+};
 
 /** Input history kept for Ctrl+R: the newest first, no repeats. */
 const HISTORY_MAX = 500;
@@ -157,6 +169,8 @@ export class OctipusTuiApp {
   private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
   private readonly search?: TranscriptSearch;
   private readonly attention?: Attention;
+  private themeSetting: ThemeSetting;
+  private readonly settingsPath: string;
   private imageBusy = false;
   private imageCounter = 0;
 
@@ -180,6 +194,9 @@ export class OctipusTuiApp {
     this.mouse = options.mouse ?? 'app';
     this.search = options.search;
     this.attention = options.attention;
+    this.themeSetting = options.theme ?? 'auto';
+    this.settingsPath = options.settingsPath ?? DEFAULT_SETTINGS_PATH;
+    if (this.themeSetting !== 'auto') setPalette(this.themeSetting);
     this.sessionUsed = options.sessionId !== undefined;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
@@ -268,7 +285,52 @@ export class OctipusTuiApp {
 
   async start(): Promise<void> {
     this.tui.start();
+    if (this.themeSetting === 'auto') this.detectTheme();
     await this.adapter.connect();
+  }
+
+  /**
+   * `auto`: ask the terminal for its background (OSC 11) and take the light
+   * palette on a light one. A terminal that does not answer keeps dark; one
+   * that answers late (over SSH) still switches.
+   */
+  private detectTheme(): void {
+    const apply = (colors: { background?: { r: number; g: number; b: number } }) => {
+      if (this.themeSetting === 'auto' && colors.background) this.applyPalette(paletteForBackground(colors.background));
+    };
+    this.tui.queryTerminalColors({ timeoutMs: 400, onLateReply: apply }).then(apply, (error: unknown) => {
+      this.pushMessage('system', `Could not ask the terminal for its colours: ${error instanceof Error ? error.message : String(error)}. Keeping the ${getPalette().name} theme; /theme sets one.`);
+    });
+  }
+
+  private applyPalette(name: PaletteName): void {
+    if (getPalette().name === name) return;
+    setPalette(name);
+    this.tui.invalidate();
+    this.tui.requestRender(true);
+  }
+
+  /** `/theme [auto|dark|light|high-contrast]`: switch now and save it in tui.json; alone, a picker. */
+  private setTheme(value: string): void {
+    if (!value) {
+      this.openPicker<ThemeSetting>('Theme', THEME_SETTINGS.map(theme => ({ value: theme, label: theme === this.themeSetting ? `${theme}  (current)` : theme, description: THEME_DESCRIPTIONS[theme] })), theme => this.setTheme(theme));
+      return;
+    }
+    if (!(THEME_SETTINGS as readonly string[]).includes(value)) {
+      this.pushMessage('system', `Error: unknown theme "${value}": one of ${THEME_SETTINGS.join(', ')}.`);
+      return;
+    }
+    const theme = value as ThemeSetting;
+    this.themeSetting = theme;
+    if (theme === 'auto') this.detectTheme();
+    else this.applyPalette(theme);
+    try {
+      writeSetting('theme', theme, this.settingsPath);
+    } catch (error) {
+      this.pushMessage('system', `Error: theme ${theme} is on for now but was not saved: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    this.pushMessage('system', `Theme: ${theme}${theme === 'auto' ? ` (${getPalette().name} for now)` : ''}. Saved in ${this.settingsPath}.`);
   }
 
   /**
@@ -959,6 +1021,9 @@ export class OctipusTuiApp {
         return;
       case 'scrollback':
         void this.dumpTranscript();
+        return;
+      case 'theme':
+        this.setTheme(value);
         return;
       case 'search':
         if (!this.search) { this.pushMessage('system', 'Transcript search needs the alternate screen; it is not available with --inline.'); return; }

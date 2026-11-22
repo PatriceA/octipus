@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { parseTerminalArgs, readSettingsFile, resolveTerminalSettings } from './settings';
+import { parseTerminalArgs, readSettingsFile, readThemeSetting, resolveTerminalSettings, writeSetting } from './settings';
 import { parseProjectArg } from './index';
 
 const file = (content: string) => {
@@ -33,4 +33,14 @@ test('a bad value fails loudly, naming the file and the choices', () => {
 test('the mouse mode after --mouse is not taken for the project path', () => {
   expect(parseProjectArg(['--mouse', 'native'])).toBeUndefined();
   expect(parseProjectArg(['--inline', '--mouse', 'off', '/work/repo'])).toBe('/work/repo');
+});
+
+test('a saved setting keeps the others; a malformed file is not overwritten', () => {
+  const path = file('{ "mouse": "native" }');
+  writeSetting('theme', 'light', path);
+  expect(readSettingsFile(path)).toEqual({ mouse: 'native', theme: 'light' });
+  expect(readThemeSetting(path)).toBe('light');
+  const bad = file('{ "mouse": "sometimes" }');
+  expect(() => writeSetting('theme', 'dark', bad)).toThrow(/mouse/);
+  expect(() => readSettingsFile(file('{ "theme": "sepia" }'))).toThrow(/theme is one of auto, dark, light, high-contrast/);
 });

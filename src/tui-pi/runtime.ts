@@ -9,7 +9,8 @@ import { defaultClipboardEnvironment } from '@/tui-kit/clipboard';
 import { installTranscriptSearch, type TranscriptSearch } from '@/tui-kit/transcript-search';
 import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
-import { type MouseMode, readNotifySetting, resolveTerminalSettings, type ScreenMode } from './settings';
+import { type MouseMode, readNotifySetting, readThemeSetting, resolveTerminalSettings, type ScreenMode } from './settings';
+import { setPalette } from './theme/defaults';
 import { Attention, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON, type NotifyMethod } from './attention';
 
 export interface RuntimeOptions {
@@ -134,6 +135,9 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const mouse = options.mouse ?? settings.mouse;
 
   const notify = options.notify ?? readNotifySetting();
+  // A fixed theme applies to both surfaces from the first frame; `auto` is the chat's to detect once the screen runs.
+  const theme = readThemeSetting();
+  if (theme !== 'auto') setPalette(theme);
   // The alternate screen with app mouse turns focus reporting on itself and
   // reads the reports (a focus loss ends a drag); everywhere else they are ours.
   const screenReportsFocus = screen === 'alt' && mouse === 'app';
