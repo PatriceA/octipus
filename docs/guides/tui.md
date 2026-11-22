@@ -24,6 +24,8 @@ User turns have a **You** heading and a vertical rail on every wrapped line. Rep
 
 The activity line shows thinking, elapsed time, model and current tool activity; it disappears when the turn ends, so the status bar keeps the model of the current or last turn at the end of its line, and drops it on `/resume`. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
 
+Text from the agent, tools and the server is reduced to what a terminal draws predictably before it is shown: control characters and escape sequences are removed, tabs become spaces, invisible format characters (variation selectors, soft hyphens, bidi controls) are dropped, and joined emoji (families, skin tones) are shown as their separate emoji. `/copy` copies the original text. Scripts with spacing vowel signs (Devanagari, Tibetan and similar) can still be measured narrower than the terminal draws them, which may wrap a row.
+
 The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls or mouse wheel for the transcript. Resizing reflows history without dropping text beyond the right edge.
 
 Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting.

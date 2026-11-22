@@ -53,10 +53,6 @@ function newSessionId(): string {
   return randomUUID();
 }
 
-function sanitize(text: string): string {
-  return text.replace(/[︎️]/g, '');
-}
-
 interface SessionRow { id: string; title: string; updatedAt: string; messages: number }
 const isSessionRow = (v: unknown): v is SessionRow => {
   const r = v as SessionRow | null;
@@ -205,7 +201,7 @@ export class OctipusTuiApp {
     const rows = Array.isArray(data) ? data.filter(isHistoryRow) : [];
     this.messages.reset();
     this.subagents.reset();
-    for (const m of rows) this.messages.push({ role: m.role, content: sanitize(m.content), timestamp: new Date(m.at) });
+    for (const m of rows) this.messages.push({ role: m.role, content: m.content, timestamp: new Date(m.at) });
     this.messages.scrollToBottom();
     this.pushMessage('system', `Session ${this.sessionId.slice(0, 8)} · ${rows.length} message${rows.length === 1 ? '' : 's'} replayed.`);
   }
@@ -259,7 +255,7 @@ export class OctipusTuiApp {
     const wasAtBottom = this.messages.getScrollOffset() === 0;
     // Interactive answers render only in the web app: a plain line here.
     const text = role === 'assistant' ? inlineUiFallbackText(content) : content;
-    this.messages.push({ role, content: sanitize(text).replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
+    this.messages.push({ role, content: text.replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
     if (wasAtBottom) this.messages.scrollToBottom();
     this.tui.requestRender();
   }

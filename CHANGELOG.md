@@ -34,6 +34,17 @@ labels reflect blast radius, not contract guarantees.
   screen.** Every box — prompts, the command palette and the editor's file
   picker, find, diff and other boxes — is drawn one terminal row per row and
   cut to its width, so a control byte in what it shows cannot break the frame.
+- **Terminal chat: `/copy` copies the reply as it arrived.** Since the
+  composer fix a copied reply had its tabs turned into spaces and its line
+  endings and escape sequences altered — the screen's cleaned version. It now
+  copies the original text.
+- **Terminal chat and editor: emoji sequences no longer shift the frame.** An
+  emoji family, a skin tone or a flag made of joined pieces is measured as two
+  cells, but most terminals (xterm, GNOME Terminal and other VTE terminals,
+  tmux) draw every piece — so the row wrapped. Such sequences are now drawn as
+  their separate emoji (👨‍👩‍👧 as 👨👩👧, 👍🏽 as 👍), and invisible format
+  characters (variation selectors, soft hyphens, bidi controls) are removed
+  from displayed text. `/copy` still copies the original.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).

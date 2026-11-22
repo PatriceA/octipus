@@ -18,6 +18,20 @@
 const ESCAPE_SEQUENCES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[PX^_][^\x1b]*(?:\x1b\\)?|[ -/]*[0-~])?/g;
 /** C0 without tab and newline, DEL, and the C1 block. */
 const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+/**
+ * Invisible format characters — variation selectors, soft hyphen, bidi marks
+ * and isolates, fillers, tags. pi-tui counts them as no cells; terminals often
+ * draw one (a lone VS16, a soft hyphen, an isolate), and a row they widen
+ * wraps. ZWJ and ZWNJ shape scripts and stay, except ZWJ inside emoji.
+ */
+const INVISIBLE = /[\p{Default_Ignorable_Code_Point}--[\u200c\u200d]]/gv;
+/**
+ * Emoji joined into one glyph — a ZWJ sequence, a skin-tone modifier. pi-tui
+ * counts the cluster as two cells; a terminal without grapheme clustering
+ * (xterm, VTE, tmux) draws every piece, two cells each. Unjoined, the pieces
+ * measure the same in both.
+ */
+const EMOJI_JOINERS = /(?<=\p{Extended_Pictographic})(?:\u200d|\p{Emoji_Modifier})|\u200d(?=\p{Extended_Pictographic})/gu;
 /** What a finished frame row may not contain. ESC and BEL stay: the app's own styling, links and cursor marker use them. */
 const ROW_BREAKERS = /[\x00-\x06\x08\x0a-\x1a\x1c-\x1f\x7f]/g;
 
@@ -28,7 +42,10 @@ export function displayText(text: string): string {
     .replace(/\r\n?/g, '\n')
     // A terminal advances a tab to the next stop; pi-tui counts three cells. Spaces are the same in both.
     .replace(/\t/g, '    ')
-    .replace(CONTROLS, '');
+    .replace(CONTROLS, '')
+    // Widths: what pi-tui measures is what the terminal draws (terminal-text.width.test.ts).
+    .replace(INVISIBLE, '')
+    .replace(EMOJI_JOINERS, '');
 }
 
 /** One-row display text for labels, previews and status segments. */
