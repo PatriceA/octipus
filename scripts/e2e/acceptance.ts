@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
+import { json, sse, startScriptedProvider, text } from '../../src/models/testing/scripted-provider';
 
 const artifact = resolve('dist/index.js');
 const root = await mkdtemp(join(tmpdir(), 'octi-acceptance-'));
@@ -26,11 +27,11 @@ let environmentWait: Promise<void> | undefined;
 const metrics: Array<{ scenario: string; passed: boolean; durationMs: number; modelCalls: number }> = [];
 
 interface ModelMessage { role: string; content?: string; tool_calls?: unknown[] }
-const provider = createServer(async (req, res) => {
+const provider = await startScriptedProvider();
+provider.respondWith(async (req) => {
   try {
-    let body = ''; for await (const part of req) body += part;
-    if (req.url?.includes('/models')) { res.end(JSON.stringify({ data: [{ id: 'acceptance-fixture' }] })); return; }
-    const input = JSON.parse(body || '{}') as { messages?: ModelMessage[]; stream?: boolean };
+    if (req.path.includes('/models')) return json({ data: [{ id: 'acceptance-fixture' }] });
+    const input = (req.body ?? {}) as { messages?: ModelMessage[]; stream?: boolean };
     modelCalls++;
     const messages = input.messages ?? [];
     if (environmentWait && messages.some(m => m.content?.includes('ENVIRONMENT_REVOKE_WAIT')) && messages.some(m => m.content?.includes('EXECUTION ENVIRONMENT:'))) { environmentWaitStarted?.(); await environmentWait; }
@@ -43,15 +44,11 @@ const provider = createServer(async (req, res) => {
     const message = { role: 'assistant', content: call ? null : 'The fixture response is 42.', ...(call ? { tool_calls: [call] } : {}) };
     const envelope = { id: `fixture-${modelCalls}`, object: 'chat.completion', created: 1, model: 'acceptance-fixture',
       choices: [{ index: 0, message, finish_reason: call ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 25, total_tokens: 125 } };
-    if (input.stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      const delta = call ? { role: 'assistant', tool_calls: [{ index: 0, ...call }] } : { role: 'assistant', content: message.content };
-      res.end(`data: ${JSON.stringify({ ...envelope, choices: [{ index: 0, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ ...envelope, choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
-    } else { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(envelope)); }
-  } catch { res.statusCode = 500; res.end('fixture provider failed'); }
+    if (!input.stream) return json(envelope);
+    const delta = call ? { role: 'assistant', tool_calls: [{ index: 0, ...call }] } : { role: 'assistant', content: message.content };
+    return sse([{ ...envelope, choices: [{ index: 0, delta, finish_reason: null }] }, { ...envelope, choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }] }]);
+  } catch { return text('fixture provider failed', { status: 500 }); }
 });
-await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
-const address = provider.address(); assert(address && typeof address !== 'string');
 const portProbe = createServer(); await new Promise<void>(resolve => portProbe.listen(0, '127.0.0.1', resolve));
 const portAddress = portProbe.address(); assert(portAddress && typeof portAddress !== 'string');
 const port = portAddress.port; await new Promise<void>(resolve => portProbe.close(() => resolve()));
@@ -60,7 +57,7 @@ const env = { ...process.env, DATA_DIR: join(root, 'data'), STORAGE_MODE: 'embed
   API_PORT: String(port), API_HOST: '127.0.0.1', WORKSPACE_PATH: workspace, DOCUMENTS_PATH: join(root, 'documents'),
   MASTER_KEY: randomBytes(32).toString('hex'), JWT_SECRET: randomBytes(32).toString('hex'), SESSION_SECRET: randomBytes(32).toString('hex'),
   BOOTSTRAP_PROVIDER: 'custom-openai', BOOTSTRAP_MODEL: 'acceptance-fixture', BOOTSTRAP_API_KEY: 'fixture-only',
-  BOOTSTRAP_BASE_URL: `http://127.0.0.1:${address.port}/v1`, LOG_LEVEL: 'warn' };
+  BOOTSTRAP_BASE_URL: `${provider.url}/v1`, LOG_LEVEL: 'warn' };
 async function boot() {
   backend = spawn(process.execPath, [artifact], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = createWriteStream(join(root, 'backend.log'), { flags: 'a' });
@@ -193,7 +190,7 @@ try {
   });
 } finally {
   releaseEnvironmentWait?.();
-  await stop(); provider.closeAllConnections(); await new Promise<void>(resolve => provider.close(() => resolve()));
+  await stop(); await provider.close();
   const report = { provider: 'scripted OpenAI-compatible boundary', model: 'acceptance-fixture',
     artifact, evidence: 'production backend, real HTTP and filesystem/database', metrics, liveModelQuality: 'unmeasured' };
   const reportPath = process.env.ACCEPTANCE_REPORT ?? join(root, 'report.json');
