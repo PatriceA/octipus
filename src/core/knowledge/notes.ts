@@ -14,6 +14,7 @@ import { coreLogger } from '@/utils/logger';
 import { type EmbeddingService, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { type KnowledgeOwner, noteKnowledgeScope } from '@/core/rag/knowledge-scope';
 import { getLinkResolverService, type LinkResolverService } from './link-resolver';
+import { NOTE_PURPOSES, notePurposeFor } from './note-purpose';
 import { parseLinks, slugify } from './wikilink';
 
 /**
@@ -27,7 +28,9 @@ import { parseLinks, slugify } from './wikilink';
  *   2. re-link — parse `[[wikilinks]]`/`#tags`, sync `knowledge_links`,
  *      resolve any ghost edges that pointed at this note's slug, then give
  *      the leftovers one similarity guess (`link-resolver.ts`);
- *   3. re-index — chunk the body into `embeddings` (`purpose='note'`).
+ *   3. re-index — chunk the body into `embeddings` under the purpose the
+ *      note's kind calls for (`notePurposeFor`: `'lesson'` for a lesson note
+ *      a learning review wrote, `'note'` for every other note).
  *
  * Every method takes a `NoteScope` (docs/plans/coworking-spec.md §5.5): a
  * user's personal notes, or one space's notes. Lookups, link resolution and
@@ -244,8 +247,9 @@ export class NoteService {
       // Report the *actual* index state (a prior save may have failed to
       // index when no embedding model was configured) rather than assuming
       // success — otherwise `indexed:true` would lie about searchability.
-      if (bodyUnchanged) {
-        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource(noteKnowledgeScope(scope), 'note', sourceIdFor(note.id))) > 0;
+      // A kind change that moves the chunks to another purpose re-indexes.
+      if (bodyUnchanged && notePurposeFor(existing.noteKind) === notePurposeFor(note.noteKind)) {
+        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource(noteKnowledgeScope(scope), notePurposeFor(note.noteKind), sourceIdFor(note.id))) > 0;
         return { note: this.withLive(scope, note), created, indexed, links: { added: 0, removed: 0 }, merged };
       }
     } else {
@@ -439,12 +443,19 @@ export class NoteService {
     return live ? { ...note, body: live.text, bodySha256: live.sha256 } : note;
   }
 
-  /** Replace the note's embedding chunks. Throws on failure. */
+  /**
+   * Remove the note's chunks under every note purpose, so a note whose kind
+   * changed (a note made a lesson, or back) keeps no rows under the old one.
+   */
+  private async deleteChunks(note: Note): Promise<void> {
+    for (const purpose of NOTE_PURPOSES) await this.embeddings.deleteBySource(noteOwner(note), purpose, sourceIdFor(note.id));
+  }
+
+  /** Replace the note's embedding chunks, under the purpose of its kind. Throws on failure. */
   private async indexChunks(note: Note): Promise<void> {
-    const owner = noteOwner(note);
-    await this.embeddings.deleteBySource(owner, 'note', sourceIdFor(note.id));
+    await this.deleteChunks(note);
     if (note.body.trim().length === 0) return;
-    await this.embeddings.indexText(owner, 'note', sourceIdFor(note.id), note.body, {
+    await this.embeddings.indexText(noteOwner(note), notePurposeFor(note.noteKind), sourceIdFor(note.id), note.body, {
       title: note.title,
     });
   }
@@ -458,7 +469,7 @@ export class NoteService {
     if (!(await capabilityConfigured('embedding'))) {
       // The earlier body's chunks go now (deleting needs no model), so a
       // keyword search never serves text the note no longer has.
-      await this.embeddings.deleteBySource(noteOwner(note), 'note', sourceIdFor(note.id))
+      await this.deleteChunks(note)
         .catch((err: unknown) => coreLogger.warn({ err, noteId: note.id }, 'Could not remove the earlier chunks of an edited note'));
       if (note.body.trim().length === 0) return true;
       await recordSkipped({ kind: 'note', sourceId: note.id, ownerUserId: note.userId, workspaceId: note.workspaceId ?? null })
@@ -600,7 +611,7 @@ export class NoteService {
     const note = await store.getById(id);
     if (!note) return false;
     if (scope.kind === 'space') await this.hub().closeNote(id, 'deleted');
-    await this.embeddings.deleteBySource(noteOwner(note), 'note', sourceIdFor(id));
+    await this.deleteChunks(note);
     await this.links.deleteForEntity(SOURCE_PREFIX, id);
     return store.delete(id);
   }

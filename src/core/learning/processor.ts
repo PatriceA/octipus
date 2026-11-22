@@ -1,5 +1,4 @@
 import { capabilityConfigured } from '@/core/capabilities/gates';
-import { createHash } from 'node:crypto';
 import { sessionAudience } from '@/core/agent/audience';
 import { z } from 'zod';
 import type { BackgroundJob } from '@/db/schema/background-jobs';
@@ -13,8 +12,6 @@ import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
 import { verifyOwnerQuotes } from '@/core/memory/owner-messages';
 import { expiryOf, ownerTimezone } from '@/core/memory/extractor';
-import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
-import { getNoteService } from '@/core/knowledge/notes';
 import { fileSkillPatchProposal, fileSkillProposal } from '@/services/file-skill-proposal';
 import { SkillPatchError } from '@/skills/patch';
 import { getPermissionManager } from '@/security/permissions';
@@ -24,6 +21,7 @@ import type { FileSkillProposalResult } from '@/services/file-skill-proposal';
 import { type ExistingContext, existingChars, gatherEvidence, gatherPatchableSkills, gatherReviewContext, type PatchableSkill, patchTargetChars, previousReviewThrough } from './evidence';
 import { coreLogger } from '@/utils/logger';
 import { LEARNING_PROMPT, parseLearningReview } from './review';
+import { fileLessonNote } from './lesson-notes';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
 import { estimateTokens } from '@/utils/token-count';
 
@@ -75,11 +73,11 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     } catch (err) {
       coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read patch targets; reviewing without them');
     }
-    let existing: ExistingContext = { skills: [], proposals: [] };
+    let existing: ExistingContext = { skills: [], proposals: [], notes: [] };
     try {
-      ({ existing, patchTargets: learnedSkills } = await gatherReviewContext(job.userId, session.id, through, payload.plan, learnedSkills));
+      ({ existing, patchTargets: learnedSkills } = await gatherReviewContext(job.userId, workspaceId, session.id, through, payload.plan, learnedSkills));
     } catch (err) {
-      coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read existing skills and proposals; reviewing without them');
+      coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read existing skills, proposals and lesson notes; reviewing without them');
     }
     // Their text counts against the same input budget as the evidence.
     const evidence = await gatherEvidence(job.userId, session.id, through, payload.plan,
@@ -92,10 +90,15 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const model = await getModelRegistry().getModelForTopic('background');
     if (!model) throw new Error('No model bound to background; configure one on Topics');
     await backgroundJobRepository.progress(job.id, { stage: 'reviewing', detail: `${evidence.length} bounded evidence excerpts` });
-    // Without an embedding model memory is off: the review is not asked for memories.
-    const prompt = (await capabilityConfigured('embedding'))
-      ? LEARNING_PROMPT
-      : `${LEARNING_PROMPT}\nMemory is off on this install: always return "memories": [].`;
+    // Without an embedding model memory is off: the review is not asked for
+    // memories. `maxLessonsPerReview` bounds the lesson notes filed (below);
+    // the review is told so it spends no output on the rest.
+    const { maxLessonsPerReview } = getConfig().learning;
+    const prompt = [LEARNING_PROMPT,
+      ...(await capabilityConfigured('embedding')) ? [] : ['Memory is off on this install: always return "memories": [].'],
+      ...maxLessonsPerReview <= 0 ? ['Lesson notes are off on this install: always return "knowledge": [].']
+        : maxLessonsPerReview === 1 ? ['Return at most 1 knowledge item.'] : [],
+    ].join('\n');
     const systemText = `${SECURITY_PREAMBLE}\n\n${prompt}`;
     const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence, learnedSkills, existing });
     const contextRoom = model.contextWindow == null ? Infinity
@@ -124,30 +127,27 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     if (response.finishReason === 'length') {
       throw new Error(`Learning review truncated at output limit: ${budget} tokens; model ${model.name ?? model.modelId}; output ${response.usage?.outputTokens ?? 'unknown'}, reasoning ${response.usage?.reasoningTokens ?? 'unknown'}. Increase this model's default output budget or reduce its reasoning setting.`);
     }
-    const review = parseLearningReview(response.content ?? '', evidence, { offeredProposals: existing.proposals.map(item => item.ref) });
+    const review = parseLearningReview(response.content ?? '', evidence, {
+      offeredProposals: existing.proposals.map(item => item.ref), offeredNotes: existing.notes.map(item => item.ref) });
     if (review.ignoredExtends.length) {
       coreLogger.warn({ jobId: job.id, ignoredExtends: review.ignoredExtends }, 'Learning check: a skill extends a proposal that was not offered; filed without it');
+    }
+    if (review.ignoredNoteExtends.length) {
+      coreLogger.warn({ jobId: job.id, ignoredExtends: review.ignoredNoteExtends }, 'Learning check: a lesson extends a note that was not offered; filed without it');
     }
     const canWrite = async (toolId: string, action: string, args: Record<string, unknown>) => {
       const permission = await getPermissionManager().check(job.userId, toolId, action, args,
         { sessionId: session.id, workspaceId: workspaceId ?? undefined }, { defaultLevel: 'ALLOW' });
       if (permission.level !== 'ALLOW') throw new Error(`${toolId}.${action} requires ${permission.level}; automatic learning cannot approve it`);
     };
-    const citations = (ids: string[]) => `\n\nEvidence: session ${session.id}; ${ids.join(', ')}. Learning check ${job.id}.`;
-    for (const item of review.knowledge) {
+    if (review.knowledge.length > maxLessonsPerReview) {
+      coreLogger.info({ jobId: job.id, proposed: review.knowledge.length, maxLessonsPerReview }, 'Learning check: lessons beyond learning.maxLessonsPerReview are not filed');
+    }
+    for (const item of review.knowledge.slice(0, Math.max(0, maxLessonsPerReview))) {
       try {
-        const body = filterPII(item.content).filtered;
-        await canWrite('knowledge', 'index', { content: body });
-        const fingerprint = createHash('sha256').update(body.toLowerCase().replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 24);
-        const existing = await getNoteRepository().getBySlug(job.userId, workspaceId, `learning-${fingerprint}`);
-        if (existing) {
-          outputs.push({ kind: 'knowledge', status: 'duplicate', id: existing.id }); continue;
-        }
-        const saved = await getNoteService().save({ scope: personalNoteScope(job.userId, workspaceId),
-          slug: `learning-${fingerprint}`, title: filterPII(item.title).filtered, body: body + citations(item.sources),
-          tags: ['session-learning'], frontmatter: { sessionId: session.id, learningJobId: job.id, sources: item.sources } });
-        outputs.push({ kind: 'knowledge', status: saved.indexed ? saved.created ? 'saved' : 'duplicate' : 'saved_unindexed', id: saved.note.id,
-          ...(!saved.indexed ? { detail: 'Note saved; embedding/indexing unavailable' } : {}) });
+        await canWrite('knowledge', 'index', { content: filterPII(item.content).filtered });
+        const result = await fileLessonNote(item, { userId: job.userId, workspaceId, sessionId: session.id, jobId: job.id });
+        outputs.push({ kind: 'knowledge', status: result.status, id: result.id, ...(result.detail ? { detail: result.detail } : {}) });
       } catch (err) { outputs.push({ kind: 'knowledge', status: 'failed', detail: errorText(err) }); }
     }
     for (const dropped of review.droppedMemories) outputs.push({ kind: 'memory', status: 'rejected', detail: dropped.reason });

@@ -10,6 +10,7 @@ import { withInstallUsage } from '@/models/providers/instrumented';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { entityRefFromSourceId } from './graph';
+import { NOTE_PURPOSES } from './note-purpose';
 import type { WikiLink } from './wikilink';
 
 /**
@@ -216,7 +217,7 @@ export class LinkResolverService {
       noteKnowledgeScope(scope),
       target,
       MAX_CANDIDATES * 4,
-      'note',
+      NOTE_PURPOSES,
       undefined,
       MIN_CANDIDATE_SIMILARITY,
     );

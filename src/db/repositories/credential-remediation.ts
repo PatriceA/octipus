@@ -101,7 +101,7 @@ export async function redactCredentialRecords(owner: string, values: string[], a
           const updated = await queryRaw(`${statement}
             WHERE ${scope} AND t."${key}"=$2 AND ${checks.join(' AND ')} RETURNING t."${key}"`, params);
           if (updated.rows.length && table === 'notes' && body) await queryRaw(
-            "DELETE FROM embeddings WHERE user_id::text=$1 AND purpose='note' AND source_id=$2", [owner, `note:${row[key]}`]);
+            "DELETE FROM embeddings WHERE user_id::text=$1 AND purpose IN ('note','lesson') AND source_id=$2", [owner, `note:${row[key]}`]);
           applied = updated.rows.length === 1;
         }
         result.records.push({ table, id: String(row[key]), columns: changes.map(change => change.column), applied });

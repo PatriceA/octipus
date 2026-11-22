@@ -193,7 +193,9 @@ export class NoteRepository {
       .select()
       .from(notes)
       .where(and(...conditions))
-      .orderBy(desc(notes.pinned), sql`('session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
+      // Lessons (written by a learning review) after the user's own notes: by
+      // kind, or by the tag on a note written before lessons had a kind.
+      .orderBy(desc(notes.pinned), sql`(${notes.noteKind} = 'lesson' OR 'session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
       .limit(opts.limit ?? 50)
       .offset(opts.offset ?? 0);
   }

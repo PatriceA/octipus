@@ -7,12 +7,16 @@ import { visibleMessages } from '@/db/repositories/message-visibility';
 import { skills } from '@/db/schema/skills';
 import { skillProposals } from '@/db/schema/skill-proposals';
 import { verificationEvidence } from '@/db/schema/verification-evidence';
+import { embeddings } from '@/db/schema/embeddings';
+import { notes } from '@/db/schema/notes';
+import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { filterPII } from '@/core/agent/pii-filter';
 import { capabilityConfigured } from '@/core/capabilities/gates';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { ensureProposalEmbeddings, ensureSkillEmbeddings } from '@/skills/embedding-backfill';
 import { MAX_PATCHED_SKILL_CHARS } from '@/skills/patch';
 import { coreLogger } from '@/utils/logger';
+import { stripEvidenceFooter } from './lesson-notes';
 
 export interface LearningEvidence { id: string; kind: 'user' | 'assistant' | 'execution' | 'verification' | 'plan' | 'request'; text: string }
 export const MAX_EVIDENCE_CHARS = 40_000;
@@ -166,8 +170,18 @@ export interface ExistingItem {
   /** The first EXISTING_EXCERPT_CHARS of its content or draft (not for system skills). */
   excerpt?: string;
 }
-export interface ExistingContext { skills: ExistingItem[]; proposals: ExistingItem[] }
+/** A lesson note of the user in this workspace; a knowledge item's `extends` names its ref. */
+export interface ExistingNote {
+  /** `note:<id>`. */
+  ref: string;
+  title: string;
+  /** The first EXISTING_EXCERPT_CHARS of its body, without the legacy evidence footer. */
+  excerpt: string;
+}
+export interface ExistingContext { skills: ExistingItem[]; proposals: ExistingItem[]; notes: ExistingNote[] }
 export const NEAREST_EXISTING = 5;
+/** Without embeddings: the most recently updated lesson notes. */
+export const FALLBACK_NOTES = 10;
 export const EXISTING_EXCERPT_CHARS = 600;
 const EXISTING_DESCRIPTION_CHARS = 400;
 /** Without embeddings: the most recent open proposals, and learned-skill names. */
@@ -178,22 +192,24 @@ export const MAX_EXISTING_CHARS = 8_000;
 
 /** What `existing` takes of the review input, as part of gatherEvidence's `reserveChars`. */
 export function existingChars(existing: ExistingContext): number {
-  return [...existing.skills, ...existing.proposals].reduce((n, item) => n + JSON.stringify(item).length + 2, 0);
+  return [...existing.skills, ...existing.proposals, ...existing.notes].reduce((n, item) => n + JSON.stringify(item).length + 2, 0);
 }
 
-/** Keep `existing` within `budget`, nearest first, taking proposals and skills in turn. */
+/** Keep `existing` within `budget`, nearest first, taking proposals, skills and notes in turn. */
 export function boundExisting(existing: ExistingContext, budget = MAX_EXISTING_CHARS): ExistingContext {
-  const out: ExistingContext = { skills: [], proposals: [] };
+  const out: ExistingContext = { skills: [], proposals: [], notes: [] };
   let used = 0;
-  for (let i = 0; i < Math.max(existing.skills.length, existing.proposals.length); i++) {
-    for (const key of ['proposals', 'skills'] as const) {
-      const item = existing[key][i];
-      if (!item) continue;
-      const size = JSON.stringify(item).length + 2;
-      if (used + size > budget) continue;
-      out[key].push(item);
-      used += size;
-    }
+  const take = <K extends keyof ExistingContext>(key: K, item: ExistingContext[K][number] | undefined) => {
+    if (!item) return;
+    const size = JSON.stringify(item).length + 2;
+    if (used + size > budget) return;
+    (out[key] as Array<typeof item>).push(item);
+    used += size;
+  };
+  for (let i = 0; i < Math.max(existing.skills.length, existing.proposals.length, existing.notes.length); i++) {
+    take('proposals', existing.proposals[i]);
+    take('skills', existing.skills[i]);
+    take('notes', existing.notes[i]);
   }
   return out;
 }
@@ -251,6 +267,37 @@ const patchableBy = (userId: string) => and(sql`${skills.userId}::text = ${userI
   sql`${skills.id} NOT LIKE 'external:%'`, isNull(skills.archivedAt), isNull(skills.ownerEditedAt), ne(skills.content, ''),
   sql`length(${skills.content}) <= ${MAX_PATCHED_SKILL_CHARS}`);
 
+/** A lesson note shown in `existing.notes`. */
+const existingNote = (row: { id: string; title: string; body: string }): ExistingNote => ({
+  ref: `note:${row.id}`, title: redact(row.title, 150), excerpt: redact(stripEvidenceFooter(row.body), EXISTING_EXCERPT_CHARS),
+});
+
+/** The user's live lesson notes of exactly this workspace. */
+const lessonNotesOf = (userId: string, workspaceId: string) => and(eq(notes.userId, userId), eq(notes.workspaceId, workspaceId),
+  notInSharedWorkspace(notes.workspaceId), eq(notes.noteKind, 'lesson'), isNull(notes.archivedAt));
+
+/**
+ * Up to NEAREST_EXISTING lesson notes of `userId` in `workspaceId` nearest to
+ * `embedding`, ranked by their best `purpose = 'lesson'` chunk of this user
+ * and workspace; without an embedding, the FALLBACK_NOTES most recently updated.
+ */
+async function existingLessonNotes(userId: string, workspaceId: string, embedding: number[] | null): Promise<ExistingNote[]> {
+  const db = getDb();
+  if (!embedding) {
+    const rows = await db.select({ id: notes.id, title: notes.title, body: notes.body }).from(notes)
+      .where(lessonNotesOf(userId, workspaceId)).orderBy(desc(notes.updatedAt), desc(notes.id)).limit(FALLBACK_NOTES);
+    return rows.map(existingNote);
+  }
+  const distance = sql<number>`min(${embeddings.embedding} <=> ${`[${embedding.join(',')}]`}::vector)`;
+  const rows = await db.select({ id: notes.id, title: notes.title, body: notes.body, distance }).from(embeddings)
+    .innerJoin(notes, sql`${embeddings.sourceId} = 'note:' || ${notes.id}::text`)
+    .where(and(eq(embeddings.purpose, 'lesson'), eq(embeddings.userId, userId), eq(embeddings.workspaceId, workspaceId),
+      sql`vector_dims(${embeddings.embedding}) = ${embedding.length}`, lessonNotesOf(userId, workspaceId)))
+    .groupBy(notes.id, notes.title, notes.body)
+    .orderBy(distance, notes.id).limit(NEAREST_EXISTING);
+  return rows.map(existingNote);
+}
+
 const openProposalsOf = (userId: string) => and(eq(skillProposals.userId, userId), ne(skillProposals.kind, 'patch'),
   inArray(skillProposals.status, ['pending', 'candidate']));
 
@@ -262,16 +309,19 @@ const openProposalsOf = (userId: string) => and(eq(skillProposals.userId, userId
  *   the owner's open proposals, nearest to the plan title/goal plus the last
  *   typed user messages. Without an embedding model (or with nothing to rank
  *   by): the FALLBACK_PROPOSALS most recent open proposals and up to
- *   FALLBACK_SKILL_NAMES learned-skill names. Redacted, within MAX_EXISTING_CHARS.
+ *   FALLBACK_SKILL_NAMES learned-skill names. Also up to NEAREST_EXISTING of
+ *   the owner's lesson notes in `workspaceId` (without an embedding model, the
+ *   FALLBACK_NOTES most recently updated). Redacted, within MAX_EXISTING_CHARS.
  * - `patchTargets`: `loaded` (the skills this session loaded) first, then the
  *   nearest patchable learned skills, within the patch-target caps. A skill
  *   offered as a patch target is not repeated in `existing`.
  *
  * Nothing of another user is read. Caller validates session ownership.
  */
-export async function gatherReviewContext(userId: string, sessionId: string, through: Date, plan: unknown, loaded: PatchableSkill[]): Promise<{ existing: ExistingContext; patchTargets: PatchableSkill[] }> {
+export async function gatherReviewContext(userId: string, workspaceId: string, sessionId: string, through: Date, plan: unknown, loaded: PatchableSkill[]): Promise<{ existing: ExistingContext; patchTargets: PatchableSkill[] }> {
   const db = getDb();
   const embedding = await topicEmbedding(userId, await reviewTopicText(sessionId, through, plan));
+  const lessonNotes = await existingLessonNotes(userId, workspaceId, embedding);
   if (!embedding) {
     const [proposals, names] = await Promise.all([
       db.select({ id: skillProposals.id, name: skillProposals.name, description: skillProposals.description, draft: skillProposals.draftPromptTemplate })
@@ -287,6 +337,7 @@ export async function gatherReviewContext(userId: string, sessionId: string, thr
         proposals: proposals.map(row => ({ ref: `proposal:${row.id}`, name: redact(row.name, 100),
           description: redact(row.description, EXISTING_DESCRIPTION_CHARS), excerpt: redact(row.draft, EXISTING_EXCERPT_CHARS) })),
         skills: names.map(row => ({ ref: `skill:${row.id}`, name: redact(row.name, 100) })),
+        notes: lessonNotes,
       }),
     };
   }
@@ -316,6 +367,7 @@ export async function gatherReviewContext(userId: string, sessionId: string, thr
         ...(!row.isSystem && row.content ? { excerpt: redact(row.content, EXISTING_EXCERPT_CHARS) } : {}) })),
       proposals: proposals.map(row => ({ ref: `proposal:${row.id}`, name: redact(row.name, 100),
         description: redact(row.description, EXISTING_DESCRIPTION_CHARS), excerpt: redact(row.draft, EXISTING_EXCERPT_CHARS) })),
+      notes: lessonNotes,
     }),
   };
 }

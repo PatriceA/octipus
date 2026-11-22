@@ -197,7 +197,10 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/swarm/node-repository.ts': 'swarm run state, keyed by run',
   'src/core/invariants.ts': 'system invariant checks',
   'src/core/artifacts/cleanup.ts': 'system cleanup job',
-  'src/core/learning/evidence.ts': "a session's own messages and events, keyed by session id",
+  'src/core/learning/evidence.ts': "a session's own messages and events, keyed by session id, and the session owner's lesson notes of the job's personal workspace (notInSharedWorkspace)",
+  // Lesson notes (docs/plans/learning-notes-and-skill-discovery.md): the owner's own, personal workspaces only.
+  'src/core/learning/lesson-notes.ts': PERSONAL_READER,
+  'src/core/learning/consolidation.ts': PERSONAL_READER,
   'src/core/learning/queue.ts': "a session's learning jobs and events, keyed by session id",
   'src/api/routes/sessions.ts': "a session's learning jobs, after the scoped session lookup",
   'src/core/notification-service.ts': "a user's own inbox (every notification of a user is theirs)",

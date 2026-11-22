@@ -26,8 +26,22 @@ export type EmbeddingPurpose =
   | 'image_description'
   | 'knowledge_artifact'
   | 'note'
+  // A note a learning review wrote (`notes.note_kind = 'lesson'`); NoteService
+  // picks the purpose from the note's kind (`notePurposeFor`).
+  | 'lesson'
   | 'message'
   | 'ephemeral';
+
+/** One purpose, or several (e.g. a note search over `'note'` and `'lesson'`). */
+export type PurposeFilter = EmbeddingPurpose | readonly EmbeddingPurpose[];
+
+/** `AND purpose …` for a raw query; empty without a filter. */
+function purposeSql(purpose: PurposeFilter | undefined): SQL {
+  if (purpose === undefined) return sql``;
+  if (typeof purpose === 'string') return sql`AND purpose = ${purpose}`;
+  if (purpose.length === 0) return sql``;
+  return sql`AND purpose IN (${sql.join(purpose.map((p) => sql`${p}`), sql`, `)})`;
+}
 
 export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
@@ -686,7 +700,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, scope?: SearchScope): Promise<SearchResult[]> {
+  async search(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: PurposeFilter, minSimilarity = 0, scope?: SearchScope): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query, 'query');
@@ -704,7 +718,7 @@ export class EmbeddingService {
     // candidates at all; the repo scope narrows within it.
     const filters = [
       scopePredicate(knowledge, 'read'),
-      purpose ? eq(embeddings.purpose, purpose) : undefined,
+      typeof purpose === 'string' ? eq(embeddings.purpose, purpose) : purpose?.length ? inArray(embeddings.purpose, [...purpose]) : undefined,
       scope?.repoIds?.length ? inArray(embeddings.repoId, scope.repoIds) : undefined,
       repoVisibilitySql(scope),
     ].filter(Boolean);
@@ -754,9 +768,9 @@ export class EmbeddingService {
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, scope?: SearchScope): Promise<SearchResult[]> {
+  async ftsSearch(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: PurposeFilter, scope?: SearchScope): Promise<SearchResult[]> {
     const db = getDb();
-    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const purposeFilter = purposeSql(purpose);
     const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     const scopeFilter = globalDocsScopeSql(scope);
     const repoFilter = repoScopeSql(scope);
@@ -813,7 +827,7 @@ export class EmbeddingService {
     knowledge: KnowledgeScope,
     query: string,
     limit = 5,
-    purpose?: EmbeddingPurpose,
+    purpose?: PurposeFilter,
     alpha = 0.6,
     minSimilarity = 0,
     scope?: SearchScope,
@@ -830,7 +844,7 @@ export class EmbeddingService {
     }
 
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
-    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const purposeFilter = purposeSql(purpose);
     // Tenant scope: whose rows are candidates at all.
     const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     // Optional hard-scope to the global product-docs corpus (see searchGlobalDocs).
