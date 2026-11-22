@@ -177,14 +177,19 @@ function extractMessage(err: unknown): string {
   return String(err);
 }
 
-/** Extract error code (e.g. 'rate_limit_exceeded', 'ECONNRESET') */
-function extractCode(err: unknown): string {
+/**
+ * Extract error code (e.g. 'rate_limit_exceeded', 'ECONNRESET'). Without one
+ * of its own, the error's `cause` chain is read: a transport failure reaches
+ * here wrapped — the SDK's "Connection error." around undici's "fetch failed"
+ * or "terminated", around the socket error that carries the code.
+ */
+function extractCode(err: unknown, depth = 0): string {
   if (!err || typeof err !== 'object') return '';
   const e = err as Record<string, unknown>;
   if (typeof e.code === 'string') return e.code;
   const nested = e.error as Record<string, unknown> | undefined;
   if (nested && typeof nested.code === 'string') return nested.code;
-  return '';
+  return depth < 4 ? extractCode(e.cause, depth + 1) : '';
 }
 
 // ── Pattern matchers (ordered from most specific to least) ─────────

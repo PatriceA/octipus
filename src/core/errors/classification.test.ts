@@ -47,6 +47,21 @@ describe('classifyError — rate limit variants', () => {
   });
 });
 
+describe('classifyError — wrapped transport failures', () => {
+  test('reads the socket code from the cause chain of an SDK connection error', () => {
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(err.recovery).toBe(RecoveryAction.RETRY_BACKOFF);
+    expect(err.metadata?.code).toBe('UND_ERR_SOCKET');
+  });
+
+  test('an own code wins over one in the cause', () => {
+    const err = classifyError(Object.assign(new Error('bad key'), { code: 'invalid_api_key', cause: { code: 'ECONNRESET' } }));
+    expect(err.reason).toBe(FailoverReason.AUTH_FAILED);
+  });
+});
+
 describe('classifyError — auth variants', () => {
   test('classifies HTTP 401 as AUTH_FAILED', () => {
     const err = classifyError({ status: 401, message: 'Unauthorized' });

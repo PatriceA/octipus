@@ -237,6 +237,13 @@ describe('failure classification over the wire', () => {
     expect(err.retryAfterMs).toBe(7_000);
   });
 
+  test('a connection reset is a transient network failure', async () => {
+    proxy.enqueue(reset());
+    const err = await rejection(clientWith().completeViaProxy({ model: 'gpt-4o', messages: hi }));
+    expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(err.recovery).toBe(RecoveryAction.RETRY_BACKOFF);
+  });
+
   test('a truncated JSON body is an invalid response', async () => {
     proxy.enqueue(text('{"id":"x","choices":[{"message":', { contentType: 'application/json' }));
     const err = await rejection(clientWith().completeViaProxy({ model: 'gpt-4o', messages: hi }));
@@ -412,6 +419,20 @@ describe('streaming over the wire', () => {
       ['/chat/completions', 'gateway-only', 'Bearer sk-boundary'],
     ]);
     expect(chunks).toContainEqual({ content: 'from the proxy' });
+  });
+
+  test('stream() on a direct provider that fails after its first chunk is not re-sent', async () => {
+    registryDouble.add(modelRow({
+      provider: 'custom-openai', modelId: 'gateway-only', endpoint: proxy.url, apiKeyRef: 'env:BOUNDARY_GATEWAY_KEY',
+      metadata: { customProvider: { auth: { type: 'bearer' } } },
+    }));
+    process.env.BOUNDARY_GATEWAY_KEY = 'gateway-key';
+    proxy.enqueue(sse([chatChunk({ content: 'half' })], { then: 'reset' }));
+    const { chunks, error } = await drain(clientWith().stream({ model: 'gateway-only', messages: hi }));
+    delete process.env.BOUNDARY_GATEWAY_KEY;
+    expect(chunks).toEqual([{ content: 'half' }]);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(proxy.requests).toHaveLength(1);
   });
 
   test('stream() for a row bound to litellm goes straight to the proxy', async () => {

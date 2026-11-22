@@ -460,6 +460,24 @@ describe('failure policy', () => {
     expect(proxy.requests).toHaveLength(0);
   });
 
+  test('a failure mid-stream is classified with the provider and counts against the breaker', async () => {
+    registryDouble.add(customRow());
+    vaultDouble.set('system', 'gateway_key', 'vault-key');
+    upstream.enqueue(sse([chatChunk({ content: 'part' })], { then: 'reset' }));
+    const chunks = [];
+    let error: unknown;
+    try {
+      for await (const c of router.stream({ model: 'wire-model', messages: hi })) chunks.push(c);
+    } catch (e) {
+      error = e;
+    }
+    expect(chunks).toEqual([{ content: 'part' }]);
+    expect(error).toBeInstanceOf(ClassifiedError);
+    expect((error as ClassifiedError).reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect((error as ClassifiedError).providerHint).toBe('custom-openai');
+    expect(getCircuitBreakerRegistry().getStatus('custom-openai').failures).toBe(1);
+  });
+
   test('router.embed picks the provider by model name and refuses one without embeddings', async () => {
     await expect(router.embed(['x'], 'claude-sonnet-4-6')).rejects.toThrow('does not support embeddings');
     await expect(router.embed(['x'], 'zz-unheard-of')).rejects.toThrow('Provider litellm does not support embeddings');
