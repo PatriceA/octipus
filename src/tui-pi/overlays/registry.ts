@@ -10,7 +10,7 @@
  * non-capturing widget channel (status badges, voice meter, MCP
  * indicator).
  */
-import { type Component, type Focusable, isFocusable, type OverlayHandle, type OverlayOptions, type TUI, truncateToWidth, frameRow } from '@/tui-kit';
+import { type Component, type Focusable, isFocusable, type OverlayHandle, type OverlayOptions, type TUI, truncateToWidth, frameRow, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import { ApprovalPrompt, type ApprovalPromptOptions } from '../components/approval-prompt';
 import { CommandPalette, type CommandPaletteOptions } from '../components/command-palette';
 import { LoginPrompt, type LoginPromptOptions } from '../components/login-prompt';
@@ -20,6 +20,8 @@ export interface OverlayController {
   showPermissionPrompt(options: PermissionPromptOptions): OverlayHandle;
   showApprovalPrompt(options: ApprovalPromptOptions): OverlayHandle;
   showCommandPalette(options: CommandPaletteOptions): OverlayHandle;
+  /** A picker (`FuzzyList`): centred, most of the screen. */
+  showPicker(component: Component): OverlayHandle;
   /** Returns the component too — the caller needs it to report a server-side error back into the box. */
   showLoginPrompt(options: LoginPromptOptions): { handle: OverlayHandle; prompt: LoginPrompt };
   /**
@@ -64,6 +66,8 @@ export class FramedOverlay implements Component, Focusable {
     return lines.map(line => truncateToWidth(frameRow(line), width, ''));
   }
   handleInput(data: string): void { this.inner.handleInput?.(data); }
+  /** Clicks reach the overlay (a picker's rows); rows it trimmed are not the inner component's to know about. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined { return this.inner.handleMouse?.(event); }
   invalidate(): void { this.inner.invalidate(); }
   get wantsKeyRelease(): boolean | undefined { return this.inner.wantsKeyRelease; }
   get focused(): boolean { return isFocusable(this.inner) && this.inner.focused; }
@@ -96,6 +100,7 @@ export function createOverlayController(tui: TUI): OverlayController {
       return { handle: show(prompt, PERMISSION_OVERLAY), prompt };
     },
     showCommandPalette: options => show(new CommandPalette(options), COMMAND_PALETTE_OVERLAY),
+    showPicker: component => show(component, COMMAND_PALETTE_OVERLAY),
     showModal: (component, options) => show(component, options ?? COMMAND_PALETTE_OVERLAY),
   };
 }

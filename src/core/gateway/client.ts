@@ -1,6 +1,6 @@
 import { apiBaseFromGatewayUrl } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
-import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
+import type { ClientMessage, GatewayMessage, SendMode } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
@@ -172,14 +172,17 @@ export class GatewayClient {
   /**
    * Send a chat message. Files go up first with `uploadAttachments`; the
    * turn names them in `fileRefs`, so the frame carries no file bytes.
+   * `mode` says what to do when a turn is running (`SEND_MODES`); the server
+   * defaults to `auto`.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
     const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
       content,
       ...(projectPath ? { projectPath } : {}),
       ...(fileRefs?.length ? { fileRefs } : {}),
+      ...(mode ? { mode } : {}),
     };
     // A frame over the server's cap would close the socket mid-send; say so
     // instead, with the setting that governs it.
@@ -239,6 +242,11 @@ export class GatewayClient {
    */
   sendCommand(name: string, args?: Record<string, string>, sessionId?: string): void {
     this.send({ type: 'command', name, args, sessionId });
+  }
+
+  /** Stop one of this user's agents (`agent.stop`); stopping a session's running root also drops the turns queued behind it. */
+  stopAgent(agentId: string): void {
+    this.send({ type: 'agent.stop', agentId });
   }
 
   /**

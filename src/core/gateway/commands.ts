@@ -2,6 +2,7 @@ import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { addPlanFeedback, formatWorkPlan } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
+import { saveWorkPlan } from '@/core/agent/work-plan-store';
 import { coreLogger } from '@/utils/logger';
 import type { TrustLevel } from './protocol';
 import { canActInSession } from '@/core/rooms/access';
@@ -191,7 +192,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         if (!state.current) return { text: 'No plan published yet.' };
         try {
           const next = addPlanFeedback(state, state.current.id, state.revision, ctx.rawArgs);
-          await workPlanRepository.save(ctx.sessionId, userId, state.revision, next);
+          await saveWorkPlan(ctx.sessionId, userId, state.revision, next);
         } catch (err) {
           // Validation and revision conflicts are user-facing, not command failures.
           return { text: err instanceof Error ? err.message : 'Feedback was not saved.' };

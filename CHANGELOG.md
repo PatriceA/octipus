@@ -47,6 +47,43 @@ labels reflect blast radius, not contract guarantees.
   `�` now. Found by the new invariant suite for the editor
   (`tests/tui/editor-invariants.e2e.test.ts`).
 
+- **Terminal chat: stop, queue, fold, search, pick, notify, theme, link.**
+  `Esc` stops the running turn (twice with none running clears the draft).
+  A message sent while a turn runs waits above the composer — `Alt+E` or a
+  click takes it back to edit — and goes out as its own turn when the turn
+  ends; before, the gateway steered it into the running turn. A turn's tool
+  calls are one collapsed row with counts, failures and time; a click or
+  `Ctrl+O` shows every call's arguments, full output and edits as diffs.
+  Reasoning before tool calls is a folded "Thinking" row, and the per-call
+  "<role> arm · …" lines are gone. Replies render as Markdown while they
+  stream, without the jump at the end. Transcript search (`Ctrl+F`, also
+  `Ctrl+Shift+F`, `/search`) now returns to where you were on `Escape`;
+  `Ctrl+R` searches what you sent. `/sessions`, `/resume`, `/skills` and
+  `/theme` alone open pickers (the text forms still work), and the command
+  palette is the same fuzzy list with a preview. While the terminal is
+  unfocused, a finished turn or a waiting decision notifies (bell, OSC 9 or
+  OSC 777: `notify` in `~/.octipus/tui.json`), and the window title shows
+  idle / working / waiting. Themes: `auto` follows the terminal background
+  (OSC 11), plus `light` and `high-contrast`, `NO_COLOR` honoured, `/theme`
+  saves the choice; the dark border and four light colours changed to reach
+  WCAG contrast. URLs and `path:line` references are OSC 8 links where the
+  terminal shows them (`http`, `https`, `file` only), and attached images are
+  drawn inline on Kitty-graphics terminals (iTerm2 with `--inline`).
+  `Ctrl+F` no longer moves the composer's cursor right (Right does).
+  `Alt+C` / `/copy code` copies the latest reply's last code block.
+- **Gateway: `session.plan_updated`.** Every save of a session's work plan
+  (agent tools, `/plan-feedback`, the web's feedback route) publishes
+  `session.plan_updated` (`{ revision }`) to the owner's connections. The
+  terminal clients refresh their plan summary on it instead of asking every
+  4 seconds. The gateway client gains `stopAgent` and an optional send mode
+  on `sendChat`.
+- **Terminal editor: an agent's `str_replace` edit no longer offers to
+  replace the whole file with the fragment.** The chat adapter reported
+  `str_replace_editor`'s `new_str` as the file's new text, so the editor's
+  diff showed the file reduced to the replacement. A fragment edit is now its
+  own event (`agent.edit`: old and new fragment), which the editor does not
+  review yet; `create` (`file_text`) and whole-file writes are reviewed as
+  before.
 - **Terminal chat and editor run on the alternate screen; drag selects
   without Shift.** `octi tui` and `octi edit` now open on the terminal's
   alternate screen. What you had in the terminal before launch survives —

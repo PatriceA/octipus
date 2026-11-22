@@ -146,10 +146,23 @@ describe('decodeGatewayEvent', () => {
     // Row identity is now the human title, not the raw tool name.
     expect(toolEvent.tool.name).toBe('Read poem.md (3 lines)');
     expect(toolEvent.tool.preview).toBe('roses are red');
-    // Narration uses the title too.
-    const narration = out.find((e) => e.kind === 'message');
-    if (!narration || narration.kind !== 'message') throw new Error('expected narration');
-    expect(narration.content).toContain('writing arm · Read poem.md (3 lines)');
+    // The tool group shows the full text and the duration; no separate narration line repeats them.
+    expect(toolEvent.tool).toMatchObject({ toolName: 'filesystem__read_file', title: 'Read poem.md (3 lines)', durationMs: 200, output: 'roses are red\nviolets are blue' });
+    expect(out.filter((e) => e.kind === 'message')).toEqual([]);
+  });
+
+  test('calls and results carry the call id, the arguments and the full output', () => {
+    const call = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: { type: 'cli_tool_use', id: 'c1', toolName: 'Bash', args: { command: 'ls' } } } }));
+    const result = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: { type: 'cli_tool_result', id: 'c1', toolName: 'Bash', output: 'a\nb\nc' } } }));
+    if (call.kind !== 'tool' || result.kind !== 'tool') throw new Error('expected tool events');
+    expect(call.tool).toMatchObject({ state: 'pending', callId: 'c1', args: { command: 'ls' } });
+    expect(result.tool).toMatchObject({ state: 'completed', callId: 'c1', output: 'a\nb\nc', preview: 'a' });
+    const edit = single(decodeGatewayEvent({ type: 'agent.action', payload: { data: {
+      type: 'tool_call_complete', toolCallId: 't9', name: 'edit_file', status: 'ok', durationMs: 40,
+      title: 'Edited a.ts (+1 −1)', input: { kind: 'path', value: 'a.ts' }, result: { kind: 'diff', patch: '-old\n+new', added: 1, removed: 1 },
+    } } }));
+    if (edit.kind !== 'tool') throw new Error('expected tool');
+    expect(edit.tool).toMatchObject({ callId: 't9', toolName: 'edit_file', diff: '-old\n+new', input: 'a.ts', durationMs: 40 });
   });
 
   test('agent.action → tool_call_complete falls back to name + resultPreview (old server)', () => {

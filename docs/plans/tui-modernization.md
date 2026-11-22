@@ -287,23 +287,25 @@ Defects and risks
 
 Experience gaps against current agent TUIs
 
-| Area | Today | Expected |
-| --- | --- | --- |
-| Stop a turn | `/abort` typed into the composer | Esc interrupts; second Esc clears the draft |
-| Typing during a turn | Sent immediately as a new message | Queue shown above the composer; edit or remove before it is sent |
-| Streaming | Plain text until the reply completes, then re-rendered as Markdown (visible jump) | Markdown while streaming, stable block by block |
-| Tool calls | One flat `→ tool → preview` system line each; result preview is 80 characters | Grouped per turn, collapsed by default, expandable; duration and status; diffs for edits; full output on demand |
-| Thinking / reasoning | Pre-tool text becomes an ordinary message | Dim, collapsible block |
-| Selection and copy | Shift+drag; `/copy last` | Drag to select, copy on release; copy a code block with one key |
-| Search | None | `/` or Ctrl+F in the transcript; Ctrl+R in input history |
-| Sessions, models, skills | Text lists and `/resume <n>` | Pickers with fuzzy filter and preview |
-| Mentions | `@` file completion via `fd` | Also agents, skills, sessions; pasted paths become chips |
-| Images | Attach from clipboard or path | Also show images and diagrams inline where the terminal can (pi-tui has Kitty and iTerm2 support that is unused) |
-| Links | Printed as text | OSC 8 hyperlinks for URLs and `file:line` |
-| Attention | Nothing when the window is in the background | Bell or OSC 9/777 notification when a turn ends or a decision is waiting; title shows state |
-| Theme | One dark palette | Follows terminal background (OSC 11), light and high-contrast variants, `NO_COLOR` |
-| Exit | Frame left in scrollback | Screen restored; a short summary and the resume command printed |
-| Long sessions | Unbounded | Virtualised transcript; older turns loaded on demand |
+The "Today" column is the state before Phase 2; "Now" is after Phase 3 (§7).
+
+| Area | Today | Expected | Now |
+| --- | --- | --- | --- |
+| Stop a turn | `/abort` typed into the composer | Esc interrupts; second Esc clears the draft | As expected (Phase 3.1) |
+| Typing during a turn | Sent immediately as a new message | Queue shown above the composer; edit or remove before it is sent | As expected (3.1) |
+| Streaming | Plain text until the reply completes, then re-rendered as Markdown (visible jump) | Markdown while streaming, stable block by block | As expected (3.3) |
+| Tool calls | One flat `→ tool → preview` system line each; result preview is 80 characters | Grouped per turn, collapsed by default, expandable; duration and status; diffs for edits; full output on demand | As expected (3.2); "full output" is what the gateway sends: a CLI agent's whole output, a native tool's capped preview |
+| Thinking / reasoning | Pre-tool text becomes an ordinary message | Dim, collapsible block | As expected (3.2) |
+| Selection and copy | Shift+drag; `/copy last` | Drag to select, copy on release; copy a code block with one key | As expected (Phase 2; `Alt+C` / `/copy code` in Phase 3) |
+| Search | None | `/` or Ctrl+F in the transcript; Ctrl+R in input history | As expected (3.4) on the alternate screen: `Ctrl+F`, `Ctrl+Shift+F`, `/search` (a bare `/` is the command prefix); not with `--inline` |
+| Sessions, models, skills | Text lists and `/resume <n>` | Pickers with fuzzy filter and preview | Sessions, skills, commands, themes, input history (3.5). **Models not done**: the gateway's command registry has no model or lane command to list from |
+| Mentions | `@` file completion via `fd` | Also agents, skills, sessions; pasted paths become chips | **Not done**: not among Phase 3's items; needs an autocomplete provider of our own beside pi-tui's file provider |
+| Images | Attach from clipboard or path | Also show images and diagrams inline where the terminal can (pi-tui has Kitty and iTerm2 support that is unused) | Attached images (3.8): Kitty graphics on the alternate screen, iTerm2 with `--inline` (pi-tui does not draw iTerm2 images on the alternate screen), text elsewhere. Diagrams not done |
+| Links | Printed as text | OSC 8 hyperlinks for URLs and `file:line` | As expected (3.8), where the terminal shows links |
+| Attention | Nothing when the window is in the background | Bell or OSC 9/777 notification when a turn ends or a decision is waiting; title shows state | As expected (3.6) |
+| Theme | One dark palette | Follows terminal background (OSC 11), light and high-contrast variants, `NO_COLOR` | As expected (3.7) |
+| Exit | Frame left in scrollback | Screen restored; a short summary and the resume command printed | As expected (Phase 2) |
+| Long sessions | Unbounded | Virtualised transcript; older turns loaded on demand | Virtualised and capped (Phase 2). **Loading older turns not done**: the gateway's `history` takes no cursor (Phase 2 note) |
 
 ### 5.2 Editor (`src/tui-editor/`)
 
@@ -600,6 +602,41 @@ In the order users will feel them:
 9. Plan status pushed by the gateway instead of polled.
 
 Done when: each row of the table in §5.1 reads "Expected".
+
+**Phase 3 — shipped** on the modernization branch, except where the §5.1
+table's "Now" column says otherwise (models picker, mentions, diagrams,
+older turns from the server).
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| 1. Esc stops the turn; typing during a turn queues | `5b191b5` | `app-turn.test.ts`, `chat-frame.test.ts` (clicks on sticky rows), `client.test.ts`; `turn.e2e` (queue rows above the composer, sent with `mode: 'queue'` when the turn ends, Esc sends `agent.stop` for the root and returns queued messages, second Esc clears, a click takes one back) |
+| 2. Tool groups, diffs, thinking | `5862305` | `tool-group.test.ts` (pairing by id, by name only without one, summary, expansion, sanitising), `gateway-adapter.test.ts`, `app-commands.test.ts`; `tool-group.e2e` (click and Ctrl+O, diff, failed call) |
+| 3. Markdown while streaming | `c7319a4` | `messages-pane.test.ts` (every prefix renders, the completed reply equals the streamed rows, earlier blocks keep their rows, open fence); `streaming.e2e` |
+| 4. Transcript search; Ctrl+R | `31671a1` | `transcript-search.test.ts`, `fuzzy-list.test.ts`, `command-palette.test.ts`; `search.e2e` (count, highlight, next, Escape back to the reading position, `/search`, Ctrl+R) |
+| 5. Pickers | `4b172de` | `app-pickers.test.ts`; `pickers.e2e` (sessions with preview and resume, skills then mode, palette click) |
+| 6. Notifications, title | `10e5408` | `attention.test.ts`; `attention.e2e` (OSC 777 only while unfocused, decision waiting, title states, focus reports kept out of the composer inline, `?1004l` on exit) |
+| 7. Themes | `d91cba9` | `theme.test.ts` (WCAG contrast of every role on every background a palette is for), `settings.test.ts`; `theme.e2e` (OSC 11 reply switches to light, `/theme` saves, saved theme from the first frame, `NO_COLOR`) |
+| 8. Links, images | `019cd30` | `hyperlinks.test.ts` (schemes, injection, wrap), `links.test.ts`; `links.e2e` (links only where shown, no other scheme, image fallback text, Kitty and iTerm2 sequences) |
+| 9. Plan status pushed | `6442e41` | `work-plan-store.test.ts`, `app-plan.test.ts`; `plan.e2e` (no fetch over 4.5 s, one on `session.plan_updated`) |
+
+Also: `str_replace_editor`'s fragment is no longer reported as the whole
+file (`a6f4024`, `gateway-adapter.write.test.ts`, found in Phase 4); the
+invariant suite fuzzes the new items, the queue, the pickers and link
+rows (`350d346`; 80 seeds clean locally); a reply's code block is copied
+with `Alt+C` / `/copy code` (`54866ee`).
+
+Server-side changes: the gateway client (`stopAgent`, an optional send
+mode — client code, no protocol change) and one new event,
+`session.plan_updated`, published by `saveWorkPlan` from the four places a
+plan is saved. Queueing is client-side: the gateway still steers a
+`chat.send` into a running turn, so the TUI holds messages until the turn
+ends and sends them with `mode: 'queue'` rather than changing that.
+
+Not verifiable here: notifications, focus reports, OSC 11, OSC 8 and inline
+images were checked as the bytes written and the colours drawn in
+xterm-headless, which reports neither focus nor its background and draws no
+images; how GNOME Terminal, kitty, iTerm2, Windows Terminal and tmux show
+them was not observed.
 
 ### Phase 4 — Editor correctness (M)
 

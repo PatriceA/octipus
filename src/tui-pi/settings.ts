@@ -23,10 +23,12 @@
  * A bad value is an error at launch, not a silent default: the user asked
  * for something and would otherwise not get it without knowing.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { NOTIFY_METHODS, type NotifyMethod } from './attention';
+import { THEME_SETTINGS, type ThemeSetting } from './theme/defaults';
 
 export const MOUSE_MODES = ['app', 'native', 'off'] as const;
 export type MouseMode = (typeof MOUSE_MODES)[number];
@@ -37,12 +39,23 @@ export interface TerminalSettings {
   screen: ScreenMode;
 }
 
-const fileSchema = z.object({ mouse: z.enum(MOUSE_MODES).optional() }).strict();
+const fileSchema = z.object({
+  mouse: z.enum(MOUSE_MODES).optional(),
+  /** How to notify when a turn ends or a decision waits while the terminal is in the background (`attention.ts`). */
+  notify: z.enum(NOTIFY_METHODS).optional(),
+  /** `auto` follows the terminal's background (OSC 11); `/theme` sets it. */
+  theme: z.enum(THEME_SETTINGS).optional(),
+}).strict();
+
+/** Everything `~/.octipus/tui.json` may hold. */
+export type SettingsFile = z.infer<typeof fileSchema>;
+
+const CHOICES: Record<string, readonly string[]> = { mouse: MOUSE_MODES, notify: NOTIFY_METHODS, theme: THEME_SETTINGS };
 
 export const DEFAULT_SETTINGS_PATH = join(homedir(), '.octipus', 'tui.json');
 
 /** The settings file's values; `{}` when there is none. Throws, naming the file, when it is malformed. */
-export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): Partial<TerminalSettings> {
+export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): SettingsFile {
   if (!existsSync(path)) return {};
   let parsed: unknown;
   try {
@@ -53,7 +66,9 @@ export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): Partial<
   const result = fileSchema.safeParse(parsed);
   if (!result.success) {
     const issue = result.error.issues[0];
-    throw new Error(`${path}: ${issue?.path.join('.') || 'settings'}: ${issue?.message ?? 'invalid'} (mouse is one of ${MOUSE_MODES.join(', ')})`);
+    const key = String(issue?.path[0] ?? '');
+    const choices = Object.entries(CHOICES).filter(([name]) => !key || key === name || !(key in CHOICES)).map(([name, values]) => `${name} is one of ${values.join(', ')}`);
+    throw new Error(`${path}: ${issue?.path.join('.') || 'settings'}: ${issue?.message ?? 'invalid'} (${choices.join('; ')})`);
   }
   return result.data;
 }
@@ -75,5 +90,26 @@ export function parseTerminalArgs(args: string[]): Partial<TerminalSettings> {
 
 /** Flags win over the file; the file wins over the defaults. */
 export function resolveTerminalSettings(args: string[], path: string = DEFAULT_SETTINGS_PATH): TerminalSettings {
-  return { mouse: 'app', screen: 'alt', ...readSettingsFile(path), ...parseTerminalArgs(args) };
+  const file = readSettingsFile(path);
+  return { mouse: 'app', screen: 'alt', ...(file.mouse ? { mouse: file.mouse } : {}), ...parseTerminalArgs(args) };
+}
+
+/** The theme from the file; `auto` without one. */
+export function readThemeSetting(path: string = DEFAULT_SETTINGS_PATH): ThemeSetting {
+  return readSettingsFile(path).theme ?? 'auto';
+}
+
+/**
+ * Change one setting in the file, keeping the others (`/theme` persists this
+ * way). A file that is malformed is not overwritten: the error says why.
+ */
+export function writeSetting<K extends keyof SettingsFile>(key: K, value: SettingsFile[K], path: string = DEFAULT_SETTINGS_PATH): void {
+  const next = fileSchema.parse({ ...readSettingsFile(path), [key]: value });
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+/** The notification method from the file; `auto` without one. */
+export function readNotifySetting(path: string = DEFAULT_SETTINGS_PATH): NotifyMethod {
+  return readSettingsFile(path).notify ?? 'auto';
 }

@@ -91,3 +91,23 @@ it('keeps a collapsed plan closed when an automatic detail request fails', async
     expect(bar.isPlanExpanded()).toBe(false);
   } finally { await app.stop(); }
 });
+
+it('fetches the plan status on connect and when the gateway says the plan changed, never on a timer', async () => {
+  vi.useFakeTimers();
+  gateway.sendCommand.mockClear();
+  let root!: Container;
+  const tui = { addChild: (child: Container) => { root = child; }, setFocus: vi.fn(), addInputListener: vi.fn(), requestRender: vi.fn() } as unknown as TUI;
+  const app = new OctipusTuiApp(tui, {});
+  try {
+    const statusFetches = () => gateway.sendCommand.mock.calls.filter(call => call[0] === 'work-plan-status').length;
+    gateway.listener({ kind: 'status', status: 'connected' });
+    expect(statusFetches()).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(statusFetches()).toBe(1);
+    gateway.listener({ kind: 'plan.updated', revision: 3 });
+    expect(statusFetches()).toBe(2);
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: '2/3 steps done · Verify' });
+    const bar = root.children.find(child => child instanceof StatusBar)!;
+    expect(bar.render(120).join('\n')).toContain('2/3 steps done');
+  } finally { await app.stop(); }
+});

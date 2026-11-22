@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 import { OctipusTuiApp } from './app';
 import { createRuntime } from './runtime';
 import { stripTranscriptRails } from './components/messages-pane';
-import { resolveTerminalSettings, type TerminalSettings } from './settings';
+import { readThemeSetting, resolveTerminalSettings, type TerminalSettings } from './settings';
 
 export interface LaunchOptions {
   gatewayUrl?: string;
@@ -38,6 +38,9 @@ export async function launchOctipusTui(options: LaunchOptions = {}): Promise<voi
     copy: runtime.copy,
     dumpToScrollback: runtime.dumpToScrollback,
     mouse: runtime.mouse,
+    search: runtime.search,
+    attention: runtime.attention,
+    theme: readThemeSetting(),
   });
   await app.start();
 }

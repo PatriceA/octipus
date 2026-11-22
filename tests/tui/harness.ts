@@ -17,6 +17,8 @@ export interface HarnessOptions {
   files?: Record<string, string>;
   /** Run the program under another one (`tmux new-session --`): its argv goes in front of the Node command. */
   wrap?: string[];
+  /** What the fixture gateway answers to a command, by name, instead of its default text. */
+  commandResults?: Record<string, { result: unknown; data?: unknown; error?: string }>;
 }
 
 export class TuiHarness {
@@ -56,7 +58,9 @@ export class TuiHarness {
       socket.on('message', raw => {
         const msg = JSON.parse(String(raw)); this.commands.push(msg);
         if (msg.type === 'auth') socket.send(JSON.stringify({ type: 'auth_ok' }));
-        if (msg.type === 'command') {
+        if (msg.type === 'command' && options.commandResults?.[msg.name]) {
+          socket.send(JSON.stringify({ type: 'command.result', name: msg.name, ...options.commandResults[msg.name] }));
+        } else if (msg.type === 'command') {
           const result = msg.name === 'work-plan-status' ? '1/3 steps done · Check rendering'
             : msg.name === 'work-plan' ? 'Plan: Improve the terminal\n[done] Inspect\n[active] Check rendering\n[pending] Verify'
             : msg.name === 'plan-feedback' ? 'Feedback saved as pending.' : 'Available: /help /work-plan /plan-feedback';

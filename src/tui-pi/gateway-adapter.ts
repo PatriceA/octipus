@@ -9,6 +9,7 @@
  * `kind` without re-parsing payload shapes.
  */
 import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
+import type { SendMode } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -16,9 +17,25 @@ export type ToolState = 'pending' | 'executing' | 'completed' | 'error';
 
 export interface ToolEventState {
   state: ToolState;
+  /** What to show: the server's title when it sent one ("Read poem.md"), else the tool name. */
   name: string;
   preview?: string;
   mcpServer?: string;
+  /** The tool's own name, for pairing a result with its call when `name` is a title. */
+  toolName?: string;
+  /** The call id, when the gateway sends one (CLI agents' `id`, `tool_call_complete`'s `toolCallId`). */
+  callId?: string;
+  /** The call's arguments as sent. */
+  args?: Record<string, unknown>;
+  /** The server's one-line summary of the input (`tool_call_complete`), for calls announced without arguments. */
+  input?: string;
+  /** The result's text, as much as the gateway sent. */
+  output?: string;
+  /** A unified diff of what the call changed (`+` / `-` / ` ` lines). */
+  diff?: string;
+  durationMs?: number;
+  /** The server's title, once the call completed. */
+  title?: string;
 }
 
 export interface AgentEndStats {
@@ -47,14 +64,21 @@ export type AgentSessionEvent =
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
+  /** An agent was stopped on request (`agent.stop`, Esc). */
+  | { kind: 'agent.stopped';  agentId: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
+  /** The session's work plan was saved; the summary is stale. */
+  | { kind: 'plan.updated';   revision: number }
   | { kind: 'identity';       user: string | null }
   /** No usable CLI login: the client will not connect until one is stored. */
   | { kind: 'login_required'; reason: string }
   | { kind: 'tool';           tool: ToolEventState; agentId?: string }
   | { kind: 'command.result'; name: string; result: unknown; error?: string; data?: unknown }
+  /** The agent proposes the whole new text of a file. */
   | { kind: 'agent.write';    path: string; newText: string }
+  /** The agent replaces `oldText` with `newText` somewhere in a file (`str_replace`, `edit`): a fragment, not the file. */
+  | { kind: 'agent.edit';     path: string; oldText: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
   | { kind: 'error';          message: string };
 
@@ -152,8 +176,14 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[]): void {
-    this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
+    if (mode) this.client.sendChat(sessionId, content, projectPath, fileRefs, mode);
+    else this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  }
+
+  /** Stop an agent of this user (the running turn's root, for Esc). */
+  stopAgent(agentId: string): void {
+    this.client.stopAgent(agentId);
   }
 
   /** Upload images for the next turn (REST); see `GatewayClient.uploadAttachments`. */
@@ -292,6 +322,16 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       return out;
     }
 
+    case 'agent.stopped': {
+      const agentId = pickString(payload, 'agentId');
+      if (agentId) out.push({ kind: 'agent.stopped', agentId });
+      return out;
+    }
+
+    case 'session.plan_updated':
+      out.push({ kind: 'plan.updated', revision: pickNumber(payload, 'revision') ?? 0 });
+      return out;
+
     case 'session.stats': {
       out.push({
         kind: 'session.stats',
@@ -415,20 +455,22 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         // Prefer the adapter-supplied human title (e.g. codex "git status")
         // over a re-derived arg summary.
         const preview = pickString(data, 'title') ?? summarizeToolArgs(name, args);
-        out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer } });
+        const callId = pickString(data, 'id') ?? pickString(data, 'toolCallId');
+        out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer, toolName: name, ...(callId ? { callId } : {}), ...(args ? { args } : {}) } });
         const write = extractAgentWrite(name, args);
-        if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
+        if (write) out.push(write);
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
         const isError = Boolean(data.error || data.isError);
         // CLI adapters emit the captured output on `output` (codex/claude);
         // fall back to the legacy `result` string for older servers.
-        const output = pickString(data, 'output') ?? pickString(data, 'result');
+        const output = pickString(data, 'output') ?? pickString(data, 'result') ?? pickString(data, 'error');
         const preview = output?.split('\n')[0]?.slice(0, 80);
+        const callId = pickString(data, 'id') ?? pickString(data, 'toolCallId');
         out.push({
           kind: 'tool',
           agentId: actor,
-          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
+          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer, toolName: name, ...(callId ? { callId } : {}), ...(output !== undefined ? { output } : {}) },
         });
       } else if (type === 'tool_call_complete') {
         // Phase 5 per-tool completion event. Web chat uses it for the
@@ -443,7 +485,6 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const title = pickString(data, 'title');
         const label = title ?? name;
         const status = pickString(data, 'status') ?? 'ok';
-        const role = pickString(data, 'role');
         const durationMs = pickNumber(data, 'durationMs');
         const error = pickString(data, 'error');
         const resultPreview = pickString(data, 'resultPreview');
@@ -452,24 +493,24 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const preview = isError
           ? (error ? error.slice(0, 80) : status)
           : (resultSummary ?? (resultPreview ? resultPreview.slice(0, 80) : undefined));
+        const result = asRecord(data.result);
+        const output = isError ? error ?? status : resultText(result) ?? resultPreview;
+        const diff = pickString(result, 'kind') === 'diff' ? pickString(result, 'patch') : undefined;
+        const inputRecord = asRecord(data.input);
+        const inputValue = pickString(inputRecord, 'value');
+        const input = inputValue ? `${inputValue}${pickString(inputRecord, 'detail') ? ` (${pickString(inputRecord, 'detail')})` : ''}` : undefined;
+        const callId = pickString(data, 'toolCallId') ?? pickString(data, 'id');
+        // How long it took is on the tool group's row now; the "<role> arm ·
+        // <title> · 0.2s" line this used to add said it once more per call.
         out.push({
           kind: 'tool',
           agentId: actor,
-          tool: { state: isError ? 'error' : 'completed', name: label, preview, mcpServer },
+          tool: {
+            state: isError ? 'error' : 'completed', name: label, preview, mcpServer, toolName: name,
+            ...(callId ? { callId } : {}), ...(title ? { title } : {}), ...(durationMs !== undefined ? { durationMs } : {}),
+            ...(output !== undefined ? { output } : {}), ...(diff ? { diff } : {}), ...(input ? { input } : {}),
+          },
         });
-        // Surface a one-liner narration too so the activity log shows
-        // who did what with what timing — matches the web chat's
-        // transient bubble ("data arm · Read poem.md · 0.2s").
-        if (role) {
-          const dur = durationMs != null
-            ? ` · ${(durationMs / 1000).toFixed(durationMs >= 1000 ? 1 : 2)}s`
-            : '';
-          if (isError && error) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label} failed: ${error}` });
-          } else if (!isError) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label}${dur}` });
-          }
-        }
       }
       return out;
     }
@@ -498,6 +539,18 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
   }
 
   return out;
+}
+
+/** The text a structured result preview carries, for the expanded tool group. */
+function resultText(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) return undefined;
+  switch (pickString(result, 'kind')) {
+    case 'text': return pickString(result, 'text');
+    case 'exit': return [`exit ${pickNumber(result, 'code') ?? '?'}`, pickString(result, 'tail')].filter(Boolean).join('\n');
+    case 'list': return Array.isArray(result.items) ? result.items.filter((item): item is string => typeof item === 'string').join('\n') : undefined;
+    case 'file': return pickString(result, 'path');
+    default: return undefined;
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -548,25 +601,30 @@ function summarizeResultPreview(result: Record<string, unknown> | undefined): st
 const WRITE_TOOL_NAMES = new Set(['write_file', 'write', 'edit', 'apply_patch', 'str_replace_editor']);
 
 /**
- * Recognise write-style tool calls and pull out the proposed text.
- * Returns null when the tool isn't a known editor write or required
- * fields are missing.
+ * Recognise write-style tool calls and pull out what they propose: the whole
+ * new text of a file (`agent.write`), or a replacement of one fragment by
+ * another (`agent.edit`). Returns null when the tool isn't a known editor
+ * write or the call does not say enough to know either.
+ *
+ * A fragment is never reported as the file: `str_replace_editor`'s `new_str`
+ * replaces `old_str`, and treating it as the new file made the editor offer
+ * to replace the whole file with it. An insert (`new_str` at a line) or a
+ * lone `replacement` names no text to replace and is left out.
  *
  * Conservative on purpose: keeps the diff overlay from triggering on
- * unrelated tool calls (read_file, bash). Extensions can broaden the
- * set in Phase 7 once the registration API exists.
+ * unrelated tool calls (read_file, bash).
  */
-function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): { path: string; newText: string } | null {
+export function extractAgentWrite(toolName: string, args: Record<string, unknown> | undefined): Extract<AgentSessionEvent, { kind: 'agent.write' | 'agent.edit' }> | null {
   if (!args) return null;
   if (!WRITE_TOOL_NAMES.has(toolName)) return null;
   const path = pickString(args, 'path') ?? pickString(args, 'file_path') ?? pickString(args, 'filename');
   if (!path) return null;
-  const newText = pickString(args, 'content')
-    ?? pickString(args, 'text')
-    ?? pickString(args, 'new_str')
-    ?? pickString(args, 'replacement');
-  if (newText === undefined) return null;
-  return { path, newText };
+  const whole = pickString(args, 'content') ?? pickString(args, 'text') ?? pickString(args, 'file_text');
+  if (whole !== undefined) return { kind: 'agent.write', path, newText: whole };
+  const oldText = pickString(args, 'old_str') ?? pickString(args, 'old_string');
+  const newText = pickString(args, 'new_str') ?? pickString(args, 'new_string');
+  if (oldText !== undefined && newText !== undefined) return { kind: 'agent.edit', path, oldText, newText };
+  return null;
 }
 
 const ARG_PREVIEW_MAX = 80;

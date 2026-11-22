@@ -9,6 +9,15 @@ import type { MouseMode } from './settings';
 import { writeFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
+import { QueuedMessages } from './components/queued-messages';
+import { FuzzyList } from '@/tui-kit/fuzzy-list';
+import type { TranscriptSearch } from '@/tui-kit/transcript-search';
+import type { Attention } from './attention';
+import { getFuzzyListTheme, getPalette, paletteForBackground, type PaletteName, setPalette, THEME_SETTINGS, type ThemeSetting } from './theme/defaults';
+import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
+import { configureLinks } from './links';
+import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
+import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
  *
@@ -62,24 +71,48 @@ export interface OctipusTuiAppOptions {
   dumpToScrollback?: (text: string) => Promise<void>;
   /** The mouse mode the runtime set up; it decides the welcome hint and whether Up/Down scroll. */
   mouse?: MouseMode;
+  /** The alternate screen's transcript search (`runtime.search`), for `/search`. */
+  search?: TranscriptSearch;
+  /** Focus, notifications and the window title (`runtime.attention`). */
+  attention?: Attention;
+  /** `theme` from `~/.octipus/tui.json`; `auto` asks the terminal for its background. */
+  theme?: ThemeSetting;
+  /** Where `/theme` saves the choice (tests point it elsewhere). */
+  settingsPath?: string;
 }
+
+const THEME_DESCRIPTIONS: Record<ThemeSetting, string> = {
+  auto: 'Dark or light, from the terminal\'s background',
+  dark: 'Light text on a dark background',
+  light: 'Dark text on a light background',
+  'high-contrast': 'White on black, the strongest colours',
+};
+
+/** Input history kept for Ctrl+R: the newest first, no repeats. */
+const HISTORY_MAX = 500;
 
 function newSessionId(): string {
   return randomUUID();
 }
 
-interface SessionRow { id: string; title: string; updatedAt: string; messages: number }
-const isSessionRow = (v: unknown): v is SessionRow => {
-  const r = v as SessionRow | null;
-  return !!r && typeof r.id === 'string' && typeof r.title === 'string';
-};
 interface HistoryRow { role: 'user' | 'assistant'; content: string; at: string }
 const isHistoryRow = (v: unknown): v is HistoryRow => {
   const r = v as HistoryRow | null;
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
+
+type PendingImage = { marker: string; attachment: ChatAttachment };
+/** Two Escapes within this long, with no turn running, clear the draft. */
+const DOUBLE_ESCAPE_MS = 1500;
+
+/**
+ * The turn this client is waiting on: from the message it sent (or the root
+ * agent starting, for a turn another tab began) to its reply, an error or
+ * the root agent stopping. `rootAgentId` is what Esc stops.
+ */
+interface RunningTurn { rootAgentId: string | null; stopping: boolean }
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -124,7 +157,22 @@ export class OctipusTuiApp {
   private speakNextReply = false;
   /** Guards the async windows of toggleTalk (init / transcription) against re-entrant key presses. */
   private talkBusy = false;
-  private pendingImages: Array<{ marker: string; attachment: ChatAttachment }> = [];
+  private pendingImages: PendingImage[] = [];
+  /** Messages typed while a turn runs; the first goes out when it ends. */
+  private readonly queue = new QueuedMessages<PendingImage[]>(() => getKeybindings().getKeys('app.queue.edit').map(String).join(' / ') || 'Alt+E');
+  private turn: RunningTurn | null = null;
+  /** When the last Escape was pressed, for the double Escape that clears the draft. */
+  private lastEscape = 0;
+  /** What was submitted from the composer, newest first (Ctrl+R). */
+  private inputHistory: string[] = [];
+  /** The picker open now (history, sessions, models, skills), if any. */
+  private pickerHandle: OverlayHandle | null = null;
+  /** The picker waiting for the gateway's list, if one is. */
+  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
+  private readonly search?: TranscriptSearch;
+  private readonly attention?: Attention;
+  private themeSetting: ThemeSetting;
+  private readonly settingsPath: string;
   private imageBusy = false;
   private imageCounter = 0;
 
@@ -146,20 +194,32 @@ export class OctipusTuiApp {
     this.copy = options.copy;
     this.dumpToScrollback = options.dumpToScrollback;
     this.mouse = options.mouse ?? 'app';
+    this.search = options.search;
+    this.attention = options.attention;
+    this.themeSetting = options.theme ?? 'auto';
+    this.settingsPath = options.settingsPath ?? DEFAULT_SETTINGS_PATH;
+    if (this.themeSetting !== 'auto') setPalette(this.themeSetting);
     this.sessionUsed = options.sessionId !== undefined;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
     this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) tui.setFocus(this.composer); });
+    this.decisions.onChange = () => {
+      this.showState();
+      if (this.decisions.size) this.attention?.notify('A decision is waiting for you');
+    };
     this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
+    configureLinks({ enabled: hyperlinksEnabled(), cwd: this.projectPath ?? process.cwd() });
 
     // Layout: transcript, then activity, subagents, composer, status bar LAST.
     // The bar carries counters that have to stay readable — at the top it
     // scrolled off with the first screenful of output, which is exactly when
     // the numbers start being interesting.
-    const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents };
+    const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents, sticky: this.queue };
+    this.queue.onEdit = index => this.editQueued(index);
+    this.queue.onExpire = () => this.tui.requestRender();
     const rows = () => tui.terminal?.rows ?? 30;
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
@@ -204,6 +264,15 @@ export class OctipusTuiApp {
         return { consume: true };
       }
       if (kb.matches(data, 'app.transcript.dump')) { void this.dumpTranscript(); return { consume: true }; }
+      if (kb.matches(data, 'app.queue.edit') && this.queue.size) { this.editQueued(); return { consume: true }; }
+      if (kb.matches(data, 'app.history.search')) { this.openHistoryPicker(); return { consume: true }; }
+      if (kb.matches(data, 'app.copy.code')) { handleTerminalCommand('/copy code', this.tui, this.messages, text => this.pushMessage('system', text), this.copy); return { consume: true }; }
+      if (kb.matches(data, 'app.tools.toggle')) {
+        this.messages.setDetail(!this.messages.getDetail());
+        this.tui.requestRender();
+        return { consume: true };
+      }
+      if (matchesKey(data, 'escape') && !this.composer.isShowingAutocomplete()) return this.escape();
       if (this.transcript) return this.transcriptKey(this.transcript, data);
       if (this.messages.handleScrollInput(data)) {
         this.tui.requestRender();
@@ -214,12 +283,166 @@ export class OctipusTuiApp {
 
     this.status.setUser(readCliSession()?.username ?? null);
     this.welcome();
+    this.showState();
     this.adapter.on((event) => this.handleEvent(event));
   }
 
   async start(): Promise<void> {
     this.tui.start();
+    if (this.themeSetting === 'auto') this.detectTheme();
     await this.adapter.connect();
+  }
+
+  /**
+   * `auto`: ask the terminal for its background (OSC 11) and take the light
+   * palette on a light one. A terminal that does not answer keeps dark; one
+   * that answers late (over SSH) still switches.
+   */
+  private detectTheme(): void {
+    const apply = (colors: { background?: { r: number; g: number; b: number } }) => {
+      if (this.themeSetting === 'auto' && colors.background) this.applyPalette(paletteForBackground(colors.background));
+    };
+    this.tui.queryTerminalColors({ timeoutMs: 400, onLateReply: apply }).then(apply, (error: unknown) => {
+      this.pushMessage('system', `Could not ask the terminal for its colours: ${error instanceof Error ? error.message : String(error)}. Keeping the ${getPalette().name} theme; /theme sets one.`);
+    });
+  }
+
+  private applyPalette(name: PaletteName): void {
+    if (getPalette().name === name) return;
+    setPalette(name);
+    this.tui.invalidate();
+    this.tui.requestRender(true);
+  }
+
+  /** `/theme [auto|dark|light|high-contrast]`: switch now and save it in tui.json; alone, a picker. */
+  private setTheme(value: string): void {
+    if (!value) {
+      this.openPicker<ThemeSetting>('Theme', THEME_SETTINGS.map(theme => ({ value: theme, label: theme === this.themeSetting ? `${theme}  (current)` : theme, description: THEME_DESCRIPTIONS[theme] })), theme => this.setTheme(theme));
+      return;
+    }
+    if (!(THEME_SETTINGS as readonly string[]).includes(value)) {
+      this.pushMessage('system', `Error: unknown theme "${value}": one of ${THEME_SETTINGS.join(', ')}.`);
+      return;
+    }
+    const theme = value as ThemeSetting;
+    this.themeSetting = theme;
+    if (theme === 'auto') this.detectTheme();
+    else this.applyPalette(theme);
+    try {
+      writeSetting('theme', theme, this.settingsPath);
+    } catch (error) {
+      this.pushMessage('system', `Error: theme ${theme} is on for now but was not saved: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    this.pushMessage('system', `Theme: ${theme}${theme === 'auto' ? ` (${getPalette().name} for now)` : ''}. Saved in ${this.settingsPath}.`);
+  }
+
+  /**
+   * Escape with no overlay open: stop the running turn; with no turn running,
+   * a second Escape within `DOUBLE_ESCAPE_MS` clears the draft (the first one
+   * says so), so one stray key never loses what was typed.
+   */
+  private escape(): { consume: true } | undefined {
+    const now = Date.now();
+    const again = now - this.lastEscape < DOUBLE_ESCAPE_MS;
+    this.lastEscape = now;
+    if (this.turn) { this.interrupt(); return { consume: true }; }
+    if (!this.composer.getText()) return undefined;
+    if (again) {
+      this.composer.setText('');
+      this.pendingImages = [];
+      this.lastEscape = 0;
+      this.queue.setHint(null);
+    } else {
+      this.queue.setHint('Esc again to clear the draft', DOUBLE_ESCAPE_MS);
+    }
+    this.tui.requestRender();
+    return { consume: true };
+  }
+
+  /**
+   * Stop the running turn: `agent.stop` for its root agent, which also drops
+   * the turns the server queued behind it; the gateway's `/abort` (every
+   * running agent of this user) when the root is not known yet. Messages
+   * queued here come back to the composer instead of starting a new turn.
+   */
+  private interrupt(): void {
+    const turn = this.turn;
+    if (!turn) return;
+    if (turn.stopping) { this.queue.setHint('Already stopping the turn…'); this.tui.requestRender(); return; }
+    turn.stopping = true;
+    if (turn.rootAgentId) this.adapter.stopAgent(turn.rootAgentId);
+    else this.adapter.sendCommand('abort');
+    this.pushMessage('system', 'Stopping the turn (Esc)…');
+    const queued = this.queue.drain();
+    if (queued.length) {
+      const draft = this.composer.getText();
+      this.composer.setText([...queued.map(item => item.text), ...(draft ? [draft] : [])].join('\n'));
+      for (const item of queued) this.pendingImages.push(...item.extra);
+      this.queue.setHint(`${queued.length} queued message${queued.length === 1 ? ' is' : 's are'} back in the composer`, 3000);
+    }
+    this.tui.requestRender();
+  }
+
+  /** Take a queued message (the newest by default) back into the composer, ahead of what is typed there. */
+  private editQueued(index?: number): void {
+    const item = this.queue.take(index);
+    if (!item) return;
+    const draft = this.composer.getText();
+    this.composer.setText(draft ? `${item.text}\n${draft}` : item.text);
+    this.pendingImages.push(...item.extra);
+    this.queue.setHint('Edit and send it again, or clear it with Esc Esc', 3000);
+    this.tui.setFocus(this.composer);
+    this.tui.requestRender();
+  }
+
+  /** The turn is over (reply, error, stop): say so if nobody is looking, then send the first queued message as the next one. */
+  private endTurn(outcome: 'reply' | 'error' | 'stopped' = 'reply'): void {
+    if (!this.turn) return;
+    this.turn = null;
+    this.showState();
+    if (!this.queue.size) this.attention?.notify(outcome === 'reply' ? 'The reply is ready' : outcome === 'error' ? 'The turn failed' : 'The turn was stopped');
+    if (this.lastStatus === 'connected') this.sendNextQueued();
+  }
+
+  /** The window title (and OSC 7501 status) says whether the chat waits for the user, works, or is idle. */
+  private showState(): void {
+    this.attention?.setState(this.decisions.size ? 'waiting' : this.turn ? 'working' : 'idle', this.projectPath?.split(/[/\\]/).pop());
+  }
+
+  private sendNextQueued(): void {
+    const next = this.queue.shift();
+    if (!next) return;
+    this.sendNow(next.text, next.extra, 'queue');
+    this.tui.requestRender();
+  }
+
+  /** Track the running turn from the gateway's events. */
+  private trackTurn(event: AgentSessionEvent): void {
+    switch (event.kind) {
+      case 'agent.start':
+        if (event.subagent) return;
+        if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
+        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        this.showState();
+        return;
+      case 'message':
+        if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
+        return;
+      case 'agent.end':
+        if (this.turn && (event.nodeId === undefined || event.nodeId === this.turn.rootAgentId) && !this.subagents.has(event.nodeId)) this.endTurn();
+        return;
+      case 'agent.stopped':
+        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn('stopped');
+        return;
+      case 'error':
+        this.endTurn(this.turn?.stopping ? 'stopped' : 'error');
+        return;
+      case 'status':
+        if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
+        else this.turn = null;
+        return;
+    }
   }
 
   private quit(): void {
@@ -265,8 +488,8 @@ export class OctipusTuiApp {
   private hotkeysText(): string {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
-    rows.push(['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
-    if (this.transcript) rows.push(['Ctrl+Shift+F', 'Search the transcript'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
+    rows.push(['Esc', 'Stop the running turn; with none running, twice clears the draft'], ['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
+    if (this.transcript) rows.push(['Ctrl+F / Ctrl+Shift+F', 'Search the transcript: Enter / Shift+Enter next / previous, Esc returns to where you were'], ['Drag', 'Select and copy transcript text (Shift+drag: the terminal selects)']);
     const w = Math.max(...rows.map(([k]) => k.length));
     return `Hotkeys (override in ~/.octipus/keybindings.json):\n${rows.map(([k, d]) => `  ${k.padEnd(w)}  ${d}`).join('\n')}`;
   }
@@ -302,6 +525,7 @@ export class OctipusTuiApp {
     this.exiting = true;
     this.activity.dispose();
     this.decisions.dispose();
+    this.queue.dispose();
     this.session.dispose();
     if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
@@ -346,6 +570,7 @@ export class OctipusTuiApp {
       this.speakNextReply = false;
       void this.voice?.say(event.content).catch(() => {});
     }
+    this.trackTurn(event);
     if (this.session.handleEvent(event)) return;
     switch (event.kind) {
       case 'status':
@@ -383,6 +608,10 @@ export class OctipusTuiApp {
           this.sessionBeforeResume = null;
           this.pushMessage('system', `Could not open session ${this.sessionId.slice(0, 8)}: ${event.error ?? String(event.result)} — continuing in ${fallback.slice(0, 8)}.`);
           this.sessionId = fallback;
+          return;
+        }
+        if (this.loading && event.name === this.loading.command) {
+          this.fillPicker(event);
           return;
         }
         if (event.name === 'sessions' && Array.isArray(event.data)) {
@@ -426,6 +655,8 @@ export class OctipusTuiApp {
         return;
       }
       case 'agent.write':
+      case 'agent.edit':
+      case 'agent.stopped':
         return;
     }
   }
@@ -433,6 +664,7 @@ export class OctipusTuiApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleSubmit(rawText: string): void {
+    this.remember(rawText);
     if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, text => this.pushMessage('system', text), this.copy)) return;
     const text = rawText.trim();
     if (!text) return;
@@ -442,16 +674,30 @@ export class OctipusTuiApp {
     // The voice path re-arms it right after calling this.
     this.speakNextReply = false;
 
-    this.pushMessage('user', text);
-
     if (text.startsWith('/')) {
+      this.pushMessage('user', text);
       this.handleCommand(text.slice(1));
       return;
     }
-    this.sessionUsed = true;
-    const images = this.pendingImages.filter(image => text.includes(image.marker)).map(image => image.attachment);
+    const images = this.pendingImages.filter(image => text.includes(image.marker));
     this.pendingImages = [];
-    if (images.length) void this.sendWithImages(text, images);
+    // A turn is running: hold the message, visibly, until it ends.
+    if (this.turn) {
+      this.queue.push({ text, extra: images });
+      this.tui.requestRender();
+      return;
+    }
+    this.sendNow(text, images);
+  }
+
+  /** Send a chat message now; it starts the turn this client waits on. `queue` never steers a turn another tab started. */
+  private sendNow(text: string, images: PendingImage[], mode?: 'queue'): void {
+    this.pushMessage('user', text);
+    this.sessionUsed = true;
+    this.turn = { rootAgentId: null, stopping: false };
+    this.showState();
+    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), mode);
+    else if (mode) this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode);
     else this.adapter.sendChat(this.sessionId, text, this.projectPath);
   }
 
@@ -461,19 +707,22 @@ export class OctipusTuiApp {
    * so its size cap does not limit the image. A session the server has not
    * seen yet is created by the upload, and the TUI continues in it.
    */
-  private async sendWithImages(text: string, images: ChatAttachment[]): Promise<void> {
+  private async sendWithImages(text: string, images: ChatAttachment[], mode?: 'queue'): Promise<void> {
     const from = this.sessionId;
     let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
     try {
       prepared = await this.adapter.uploadAttachments(from, images, text);
     } catch (error) {
       this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
+      this.endTurn();
       return;
     }
     if (this.sessionId !== from) return; // switched sessions while uploading
     this.sessionId = prepared.sessionId;
     const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
-    this.adapter.sendChat(prepared.sessionId, content, this.projectPath, prepared.uploaded.map(file => ({ path: file.path })));
+    const refs = prepared.uploaded.map(file => ({ path: file.path }));
+    if (mode) this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode);
+    else this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs);
   }
 
   private async attachImage(path?: string): Promise<void> {
@@ -488,6 +737,9 @@ export class OctipusTuiApp {
       this.pendingImages.push({ marker, attachment });
       this.composer.insertTextAtCursor(marker + ' ');
       this.pushMessage('system', `${marker} received: ${attachment.name}. Send your message to pass it to the agent.`);
+      // Drawn where the terminal draws images; a line naming it elsewhere.
+      this.messages.pushItem({ kind: 'image', name: attachment.name, mimeType: attachment.mimeType, data: attachment.data });
+      if (this.messages.getScrollOffset() === 0) this.messages.scrollToBottom();
       this.tui.requestRender();
     } catch (error) {
       this.pushMessage('system', `Image not attached: ${error instanceof Error ? error.message : String(error)}`);
@@ -641,6 +893,91 @@ export class OctipusTuiApp {
     this.loginHandle = handle;
   }
 
+  private remember(text: string): void {
+    const entry = text.trim();
+    if (!entry) return;
+    this.inputHistory = [entry, ...this.inputHistory.filter(item => item !== entry)].slice(0, HISTORY_MAX);
+  }
+
+  /** Open a picker; one at a time. `onChoose` runs after it closed. */
+  private openPicker<T>(title: string, items: Array<{ value: T; label: string; description?: string }>, onChoose: (value: T) => void, preview?: (value: T) => string, emptyText?: string): FuzzyList<T> | null {
+    if (this.pickerHandle) return null;
+    const close = () => {
+      this.pickerHandle?.hide();
+      this.pickerHandle = null;
+      this.loading = null;
+      this.tui.setFocus(this.composer);
+      this.tui.requestRender();
+    };
+    const list = new FuzzyList<T>({
+      title, items, emptyText, theme: getFuzzyListTheme(),
+      preview: preview ? item => preview(item.value) : undefined,
+      onSelect: item => { close(); onChoose(item.value); },
+      onCancel: close,
+    });
+    this.pickerHandle = this.overlays.showPicker(list);
+    return list;
+  }
+
+  /** Re-point every later command and chat at another session and replay its transcript. */
+  private resumeSession(id: string): void {
+    this.sessionBeforeResume = this.sessionId;
+    this.pendingImages = [];
+    this.turn = null;
+    if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
+    this.sessionId = id;
+    this.sessionUsed = true;
+    this.session.reset();
+    this.adapter.sendCommand('history');
+  }
+
+  /** `/sessions` or `/resume` alone: pick a session to resume; it opens at once and fills when the list arrives. */
+  private openSessionPicker(): void {
+    const list = this.openPicker<SessionRow>('Sessions', [], row => {
+      if (row.id === this.sessionId) { this.pushMessage('system', 'That is this session.'); return; }
+      this.resumeSession(row.id);
+    }, sessionPreview, 'Loading sessions…');
+    if (!list) return;
+    this.loading = { command: 'sessions', list };
+    this.adapter.sendCommand('sessions');
+  }
+
+  /** `/skills` alone: pick a skill, then how it is used. */
+  private openSkillPicker(): void {
+    const list = this.openPicker<SkillRow>('Skills', [], skill => {
+      this.openPicker('How to use: ' + skill.name, SKILL_MODES.map(entry => ({ value: entry.mode, label: entry.label, description: entry.description })), mode => {
+        this.pushMessage('user', `/skills ${skillCommand(skill, mode)}`);
+        this.adapter.sendCommand('skills', { value: skillCommand(skill, mode) });
+      });
+    }, skill => `${skill.name}\nId: ${skill.id}\nNow: ${skill.mode}${skill.available ? '' : '\nNot available to you any more.'}\nEnter chooses Automatic, Always or This session.`, 'Loading skills…');
+    if (!list) return;
+    this.loading = { command: 'skills', list };
+    this.adapter.sendCommand('skills');
+  }
+
+  /** The list a picker was waiting for arrived (or failed). */
+  private fillPicker(event: Extract<AgentSessionEvent, { kind: 'command.result' }>): void {
+    const loading = this.loading;
+    this.loading = null;
+    if (!loading) return;
+    if (event.error) { loading.list.setItems([], `Could not load: ${event.error}`); this.tui.requestRender(); return; }
+    if (loading.command === 'sessions') {
+      this.sessionList = Array.isArray(event.data) ? event.data.filter(isSessionRow) : [];
+      loading.list.setItems(sessionItems(this.sessionList, this.sessionId), 'No sessions yet.');
+    } else {
+      const parsed = parseSkillList(typeof event.result === 'string' ? event.result : '');
+      if ('unreadable' in parsed) loading.list.setItems([], parsed.unreadable || 'The server sent no skill list.');
+      else loading.list.setItems(skillItems(parsed.rows), 'No skills available.');
+    }
+    this.tui.requestRender();
+  }
+
+  /** Ctrl+R: find something sent before and put it back in the composer. */
+  private openHistoryPicker(): void {
+    const items = this.inputHistory.map(text => ({ value: text, label: text.split('\n')[0] ?? text, description: text.includes('\n') ? `+${text.split('\n').length - 1} lines` : undefined }));
+    this.openPicker('Input history', items, text => { this.composer.setText(text); }, text => text, 'Nothing sent yet in this run');
+  }
+
   private openCommandPalette(): void {
     if (this.paletteHandle) return;
     this.paletteHandle = this.overlays.showCommandPalette({
@@ -666,6 +1003,11 @@ export class OctipusTuiApp {
     const value = parts.slice(1).join(' ').trim();
     const args: Record<string, string> | undefined = value ? { value } : undefined;
 
+    // Gateway commands that open a picker when given nothing; with an
+    // argument they go to the gateway as text (`/sessions list` lists).
+    if (name === 'sessions' && !value) { this.openSessionPicker(); return; }
+    if (name === 'skills' && !value) { this.openSkillPicker(); return; }
+
     // `/cost` is deliberately absent: it goes to the gateway, which reads the
     // cost log — the same totals the status bar shows, plus the input/output/
     // request split the old TUI-local counter never had.
@@ -687,22 +1029,25 @@ export class OctipusTuiApp {
       case 'scrollback':
         void this.dumpTranscript();
         return;
+      case 'theme':
+        this.setTheme(value);
+        return;
+      case 'search':
+        if (!this.search) { this.pushMessage('system', 'Transcript search needs the alternate screen; it is not available with --inline.'); return; }
+        if (!this.search.isOpen()) this.search.toggle();
+        return;
       case 'resume': {
+        if (!value) { this.openSessionPicker(); return; }
         const n = Number(value);
         const row = Number.isInteger(n) && n >= 1
           ? this.sessionList[n - 1]
           : value ? this.sessionList.find((s) => s.id.startsWith(value)) : undefined;
         const id = row?.id ?? (/^[0-9a-f-]{36}$/i.test(value) ? value : undefined);
         if (!id) {
-          this.pushMessage('system', value ? `No session matches "${value}" — run /sessions first.` : 'Usage: /resume <n|id> (see /sessions).');
+          this.pushMessage('system', `No session matches "${value}" — run /sessions first.`);
           return;
         }
-        this.sessionBeforeResume = this.sessionId;
-        this.pendingImages = [];
-        this.sessionId = id;
-        this.sessionUsed = true;
-        this.session.reset();
-        this.adapter.sendCommand('history');
+        this.resumeSession(id);
         return;
       }
       case 'login':
@@ -734,6 +1079,7 @@ export class OctipusTuiApp {
         } else {
           this.projectPath = value;
           this.status.setProject(value.split(/[/\\]/).pop());
+          configureLinks({ enabled: hyperlinksEnabled(), cwd: value });
           this.pushMessage('system', `Project set to: ${value}`);
         }
         return;

@@ -31,11 +31,15 @@ octi tui --inline
 
 ## Reading a conversation
 
-User turns have a **You** heading and a vertical rail on every wrapped line. Replies have an **Octipus** heading and render Markdown when complete. Streaming text remains plain until completion. System notices use a muted dot; errors have a visible `! Error` marker as well as an error colour.
+User turns have a **You** heading and a vertical rail on every wrapped line. Replies have an **Octipus** heading and render as Markdown while they stream, block by block: the blocks already written keep their rows, an unfinished code block is drawn closed at the end of what arrived, and a finished reply occupies exactly the rows it streamed into. System notices use a muted dot; errors have a visible `! Error` marker as well as an error colour.
+
+A turn's tool calls are one row: `▸ 3 tool calls · 1 running · 1 failed · 4.2s — shell, read_file`, marked `!` when one failed. Click it, or press `Ctrl+O` (every group at once), to see each call with its arguments, its whole output as the server sent it, and an edit as a diff. Calls and results are matched by the call id where the server sends one. Text the agent wrote before calling tools is a dim, folded **Thinking** row, opened the same way. Subagents' calls stay in the subagent panel. The editor's chat pane shows the same rows, collapsed (`Ctrl+O` opens a file there).
+
+Where the terminal shows links (kitty, Ghostty, WezTerm, iTerm2, Windows Terminal, VS Code, Alacritty, GNOME Terminal and other VTE terminals, tmux when it forwards them), URLs and `path:line` references in replies and tool output are links; a path opens its file, resolved from the project. Only `http`, `https` and `file` links are made, and a reply's `[text](link)` to anything else stays plain text. With the app's mouse, a click opens the link with the desktop's opener (not over SSH: there Shift+click lets the terminal open it). An image you attach is shown in the transcript where the terminal draws images (Kitty graphics; iTerm2's with `--inline`), and named in one line elsewhere.
 
 - The mouse wheel scrolls the transcript; `PageUp` and `PageDown` scroll by a page, including within one long answer. A scrollbar appears while you scroll.
 - `Ctrl+Home` jumps to the oldest retained output; `Ctrl+End` — or `End`, while reading history — returns to the latest. A **↓ End: latest** marker shows while you are away from it; clicking it also returns.
-- `Ctrl+Shift+F` searches the transcript.
+- `Ctrl+F` (or `Ctrl+Shift+F`, or `/search`) searches the transcript: the count shows as `2/5`, the current match is highlighted, `Enter` / `Shift+Enter` (`Ctrl+G` / `Ctrl+Shift+G`) go to the next / previous one, `Escape` closes the search and puts you back where you were reading, and the search key again closes it on the match. Search needs the alternate screen; with `--inline` use `/scrollback` and the terminal's own search. In the chat, `Ctrl+F` no longer moves the composer's cursor right (the Right arrow does).
 - While reading history, new messages and streaming text do not move the rows being read.
 - In the editor, the wheel scrolls the pane under the pointer (editor, tree or chat) whatever has the focus; the transcript keys apply when the chat pane has focus.
 - Resizing reflows the messages and keeps the reading position.
@@ -46,6 +50,46 @@ The activity line shows thinking, elapsed time, model and current tool activity;
 
 Text from the agent, tools and the server is reduced to what a terminal draws predictably before it is shown: control characters and escape sequences are removed, tabs become spaces, invisible format characters (variation selectors, soft hyphens, bidi controls) are dropped, and joined emoji (families, skin tones) are shown as their separate emoji. `/copy` copies the original text. Scripts with spacing vowel signs (Devanagari, Tibetan and similar) can still be measured narrower than the terminal draws them; on the alternate screen that shifts only the rest of that row.
 
+## Turns: stopping, queueing, history
+
+`Esc` stops the running turn (the root agent is stopped, and with it the messages the server queued behind it; before the agent is known it sends the gateway's `/abort`). With no turn running, `Esc` twice within a second and a half clears the draft; the first press says so.
+
+A message you send while a turn runs is not pushed into that turn: it waits in the rows above the composer (`⧗ queued 1 · …`) and is sent, as its own turn, when the turn ends; with several, one per turn. `Alt+E` or a click on its row takes it back into the composer to edit or delete. Stopping a turn with `Esc` puts every queued message back into the composer instead of sending it. Slash commands run at once, turn or not.
+
+`Ctrl+R` lists what you sent in this run, newest first, with a filter; `Enter` puts the chosen message back in the composer. `Up` / `Down` still step through the composer's history.
+
+## Pickers
+
+Sessions, skills, commands, themes and input history are chosen from the same list: type to filter (letters in order, `hdr` finds `header`; words separated by spaces must all match), `Up` / `Down` / `PageUp` / `PageDown` to move, `Enter` or a click to choose, `Escape` to close. The box below the list says what the highlighted entry is.
+
+| Opens it | Lists | Choosing |
+| --- | --- | --- |
+| `/sessions` or `/resume` alone | Your recent sessions (title, last update, messages) | Resumes it here |
+| `/skills` alone | Your skills and how each is used now | Then pick Automatic, Always or This session; sent as `/skills <id> <mode>` |
+| `Ctrl+P` / `F4` | Every command, with what it does and where it runs | Runs it |
+| `/theme` alone | `auto`, `dark`, `light`, `high-contrast` | Switches and saves |
+| `Ctrl+R` | What you sent | Puts it in the composer |
+
+The text forms keep working: `/sessions list`, `/resume <n|id>`, `/skills <id> always`. There is no model picker: the gateway has no model command to list from.
+
+## Attention and the window title
+
+The window title says what the chat is doing: `Octipus — <project>`, `· working…` during a turn, `· waiting for you` while a question or permission is open (terminals that support the OSC 7501 program status get the same). When the terminal window is not focused, a turn ending or a decision arriving raises a notification. Set how in `~/.octipus/tui.json`:
+
+```json
+{ "notify": "auto" }
+```
+
+| Value | Effect |
+| --- | --- |
+| `auto` (default) | OSC 9 in iTerm2, WezTerm, Ghostty, kitty and Windows Terminal; OSC 777 in VTE terminals (GNOME Terminal, Tilix); the bell elsewhere and inside tmux or screen |
+| `bell`, `osc9`, `osc777` | That one |
+| `off` | None |
+
+Focus comes from the terminal's focus reports (`?1004`); a terminal that sends none is treated as focused and never notified.
+
+## Prompts and decisions
+
 Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting. A question taller than the window scrolls inside its box with `Up` / `Down`; the choices and the keys to answer stay visible.
 
 ## Selecting and copying text
@@ -54,7 +98,7 @@ Both surfaces display streamed responses, identity, backend session usage, permi
 
 Your terminal's own selection is still there behind its override key: **Shift**+drag in xterm, GNOME Terminal, Konsole, Kitty, Windows Terminal and most others; **Option**+drag in iTerm2 and Terminal.app. Then use the terminal's Copy command. **Ctrl+C** remains the app's quit/cancel key.
 
-`/copy` or `/copy last` copies the latest assistant response, including text outside the viewport. `/copy transcript` copies all loaded user, assistant and system messages. Both preserve raw Markdown and Unicode; during streaming they copy the text received so far.
+`/copy` or `/copy last` copies the latest assistant response, including text outside the viewport. `/copy code` or `Alt+C` copies the last code block of the latest reply that has one, without its fences. `/copy transcript` copies all loaded user, assistant and system messages. Both preserve raw Markdown and Unicode; during streaming they copy the text received so far.
 
 Selection and `/copy` use the same clipboard chain, and say which way the text went:
 
@@ -90,7 +134,7 @@ An unknown value is an error at launch naming the choices; it is not silently re
 
 ## Plans and feedback
 
-A persistent plan summary shows progress once the agent publishes a plan. It refreshes while connected.
+A persistent plan summary shows progress once the agent publishes a plan. The server announces every change to the plan (`session.plan_updated`), and the summary is fetched then and on connecting; there is no polling.
 
 | Command | Action |
 | --- | --- |
@@ -108,16 +152,20 @@ The compact details show steps near the active step. The full transcript entry r
 | `Ctrl+P` / `F4` | Command palette |
 | `F5` | Show shortcuts |
 | `Ctrl+Q` | Quit |
+| `Esc` | Stop the running turn; with none, twice clears the draft |
+| `Alt+E` | Take the newest queued message back into the composer |
+| `Ctrl+O` | Expand or collapse tool calls and thinking |
+| `Ctrl+R` | Search input history |
 | `Up` / `Down` in composer | Input history |
 | `Tab` | Completion |
 | `\` then `Enter` | Newline when the terminal does not support Shift+Enter |
 | `Alt+T` / `F8` | Chat shell voice input, when configured |
 | `Alt+O` | Transcript into the terminal scrollback |
-| `Ctrl+Shift+F` | Search the transcript |
+| `Ctrl+F` / `Ctrl+Shift+F` | Search the transcript |
 
 Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills` and `/compact`.
 
-The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace`, `/resume`, `/export` and `/scrollback` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
+The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace`, `/resume`, `/theme`, `/search`, `/export` and `/scrollback` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 
 To resume a chat session:
 
@@ -125,7 +173,7 @@ To resume a chat session:
 octi tui --session <id>
 ```
 
-Or use `/sessions` followed by `/resume <n|id>` inside the chat shell. The editor currently starts a new agent session on launch; restoring local editor buffers does not resume an agent conversation.
+Or use `/sessions` (a picker) inside the chat shell, or `/sessions list` followed by `/resume <n|id>`. The editor currently starts a new agent session on launch; restoring local editor buffers does not resume an agent conversation.
 
 ## Working in the editor
 
@@ -275,7 +323,11 @@ Both clients connect to the gateway, normally `ws://localhost:3005/gateway`, sig
 API_PORT=3015 octi edit --project ~/code/myapp
 ```
 
-The default palette uses the Deep Sea accent colours. Actual background colour and glyph availability depend on the terminal and font. File/status icons have an ASCII fallback:
+### Themes
+
+Three palettes: `dark` (the Deep Sea colours), `light` and `high-contrast` (white on black). By default (`auto`) the chat asks the terminal for its background colour (OSC 11) and takes `light` on a light background, `dark` on a dark one or when the terminal does not answer. `/theme <name>` switches at once and saves the choice as `theme` in `~/.octipus/tui.json`, keeping the file's other settings; a fixed theme applies to the editor too. Every role of every palette is checked against the backgrounds it is made for (4.5:1 for text, 3:1 for borders; 7:1 and 4.5:1 in high contrast). `NO_COLOR` set to anything turns colour off; bold, italics and underlines still tell roles apart.
+
+Glyph availability depends on the terminal and font. File/status icons have an ASCII fallback:
 
 ```bash
 OCTIPUS_TUI_ICONS=ascii octi edit
@@ -294,6 +346,6 @@ npm run test:tui
 
 This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
 
-The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps; its editor counterpart (`tests/tui/editor-invariants.e2e.test.ts`) drives the editor through random keys, clicks, drags, wheel notches, resizes, agent edits and files changed on disk, and checks that no row wraps, the mode bar stays on the last row, the cursor stays in the editor pane (or an open box), and no control byte reaches the terminal outside an escape sequence. The chat suite runs 8 seeds by default and the editor's 6; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
+The tests assert current screen contents, including streaming Markdown, tool groups, stopping and queueing turns, search, pickers, notifications and the title, themes (OSC 11, `/theme`, `NO_COLOR`), links and images, pushed plan status, approvals, plan feedback, resize/focus and save/quit flows, the alternate screen (scrollback kept through resizes, the screen restored on every way out), drag selection and the clipboard chain, and a frame-time budget for a 5,000-message transcript. One suite runs the chat inside a real tmux when it is installed. An invariant suite (`tests/tui/invariants.e2e.test.ts`) drives the chat through random gateway events and resizes and checks after every step that the status line is the last row, the composer is above it with the cursor, and no row wraps (its random mix includes tool groups, thinking items, queued messages, pickers and link-carrying rows); its editor counterpart (`tests/tui/editor-invariants.e2e.test.ts`) drives the editor through random keys, clicks, drags, wheel notches, resizes, agent edits and files changed on disk, and checks that no row wraps, the mode bar stays on the last row, the cursor stays in the editor pane (or an open box), and no control byte reaches the terminal outside an escape sequence. The chat suite runs 8 seeds by default and the editor's 6; `TUI_FUZZ_SEEDS=500` runs more and `TUI_FUZZ_SEED=<n>` reruns the seed a failure names. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. The screen model is xterm's: VTE, Kitty, Ghostty, iTerm2, Windows Terminal, SSH and the Linux console are not exercised. Tests do not establish compatibility with every terminal or font.
 
 See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.

@@ -46,7 +46,8 @@ export function terminalClipboard(tui: Pick<TUI, 'terminal'>): (text: string) =>
 }
 
 /**
- * `/copy [last|transcript]`. Returns false for any other command. The copy
+ * `/copy [last|transcript|code]`. Returns false for any other command.
+ * `code` is the last code block of the latest reply that has one. The copy
  * itself is asynchronous (a clipboard tool may run); `notify` reports which
  * way the text went, or that it did not.
  */
@@ -57,9 +58,9 @@ export function handleTerminalCommand(
   const [name, ...args] = command.trim().replace(/^\//, '').split(/\s+/);
   const value = args.join(' ');
   if (name !== 'copy') return false;
-  if (!['', 'last', 'transcript'].includes(value)) { notify('Usage: /copy [last|transcript]'); return true; }
-  const text = messages.getCopyText(value === 'transcript' ? 'transcript' : 'last');
-  if (!text) { notify('No assistant response to copy yet.'); return true; }
+  if (!['', 'last', 'transcript', 'code'].includes(value)) { notify('Usage: /copy [last|transcript|code]'); return true; }
+  const text = messages.getCopyText(value === 'transcript' ? 'transcript' : value === 'code' ? 'code' : 'last');
+  if (!text) { notify(value === 'code' ? 'No code block in the replies yet.' : 'No assistant response to copy yet.'); return true; }
   void copy(text).then(result => notify(result.message), (error: unknown) => notify(`Not copied: ${error instanceof Error ? error.message : String(error)}`));
   return true;
 }

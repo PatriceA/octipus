@@ -12,6 +12,7 @@ import { monitorRepository } from '@/db/repositories/monitor-repository';
 import { monitorService } from '@/core/monitors/service';
 import { addPlanFeedback } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
+import { saveWorkPlan } from '@/core/agent/work-plan-store';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { idempotent } from '@/api/idempotency';
@@ -303,7 +304,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     }
     if (state.current.feedback.length >= 50) { set.status = 400; return { error: 'This plan has reached its feedback limit.' }; }
     const next = addPlanFeedback(state, body.planId, body.revision, text);
-    try { await workPlanRepository.save(session.id, session.userId, state.revision, next); }
+    try { await saveWorkPlan(session.id, session.userId, state.revision, next); }
     catch (error) {
       if (error instanceof Error && error.message === 'Plan changed. Refresh and try again.') {
         set.status = 409; return { error: error.message };

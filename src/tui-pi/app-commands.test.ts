@@ -71,7 +71,7 @@ test('/help appends the TUI-local commands the gateway cannot know about', async
   const t = mount();
   gateway.listener({ kind: 'command.result', name: 'h', result: 'Available commands:\n  /help — List' });
   expect(t.text()).toContain('TUI commands:');
-  expect(t.text()).toContain('/resume <n|id>');
+  expect(t.text()).toContain('/resume [n|id]');
   await t.app.stop();
 });
 
@@ -170,7 +170,9 @@ test('streamed deltas draw live, an iteration change keeps the earlier text, the
   gateway.listener({ kind: 'delta', delta: 'check.', iteration: 1 });
   expect(t.text()).toContain('Let me check.');
   gateway.listener({ kind: 'delta', delta: 'The answer', iteration: 2 });
-  expect(t.text()).toContain('Let me check.');
+  // The text before the tool call is reasoning: a folded, dim thinking item, not a reply.
+  expect(t.text()).toContain('· ▸ Thinking · 1 line — Let me check.');
+  expect(t.text().match(/^Octipus$/gm)).toHaveLength(1);
   expect(t.text()).toContain('The answer');
   gateway.listener({ kind: 'message', role: 'assistant', content: 'The answer is 42.' });
   const text = t.text();
@@ -206,6 +208,8 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
   expect(gateway.uploadAttachments).toHaveBeenCalledWith(expect.any(String), [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }], 'What is in [image1]?');
   await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
     'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }]));
+  // The reply ends the turn; a message typed before it would wait in the queue.
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.' });
   t.submit('Next message');
   expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined]);
   await t.app.stop();
@@ -230,5 +234,27 @@ test('removing the image marker removes it from the outgoing message', async () 
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
   t.submit('Text only');
   expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
+  await t.app.stop();
+});
+
+test("a turn's tool calls are one collapsed group; Ctrl+O expands every call's arguments and output", async () => {
+  const t = mount();
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root' });
+  gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'shell', toolName: 'shell', callId: 'a', args: { command: 'ls -la' } } });
+  gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'read_file', toolName: 'read_file', callId: 'b', args: { path: 'a.ts' } } });
+  gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'completed', name: 'shell', toolName: 'shell', callId: 'a', output: 'total 0\nfile.ts', durationMs: 40 } });
+  const collapsed = t.text();
+  expect(collapsed).toContain('▸ 2 tool calls · 1 running · 40ms — shell, read_file');
+  expect(collapsed).not.toContain('ls -la');
+  expect(collapsed).not.toContain('→ shell');
+  t.key('\x0f'); // Ctrl+O
+  const expanded = t.text();
+  expect(expanded).toContain('$ ls -la');
+  expect(expanded).toContain('file.ts');
+  expect(expanded).toContain('… read_file · running');
+  // The next turn starts a new group.
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Done.' });
+  gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'websearch', toolName: 'websearch' } });
+  expect(t.text().match(/tool calls?/g)).toHaveLength(2);
   await t.app.stop();
 });

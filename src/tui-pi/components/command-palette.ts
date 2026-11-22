@@ -1,27 +1,14 @@
 /**
- * Command palette overlay (Ctrl+P).
+ * Command palette overlay (Ctrl+P): the command picker.
  *
- * Wraps pi-tui's SelectList over OCTIPUS_SLASH_COMMANDS. Selection
- * fires `onCommand` with the command name (no leading `/`) so the
- * caller can route through its existing slash command handler.
- *
- * Filtering is delegated to SelectList via `setFilter`. We watch
- * keystrokes that aren't navigation keys, append/erase from a small
- * filter buffer, and forward to the list. Phase 6 will replace the
- * filter buffer with a proper Input child once the palette grows
- * past command names (e.g. when extensions register commands with
- * arbitrary keywords).
+ * The shared fuzzy list (`@/tui-kit/fuzzy-list`) over OCTIPUS_SLASH_COMMANDS,
+ * with each command's description, argument hint and where it runs as the
+ * preview. Selection fires `onCommand` with the command name (no leading
+ * `/`) so the caller routes it through its existing slash command handler.
  */
-import {
-  type Component,
-  type Focusable,
-  matchesKey,
-  type SelectItem,
-  SelectList,
-  truncateToWidth,
-  visibleWidth,
-} from '@/tui-kit';
-import { chalk, getPalette, getSelectListTheme } from '../theme/defaults';
+import type { Component, Focusable, SelectItem, TuiMouseEvent, TuiMouseEventResult } from '@/tui-kit';
+import { FuzzyList, type FuzzyListItem } from '@/tui-kit/fuzzy-list';
+import { getFuzzyListTheme } from '../theme/defaults';
 import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
 
 export interface CommandPaletteOptions {
@@ -29,11 +16,9 @@ export interface CommandPaletteOptions {
   onCancel: () => void;
   /** Override the command list (mainly for tests). */
   items?: SelectItem[];
-  /** SelectList max visible rows. */
+  /** Rows of the list at most. */
   maxVisible?: number;
 }
-
-const PRINTABLE_CHAR = /^[\w\-./?@]$/;
 
 function defaultItems(): SelectItem[] {
   return OCTIPUS_SLASH_COMMANDS.map((cmd) => ({
@@ -43,79 +28,38 @@ function defaultItems(): SelectItem[] {
   }));
 }
 
-export class CommandPalette implements Component, Focusable {
-  focused = false;
-  private readonly list: SelectList;
-  private filter = '';
-
-  constructor(private readonly options: CommandPaletteOptions) {
-    const items = options.items ?? defaultItems();
-    this.list = new SelectList(items, options.maxVisible ?? 8, getSelectListTheme());
-    this.list.onSelect = (item) => this.options.onCommand(item.value);
-    this.list.onCancel = () => this.options.onCancel();
-  }
-
-  invalidate(): void { this.list.invalidate(); }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, 'escape')) { this.options.onCancel(); return; }
-
-    if (matchesKey(data, 'backspace')) {
-      if (this.filter.length === 0) {
-        this.options.onCancel();
-        return;
-      }
-      this.filter = this.filter.slice(0, -1);
-      this.list.setFilter(this.filter);
-      return;
-    }
-
-    // Forward navigation + Enter to the list as-is.
-    if (matchesKey(data, 'up') || matchesKey(data, 'down')
-        || matchesKey(data, 'pageUp') || matchesKey(data, 'pageDown')
-        || matchesKey(data, 'home') || matchesKey(data, 'end')
-        || matchesKey(data, 'enter')) {
-      this.list.handleInput(data);
-      return;
-    }
-
-    // Single printable char (no modifier) → extend filter.
-    if (data.length === 1 && PRINTABLE_CHAR.test(data)) {
-      this.filter += data;
-      this.list.setFilter(this.filter);
-    }
-  }
-
-  render(width: number): string[] {
-    const palette = getPalette();
-    const border = (text: string) => chalk.hex(palette.border)(text);
-    const dim = (text: string) => chalk.hex(palette.dim)(text);
-    const accent = (text: string) => chalk.hex(palette.accent)(text);
-
-    const header = accent('Command palette');
-    const filterLine = `${dim('filter:')} ${this.filter || dim('(type to filter)')}`;
-    const listLines = this.list.render(width - 2);
-
-    const innerWidth = Math.max(
-      visibleWidth(header),
-      visibleWidth(filterLine),
-      ...listLines.map(visibleWidth),
-    );
-    const boxWidth = Math.min(width, innerWidth + 4);
-    const inner = boxWidth - 4;
-    const top    = border('┌' + '─'.repeat(boxWidth - 2) + '┐');
-    const middle = (text: string) => border('│ ') + padTo(truncateToWidth(text, inner), inner) + border(' │');
-    const bottom = border('└' + '─'.repeat(boxWidth - 2) + '┘');
-
-    return [top, middle(header), middle(filterLine), ...listLines.map((line) => middle(line)), bottom];
-  }
-
-  /** Currently active filter string (testing aid). */
-  getFilter(): string { return this.filter; }
+function preview(item: FuzzyListItem<string>): string {
+  const command = OCTIPUS_SLASH_COMMANDS.find(cmd => cmd.name === item.value);
+  if (!command) return item.description ?? '';
+  const aliases = command.aliases?.length ? `\nAliases: ${command.aliases.map(alias => `/${alias}`).join(', ')}` : '';
+  const where = command.source === 'tui' ? 'Runs in this terminal.' : 'Runs on the server.';
+  return `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ''}\n${command.description ?? ''}${aliases}\n${where}`;
 }
 
-function padTo(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + ' '.repeat(width - w);
+export class CommandPalette implements Component, Focusable {
+  private readonly list: FuzzyList<string>;
+
+  constructor(options: CommandPaletteOptions) {
+    const items = (options.items ?? defaultItems()).map(item => ({ value: item.value, label: item.label, description: item.description, search: `${item.label} ${item.description ?? ''}` }));
+    this.list = new FuzzyList<string>({
+      title: 'Commands',
+      items,
+      theme: getFuzzyListTheme(),
+      maxVisible: options.maxVisible ?? 8,
+      preview,
+      onSelect: item => options.onCommand(item.value),
+      onCancel: options.onCancel,
+    });
+  }
+
+  get focused(): boolean { return this.list.focused; }
+  set focused(value: boolean) { this.list.focused = value; }
+  invalidate(): void { this.list.invalidate(); }
+  handleInput(data: string): void { this.list.handleInput(data); }
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined { return this.list.handleMouse(event); }
+  setMaxRows(rows: number): void { this.list.setMaxRows(rows); }
+  render(width: number): string[] { return this.list.render(width); }
+
+  /** Currently active filter string (testing aid). */
+  getFilter(): string { return this.list.getFilter(); }
 }
