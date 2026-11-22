@@ -30,6 +30,10 @@ labels reflect blast radius, not contract guarantees.
   click printed an escape sequence and typing did not echo. Every exit path
   now turns mouse reporting off, shows the cursor and leaves raw mode first,
   then prints the error and exits non-zero.
+- **Terminal chat and editor: pop-up boxes get the same guard as the main
+  screen.** Every box — prompts, the command palette and the editor's file
+  picker, find, diff and other boxes — is drawn one terminal row per row and
+  cut to its width, so a control byte in what it shows cannot break the frame.
 
 - **Fewer, merged skill proposals** ([plan](docs/plans/self-learning-consolidation.md),
   [reference](docs/SESSION-LEARNING.md#the-life-of-a-skill-proposal)).
