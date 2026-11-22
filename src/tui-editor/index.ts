@@ -10,6 +10,7 @@
 import { resolve } from 'node:path';
 import { OctipusEditorApp } from './app';
 import { createRuntime } from '@/tui-pi/runtime';
+import { terminalProblem } from '@/tui-kit/terminal-check';
 
 export interface LaunchEditorOptions {
   gatewayUrl?: string;
@@ -36,6 +37,11 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
 }
 
 if (import.meta.main) {
+  const problem = terminalProblem('octi edit');
+  if (problem) {
+    process.stderr.write(`${problem}\n`);
+    process.exit(2);
+  }
   const args = process.argv.slice(2);
   let projectPath: string | undefined;
   for (let i = 0; i < args.length; i++) {
