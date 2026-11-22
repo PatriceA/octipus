@@ -12,6 +12,7 @@ import { DecisionQueue } from '@/tui-pi/decision-queue';
 import { QueuedMessages } from './components/queued-messages';
 import { FuzzyList } from '@/tui-kit/fuzzy-list';
 import type { TranscriptSearch } from '@/tui-kit/transcript-search';
+import type { Attention } from './attention';
 import { getFuzzyListTheme } from './theme/defaults';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
@@ -69,6 +70,8 @@ export interface OctipusTuiAppOptions {
   mouse?: MouseMode;
   /** The alternate screen's transcript search (`runtime.search`), for `/search`. */
   search?: TranscriptSearch;
+  /** Focus, notifications and the window title (`runtime.attention`). */
+  attention?: Attention;
 }
 
 /** Input history kept for Ctrl+R: the newest first, no repeats. */
@@ -153,6 +156,7 @@ export class OctipusTuiApp {
   /** The picker waiting for the gateway's list, if one is. */
   private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
   private readonly search?: TranscriptSearch;
+  private readonly attention?: Attention;
   private imageBusy = false;
   private imageCounter = 0;
 
@@ -175,11 +179,16 @@ export class OctipusTuiApp {
     this.dumpToScrollback = options.dumpToScrollback;
     this.mouse = options.mouse ?? 'app';
     this.search = options.search;
+    this.attention = options.attention;
     this.sessionUsed = options.sessionId !== undefined;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
     this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) tui.setFocus(this.composer); });
+    this.decisions.onChange = () => {
+      this.showState();
+      if (this.decisions.size) this.attention?.notify('A decision is waiting for you');
+    };
     this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
@@ -253,6 +262,7 @@ export class OctipusTuiApp {
 
     this.status.setUser(readCliSession()?.username ?? null);
     this.welcome();
+    this.showState();
     this.adapter.on((event) => this.handleEvent(event));
   }
 
@@ -320,11 +330,18 @@ export class OctipusTuiApp {
     this.tui.requestRender();
   }
 
-  /** The turn is over (reply, error, stop): send the first queued message as the next one. */
-  private endTurn(): void {
+  /** The turn is over (reply, error, stop): say so if nobody is looking, then send the first queued message as the next one. */
+  private endTurn(outcome: 'reply' | 'error' | 'stopped' = 'reply'): void {
     if (!this.turn) return;
     this.turn = null;
+    this.showState();
+    if (!this.queue.size) this.attention?.notify(outcome === 'reply' ? 'The reply is ready' : outcome === 'error' ? 'The turn failed' : 'The turn was stopped');
     if (this.lastStatus === 'connected') this.sendNextQueued();
+  }
+
+  /** The window title (and OSC 7501 status) says whether the chat waits for the user, works, or is idle. */
+  private showState(): void {
+    this.attention?.setState(this.decisions.size ? 'waiting' : this.turn ? 'working' : 'idle', this.projectPath?.split(/[/\\]/).pop());
   }
 
   private sendNextQueued(): void {
@@ -341,6 +358,7 @@ export class OctipusTuiApp {
         if (event.subagent) return;
         if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
         else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        this.showState();
         return;
       case 'message':
         if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
@@ -349,10 +367,10 @@ export class OctipusTuiApp {
         if (this.turn && (event.nodeId === undefined || event.nodeId === this.turn.rootAgentId) && !this.subagents.has(event.nodeId)) this.endTurn();
         return;
       case 'agent.stopped':
-        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn();
+        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn('stopped');
         return;
       case 'error':
-        this.endTurn();
+        this.endTurn(this.turn?.stopping ? 'stopped' : 'error');
         return;
       case 'status':
         if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
@@ -611,6 +629,7 @@ export class OctipusTuiApp {
     this.pushMessage('user', text);
     this.sessionUsed = true;
     this.turn = { rootAgentId: null, stopping: false };
+    this.showState();
     if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), mode);
     else if (mode) this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode);
     else this.adapter.sendChat(this.sessionId, text, this.projectPath);

@@ -8,13 +8,18 @@ export class DecisionQueue {
   private handle: OverlayHandle | null = null;
   private disposed = false;
   private readonly resolved = new Set<string>();
+  /** The number of decisions waiting changed (the window title says one is waiting). */
+  onChange?: () => void;
   constructor(private readonly overlays: OverlayController, private readonly adapter: GatewayAdapter,
     private readonly report: (text: string) => void, private readonly restoreFocus: () => void) {}
   push(event: Decision): void {
     if (this.disposed || this.resolved.has(event.requestId) || this.pending.some(item => item.requestId === event.requestId)) return;
     this.pending.push(event);
     if (!this.handle) this.show();
+    this.onChange?.();
   }
+  /** Decisions waiting for an answer. */
+  get size(): number { return this.pending.length; }
   /** A decision recorded elsewhere closes its prompt without answering again. */
   resolve(requestId: string, status: 'approved' | 'denied' | 'expired'): void {
     if (this.disposed) return;
@@ -25,6 +30,7 @@ export class DecisionQueue {
     const index = this.pending.findIndex(event => event.kind === 'permission' && event.requestId === requestId);
     if (index < 0) return;
     const [event] = this.pending.splice(index, 1);
+    this.onChange?.();
     this.report(`Permission ${status}: ${event.kind === 'permission' ? event.toolName : requestId}`);
     if (index !== 0) return;
     this.handle?.hide(); this.handle = null;
@@ -42,6 +48,7 @@ export class DecisionQueue {
         ? `${approved ? 'Approved' : 'Denied'}: ${response}`
         : `${approved ? 'Answered' : 'Declined'}: ${response}`);
       this.handle?.hide(); this.handle = null; this.pending.shift();
+      this.onChange?.();
       if (this.pending.length) this.show(); else this.restoreFocus();
     };
     try {

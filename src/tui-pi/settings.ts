@@ -27,6 +27,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { NOTIFY_METHODS, type NotifyMethod } from './attention';
 
 export const MOUSE_MODES = ['app', 'native', 'off'] as const;
 export type MouseMode = (typeof MOUSE_MODES)[number];
@@ -37,12 +38,21 @@ export interface TerminalSettings {
   screen: ScreenMode;
 }
 
-const fileSchema = z.object({ mouse: z.enum(MOUSE_MODES).optional() }).strict();
+const fileSchema = z.object({
+  mouse: z.enum(MOUSE_MODES).optional(),
+  /** How to notify when a turn ends or a decision waits while the terminal is in the background (`attention.ts`). */
+  notify: z.enum(NOTIFY_METHODS).optional(),
+}).strict();
+
+/** Everything `~/.octipus/tui.json` may hold. */
+export type SettingsFile = z.infer<typeof fileSchema>;
+
+const CHOICES: Record<string, readonly string[]> = { mouse: MOUSE_MODES, notify: NOTIFY_METHODS };
 
 export const DEFAULT_SETTINGS_PATH = join(homedir(), '.octipus', 'tui.json');
 
 /** The settings file's values; `{}` when there is none. Throws, naming the file, when it is malformed. */
-export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): Partial<TerminalSettings> {
+export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): SettingsFile {
   if (!existsSync(path)) return {};
   let parsed: unknown;
   try {
@@ -53,7 +63,9 @@ export function readSettingsFile(path: string = DEFAULT_SETTINGS_PATH): Partial<
   const result = fileSchema.safeParse(parsed);
   if (!result.success) {
     const issue = result.error.issues[0];
-    throw new Error(`${path}: ${issue?.path.join('.') || 'settings'}: ${issue?.message ?? 'invalid'} (mouse is one of ${MOUSE_MODES.join(', ')})`);
+    const key = String(issue?.path[0] ?? '');
+    const choices = Object.entries(CHOICES).filter(([name]) => !key || key === name || !(key in CHOICES)).map(([name, values]) => `${name} is one of ${values.join(', ')}`);
+    throw new Error(`${path}: ${issue?.path.join('.') || 'settings'}: ${issue?.message ?? 'invalid'} (${choices.join('; ')})`);
   }
   return result.data;
 }
@@ -75,5 +87,11 @@ export function parseTerminalArgs(args: string[]): Partial<TerminalSettings> {
 
 /** Flags win over the file; the file wins over the defaults. */
 export function resolveTerminalSettings(args: string[], path: string = DEFAULT_SETTINGS_PATH): TerminalSettings {
-  return { mouse: 'app', screen: 'alt', ...readSettingsFile(path), ...parseTerminalArgs(args) };
+  const file = readSettingsFile(path);
+  return { mouse: 'app', screen: 'alt', ...(file.mouse ? { mouse: file.mouse } : {}), ...parseTerminalArgs(args) };
+}
+
+/** The notification method from the file; `auto` without one. */
+export function readNotifySetting(path: string = DEFAULT_SETTINGS_PATH): NotifyMethod {
+  return readSettingsFile(path).notify ?? 'auto';
 }

@@ -19,7 +19,9 @@ describe.skipIf(process.platform === 'win32')('tool groups in a real terminal', 
     tui = await TuiHarness.start('src/tui-pi/index.ts', 100, 30);
     await tui.waitFor('connected');
     turn(tui);
-    await tui.waitFor('▸ 2 tool calls · 1 running — Bash, str_replace_editor');
+    // The client times a result that came without a duration: "· 1ms" may follow "running".
+    await tui.waitFor('▸ 2 tool calls · 1 running');
+    await tui.waitFor('— Bash, str_replace_editor');
     // The whole turn is on screen before rows are counted: the second iteration folds the first's text.
     await tui.waitFor('Fixed.');
     await tui.waitFor('▸ Thinking');

@@ -9,7 +9,8 @@ import { defaultClipboardEnvironment } from '@/tui-kit/clipboard';
 import { installTranscriptSearch, type TranscriptSearch } from '@/tui-kit/transcript-search';
 import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
-import { type MouseMode, resolveTerminalSettings, type ScreenMode } from './settings';
+import { type MouseMode, readNotifySetting, resolveTerminalSettings, type ScreenMode } from './settings';
+import { Attention, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON, type NotifyMethod } from './attention';
 
 export interface RuntimeOptions {
   /** Override the default WebSocket URL (otherwise built from the API port). */
@@ -30,6 +31,8 @@ export interface RuntimeOptions {
   ownsScrolling?: boolean;
   /** Turns a drag selection into the text that is copied (the chat leaves out the transcript's rail). */
   selectionText?: (text: string) => string;
+  /** See `attention.ts`. Default: `notify` in `~/.octipus/tui.json`, else `auto`. */
+  notify?: NotifyMethod;
 }
 
 export interface Runtime {
@@ -50,6 +53,8 @@ export interface Runtime {
   dumpToScrollback: (text: string) => Promise<void>;
   /** The transcript search on the alternate screen (`/search`, Ctrl+F, Ctrl+Shift+F); absent inline and for the editor. */
   search?: TranscriptSearch;
+  /** Focus, notifications and the window title. */
+  attention: Attention;
 }
 
 /**
@@ -128,14 +133,21 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const screen = options.screen ?? settings.screen;
   const mouse = options.mouse ?? settings.mouse;
 
+  const notify = options.notify ?? readNotifySetting();
+  // The alternate screen with app mouse turns focus reporting on itself and
+  // reads the reports (a focus loss ends a drag); everywhere else they are ours.
+  const screenReportsFocus = screen === 'alt' && mouse === 'app';
+  let attention: Attention | null = null;
   const terminal = new class extends ProcessTerminal {
-    override start(...args: Parameters<ProcessTerminal['start']>): void {
-      super.start(...args);
+    override start(onInput: (data: string) => void, onResize: () => void): void {
+      super.start(data => { if (!attention?.observe(data) || screenReportsFocus) onInput(data); }, onResize);
+      if (!screenReportsFocus) this.write(FOCUS_REPORTING_ON);
       // Inline: wheel reports for the app's own scrolling; Shift+drag stays native selection.
       if (screen === 'inline' && mouse === 'app') setMouseCapture(this, true);
       if (screen === 'alt' && mouse === 'native') this.write(ALTERNATE_SCROLL_ON);
     }
     override stop(): void {
+      if (!screenReportsFocus) this.write(FOCUS_REPORTING_OFF);
       if (screen === 'inline' && mouse === 'app') setMouseCapture(this, false);
       if (screen === 'alt' && mouse === 'native') this.write(ALTERNATE_SCROLL_OFF);
       super.stop();
@@ -145,6 +157,7 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
     }
   }();
   const copy = (text: string) => copyToClipboard(text, defaultClipboardEnvironment(data => terminal.write(data)));
+  attention = new Attention({ write: data => terminal.write(data), setTitle: title => terminal.setTitle(title), setProgramStatus: status => terminal.setProgramStatus(status) }, notify);
 
   let tui: TUI;
   let search: TranscriptSearch | undefined;
@@ -223,5 +236,5 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   let exitHandler = (_signal: 'SIGINT' | 'SIGTERM') => { void shutdown().then(() => process.exit(0)); };
   process.on('SIGINT', () => exitHandler('SIGINT'));
   process.on('SIGTERM', () => exitHandler('SIGTERM'));
-  return { tui, screen, mouse, gatewayUrl, keybindings, shutdown, copy, dumpToScrollback, search, setExitHandler: handler => { exitHandler = handler; } };
+  return { tui, screen, mouse, gatewayUrl, keybindings, shutdown, copy, dumpToScrollback, search, attention, setExitHandler: handler => { exitHandler = handler; } };
 }

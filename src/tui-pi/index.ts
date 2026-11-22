@@ -39,6 +39,7 @@ export async function launchOctipusTui(options: LaunchOptions = {}): Promise<voi
     dumpToScrollback: runtime.dumpToScrollback,
     mouse: runtime.mouse,
     search: runtime.search,
+    attention: runtime.attention,
   });
   await app.start();
 }
