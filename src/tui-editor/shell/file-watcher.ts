@@ -10,15 +10,18 @@
  *
  * A buffer without unsaved edits is reloaded (one undo step brings the old
  * text back) and the mode bar says so. A buffer with unsaved edits is not
- * touched: the reload / overwrite / cancel prompt is offered once for that
+ * touched, and nothing is opened over what the user is typing: the reload /
+ * overwrite / cancel prompt waits in `PendingPrompts` (the mode bar shows it)
+ * until the resolve key or the next save of that buffer, once for that
  * version of the file. A deleted file is reported once. Buffers under agent
- * review are left to the review.
+ * review, or with a review waiting, are left to the review.
  */
 import { statSync } from 'node:fs';
 import { relative } from 'node:path';
 import { checkDisk, readFileForBuffer } from '../workspace-fs-bridge';
 import type { EditorContext } from './context';
 import type { FileOps } from './file-ops';
+import { externalKey } from './pending-prompts';
 
 export const WATCH_INTERVAL_MS = 1000;
 
@@ -27,7 +30,17 @@ export class FileWatcher {
   /** The file version (`mtime:size`) already offered or reported per buffer, so it is said once. */
   private readonly told = new Map<string, string>();
 
-  constructor(private readonly ctx: EditorContext, private readonly files: FileOps) {}
+  constructor(
+    private readonly ctx: EditorContext,
+    private readonly files: FileOps,
+    /** Buffers the watcher leaves alone: an agent edit to them is waiting for review. */
+    private readonly underReview: (bufferId: string) => boolean = () => false,
+  ) {}
+
+  private inSync(id: string): void {
+    this.told.delete(id);
+    this.ctx.pending.remove(externalKey(id));
+  }
 
   start(interval = WATCH_INTERVAL_MS): void {
     if (this.timer) return;
@@ -44,11 +57,11 @@ export class FileWatcher {
   check(): void {
     const { buffers, tui } = this.ctx;
     for (const record of buffers.get().buffers) {
-      if (!record.path || !record.disk || record.agentLocked) continue;
+      if (!record.path || !record.disk || record.agentLocked || this.underReview(record.id)) continue;
       let version: string;
       try {
         const stat = statSync(record.path);
-        if (stat.mtimeMs === record.disk.mtimeMs && stat.size === record.disk.size) { this.told.delete(record.id); continue; }
+        if (stat.mtimeMs === record.disk.mtimeMs && stat.size === record.disk.size) { this.inSync(record.id); continue; }
         version = `${stat.mtimeMs}:${stat.size}`;
       } catch (error) {
         if (!isMissing(error)) { this.ctx.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`); continue; }
@@ -70,21 +83,21 @@ export class FileWatcher {
         this.ctx.pushMessage('system', `Error: Cannot check ${record.path}: ${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
-      if (!check.changed) { buffers.markSaved(record.id, record.savedText, check.disk); continue; }
+      if (!check.changed) { this.inSync(record.id); buffers.markSaved(record.id, record.savedText, check.disk); continue; }
       // The disk now holds what the buffer holds (the agent wrote the text the review accepted): in sync.
       const now = readFileForBuffer(record.path);
-      if (now.ok && now.text === record.buffer.text()) { buffers.markSaved(record.id, now.text, now.disk); continue; }
+      if (now.ok && now.text === record.buffer.text()) { this.inSync(record.id); buffers.markSaved(record.id, now.text, now.disk); continue; }
       if (!record.dirty) {
         this.files.reloadFromDisk(record.id);
         this.ctx.notice(`${shown} changed on disk and was reloaded (Ctrl+Z brings the old text back).`, 'info');
         tui.requestRender();
         continue;
       }
-      // Unsaved edits: ask, once for this version, when nothing else is being asked.
-      if (tui.hasOverlay()) continue;
+      // Unsaved edits: never a prompt over what is being typed (its r / o would take the next keys as an answer).
+      // It waits for the resolve key or the next save of this buffer, once for this version.
       this.told.set(record.id, version);
-      buffers.setActive(record.id);
-      this.files.promptExternalChange(record.id, false);
+      const id = record.id;
+      this.ctx.pending.add({ key: externalKey(id), bufferId: id, text: `${shown} changed on disk`, open: () => { buffers.setActive(id); this.files.promptExternalChange(id, false); } });
       tui.requestRender();
     }
     // Forget buffers that closed.

@@ -46,6 +46,7 @@ import { FileOps, PROMPT_OVERLAY } from './shell/file-ops';
 import { HighlightParses } from './shell/highlight-parses';
 import { EditorOverlays } from './shell/overlay-actions';
 import { APP_OVERLAYS, OverlaySlots } from './shell/overlay-slots';
+import { PendingPrompts } from './shell/pending-prompts';
 import { EditorPersistence } from './shell/persistence';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
@@ -70,6 +71,8 @@ export class OctipusEditorApp {
   readonly layout = new LayoutStore();
   readonly buffers = new BufferStore();
   readonly workspace = new WorkspaceStore();
+  /** Background questions (file changed on disk, agent edit to review) waiting for the resolve key. */
+  readonly pending = new PendingPrompts();
 
   private readonly status = new StatusBar();
   private readonly tabs: TabStrip;
@@ -119,6 +122,7 @@ export class OctipusEditorApp {
       buffers: this.buffers,
       layout: this.layout,
       overlays: this.slots,
+      pending: this.pending,
       projectPath: this.projectPath,
       notice: (text, tone) => this.modeBar.setNotice(text, tone),
       pushMessage: (role, content) => this.pushMessage(role, content),
@@ -136,7 +140,7 @@ export class OctipusEditorApp {
     this.parses = new HighlightParses(this.buffers, () => this.tui.requestRender());
     this.files = new FileOps(this.ctx, (id) => this.parses.reparse(id));
     this.review = new AgentReview(this.ctx, this.files);
-    this.watcher = new FileWatcher(this.ctx, this.files);
+    this.watcher = new FileWatcher(this.ctx, this.files, (id) => this.review.underReview(id));
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
     const copy = terminalClipboard(tui);
@@ -164,6 +168,7 @@ export class OctipusEditorApp {
     this.modeBar = new ModeBar(this.layout, this.buffers, {
       getVimMode: () => this.editor.getVimState().mode,
       getVimCommandLine: () => this.editor.getVimState().commandLine,
+      getAttention: () => this.pending.summary(),
     });
     this.tree = new FileTree({
       root: this.projectPath,
@@ -238,6 +243,9 @@ export class OctipusEditorApp {
       tui.addInputListener((data) => this.handleGlobalKey(data)),
       // Re-parse highlighting after edits; forget the parse of a closed buffer.
       this.buffers.subscribe((state) => this.parses.schedule(state.buffers)),
+      // A closed buffer's waiting prompts and agent edits go with it.
+      this.buffers.subscribe(() => { this.pending.prune((id) => this.buffers.byId(id) !== null); this.review.prune(); }),
+      this.pending.subscribe(() => this.tui.requestRender()),
     );
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
@@ -275,6 +283,10 @@ export class OctipusEditorApp {
       goToLine: (target) => this.goToLine(target),
       copySelection: () => this.layout.get().focused === 'editor' && this.editor.copySelection(),
       newScratch: () => { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); },
+      openPending: () => {
+        if (!this.pending.openNext()) this.modeBar.setNotice('Nothing is waiting: no file changed on disk, no agent edit to review.', 'info');
+        this.tui.requestRender();
+      },
       saveAsCommand: (value) => {
         const active = this.buffers.active();
         if (!active) { this.pushMessage('system', 'Error: No buffer to save.'); return; }

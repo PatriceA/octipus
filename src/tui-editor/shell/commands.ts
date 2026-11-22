@@ -27,6 +27,8 @@ export interface CommandHost {
   /** Copy the editor's selection, when the editor has the focus and something selected; returns whether it did. */
   copySelection(): boolean;
   newScratch(): void;
+  /** Open the oldest background prompt (file changed on disk, agent edit to review). */
+  openPending(): void;
   saveAsCommand(path: string): void;
   reloadKeybindings(): void;
   closeActiveBuffer(): void;
@@ -103,6 +105,7 @@ export function handleGlobalKey(host: CommandHost, data: string): { consume: tru
   if (kb.matches(data, 'app.goto.line'))     { host.goToLine(''); return { consume: true }; }
   if (kb.matches(data, 'app.search.project')) { overlays.openProjectSearch(''); return { consume: true }; }
   if (kb.matches(data, 'app.file.new'))      { host.fileCommands.newFile(''); return { consume: true }; }
+  if (kb.matches(data, 'app.pending.open'))  { host.openPending(); return { consume: true }; }
   if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
   if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
   if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }

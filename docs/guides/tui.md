@@ -198,6 +198,7 @@ At 80 columns and wider, the editor shows a file tree, buffer editor and chat. B
 | `Alt+Z` | Soft wrap on or off |
 | `Ctrl+Shift+F` / `Alt+G` | Search the project |
 | `Alt+N` | New file |
+| `Alt+Y` | Resolve what is waiting: a file changed on disk under unsaved edits, an agent edit to review |
 | `Ctrl+Q` | Quit, with unsaved-change protection |
 
 In the file:
@@ -238,7 +239,7 @@ The wheel scrolls the pane under the pointer, whatever has the focus. While a bo
 | `/delete`, `d` or `Delete` in the tree | Delete the file after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
 | `/revert` | Put the file on disk back into the buffer (one undo step) |
 
-Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone and you are asked once: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.
+Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone, and nothing opens over what you are typing: the bottom bar says `⚑ <file> changed on disk — press alt+y to resolve` until you do. `Alt+Y` (or saving that tab) asks: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). Each version of the file is offered once. A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.
 
 ### Saving
 
@@ -295,7 +296,7 @@ The state file is private to its owner. Changes are checkpointed after a short d
 
 ### Reviewing the agent's edits
 
-When the agent writes a file, its edit is shown as a diff before it reaches the buffer: the buffer is locked until you decide, and edits to several files are reviewed one after another. A file that is not open is opened in a tab for the review (a new file is compared with nothing); a change to a file the agent names relative to the project reaches its tab too.
+When the agent writes a file, its edit is shown as a diff before it reaches the buffer. The review does not open on its own — its single-letter keys would take whatever you were typing as an answer — and it does not switch tabs: the bottom bar says `⚑ agent edit to <file> ready for review — press alt+y to resolve` (with how many more are waiting), and `Alt+Y`, or saving that tab, opens it. Edits to several files wait in order; a newer edit to the same file replaces the waiting one. While the review is open the buffer is locked. A file that is not open is opened in a background tab for the review (a new file is compared with nothing); a change to a file the agent names relative to the project reaches its tab too.
 
 The diff is split into **hunks** — runs of changed lines — marked with the current one (`▌`) and your decision (`✓` / `✗`):
 

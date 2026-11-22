@@ -7,6 +7,15 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: background prompts no longer take the keyboard.** A file
+  changed on disk under unsaved edits and an agent edit ready for review used
+  to open their prompt at once, switching tabs and taking focus mid-typing, so
+  the next keystroke (`r`, `o`, `a`) picked reload, overwrite, accept-all or
+  reject-all. Both now wait: the mode bar shows `⚑ … — press alt+y to
+  resolve`, and the prompt opens on `Alt+Y` (`app.pending.open`) or when you
+  save that tab. An agent edit to a file that is not open opens it in a
+  background tab. Prompts you open yourself (Ctrl+S on a changed file) work as
+  before.
 - **Terminal editor: Save As no longer leaves two tabs sharing one identity.**
   Saving `a.ts` as `b.ts` and then opening `a.ts` again gave both tabs the
   same internal id, so Ctrl+S in the `a.ts` tab wrote `b.ts`, closing one tab

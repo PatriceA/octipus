@@ -19,6 +19,10 @@ describe.skipIf(process.platform === 'win32')('agent edit review in a real POSIX
     // Three hunks: the first line, a middle one, and an addition at the end.
     const proposed = ['ALPHA', 'bravo', 'charlie', 'DELTA', 'echo', 'foxtrot', 'golf', 'hotel', ''];
     agentWrites(tui, 'review.txt', proposed.join('\r\n'));
+    // Nothing opens over the editor: the mode bar says the edit waits, Alt+Y opens it.
+    await tui.waitFor('agent edit to review.txt ready for review');
+    expect(await tui.text()).not.toContain('Agent edit: review.txt');
+    tui.send('\x1by');
     await tui.waitFor('Agent edit: review.txt');
     await tui.waitFor('hunk 1/3');
     expect(await tui.text()).toContain(' review.txt ');
@@ -40,6 +44,8 @@ describe.skipIf(process.platform === 'win32')('agent edit review in a real POSIX
     writeFileSync(path, 'export const a = 1;\nexport const b = 2;\n');
     await tui.waitFor('focus:editor'); await tui.waitFor('connected');
     agentWrites(tui, path, 'export const a = 100;\nexport const b = 2;\n');
+    await tui.waitFor('ready for review');
+    tui.send('\x1by');
     await tui.waitFor('Agent edit: keep.ts');
     tui.send('\x1b'); await tui.waitFor('Agent edit: keep.ts', true);
     await tui.waitFor('export const a = 1;');

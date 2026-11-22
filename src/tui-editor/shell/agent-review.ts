@@ -1,12 +1,19 @@
 /**
  * Review of the agent's file edits, hunk by hunk.
  *
- * An edit to an open buffer takes the buffer's lock and is shown as a diff of
- * the buffer against the agent's text. An edit to a file that is not open
- * opens it in a tab first — a review tab, compared with the file as it is on
- * disk — rather than going by unseen. Applying the review puts the result
- * (the accepted hunks, the rest as they were) in the buffer as one undo
- * step, releases the lock and presents the next queued edit.
+ * An agent edit arrives while the user may be typing anywhere, so it never
+ * opens on its own: it waits in `PendingPrompts`, the mode bar says an agent
+ * edit is ready for review, and the review opens on the resolve key or when
+ * the user saves that buffer. The active tab and the focus stay where they
+ * are. A later edit to the same buffer replaces the waiting one (the agent's
+ * newest text). An edit to a file that is not open opens it in a background
+ * tab — compared with the file as it is on disk — rather than going by
+ * unseen. While a review waits the file watcher leaves the buffer alone.
+ *
+ * The review is a diff of the buffer, as it is when the review opens,
+ * against the agent's text; the buffer is locked while it is open. Applying
+ * it puts the result (the accepted hunks, the rest as they were) in the
+ * buffer as one undo step and releases the lock.
  *
  * The review controls the buffer, not the file: the agent may already have
  * written its version. After the review the buffer's baseline follows the
@@ -20,13 +27,25 @@ import { DiffOverlay, type ReviewResult } from '../components/diff-overlay';
 import { readFileForBuffer } from '../workspace-fs-bridge';
 import type { EditorContext } from './context';
 import type { FileOps } from './file-ops';
+import { reviewKey } from './pending-prompts';
 
-interface PendingEdit { bufferId: string; label: string; after: string }
+interface PendingEdit { bufferId: string; after: string }
 
 export class AgentReview {
-  private readonly queue: PendingEdit[] = [];
+  /** Edits waiting for the resolve key, by buffer: the agent's newest text for each. */
+  private readonly waiting = new Map<string, PendingEdit>();
+  /** The buffer whose review is open. */
+  private reviewingId: string | null = null;
 
   constructor(private readonly ctx: EditorContext, private readonly files: FileOps) {}
+
+  /** Whether an agent edit to `bufferId` is waiting for review or being reviewed. */
+  underReview(bufferId: string): boolean { return this.reviewingId === bufferId || this.waiting.has(bufferId); }
+
+  /** Forget the edits of buffers that closed. */
+  prune(): void {
+    for (const id of [...this.waiting.keys()]) if (!this.ctx.buffers.byId(id)) this.waiting.delete(id);
+  }
 
   /** `agent.write`: the agent changed (or proposes to change) `path`. */
   handleWrite(path: string, newText: string): void {
@@ -36,9 +55,16 @@ export class AgentReview {
     const after = newText.replace(/\r\n/g, '\n');
     const record = this.ctx.buffers.findByPath(absolute) ?? this.openForReview(absolute);
     if (!record) return;
-    // Lock the buffer until the review is applied; a queued edit holds its lock while it waits.
-    this.ctx.buffers.setAgentLocked(record.id, true);
-    this.open({ bufferId: record.id, label: record.label, after });
+    this.wait({ bufferId: record.id, after });
+  }
+
+  /** Hold an edit for the resolve key; nothing is opened over what the user is doing. */
+  private wait(edit: PendingEdit): void {
+    const id = edit.bufferId;
+    this.waiting.set(id, edit);
+    const label = this.ctx.buffers.byId(id)?.label ?? 'a file';
+    this.ctx.pending.add({ key: reviewKey(id), bufferId: id, text: `agent edit to ${label} ready for review`, open: () => this.open(id) });
+    this.ctx.tui.requestRender();
   }
 
   /** A file that is not open: open it in a tab to review the edit there. */
@@ -47,7 +73,7 @@ export class AgentReview {
     const shown = relative(this.ctx.projectPath, absolute) || absolute;
     if (!existsSync(absolute)) {
       // A new file: compared with nothing. The tab has the path but no file yet; Ctrl+S creates it.
-      const record = buffers.openFile(absolute, '', { disk: null });
+      const record = buffers.openFile(absolute, '', { disk: null, activate: false });
       this.ctx.log(`The agent is creating ${shown}; opened it for review.`);
       return record;
     }
@@ -56,42 +82,41 @@ export class AgentReview {
       this.ctx.pushMessage('system', `Error: The agent edited ${shown}, which cannot be opened for review: ${read.error}`);
       return null;
     }
-    const record = buffers.openFile(absolute, read.text, { disk: read.disk });
+    const record = buffers.openFile(absolute, read.text, { disk: read.disk, activate: false });
     this.ctx.log(`The agent edited ${shown}; opened it for review.`);
     return record;
   }
 
-  private open(edit: PendingEdit): void {
+  /** Open the review of the edit waiting for `bufferId` (the resolve key, or saving that buffer). */
+  private open(bufferId: string): void {
     const { overlays, buffers } = this.ctx;
-    if (overlays.isOpen('diff')) { this.queue.push(edit); return; }
-    const record = buffers.byId(edit.bufferId);
-    if (!record) { this.next(); return; }
-    buffers.setAgentLocked(edit.bufferId, true);
-    buffers.setActive(edit.bufferId);
+    const edit = this.waiting.get(bufferId);
+    const record = buffers.byId(bufferId);
+    if (!edit || !record) { this.waiting.delete(bufferId); return; }
+    if (overlays.isOpen('diff')) { this.wait(edit); return; }
+    this.waiting.delete(bufferId);
+    this.reviewingId = bufferId;
+    buffers.setAgentLocked(bufferId, true);
+    buffers.setActive(bufferId);
     overlays.show('diff', new DiffOverlay({
-      bufferLabel: edit.label,
+      bufferLabel: record.label,
       before: record.buffer.text(),
       after: edit.after,
-      onApply: (result) => this.resolve(edit, result),
+      onApply: (result) => this.resolve(edit, record.label, result),
     }));
   }
 
-  private resolve(edit: PendingEdit, result: ReviewResult): void {
+  private resolve(edit: PendingEdit, label: string, result: ReviewResult): void {
     const { buffers, tui } = this.ctx;
     const record = buffers.byId(edit.bufferId);
     if (record && result.text !== record.buffer.text()) record.buffer.setText(result.text);
     buffers.setAgentLocked(edit.bufferId, false);
+    this.reviewingId = null;
     const disk = this.files.syncWithDisk(edit.bufferId, edit.after);
-    this.ctx.log(describe(edit.label, result, disk));
+    this.ctx.log(describe(label, result, disk));
     this.ctx.overlays.hide('diff');
-    this.next();
+    if (!tui.hasOverlay()) this.ctx.refocus();
     tui.requestRender();
-  }
-
-  private next(): void {
-    const next = this.queue.shift();
-    if (next) this.open(next);
-    else if (!this.ctx.tui.hasOverlay()) this.ctx.refocus();
   }
 }
 

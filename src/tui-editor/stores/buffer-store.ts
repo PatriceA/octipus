@@ -60,6 +60,8 @@ export interface BufferState {
 export interface OpenFileOptions {
   label?: string;
   disk?: DiskInfo | null;
+  /** False: open it as a tab without making it the active one (a file opened in the background). */
+  activate?: boolean;
 }
 
 export class BufferStore {
@@ -105,7 +107,7 @@ export class BufferStore {
   openFile(absPath: string, savedText: string, options: OpenFileOptions = {}): BufferRecord {
     const existing = this.findByPath(absPath);
     if (existing) {
-      this.set({ activeId: existing.id });
+      if (options.activate !== false) this.set({ activeId: existing.id });
       return existing;
     }
     const rec = this.track({
@@ -121,7 +123,8 @@ export class BufferStore {
       agentLocked: false,
       createdAt: Date.now(),
     });
-    this.set({ buffers: [...this.state.buffers, rec], activeId: rec.id });
+    const background = options.activate === false && this.state.activeId !== null;
+    this.set({ buffers: [...this.state.buffers, rec], activeId: background ? this.state.activeId : rec.id });
     return rec;
   }
 
