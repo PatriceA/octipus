@@ -191,3 +191,34 @@ test('control bytes in a file are shown, never sent to the terminal', () => {
   expect(lines[3]).toContain('nel \ufffd csi \ufffd2J end');
   expect(rec.buffer.text()).toContain('\x1b[2J'); // the file itself is untouched
 });
+
+// A paste while an agent edit held the buffer was consumed and dropped without a word.
+describe('a paste into a buffer under agent review', () => {
+  test('a bracketed paste is not inserted and says why; the next keys are not swallowed', () => {
+    const store = new BufferStore();
+    const rec = store.openFile('/tmp/locked.ts', 'text');
+    const notices: string[] = [];
+    const editor = new TextEditor(store, { height: 5, onNotice: (t) => notices.push(t) });
+    store.setAgentLocked(rec.id, true);
+    editor.handleInput('\x1b[200~pasted\x1b[201~');
+    expect(rec.buffer.text()).toBe('text');
+    expect(notices).toEqual(['Not pasted: an agent edit to this buffer is under review. Finish the review, then paste again.']);
+    store.setAgentLocked(rec.id, false);
+    editor.handleInput('x');
+    expect(rec.buffer.text()).toBe('xtext');
+  });
+
+  test('a clipboard paste that lands after the lock was taken says so too', async () => {
+    const store = new BufferStore();
+    const rec = store.openFile('/tmp/locked.ts', 'text');
+    const notices: string[] = [];
+    let answer: (text: string) => void = () => {};
+    const editor = new TextEditor(store, { height: 5, onNotice: (t) => notices.push(t), clipboard: { copy() {}, paste: () => new Promise<string>((resolve) => { answer = resolve; }) } });
+    editor.handleInput('\x16'); // Ctrl+V
+    store.setAgentLocked(rec.id, true);
+    answer('late');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rec.buffer.text()).toBe('text');
+    expect(notices.at(-1)).toContain('under review');
+  });
+});

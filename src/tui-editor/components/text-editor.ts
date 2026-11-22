@@ -42,6 +42,8 @@ import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 /** Rows kept between the cursor and the top or bottom of the pane while it moves. */
 export const SCROLLOFF = 3;
+/** Said when a paste arrives while an agent edit to the buffer is under review. */
+const LOCKED_PASTE = 'Not pasted: an agent edit to this buffer is under review. Finish the review, then paste again.';
 /** A line longer than this is highlighted and styled only where it is on screen, not whole. */
 export const LONG_LINE = 2_000;
 /** For a long line with wrap off: the line is indexed in pieces this many cells wide, to find the visible part. */
@@ -161,6 +163,7 @@ export class TextEditor implements Component, Focusable {
       const end = this.paste.indexOf('\x1b[201~');
       if (end >= 0) {
         if (!active.agentLocked) active.buffer.insert(this.paste.slice(0, end).replace(/\r\n?/g, '\n'));
+        else this.options.onNotice?.(LOCKED_PASTE);
         const rest = this.paste.slice(end + '\x1b[201~'.length);
         this.paste = null;
         // Keystrokes that arrived in the same chunk as the paste terminator.
@@ -271,7 +274,8 @@ export class TextEditor implements Component, Focusable {
     if (!clipboard) return;
     void clipboard.paste().then((text) => {
       if (text === null) { this.options.onNotice?.('Nothing to paste: the clipboard cannot be read here and nothing was copied in the editor.'); return; }
-      if (this.buffers.active()?.id !== active.id || active.agentLocked) return;
+      if (this.buffers.active()?.id !== active.id) { this.options.onNotice?.(`Not pasted: the tab changed before the clipboard was read (${active.label}).`); return; }
+      if (this.buffers.byId(active.id)?.agentLocked) { this.options.onNotice?.(LOCKED_PASTE); return; }
       active.buffer.insert(text.replace(/\r\n?/g, '\n'));
       this.scrollIntoView(active);
       this.options.requestRender?.();

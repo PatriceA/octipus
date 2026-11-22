@@ -7,6 +7,9 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: a paste into a tab under agent review says it was not
+  pasted.** It used to vanish silently; the bottom bar now says the review has
+  to be finished first.
 - **Terminal editor: `/delete <path>` deletes that path, and paths keep their
   spaces.** `/delete` ignored its argument and offered to delete the active
   tab's file instead; `/rename` and `/save-as` collapsed a run of spaces in
