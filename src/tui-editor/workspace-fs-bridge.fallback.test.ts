@@ -24,7 +24,7 @@ vi.mock('node:fs', async (original) => {
     }) as typeof fs.statSync,
     openSync: ((path: fs.PathLike, flags?: fs.OpenMode, mode?: fs.Mode) => {
       if (inject.createTemp && String(path).endsWith('.octipus-save')) throw fail(inject.createTemp);
-      return actual.openSync(path, flags, mode);
+      return actual.openSync(path, flags ?? 'r', mode);
     }) as typeof fs.openSync,
   };
 });
