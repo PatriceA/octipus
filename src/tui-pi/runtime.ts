@@ -11,7 +11,7 @@ import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings, loadOctipusKeybindings } from './keybindings';
 import { type MouseMode, readNotifySetting, readThemeSetting, resolveTerminalSettings, type ScreenMode } from './settings';
 import { setPalette } from './theme/defaults';
-import { openUrl } from './links';
+import { openerFor, openUrl } from './links';
 import { Attention, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON, type NotifyMethod } from './attention';
 
 export interface RuntimeOptions {
@@ -109,6 +109,9 @@ const ALTERNATE_SCROLL_ON = '\x1b[?1007h';
 const ALTERNATE_SCROLL_OFF = '\x1b[?1007l';
 /** Erase the scrollback. The main-screen renderer sends it on every resize; it took the user's history before launch with it. */
 const ERASE_SCROLLBACK = '\x1b[3J';
+/** Save the window and icon titles on the terminal's title stack, and restore them (xterm; others ignore it). */
+const TITLE_PUSH = '\x1b[22;0t';
+const TITLE_POP = '\x1b[23;0t';
 /** What the alternate-screen renderer flashes after a copy; replaced by what actually happened. */
 const COPIED_FLASH = 'Copied!';
 
@@ -179,8 +182,8 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
     }(terminal, options.showHardwareCursor ?? false, undefined, {
       mouse: mouse === 'app',
       scrollToEndIndicator: () => ' ↓ End: latest ',
-      // The app gets the click, not the terminal: open the link here (http, https, file only).
-      openUrl: url => openUrl(url, message => alt.flash(message)),
+      // The app gets the click, not the terminal: open a web link here; a local file's path is copied, never opened.
+      openUrl: url => openUrl(url, message => alt.flash(message), openerFor(), copy),
       copySelection: async text => {
         const result = await copy(selectionText(text));
         if (!result.ok) return result.message;
@@ -198,6 +201,8 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const userBindings = loadOctipusKeybindings();
   const keybindings = installOctipusKeybindings(options.ownsScrolling ? withoutViewportKeys(userBindings) : withChatSearchKeys(userBindings));
 
+  // The chat and the editor set the window title (`options.title`, `Attention`): save the user's first, put it back on the way out.
+  terminal.write(TITLE_PUSH);
   if (options.title) terminal.setTitle(options.title);
 
   // tui.stop() leaves the alternate screen (or moves below the frame) and
@@ -211,6 +216,7 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
     try { tui.stop({ preserveScreen: true }); } catch (error) {
       process.stderr.write(`Could not restore the terminal: ${error instanceof Error ? error.message : String(error)}\n`);
     }
+    process.stdout.write(TITLE_POP);
   };
   installExitGuards(restore);
 

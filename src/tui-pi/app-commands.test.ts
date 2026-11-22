@@ -4,6 +4,7 @@ import { OctipusTuiApp } from './app';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
 import { MessagesPane } from './components/messages-pane';
+import type { Attention } from './attention';
 import type { AgentSessionEvent } from './gateway-adapter';
 import { installOctipusKeybindings } from './keybindings';
 
@@ -12,8 +13,8 @@ vi.mock('./image-attachments', () => ({ readClipboardImage: image.read, readImag
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
   uploadAttachments: vi.fn(),
   getSessionId: () => undefined as string | null | undefined,
 }));
@@ -24,6 +25,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   sendChat = gateway.sendChat;
   uploadAttachments = gateway.uploadAttachments;
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));
@@ -102,7 +104,7 @@ test('a refused /resume rolls the session back so the next message does not go a
   expect(gateway.getSessionId()).toBe(before);
   expect(t.text()).toContain('Could not open session 11111111: Session not found');
   t.submit('hello again');
-  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined);
+  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined, undefined, undefined, expect.any(String));
   await t.app.stop();
 });
 
@@ -139,18 +141,18 @@ test('Ctrl+Q quits and F5 prints the hotkeys', async () => {
 test('the thinking line shows model and elapsed seconds', async () => {
   vi.useFakeTimers();
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'ornith:35b' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'ornith:35b', root: true });
   vi.advanceTimersByTime(5000);
   gateway.listener({ kind: 'agent.iteration', agentId: 'root', iteration: 2 });
   expect(t.activity()).toMatch(/thinking · general · iter 2 · 5s · ornith:35b/);
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 } });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, root: true });
   expect(t.activity()).toBe('');
   await t.app.stop();
 });
 
 test('progress appears once without ending the turn or clearing a live answer', async () => {
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'cli/claude' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'cli/claude', root: true });
   gateway.listener({ kind: 'delta', delta: 'Answer in progress', iteration: 1 });
   const update = { kind: 'message', role: 'assistant', content: 'Found the cause.', messageId: 'p1', progress: true } as const;
   gateway.listener(update);
@@ -179,7 +181,7 @@ test('streamed deltas draw live, an iteration change keeps the earlier text, the
   expect(text).toContain('The answer is 42.');
   expect(text.match(/The answer/g)).toHaveLength(1);
   gateway.listener({ kind: 'delta', delta: 'x', iteration: 3 });
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 } });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, root: true });
   expect(t.text()).not.toMatch(/\n\s+x$/);
   await t.app.stop();
 });
@@ -187,9 +189,9 @@ test('streamed deltas draw live, an iteration change keeps the earlier text, the
 test('partial text from a failed turn is dropped, not promoted into history by the next turn', async () => {
   const t = mount();
   gateway.listener({ kind: 'delta', delta: 'half an ans', iteration: 1 });
-  gateway.listener({ kind: 'error', message: 'provider died' });
+  gateway.listener({ kind: 'chat.error', message: 'provider died', cancelled: false });
   expect(t.text()).not.toContain('half an ans');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', root: true });
   gateway.listener({ kind: 'delta', delta: 'fresh', iteration: 1 });
   expect(t.text()).not.toContain('half an ans');
   expect(t.text()).toContain('fresh');
@@ -207,23 +209,27 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
   t.submit('What is in [image1]?');
   expect(gateway.uploadAttachments).toHaveBeenCalledWith(expect.any(String), [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }], 'What is in [image1]?');
   await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
-    'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }]));
+    'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }], undefined, expect.any(String)));
   // The reply ends the turn; a message typed before it would wait in the queue.
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.', turnId: gateway.sendChat.mock.calls.at(-1)?.[5] as string });
   t.submit('Next message');
-  expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined]);
+  expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined, undefined, undefined, expect.any(String)]);
   await t.app.stop();
 });
 
 test('a failed image upload says so and sends nothing', async () => {
   image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
   gateway.uploadAttachments.mockRejectedValue(new Error('Each attachment must contain data and be no larger than 10 MiB.'));
-  const t = mount();
+  const attention = { notify: vi.fn(), setState: vi.fn() };
+  const t = mount({ attention: attention as unknown as Attention });
   t.submit('/attach');
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
   t.submit('Look at [image1]');
   await vi.waitFor(() => expect(t.text()).toContain('Message not sent: the image upload failed'));
   expect(gateway.sendChat).not.toHaveBeenCalled();
+  // A failure, not "the reply is ready".
+  expect(attention.notify).toHaveBeenCalledWith('The turn failed');
+  expect(attention.notify).not.toHaveBeenCalledWith('The reply is ready');
   await t.app.stop();
 });
 
@@ -233,13 +239,13 @@ test('removing the image marker removes it from the outgoing message', async () 
   t.submit('/attach');
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
   t.submit('Text only');
-  expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
+  expect(gateway.sendChat.mock.calls.at(-1)?.[3]).toBeUndefined();
   await t.app.stop();
 });
 
 test("a turn's tool calls are one collapsed group; Ctrl+O expands every call's arguments and output", async () => {
   const t = mount();
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root', root: true });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'shell', toolName: 'shell', callId: 'a', args: { command: 'ls -la' } } });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'pending', name: 'read_file', toolName: 'read_file', callId: 'b', args: { path: 'a.ts' } } });
   gateway.listener({ kind: 'tool', agentId: 'root', tool: { state: 'completed', name: 'shell', toolName: 'shell', callId: 'a', output: 'total 0\nfile.ts', durationMs: 40 } });

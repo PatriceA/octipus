@@ -10,6 +10,11 @@ describe('safe URLs', () => {
   test('only http, https and file; nothing that can end or extend the sequence', () => {
     expect(safeUrl('https://example.com/a?b=c#d')).toBe('https://example.com/a?b=c#d');
     expect(safeUrl('file:///etc/hosts')).toBe('file:///etc/hosts');
+    expect(safeUrl('file://localhost/etc/hosts')).toBe('file:///etc/hosts');
+    expect(safeUrl(fileUrlFor('a.ts:1', '/repo'))).not.toBeNull();
+    // Another machine's file: a UNC path, which Windows opens over SMB with the user's credentials.
+    expect(safeUrl('file://attacker.example/share/x')).toBeNull();
+    expect(safeUrl('file://10.0.0.5/c$/x')).toBeNull();
     for (const bad of ['javascript:alert(1)', 'ssh://host', 'data:text/html,x', 'https://x.com/\x07\x1b]52;c;AAAA', 'https://x.com/a b', 'not a url', '']) {
       expect(safeUrl(bad)).toBeNull();
     }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { FakeSocket } from '@/tui-pi/testing/wire';
 import { GatewayClient } from './client';
 
 vi.mock('@/core/gateway/cli-session', () => ({
@@ -101,11 +102,27 @@ describe('GatewayClient — session-scoped commands and dropped events', () => {
     client.sendChat(sid, 'plain');
     client.sendChat(sid, 'after the turn', undefined, undefined, 'queue');
     client.stopAgent('agent-7');
+    client.stopSession(sid);
     expect(sent).toEqual([
       { type: 'chat.send', sessionId: sid, content: 'plain' },
       { type: 'chat.send', sessionId: sid, content: 'after the turn', mode: 'queue' },
       { type: 'agent.stop', agentId: 'agent-7' },
+      { type: 'session.stop', sessionId: sid },
     ]);
+  });
+
+  test('every send says whether the frame went out: false while the socket is not open', () => {
+    const { client, sent } = stubClient();
+    expect(client.sendChat('11111111-2222-4333-8444-555555555555', 'hi')).toBe(true);
+    (client as unknown as { ws: { readyState: number } }).ws.readyState = 3; // CLOSED
+    expect(client.sendChat('11111111-2222-4333-8444-555555555555', 'lost')).toBe(false);
+    expect(client.sendCommand('status')).toBe(false);
+    expect(client.stopAgent('a')).toBe(false);
+    expect(client.stopSession('11111111-2222-4333-8444-555555555555')).toBe(false);
+    expect(client.respondPermission('r', true)).toBe(false);
+    expect(client.respondApproval('r', true)).toBe(false);
+    expect(new GatewayClient({}).sendCommand('status')).toBe(false); // never connected
+    expect(sent).toHaveLength(1);
   });
 
   test('events_dropped reaches the UI as an error instead of vanishing', () => {
@@ -171,5 +188,30 @@ describe('GatewayClient — attachments go over REST, the turn names them', () =
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Each attachment must contain data and be no larger than 10 MiB.' }), { status: 400 })));
     const { client } = stubClient();
     await expect(client.uploadAttachments('s', [image], 'x')).rejects.toThrow('no larger than 10 MiB');
+  });
+});
+
+describe('GatewayClient — reconnecting after the server went away', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  test('a socket that dies with an error before it closes is reconnected', async () => {
+    vi.useFakeTimers();
+    FakeSocket.all = [];
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const statuses: string[] = [];
+    const client = new GatewayClient({ url: 'ws://gateway.test/gateway', onStatusChange: s => statuses.push(s), onError: () => {} });
+    await client.connect();
+    FakeSocket.latest().open();
+    expect(client.getStatus()).toBe('connected');
+    // What Node's WebSocket does when the connection is cut: `error`, then `close` 1006.
+    FakeSocket.latest().onerror?.();
+    FakeSocket.latest().drop();
+    expect(statuses.slice(-2)).toEqual(['error', 'disconnected']);
+    vi.advanceTimersByTime(1000);
+    await Promise.resolve();
+    expect(FakeSocket.all).toHaveLength(2);
+    FakeSocket.latest().open();
+    expect(client.getStatus()).toBe('connected');
+    client.disconnect();
   });
 });

@@ -8,16 +8,19 @@ import { installOctipusKeybindings } from './keybindings';
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
-  stopAgent: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
+  stopAgent: vi.fn((..._args: unknown[]) => true),
+  stopSession: vi.fn((..._args: unknown[]) => true),
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   on(listener: (event: AgentSessionEvent) => void) { gateway.listener = listener; }
   sendCommand = gateway.sendCommand;
   sendChat = gateway.sendChat;
   stopAgent = gateway.stopAgent;
+  stopSession = gateway.stopSession;
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));
@@ -41,10 +44,12 @@ function mount() {
     screen: () => strip(root.render(100)),
     key: (data: string) => input(data),
     chats: () => gateway.sendChat.mock.calls.map(call => call[1]),
+    /** The turn id the latest send carried: the gateway echoes it on that turn's answer. */
+    turnId: () => gateway.sendChat.mock.calls.at(-1)?.[5] as string,
   };
 }
 
-beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); gateway.stopAgent.mockClear(); installOctipusKeybindings({}); });
+beforeEach(() => { gateway.sendCommand.mockClear(); gateway.sendChat.mockClear(); gateway.stopAgent.mockClear(); gateway.stopSession.mockClear(); installOctipusKeybindings({}); });
 afterEach(() => { vi.useRealTimers(); });
 
 test('a message typed during a turn is queued above the composer and sent when the turn ends', async () => {
@@ -56,12 +61,12 @@ test('a message typed during a turn is queued above the composer and sent when t
   expect(t.screen()).toContain('⧗ queued 1 · second');
   expect(t.screen()).toContain('⧗ queued 2 · third');
   expect(t.screen()).toContain('sent when the turn ends');
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply one' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply one', turnId: t.turnId() });
   // One at a time, as its own turn: the next waits for this one to end.
-  expect(gateway.sendChat.mock.calls.at(-1)).toEqual([expect.any(String), 'second', undefined, undefined, 'queue']);
+  expect(gateway.sendChat.mock.calls.at(-1)).toEqual([expect.any(String), 'second', undefined, undefined, 'queue', expect.any(String)]);
   expect(t.screen()).not.toContain('queued 2');
   expect(t.screen()).toContain('⧗ queued 1 · third');
-  gateway.listener({ kind: 'error', message: 'model failed' });
+  gateway.listener({ kind: 'error', message: 'CHAT_ERROR: model failed', code: 'CHAT_ERROR', turnId: t.turnId() });
   expect(t.chats()).toEqual(['first', 'second', 'third']);
   expect(t.screen()).not.toContain('⧗ queued');
   await t.app.stop();
@@ -74,7 +79,7 @@ test('a queued message can be taken back to edit or remove it before it is sent'
   t.key('\x1be'); // Alt+E
   expect(t.composer.getText()).toBe('typo mesage');
   expect(t.screen()).not.toContain('⧗ queued');
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply', turnId: t.turnId() });
   // Nothing left in the queue: nothing goes out by itself.
   expect(t.chats()).toEqual(['first']);
   await t.app.stop();
@@ -83,14 +88,14 @@ test('a queued message can be taken back to edit or remove it before it is sent'
 test('Esc stops the running turn by its root agent; queued messages come back to the composer', async () => {
   const t = mount();
   t.submit('long task');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
   gateway.listener({ kind: 'agent.start', role: 'research', model: 'm', nodeId: 'child-1', subagent: true });
   t.submit('follow-up');
   expect(t.key(ESC)).toEqual({ consume: true });
   expect(gateway.stopAgent).toHaveBeenCalledWith('root-1');
   expect(t.screen()).toContain('Stopping the turn (Esc)');
   expect(t.composer.getText()).toBe('follow-up');
-  gateway.listener({ kind: 'agent.stopped', agentId: 'root-1' });
+  gateway.listener({ kind: 'agent.stopped', agentId: 'root-1', root: true });
   expect(t.chats()).toEqual(['long task']);
   // The agent is idle now: the second Esc clears the draft.
   t.key(ESC);
@@ -98,12 +103,13 @@ test('Esc stops the running turn by its root agent; queued messages come back to
   await t.app.stop();
 });
 
-test('Esc before the root agent is known sends the gateway abort; a second Esc while stopping does not send another', async () => {
+test('Esc before the root agent is known stops this session, never the user-wide abort; a second Esc while stopping does not send another', async () => {
   const t = mount();
   t.submit('quick');
   t.key(ESC);
   t.key(ESC);
-  expect(gateway.sendCommand.mock.calls.filter(call => call[0] === 'abort')).toHaveLength(1);
+  expect(gateway.sendCommand.mock.calls.filter(call => call[0] === 'abort')).toHaveLength(0);
+  expect(gateway.stopSession).toHaveBeenCalledTimes(1);
   expect(gateway.stopAgent).not.toHaveBeenCalled();
   expect(t.screen()).toContain('Already stopping the turn');
   await t.app.stop();
@@ -136,15 +142,31 @@ test('slash commands run during a turn instead of queueing', async () => {
   await t.app.stop();
 });
 
-test('the turn a subagent finishing does not end; the root finishing does', async () => {
+test('the turn a subagent finishing does not end; the root finishing waits for its answer', async () => {
   const t = mount();
   t.submit('fan out');
-  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1' });
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
   gateway.listener({ kind: 'agent.start', role: 'research', model: 'm', nodeId: 'child-1', subagent: true });
   t.submit('later');
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'child-1', role: 'research' });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'child-1', role: 'research', root: false });
   expect(t.chats()).toEqual(['fan out']);
-  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general' });
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general', root: true });
+  expect(t.chats()).toEqual(['fan out']);
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Fanned out.', turnId: t.turnId() });
   expect(t.chats()).toEqual(['fan out', 'later']);
+  await t.app.stop();
+});
+
+test('a root that finished without an answer ends the turn after a grace period', async () => {
+  vi.useFakeTimers();
+  const t = mount();
+  t.submit('lost answer');
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', nodeId: 'root-1', root: true });
+  t.submit('next');
+  gateway.listener({ kind: 'agent.end', stats: { tokens: 1, cost: 0 }, nodeId: 'root-1', role: 'general', root: true });
+  vi.advanceTimersByTime(4000);
+  expect(t.chats()).toEqual(['lost answer']);
+  vi.advanceTimersByTime(2000);
+  expect(t.chats()).toEqual(['lost answer', 'next']);
   await t.app.stop();
 });

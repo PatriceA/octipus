@@ -69,4 +69,20 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     expect(await tui.text()).toContain('unsent composer text');
     expect(tui.commands.some(command => command.type === 'chat.send')).toBe(false);
   });
+
+  test('/clear on the alternate screen keeps the composer and the status rows drawn', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
+    await tui.waitFor('connected');
+    tui.event('chat.response', { response: Array.from({ length: 40 }, (_, n) => `Old line ${n}`).join('\n') });
+    await tui.waitFor('Old line 39');
+    tui.send('/clear\r');
+    await tui.waitFor('Chat cleared.');
+    await tui.waitFor('Old line 39', true);
+    tui.send('still here');
+    await tui.waitFor('still here');
+    const rows = (await tui.text()).split('\n');
+    // The status row (unchanged by /clear) is still on the screen, at the bottom.
+    expect(rows.at(-1)).toContain('● Octipus');
+    expect(rows.at(-1)).toContain('connected');
+  });
 });

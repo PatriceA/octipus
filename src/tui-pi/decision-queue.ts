@@ -65,9 +65,15 @@ export class DecisionQueue {
       if (this.pending.length) this.show();
     }
   }
-  private answer(event: Decision, approved: boolean, response: string): void {
-    if (event.kind === 'permission') this.adapter.respondPermission(event.requestId, approved);
-    else this.adapter.respondApproval(event.requestId, approved, response);
+  /** Send the answer; false when it could not go out (not connected). */
+  private answer(event: Decision, approved: boolean, response: string): boolean {
+    const sent = event.kind === 'permission'
+      ? this.adapter.respondPermission(event.requestId, approved)
+      : this.adapter.respondApproval(event.requestId, approved, response);
+    if (!sent && !this.disposed) {
+      this.report(`Error: Not connected: your answer to the ${event.kind === 'permission' ? `${event.toolName} permission request` : 'question'} was not sent. The agent still waits; answer it from the web app, or again here once connected.`);
+    }
+    return sent;
   }
   dispose(): void {
     if (this.disposed) return;

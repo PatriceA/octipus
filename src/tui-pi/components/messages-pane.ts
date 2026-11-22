@@ -15,6 +15,7 @@
  * to the latest shrinks it again. At most `maxItems` are kept in memory; the
  * oldest are dropped beyond that, with a notice at the top saying so.
  */
+import { sanitizeStreaming, type SettledText } from './live-text';
 import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayText } from '@/tui-kit';
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
@@ -96,6 +97,8 @@ export class MessagesPane implements Component {
   /** What each message said before `displayText`: `/copy` hands over the text, not the screen's version of it. */
   private raw = new WeakMap<ChatMessage, string>();
   private liveRaw: string | null = null;
+  /** What of the streaming reply is sanitised already (`sanitizeStreaming`). */
+  private liveSettled: SettledText | null = null;
   /**
    * The streaming reply's Markdown, kept across deltas: pi-tui's Markdown
    * reuses the blocks whose source did not change, so only the block being
@@ -199,12 +202,14 @@ export class MessagesPane implements Component {
     return hit && isFoldable(hit.item) ? hit.item : null;
   }
   setLive(raw: string | null): void {
-    const text = raw === null ? null : displayText(raw);
+    let text: string | null = null;
+    if (raw === null) this.liveSettled = null;
+    else ({ text, settled: this.liveSettled } = sanitizeStreaming(this.liveSettled, raw));
     this.liveRaw = raw;
     if (this.live !== text) { this.live = text; this.revision++; }
   }
   reset(): void {
-    this.history = []; this.live = null; this.liveRaw = null; this.offset = 0; this.windowStart = 0; this.dropped = 0;
+    this.history = []; this.live = null; this.liveRaw = null; this.liveSettled = null; this.offset = 0; this.windowStart = 0; this.dropped = 0;
     this.frozen = null; this.frozenMessages = []; this.newer = 0; this.changed();
   }
   /** Older items in memory that the window does not show yet. */
@@ -215,6 +220,12 @@ export class MessagesPane implements Component {
     this.windowStart = Math.max(0, this.windowStart - this.windowSize);
     this.changed();
     return true;
+  }
+  /** Bring every item in memory into view (the search is open). */
+  growAll(): void {
+    if (!this.windowStart) return;
+    this.windowStart = 0;
+    this.changed();
   }
   /** Back to the latest window; call only while the end is shown. */
   trimWindow(): void {

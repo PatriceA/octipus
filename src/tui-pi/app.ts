@@ -33,7 +33,7 @@ import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItem
  * State that belongs to multiple components (cumulative tokens,
  * session list, pending overlays) lives in plain fields here.
  */
-import { ChatSessionPresenter } from './chat-session-presenter';
+import { ChatSessionPresenter, type TurnContext } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, isViewportTUI, matchesKey, type OverlayHandle, Spacer, type TUI, VStack } from '@/tui-kit';
 import { loginWithPassword } from '@/core/gateway/cli-login';
@@ -104,6 +104,15 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
 const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
+/** How long after the root agent finished the turn waits for its answer before it ends anyway. */
+const ANSWER_GRACE_MS = 5000;
+
+/** What `trackTurn` decided: the presenter's part, and how the turn ended if it did. */
+interface TurnVerdict extends TurnContext { end?: 'reply' | 'error' | 'stopped' }
+
+/** Turn ids of turns this client gave up on, kept to recognise their late answers. */
+const ENDED_TURNS_KEPT = 32;
+
 /** Two Escapes within this long, with no turn running, clear the draft. */
 const DOUBLE_ESCAPE_MS = 1500;
 
@@ -112,7 +121,18 @@ const DOUBLE_ESCAPE_MS = 1500;
  * agent starting, for a turn another tab began) to its reply, an error or
  * the root agent stopping. `rootAgentId` is what Esc stops.
  */
-interface RunningTurn { rootAgentId: string | null; stopping: boolean }
+interface RunningTurn {
+  rootAgentId: string | null;
+  stopping: boolean;
+  /**
+   * The id this client's `chat.send` carried, echoed on what ends it; null
+   * for a turn another tab or the server started (any reply of the session
+   * ends that one).
+   */
+  turnId: string | null;
+  /** Esc came before anything of the turn had started on the server: stop the root as soon as it does. */
+  stopWhenRootStarts?: boolean;
+}
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -161,6 +181,10 @@ export class OctipusTuiApp {
   /** Messages typed while a turn runs; the first goes out when it ends. */
   private readonly queue = new QueuedMessages<PendingImage[]>(() => getKeybindings().getKeys('app.queue.edit').map(String).join(' / ') || 'Alt+E');
   private turn: RunningTurn | null = null;
+  /** Turns of this client that ended before their answer came (stopped, disconnected): that answer is stale. */
+  private readonly endedTurnIds: string[] = [];
+  /** Ends the turn when its root finished but no answer came (`awaitAnswer`). */
+  private answerTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the last Escape was pressed, for the double Escape that clears the draft. */
   private lastEscape = 0;
   /** What was submitted from the composer, newest first (Ctrl+R). */
@@ -169,6 +193,8 @@ export class OctipusTuiApp {
   private pickerHandle: OverlayHandle | null = null;
   /** The picker waiting for the gateway's list, if one is. */
   private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
+  /** Lists a picker asked for and was closed before they came: their late results are dropped, not shown in the transcript. */
+  private readonly cancelledLists: Array<'sessions' | 'skills'> = [];
   private readonly search?: TranscriptSearch;
   private readonly attention?: Attention;
   private themeSetting: ThemeSetting;
@@ -224,6 +250,8 @@ export class OctipusTuiApp {
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
       this.transcript = createTranscriptView(this.messages);
+      // The search reads the rendered rows: while it is open, render every message in memory.
+      this.transcript.document.showAll = () => this.search?.isOpen() ?? false;
       tui.setLayoutRoot(new VStack([
         { component: this.transcript, basis: 0, grow: 1, minSize: 0 },
         { component: new ChatFooter(parts, rows), basis: 'auto', shrink: 0 },
@@ -362,17 +390,21 @@ export class OctipusTuiApp {
 
   /**
    * Stop the running turn: `agent.stop` for its root agent, which also drops
-   * the turns the server queued behind it; the gateway's `/abort` (every
-   * running agent of this user) when the root is not known yet. Messages
-   * queued here come back to the composer instead of starting a new turn.
+   * the turns the server queued behind it; `session.stop` for this session
+   * when the root is not known yet — never `/abort`, which stops the user's
+   * agents in every session. Messages queued here come back to the composer
+   * instead of starting a new turn.
    */
   private interrupt(): void {
     const turn = this.turn;
     if (!turn) return;
     if (turn.stopping) { this.queue.setHint('Already stopping the turn…'); this.tui.requestRender(); return; }
+    const sent = turn.rootAgentId ? this.adapter.stopAgent(turn.rootAgentId) : this.adapter.stopSession(this.sessionId);
+    if (!sent) {
+      this.pushMessage('system', 'Error: Not connected: the turn could not be stopped. The server may still be running it; press Esc again once connected.');
+      return;
+    }
     turn.stopping = true;
-    if (turn.rootAgentId) this.adapter.stopAgent(turn.rootAgentId);
-    else this.adapter.sendCommand('abort');
     this.pushMessage('system', 'Stopping the turn (Esc)…');
     const queued = this.queue.drain();
     if (queued.length) {
@@ -399,7 +431,7 @@ export class OctipusTuiApp {
   /** The turn is over (reply, error, stop): say so if nobody is looking, then send the first queued message as the next one. */
   private endTurn(outcome: 'reply' | 'error' | 'stopped' = 'reply'): void {
     if (!this.turn) return;
-    this.turn = null;
+    this.forgetTurn();
     this.showState();
     if (!this.queue.size) this.attention?.notify(outcome === 'reply' ? 'The reply is ready' : outcome === 'error' ? 'The turn failed' : 'The turn was stopped');
     if (this.lastStatus === 'connected') this.sendNextQueued();
@@ -410,39 +442,149 @@ export class OctipusTuiApp {
     this.attention?.setState(this.decisions.size ? 'waiting' : this.turn ? 'working' : 'idle', this.projectPath?.split(/[/\\]/).pop());
   }
 
+  /** Drop the running turn, remembering its id so a late answer to it is recognised as stale. */
+  private forgetTurn(): void {
+    const id = this.turn?.turnId;
+    this.turn = null;
+    if (this.answerTimer) { clearTimeout(this.answerTimer); this.answerTimer = null; }
+    if (!id) return;
+    this.endedTurnIds.push(id);
+    if (this.endedTurnIds.length > ENDED_TURNS_KEPT) this.endedTurnIds.shift();
+  }
+
+  /**
+   * Whose answer a reply or failure of this session (`turnId` as echoed) is:
+   * the running turn's (`current`), one of an earlier turn this client already
+   * ended (`stale`), or neither — a background reply, another tab's turn.
+   */
+  private answerOf(turnId: string | undefined): 'current' | 'stale' | 'other' {
+    if (turnId && this.endedTurnIds.includes(turnId)) return 'stale';
+    if (!this.turn) return 'other';
+    if (this.turn.turnId === null) return 'current';
+    return turnId === this.turn.turnId ? 'current' : 'other';
+  }
+
   private sendNextQueued(): void {
+    this.queue.waitingFor = this.adapter.isConnected() ? 'turn' : 'connection';
     const next = this.queue.shift();
     if (!next) return;
     this.sendNow(next.text, next.extra, 'queue');
     this.tui.requestRender();
   }
 
-  /** Track the running turn from the gateway's events. */
-  private trackTurn(event: AgentSessionEvent): void {
+  /**
+   * Send a gateway command; when it cannot go out (not connected), say so
+   * instead of waiting for an answer that never comes.
+   */
+  private command(name: string, args?: Record<string, string>): boolean {
+    if (this.adapter.sendCommand(name, args)) return true;
+    this.pushMessage('system', `Error: Not connected: /${name} was not sent. Run it again once the status bar says connected.`);
+    return false;
+  }
+
+  /** A message that could not go out: back to the front of the queue, sent when the connection is back. */
+  private holdForConnection(text: string, images: PendingImage[]): void {
+    this.queue.unshift({ text, extra: images });
+    this.queue.waitingFor = 'connection';
+    this.queue.setHint('Not connected: the message waits in the queue and goes out when the connection is back', 4000);
+    this.tui.requestRender();
+  }
+
+  /**
+   * Track the running turn from the gateway's events. Only what is tied to
+   * this turn ends it: its reply or failure (by `turnId`), its root agent
+   * stopped, this session's stop. Returns what the presenter must know (a
+   * stale answer must not wipe the live reply of the next turn) and how the
+   * turn ended, if it did: `handleEvent` ends it only AFTER the event is in
+   * the transcript, so the next queued message goes below the reply it
+   * waited for.
+   */
+  private trackTurn(event: AgentSessionEvent): TurnVerdict {
     switch (event.kind) {
       case 'agent.start':
-        if (event.subagent) return;
+        // Only the root agent is the turn; a worker it spawned never takes its place as what Esc stops.
+        if (!event.root) return {};
         if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
-        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false, turnId: null };
+        if (this.turn.stopWhenRootStarts && this.turn.rootAgentId) {
+          this.turn.stopWhenRootStarts = false;
+          this.adapter.stopAgent(this.turn.rootAgentId);
+        }
         this.showState();
-        return;
-      case 'message':
-        if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
-        return;
+        return {};
+      case 'session.stopped':
+        if (!this.turn) return {};
+        if (event.stopped || event.droppedQueued) return { end: 'stopped' };
+        // The message is still on its way into the session's queue: nothing
+        // of it runs yet, so stop its root the moment it starts.
+        if (this.turn.stopping && !this.turn.rootAgentId) {
+          this.turn.stopWhenRootStarts = true;
+          this.pushMessage('system', 'Nothing of the turn was running yet; it is stopped as soon as it starts.');
+        }
+        return {};
+      case 'message': {
+        if (event.role !== 'assistant' || event.progress || event.messageId) return {};
+        const whose = this.answerOf(event.turnId);
+        return { stale: whose === 'stale', ...(whose === 'current' ? { end: 'reply' as const } : {}) };
+      }
+      case 'chat.error': {
+        const whose = this.answerOf(event.turnId);
+        if (whose !== 'current' || !this.turn) return { stale: whose === 'stale' };
+        // This client's own send reported it with an `error` frame already;
+        // a turn another tab started is told here.
+        if (this.turn.turnId === null && !event.cancelled) this.pushMessage('system', `Error: The turn failed: ${event.message}`);
+        return { end: this.turn.stopping || event.cancelled ? 'stopped' : 'error' };
+      }
       case 'agent.end':
-        if (this.turn && (event.nodeId === undefined || event.nodeId === this.turn.rootAgentId) && !this.subagents.has(event.nodeId)) this.endTurn();
-        return;
+        // A positive match only: an agent the server does not mark as the
+        // root (every worker) never ends the turn, whatever its id. Even the
+        // root finishing does not end it: its answer (`chat.response`,
+        // `chat.error`) follows, and the turn ends on that — ending here sent
+        // the next queued message above the reply it waited for. If no
+        // answer comes, the turn ends after a grace period.
+        if (this.turn && event.root && (this.turn.rootAgentId === null || event.nodeId === this.turn.rootAgentId)) this.awaitAnswer(this.turn);
+        return {};
       case 'agent.stopped':
-        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn('stopped');
-        return;
+        // The root by id, or — before its id is known — an agent the server
+        // marks as a root (the adapter already dropped other sessions').
+        if (this.turn && (event.agentId === this.turn.rootAgentId || (event.root === true && this.turn.rootAgentId === null))) return { end: 'stopped' };
+        return {};
       case 'error':
-        this.endTurn(this.turn?.stopping ? 'stopped' : 'error');
-        return;
+        // Only an error frame answering this turn's send ends it; a rate
+        // limit, an expired approval, dropped events or a late CHAT_ERROR of a
+        // stopped turn are shown and nothing more.
+        if (this.turn?.turnId && event.turnId === this.turn.turnId) return { endsTurn: true, end: this.turn.stopping ? 'stopped' : 'error' };
+        return {};
+      case 'delivery':
+        if (!this.turn?.turnId || event.turnId !== this.turn.turnId) return {};
+        // Folded into a turn already running (another tab's): no answer of
+        // its own comes; the running turn's answer ends this one.
+        if (event.outcome === 'steered') this.turn.turnId = null;
+        if (event.outcome === 'refused') {
+          this.pushMessage('system', `Error: Message not delivered: ${event.reason ?? 'the gateway refused it'}.`);
+          return { end: 'error' };
+        }
+        return {};
       case 'status':
-        if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
-        else this.turn = null;
-        return;
+        if (event.status === 'connected') { this.queue.waitingFor = 'turn'; if (!this.turn) this.sendNextQueued(); }
+        else {
+          this.forgetTurn();
+          this.queue.waitingFor = 'connection';
+        }
+        return {};
+      default:
+        return {};
     }
+  }
+
+  /** The root finished; its answer is on the way. End the turn anyway if it never comes (events dropped). */
+  private awaitAnswer(turn: RunningTurn): void {
+    if (this.answerTimer) clearTimeout(this.answerTimer);
+    this.answerTimer = setTimeout(() => {
+      this.answerTimer = null;
+      if (this.turn === turn) this.endTurn();
+    }, ANSWER_GRACE_MS);
+    this.answerTimer.unref?.();
   }
 
   private quit(): void {
@@ -524,6 +666,7 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
+    this.forgetTurn();
     this.decisions.dispose();
     this.queue.dispose();
     this.session.dispose();
@@ -570,12 +713,18 @@ export class OctipusTuiApp {
       this.speakNextReply = false;
       void this.voice?.say(event.content).catch(() => {});
     }
-    this.trackTurn(event);
-    if (this.session.handleEvent(event)) return;
+    const turn = this.trackTurn(event);
+    this.present(event, turn);
+    // After the event is shown: the next queued message goes below the reply.
+    if (turn.end) this.endTurn(turn.end);
+  }
+
+  private present(event: AgentSessionEvent, turn: TurnContext): void {
+    if (this.session.handleEvent(event, turn)) return;
     switch (event.kind) {
       case 'status':
         // Reconnect bookkeeping (subagent reset, plan poll) lives in the presenter.
-        if (event.status === 'connected' && this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
+        if (event.status === 'connected' && this.resumePending) this.resumePending = !this.adapter.sendCommand('history');
         this.lastStatus = event.status;
         return;
       case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
@@ -610,6 +759,13 @@ export class OctipusTuiApp {
           this.sessionId = fallback;
           return;
         }
+        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills');
+        if (cancelled >= 0) {
+          // The picker that asked was closed: keep the session list for `/resume <n>`, show nothing.
+          this.cancelledLists.splice(cancelled, 1);
+          if (event.name === 'sessions' && Array.isArray(event.data)) this.sessionList = event.data.filter(isSessionRow);
+          return;
+        }
         if (this.loading && event.name === this.loading.command) {
           this.fillPicker(event);
           return;
@@ -630,7 +786,12 @@ export class OctipusTuiApp {
         }
 
         if (event.name === 'clear' && !event.error) {
-          this.tui.terminal.clearScreen();
+          // Inline, the terminal's screen holds the old frame: erase it. On
+          // the alternate screen the renderer owns every row and redraws only
+          // the changed ones — an ESC[2J under it left the composer and the
+          // status rows blank — so redraw the whole screen instead.
+          if (this.transcript) this.tui.requestRender(true);
+          else this.tui.terminal.clearScreen();
           this.messages.reset();
           // Turns counted in THIS client reset; tokens and cost do not. They
           // come from the session's cost log, which /clear does not touch, so
@@ -657,6 +818,8 @@ export class OctipusTuiApp {
       case 'agent.write':
       case 'agent.edit':
       case 'agent.stopped':
+      case 'session.stopped':
+      case 'delivery':
         return;
     }
   }
@@ -687,18 +850,48 @@ export class OctipusTuiApp {
       this.tui.requestRender();
       return;
     }
+    // Not connected: a frame sent now is dropped by the socket. Hold it,
+    // visibly, and send it when the connection is back.
+    if (!this.adapter.isConnected()) {
+      this.queue.push({ text, extra: images });
+      this.queue.waitingFor = 'connection';
+      this.queue.setHint('Not connected: the message goes out when the connection is back', 4000);
+      this.tui.requestRender();
+      return;
+    }
     this.sendNow(text, images);
   }
 
   /** Send a chat message now; it starts the turn this client waits on. `queue` never steers a turn another tab started. */
   private sendNow(text: string, images: PendingImage[], mode?: 'queue'): void {
+    const turnId = randomUUID();
+    if (images.length) {
+      this.startTurn(text, turnId);
+      void this.sendWithImages(text, images, turnId, mode);
+      return;
+    }
+    if (!this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode, turnId)) { this.notSent(text, images); return; }
+    this.startTurn(text, turnId);
+  }
+
+  private startTurn(text: string, turnId: string): void {
     this.pushMessage('user', text);
     this.sessionUsed = true;
-    this.turn = { rootAgentId: null, stopping: false };
+    this.turn = { rootAgentId: null, stopping: false, turnId };
     this.showState();
-    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), mode);
-    else if (mode) this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode);
-    else this.adapter.sendChat(this.sessionId, text, this.projectPath);
+  }
+
+  /**
+   * `sendChat` did not put the message on the wire. Disconnected: it waits in
+   * the queue for the connection. Connected: the client refused it (over the
+   * frame cap, and said so) — it goes back to the composer to shorten.
+   */
+  private notSent(text: string, images: PendingImage[]): void {
+    if (!this.adapter.isConnected()) { this.holdForConnection(text, images); return; }
+    const draft = this.composer.getText();
+    this.composer.setText(draft ? `${text}\n${draft}` : text);
+    this.pendingImages.push(...images);
+    this.tui.requestRender();
   }
 
   /**
@@ -707,22 +900,25 @@ export class OctipusTuiApp {
    * so its size cap does not limit the image. A session the server has not
    * seen yet is created by the upload, and the TUI continues in it.
    */
-  private async sendWithImages(text: string, images: ChatAttachment[], mode?: 'queue'): Promise<void> {
+  private async sendWithImages(text: string, images: PendingImage[], turnId: string, mode?: 'queue'): Promise<void> {
     const from = this.sessionId;
     let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
     try {
-      prepared = await this.adapter.uploadAttachments(from, images, text);
+      prepared = await this.adapter.uploadAttachments(from, images.map(image => image.attachment), text);
     } catch (error) {
       this.pushMessage('system', `Message not sent: the image upload failed (${error instanceof Error ? error.message : String(error)}). Attach it again.`);
-      this.endTurn();
+      this.endTurn('error');
       return;
     }
     if (this.sessionId !== from) return; // switched sessions while uploading
     this.sessionId = prepared.sessionId;
     const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
     const refs = prepared.uploaded.map(file => ({ path: file.path }));
-    if (mode) this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode);
-    else this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs);
+    if (this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode, turnId)) return;
+    // The connection went while uploading: the turn never started here.
+    if (this.turn?.turnId === turnId) { this.turn = null; this.showState(); }
+    this.pushMessage('system', 'Not sent yet: the connection went while the image uploaded.');
+    this.notSent(text, images);
   }
 
   private async attachImage(path?: string): Promise<void> {
@@ -905,6 +1101,8 @@ export class OctipusTuiApp {
     const close = () => {
       this.pickerHandle?.hide();
       this.pickerHandle = null;
+      // Closed while its list was still on the way: that answer is no longer wanted.
+      if (this.loading) this.cancelledLists.push(this.loading.command);
       this.loading = null;
       this.tui.setFocus(this.composer);
       this.tui.requestRender();
@@ -923,12 +1121,13 @@ export class OctipusTuiApp {
   private resumeSession(id: string): void {
     this.sessionBeforeResume = this.sessionId;
     this.pendingImages = [];
-    this.turn = null;
+    this.forgetTurn();
     if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
     this.sessionId = id;
     this.sessionUsed = true;
     this.session.reset();
-    this.adapter.sendCommand('history');
+    // Not connected: replayed on connect instead.
+    this.resumePending = !this.adapter.sendCommand('history');
   }
 
   /** `/sessions` or `/resume` alone: pick a session to resume; it opens at once and fills when the list arrives. */
@@ -938,8 +1137,8 @@ export class OctipusTuiApp {
       this.resumeSession(row.id);
     }, sessionPreview, 'Loading sessions…');
     if (!list) return;
+    if (!this.adapter.sendCommand('sessions')) { list.setItems([], 'Not connected: the sessions cannot be listed now.'); return; }
     this.loading = { command: 'sessions', list };
-    this.adapter.sendCommand('sessions');
   }
 
   /** `/skills` alone: pick a skill, then how it is used. */
@@ -947,12 +1146,12 @@ export class OctipusTuiApp {
     const list = this.openPicker<SkillRow>('Skills', [], skill => {
       this.openPicker('How to use: ' + skill.name, SKILL_MODES.map(entry => ({ value: entry.mode, label: entry.label, description: entry.description })), mode => {
         this.pushMessage('user', `/skills ${skillCommand(skill, mode)}`);
-        this.adapter.sendCommand('skills', { value: skillCommand(skill, mode) });
+        this.command('skills', { value: skillCommand(skill, mode) });
       });
     }, skill => `${skill.name}\nId: ${skill.id}\nNow: ${skill.mode}${skill.available ? '' : '\nNot available to you any more.'}\nEnter chooses Automatic, Always or This session.`, 'Loading skills…');
     if (!list) return;
+    if (!this.adapter.sendCommand('skills')) { list.setItems([], 'Not connected: the skills cannot be listed now.'); return; }
     this.loading = { command: 'skills', list };
-    this.adapter.sendCommand('skills');
   }
 
   /** The list a picker was waiting for arrived (or failed). */
@@ -1100,7 +1299,7 @@ export class OctipusTuiApp {
         return;
       }
       default:
-        this.adapter.sendCommand(name, args);
+        this.command(name, args);
     }
   }
 }

@@ -620,6 +620,75 @@ labels reflect blast radius, not contract guarantees.
   environment, phone calls use the bound engines instead of a fixed whisper
   and Voxtral voice (`voice.ttsVoice` picks the voice), the TUI transcribes and
   speaks through the server, and speech calls are recorded in usage/spend.
+- **Terminal chat: a worker finishing no longer ends the turn.** The chat
+  read `agentId` from `agent.completed`, which names every agent `workerId`, so
+  any worker finishing looked like the root ending: the next queued message
+  went out while the root still ran, and the root's live reply was wiped. The
+  turn now ends only on the agent the server marks `root: true`; workers get a
+  row in the subagent panel, and their token counts are read again.
+- **Terminal chat: Esc stops this chat only.** Esc pressed before the turn's
+  root agent was known sent `/abort`, which stops every agent of the user in
+  every session — a pipeline in a browser tab included. It now sends the new
+  gateway frame `session.stop` (`{ sessionId }`): the caller's running agents
+  in that one session stop and their messages queued in it are dropped, and a
+  `session.stopped` event says how many. When nothing had started yet the chat
+  says so and stops the root as soon as it starts. The `/abort` command is
+  unchanged.
+- **Terminal chat: only the turn's own answer ends it.** Any gateway `error`
+  frame ended the running turn (a stale permission answer, an expired
+  approval, a rate limit, dropped events), a late `CHAT_CANCELLED` of a
+  stopped turn ended the next one and wiped its live reply, and another tab's
+  stop ended this tab's turn. `chat.send` now takes an optional `turnId`
+  that the gateway echoes on the turn's `chat.response`, `chat.error`,
+  `chat.delivery` and on the `error` frames that answer the send (with its
+  `sessionId`; also `RATE_LIMITED` and `INVALID_MESSAGE` for a refused send).
+  The terminal ends a turn only on its own answer, its root agent, or its
+  session's stop, and shows a late answer without touching the next turn.
+  `agent.stopped` now carries the session on its envelope and `root` in its
+  payload.
+- **Terminal chat: a queued message goes below the reply it waited for.** The
+  next queued message was sent, and shown, before the reply of the turn it
+  waited on — the root agent finishing arrives just ahead of its reply — so the
+  transcript, `/export` and the exit summary read user, user, reply. The turn
+  now ends on its answer, after it is shown (or 5 s after the root finished if
+  no answer comes).
+- **Terminal chat: nothing typed while disconnected is lost.** A message sent
+  while the gateway connection was down was dropped by the socket without a
+  word, and the chat then waited forever for its reply. It now waits in the
+  visible queue ("not connected: sent when the connection is back") and goes
+  out on reconnect; a command, a decision's answer or a stop that cannot be
+  sent says so. `GatewayClient`'s send methods return whether the frame went
+  out.
+- **Security — terminal chat: a clicked file link is no longer opened.** A
+  `path:line` or `file:` link in a reply was handed to the desktop opener on
+  click, so a model-written `notes.command:1` ran on macOS, and
+  `file://host/share` (any host was accepted) made Windows send the user's
+  NTLM credentials to that host. `file:` links are now kept only for this
+  machine (no host, `localhost` or its own name), and a click on one copies
+  its path and says so; `http`/`https` links still open in the browser.
+- **Terminal chat: `/clear` keeps the composer and status rows.** On the
+  alternate screen `/clear` left them blank until something redrew them.
+- **Terminal chat: transcript search finds every message in memory.** It
+  searched only the rendered window of the newest 200–400 messages, so older
+  ones were neither found nor counted.
+- **Terminal chat: reasoning reads before the tool calls it led to.** The
+  folded "Thinking" row used to appear below the turn's tool calls.
+- **Terminal chat: long replies stream without eating the CPU.** Each delta
+  re-sanitised and re-rendered the whole reply (a 154 KB reply in 2,000 deltas
+  cost about 3 s of CPU). The text is now sanitised incrementally and a long
+  reply is redrawn on a budget that grows with its length; the finished reply
+  still takes exactly the rows of the last streamed frame.
+- **Terminal chat and editor: the window title is restored on exit.** It kept
+  the app's last title; the terminal's title stack now saves and restores it.
+- **Terminal chat: a failed image upload notifies a failure.** It used to send
+  "The reply is ready" for a message that was never sent.
+- **Terminal chat: a cancelled picker stays cancelled.** Closing the session
+  or skills picker before its list arrived printed the late list into the
+  transcript.
+- **Terminal chat and editor: they reconnect after the server goes away.** A
+  connection cut without a close frame (a crashed or restarted server, a
+  dropped network) reported an error first, and the client then never tried
+  to reconnect.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

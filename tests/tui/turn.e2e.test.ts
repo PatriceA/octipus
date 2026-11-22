@@ -31,7 +31,7 @@ describe.skipIf(process.platform === 'win32')('turn control in a real terminal',
     await tui.waitFor('connected');
     tui.send('long task'); tui.send(KEY.Enter);
     await tui.waitFor('A streaming reply');
-    tui.event('agent.spawned', { agentId: 'root-1', role: 'general', model: 'fixture-model' });
+    tui.event('agent.spawned', { agentId: 'root-1', role: 'general', root: true, model: 'fixture-model' });
     tui.send('follow-up'); tui.send(KEY.Enter);
     await tui.waitFor('⧗ queued 1 · follow-up');
     tui.send(KEY.Esc);

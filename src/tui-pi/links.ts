@@ -6,13 +6,20 @@
  * links, and the project directory that relative paths are read from).
  * Everything rendered goes through `linkPlain` (plain text, before
  * wrapping) or `finishRows` (rows pi-tui's Markdown styled), and the latter
- * always drops a link whose URL is not `http`, `https` or `file`.
+ * always drops a link whose URL is not `http`, `https` or a `file` on this
+ * machine.
  *
  * On the alternate screen with app mouse the app receives the click, not the
- * terminal, so `openUrl` opens the link with the desktop's opener — never
- * over SSH, where it would open on the remote machine.
+ * terminal, so `openUrl` opens an `http`/`https` link with the desktop's
+ * opener — never over SSH, where it would open on the remote machine. A
+ * local file is never handed to the opener: `open` / `xdg-open` RUN what they
+ * are given (a `notes.command` the model wrote, a script, a `.desktop`
+ * file). A click on one copies its path instead. The terminal's own
+ * Ctrl+click on the OSC 8 link follows the terminal's policy.
  */
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import type { ClipboardResult } from '@/tui-kit';
 import { linkify, linkifyStyled, safeUrl, sanitizeHyperlinks } from '@/tui-kit/hyperlinks';
 
 let config = { enabled: false, cwd: process.cwd() };
@@ -42,10 +49,24 @@ export function openerFor(platform: NodeJS.Platform = process.platform, env: Nod
   return { command: 'xdg-open', args: [] };
 }
 
-/** Open a clicked link; `report` says why not, or that the opener failed. */
-export function openUrl(url: string, report: (message: string) => void, opener = openerFor()): void {
+/**
+ * A clicked link: a web page opens in the browser; a local file's path is
+ * copied (`copyPath`), never opened. `report` says what happened, or why not.
+ */
+export function openUrl(url: string, report: (message: string) => void, opener = openerFor(), copyPath?: (text: string) => Promise<ClipboardResult>): void {
   const href = safeUrl(url);
-  if (!href) { report('Not opened: only http, https and file links are opened.'); return; }
+  if (!href) { report('Not opened: only http and https links, and files on this machine, are followed.'); return; }
+  const parsed = new URL(href);
+  if (parsed.protocol === 'file:') {
+    parsed.hostname = '';
+    const path = fileURLToPath(parsed);
+    if (!copyPath) { report(`Local files are not opened from a click: ${path}`); return; }
+    copyPath(path).then(
+      result => report(result.ok ? `Copied the path (files are not opened from a click): ${path}` : `Could not copy ${path}: ${result.message}`),
+      (error: unknown) => report(`Could not copy ${path}: ${error instanceof Error ? error.message : String(error)}`),
+    );
+    return;
+  }
   if (!opener) { report('Over SSH links are not opened here: Shift+click (Option+click) lets your terminal open it.'); return; }
   const child = spawn(opener.command, [...opener.args, href], { detached: true, stdio: 'ignore' });
   child.on('error', error => report(`Could not open the link with ${opener.command}: ${error.message}`));

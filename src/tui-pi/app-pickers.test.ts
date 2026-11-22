@@ -9,8 +9,8 @@ import { parseSkillList, skillCommand } from './pickers';
 
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
-  sendCommand: vi.fn(),
-  sendChat: vi.fn(),
+  sendCommand: vi.fn((..._args: unknown[]) => true),
+  sendChat: vi.fn((..._args: unknown[]) => true),
   getSessionId: () => undefined as string | null | undefined,
 }));
 vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
@@ -20,6 +20,7 @@ vi.mock('./gateway-adapter', () => ({ GatewayAdapter: class {
   sendChat = gateway.sendChat;
   stopAgent() {}
   getWorkspace() { return null; }
+  isConnected() { return true; }
   disconnect() {}
 } }));
 vi.mock('@/core/gateway/cli-session', () => ({ readCliSession: () => null, clearCliSession: () => {} }));
@@ -73,6 +74,22 @@ describe('session picker', () => {
     expect(t.overlays).toHaveLength(0);
     expect(gateway.getSessionId()).toBe(SESSIONS[1]?.id);
     expect(gateway.sendCommand).toHaveBeenLastCalledWith('history');
+    await t.app.stop();
+  });
+
+  test('a picker closed before its list came drops the late result instead of printing it in the transcript', async () => {
+    const t = mount();
+    t.submit('/sessions');
+    t.press('\x1b'); // Esc: closed while loading
+    expect(t.overlays).toHaveLength(0);
+    gateway.listener({ kind: 'command.result', name: 'sessions', result: '1. Fix the parser\n2. Plan the release', data: SESSIONS });
+    const shown = strip((t.app as unknown as { messages: { render(width: number): string[] } }).messages.render(100));
+    expect(shown).not.toContain('/sessions:');
+    expect(shown).not.toContain('Fix the parser');
+    // A later /sessions list in text form still prints.
+    t.submit('/sessions list');
+    gateway.listener({ kind: 'command.result', name: 'sessions', result: '1. Fix the parser', data: SESSIONS });
+    expect(strip((t.app as unknown as { messages: { render(width: number): string[] } }).messages.render(100))).toContain('/sessions:');
     await t.app.stop();
   });
 

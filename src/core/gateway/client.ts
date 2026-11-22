@@ -1,6 +1,6 @@
 import { apiBaseFromGatewayUrl } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
-import type { ClientMessage, GatewayMessage, SendMode } from '@/core/gateway/protocol';
+import type { ChatDeliveryMessage, ClientMessage, GatewayMessage, SendMode } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
@@ -18,12 +18,23 @@ function decodeAttachment(attachment: ChatAttachment): File {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 
+/** The parts of a gateway `error` frame a client acts on. */
+export interface GatewayErrorFrame { code: string; sessionId?: string; turnId?: string }
+
 export interface GatewayClientOptions {
   url?: string;
   onEvent?: (event: any) => void;
   onCommandResult?: (name: string, result: unknown, error?: string, data?: unknown) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
-  onError?: (error: string) => void;
+  /**
+   * An error to show. `frame` is set for the gateway's `error` frames: its
+   * code, and — when it answers a `chat.send` — that send's session and
+   * `turnId`. Errors of this client itself (a dropped socket, a frame over
+   * the size cap, dropped events) have none.
+   */
+  onError?: (error: string, frame?: GatewayErrorFrame) => void;
+  /** What became of a `chat.send` (`chat.delivery`): steered, queued, restarted or refused. */
+  onDelivery?: (delivery: ChatDeliveryMessage) => void;
   /**
    * Who this client is now acting as — null when signed out. Fires on every
    * connect and when a rejected login is cleared, so a status bar can't keep
@@ -66,6 +77,12 @@ export class GatewayClient {
   private authenticatedAs: { username: string; userId: string } | null = null;
   /** The server's frame cap from `auth_ok` (`gateway.maxFrameBytes`). */
   private maxFrameBytes: number | null = null;
+  /**
+   * The current socket got `auth_ok`. Read by `onclose` to decide on a
+   * reconnect: the status cannot say, because a socket that dies abnormally
+   * fires `error` (status 'error') before `close`.
+   */
+  private authenticated = false;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -116,7 +133,8 @@ export class GatewayClient {
       };
 
       this.ws.onclose = (event) => {
-        const wasConnected = this.status === 'connected';
+        const wasConnected = this.authenticated;
+        this.authenticated = false;
         this.setStatus('disconnected');
         if (wasConnected && event.code !== 1000) {
           this.scheduleReconnect();
@@ -153,6 +171,7 @@ export class GatewayClient {
       stale.onclose = null;
       stale.onerror = null;
       this.ws = null;
+      this.authenticated = false;
       stale.close(1000, 'TUI exit');
     }
     this.setStatus('disconnected');
@@ -173,9 +192,9 @@ export class GatewayClient {
    * Send a chat message. Files go up first with `uploadAttachments`; the
    * turn names them in `fileRefs`, so the frame carries no file bytes.
    * `mode` says what to do when a turn is running (`SEND_MODES`); the server
-   * defaults to `auto`.
+   * defaults to `auto`. `turnId` is echoed on what ends the turn.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): boolean {
     const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
@@ -183,6 +202,7 @@ export class GatewayClient {
       ...(projectPath ? { projectPath } : {}),
       ...(fileRefs?.length ? { fileRefs } : {}),
       ...(mode ? { mode } : {}),
+      ...(turnId ? { turnId } : {}),
     };
     // A frame over the server's cap would close the socket mid-send; say so
     // instead, with the setting that governs it.
@@ -191,9 +211,9 @@ export class GatewayClient {
       this.options.onError?.(
         `Message not sent: it is ${Math.ceil(size / 1024)} KiB and the server accepts at most ${Math.floor(this.maxFrameBytes / 1024)} KiB per message (gateway.maxFrameBytes). Shorten it, or raise the setting.`,
       );
-      return;
+      return false;
     }
-    this.send(message);
+    return this.send(message);
   }
 
   /**
@@ -240,13 +260,18 @@ export class GatewayClient {
   /**
    * Send a command.
    */
-  sendCommand(name: string, args?: Record<string, string>, sessionId?: string): void {
-    this.send({ type: 'command', name, args, sessionId });
+  sendCommand(name: string, args?: Record<string, string>, sessionId?: string): boolean {
+    return this.send({ type: 'command', name, args, sessionId });
   }
 
   /** Stop one of this user's agents (`agent.stop`); stopping a session's running root also drops the turns queued behind it. */
-  stopAgent(agentId: string): void {
-    this.send({ type: 'agent.stop', agentId });
+  stopAgent(agentId: string): boolean {
+    return this.send({ type: 'agent.stop', agentId });
+  }
+
+  /** Stop this user's turn in one session (`session.stop`): its running agents and the messages queued in it, nothing elsewhere. */
+  stopSession(sessionId: string): boolean {
+    return this.send({ type: 'session.stop', sessionId });
   }
 
   /**
@@ -262,8 +287,8 @@ export class GatewayClient {
    * different surface (e.g. web UI sending the correct
    * `permission.respond`).
    */
-  respondPermission(requestId: string, approved: boolean): void {
-    this.send({ type: 'permission.respond', requestId, approved });
+  respondPermission(requestId: string, approved: boolean): boolean {
+    return this.send({ type: 'permission.respond', requestId, approved });
   }
 
   /**
@@ -271,8 +296,8 @@ export class GatewayClient {
    * "user, please decide" prompts emitted via
    * `agent.approval_required`).
    */
-  respondApproval(requestId: string, approved: boolean, response?: string): void {
-    this.send({
+  respondApproval(requestId: string, approved: boolean, response?: string): boolean {
+    return this.send({
       type: 'approval.respond',
       requestId,
       response: response ?? (approved ? 'yes' : 'no'),
@@ -283,15 +308,15 @@ export class GatewayClient {
   /**
    * Subscribe to event patterns.
    */
-  subscribe(patterns: string[]): void {
-    this.send({ type: 'subscribe', patterns });
+  subscribe(patterns: string[]): boolean {
+    return this.send({ type: 'subscribe', patterns });
   }
 
   /**
    * Send a ping.
    */
-  ping(): void {
-    this.send({ type: 'ping' });
+  ping(): boolean {
+    return this.send({ type: 'ping' });
   }
 
   getStatus(): ConnectionStatus {
@@ -300,10 +325,15 @@ export class GatewayClient {
 
   // ── Internal ────────────────────────────────────────────────────
 
-  private send(msg: ClientMessage): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    }
+  /**
+   * Put a frame on the socket. False when it could not be — the socket is not
+   * open (disconnected, reconnecting) — so a caller can say so or hold the
+   * frame instead of believing it went out.
+   */
+  private send(msg: ClientMessage): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify(msg));
+    return true;
   }
 
   private handleMessage(raw: string): void {
@@ -316,6 +346,7 @@ export class GatewayClient {
 
     switch (msg.type) {
       case 'auth_ok':
+        this.authenticated = true;
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.maxFrameBytes = msg.maxFrameBytes ?? null;
@@ -361,7 +392,13 @@ export class GatewayClient {
         break;
 
       case 'error':
-        this.options.onError?.(`${msg.code}: ${msg.message}`);
+        this.options.onError?.(`${msg.code}: ${msg.message}`, {
+          code: msg.code, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}), ...(msg.turnId ? { turnId: msg.turnId } : {}),
+        });
+        break;
+
+      case 'chat.delivery':
+        this.options.onDelivery?.(msg);
         break;
     }
   }

@@ -9,6 +9,26 @@ import type { SubagentPanel } from './components/subagent-panel';
 import { applyToolEvent, newToolGroup, type ToolGroupItem } from './components/tool-group';
 import type { TranscriptItem } from './components/messages-pane';
 
+/** What the surface knows about an event's place in the running turn (`OctipusTuiApp.trackTurn`). */
+export interface TurnContext {
+  /** A late answer of a turn that already ended: shown, but the live reply of the next turn stays. */
+  stale?: boolean;
+  /** This error ended the running turn: what it left half-streamed goes. */
+  endsTurn?: boolean;
+}
+
+/**
+ * How long a streaming reply of `length` characters waits between redraws.
+ * Every redraw renders the whole reply's Markdown again, so a long one is
+ * redrawn less often; a short one, every delta.
+ */
+export function liveRedrawInterval(length: number): number {
+  return length < 8192 ? 0 : Math.min(250, Math.round(length / 512));
+}
+
+/** Progress message ids remembered to drop repeats (a reconnect replays them): the newest this many. */
+export const SEEN_MESSAGE_IDS_KEPT = 1024;
+
 export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   lastPlanSummary: string | null = null;
@@ -19,6 +39,9 @@ export class ChatSessionPresenter {
   private activeAgentModel: string | undefined;
   private streamText = '';
   private streamIteration = -1;
+  /** When the live reply was last handed to the pane, and the redraw waiting for its interval. */
+  private liveShownAt = 0;
+  private liveTimer: ReturnType<typeof setTimeout> | null = null;
   /** This turn's tool calls: one transcript item, created by the first call. */
   private toolGroup: ToolGroupItem | null = null;
   private seenMessageIds = new Set<string>();
@@ -27,7 +50,7 @@ export class ChatSessionPresenter {
     private readonly activity: ActivityLine, private readonly subagents: SubagentPanel,
     private readonly pushMessage: (role: 'user' | 'assistant' | 'system', text: string) => void) {}
 
-  dispose(): void { this.activity.dispose(); }
+  dispose(): void { this.activity.dispose(); this.cancelLive(); }
   reset(): void {
     this.seenMessageIds.clear();
     this.refreshingPlan = false;
@@ -37,7 +60,7 @@ export class ChatSessionPresenter {
     this.activeAgentModel = undefined; this.status.setModel(null);
     this.lastPlanSummary = null; this.status.setPlan(null); this.status.setPlanDetails(null);
   }
-  handleEvent(event: AgentSessionEvent): boolean {
+  handleEvent(event: AgentSessionEvent, turn: TurnContext = {}): boolean {
     switch (event.kind) {
       case 'status':
         if (event.status === 'connected') {
@@ -92,19 +115,20 @@ export class ChatSessionPresenter {
         // call, not the reply: keep it as a folded thinking item so the trail
         // stays visible without reading as an answer, then start the next live block.
         if (event.iteration !== this.streamIteration) {
-          if (this.streamText.trim()) this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
-          this.streamText = '';
+          this.flushReasoning();
           this.streamIteration = event.iteration;
         }
         this.streamText += event.delta;
-        // A streaming interactive answer shows as its plain line, not as markup.
-        this.messages.setLive(inlineUiFallbackText(this.streamText));
-        this.tui.requestRender();
+        this.showLive();
         return true;
       case 'message':
         if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
-        if (event.messageId) this.seenMessageIds.add(event.messageId);
-        if (event.role === 'assistant' && !event.progress) { this.clearStream(); this.toolGroup = null; }
+        if (event.messageId) {
+          this.seenMessageIds.add(event.messageId);
+          // A Set iterates in insertion order: the first is the oldest. A long session no longer grows it without bound.
+          if (this.seenMessageIds.size > SEEN_MESSAGE_IDS_KEPT) this.seenMessageIds.delete(this.seenMessageIds.values().next().value as string);
+        }
+        if (event.role === 'assistant' && !event.progress && !turn.stale) { this.clearStream(); this.toolGroup = null; }
         this.pushMessage(event.role, event.content);
         return true;
       case 'agent.start':
@@ -112,10 +136,13 @@ export class ChatSessionPresenter {
         // the ROOT agent's, so a fan-out doesn't make the main indicator
         // flicker between children.
         if (event.subagent && event.nodeId) {
-          this.subagents.start(event.nodeId, event.role, event.model);
+          // A worker is announced twice (its `agent.spawned` and its swarm node): one row.
+          if (!this.subagents.has(event.nodeId)) this.subagents.start(event.nodeId, event.role, event.model);
           this.tui.requestRender();
           return true;
         }
+        // Not the root and nothing to show it under: its "Agent spawned" line is all there is.
+        if (!event.root) return true;
         // Start with iteration 0 so a long-running agent isn't silent
         // between spawn and its first iteration tick (the worker emits
         // iteration_update at the TOP of each loop iteration).
@@ -173,6 +200,14 @@ export class ChatSessionPresenter {
           this.tui.requestRender();
           return true;
         }
+        if (!event.root) {
+          // A worker the panel never saw finishing: count what it spent, leave
+          // the root's activity row and live reply alone.
+          this.cumulative = { ...this.cumulative, tokens: this.cumulative.tokens + event.stats.tokens, cost: this.cumulative.cost + event.stats.cost };
+          this.status.setStats(this.cumulative);
+          this.tui.requestRender();
+          return true;
+        }
         this.cumulative = {
           tokens: this.cumulative.tokens + event.stats.tokens,
           cost: this.cumulative.cost + event.stats.cost,
@@ -200,9 +235,14 @@ export class ChatSessionPresenter {
         this.recordTool(event.tool);
         return true;
       case 'error':
-        this.activity.setThinking(null); this.activity.setTool(null);
-        this.clearStream();
+        // A rate limit or an expired approval is not the turn failing: the
+        // live reply and the activity row stay.
+        if (turn.endsTurn) { this.activity.setThinking(null); this.activity.setTool(null); this.clearStream(); }
         this.pushMessage('system', `Error: ${event.message}`);
+        return true;
+      case 'chat.error':
+        // The turn's own `error` frame (or the surface) says what failed.
+        if (!turn.stale) { this.activity.setThinking(null); this.activity.setTool(null); this.clearStream(); this.tui.requestRender(); }
         return true;
       case 'expert':
         this.status.setExpert(event.expertId);
@@ -211,7 +251,42 @@ export class ChatSessionPresenter {
       default: return false;
     }
   }
+  /**
+   * Hand the live reply to the pane now, or — a long reply, redrawn lately —
+   * once its redraw interval is over (`liveRedrawInterval`). The last delta
+   * is always drawn: the timer draws whatever streamed by then.
+   */
+  private showLive(): void {
+    const wait = liveRedrawInterval(this.streamText.length) - (Date.now() - this.liveShownAt);
+    if (wait <= 0) { this.drawLive(); return; }
+    if (this.liveTimer) return;
+    this.liveTimer = setTimeout(() => { this.liveTimer = null; this.drawLive(); }, wait);
+    this.liveTimer.unref?.();
+  }
+
+  private drawLive(): void {
+    this.cancelLive();
+    this.liveShownAt = Date.now();
+    // A streaming interactive answer shows as its plain line, not as markup.
+    this.messages.setLive(this.streamText ? inlineUiFallbackText(this.streamText) : null);
+    this.tui.requestRender();
+  }
+
+  private cancelLive(): void {
+    if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; }
+  }
+
+  /** The live text so far becomes a folded thinking item; a later delta of the same iteration starts a new live block. */
+  private flushReasoning(): void {
+    if (!this.streamText.trim()) return;
+    this.pushItem({ kind: 'thinking', text: this.streamText, expanded: this.messages.getDetail() });
+    this.streamText = '';
+    this.cancelLive();
+    this.messages.setLive(null);
+  }
+
   private clearStream(): void {
+    this.cancelLive();
     this.streamText = '';
     this.streamIteration = -1;
     this.messages.setLive(null);
@@ -219,6 +294,9 @@ export class ChatSessionPresenter {
 
   /** A root agent tool event: into this turn's tool group, which the first call puts in the transcript. */
   private recordTool(tool: ToolEventState): void {
+    // What streamed before the call was the reasoning that led to it: keep it
+    // above the group, as a thinking item, not under it as a live reply.
+    this.flushReasoning();
     const group = this.toolGroup ?? (this.toolGroup = { ...newToolGroup(), expanded: this.messages.getDetail() });
     applyToolEvent(group, tool);
     // The first call puts the group in the transcript (again, after /clear emptied it).
