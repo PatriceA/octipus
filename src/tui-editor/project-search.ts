@@ -92,9 +92,12 @@ function runRipgrep(
     let pending = '';
     let errors = '';
     setStop(() => child.kill('SIGTERM'));
-    child.stderr.on('data', (chunk: globalThis.Buffer) => { errors += chunk.toString('utf8'); });
-    child.stdout.on('data', (chunk: globalThis.Buffer) => {
-      pending += chunk.toString('utf8');
+    // A chunk can end inside a multi-byte character: the streams' decoders keep the partial bytes for the next one.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => { errors += chunk; });
+    child.stdout.on('data', (chunk: string) => {
+      pending += chunk;
       const lines = pending.split('\n');
       pending = lines.pop() ?? '';
       const batch: ProjectHit[] = [];

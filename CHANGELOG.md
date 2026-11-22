@@ -7,6 +7,10 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: project search results keep non-ASCII text intact.**
+  ripgrep's output was decoded one chunk at a time, so a character split
+  between two chunks showed as `��` and shifted the match highlight. The
+  output is now decoded as one stream.
 - **Terminal editor: saving keeps a file's owner and works in read-only
   folders.** The atomic save renamed a temporary file created by you over the
   original, so a file owned by another user or group (a shared file, one

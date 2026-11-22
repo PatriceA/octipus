@@ -81,3 +81,15 @@ test('ripgrep JSON lines: byte offsets become columns; other messages are ignore
   expect(parseRipgrepLine('/p', '{"type":"begin","data":{}}')).toEqual([]);
   expect(parseRipgrepLine('/p', 'not json')).toEqual([]);
 });
+
+// Each stdout chunk was decoded on its own: a chunk ending inside a multi-byte character turned it into two U+FFFD.
+test.skipIf(process.platform === 'win32')('ripgrep output split inside a multi-byte character is decoded whole', async () => {
+  const fake = join(root, 'fake-rg');
+  const line = JSON.stringify({ type: 'match', data: { path: { text: 'src/a.ts' }, lines: { text: 'x 😀 greeting\n' }, line_number: 1, submatches: [{ start: 7, end: 15 }] } });
+  const bytes = globalThis.Buffer.from(`${line}\n`, 'utf8');
+  const cut = bytes.indexOf(globalThis.Buffer.from('😀', 'utf8')) + 2; // two of the emoji's four bytes
+  const octal = (b: globalThis.Buffer) => [...b].map((x) => `\\${x.toString(8).padStart(3, '0')}`).join('');
+  writeFileSync(fake, `#!/bin/sh\nprintf '${octal(bytes.subarray(0, cut))}'\nsleep 0.2\nprintf '${octal(bytes.subarray(cut))}'\n`, { mode: 0o755 });
+  const { hits } = await run('greeting', { rg: fake });
+  expect(hits.map((h) => [h.text, h.col])).toEqual([['x 😀 greeting', 5]]);
+});
