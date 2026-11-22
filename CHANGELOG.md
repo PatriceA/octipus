@@ -612,6 +612,18 @@ labels reflect blast radius, not contract guarantees.
   `session.stopped` event says how many. When nothing had started yet the chat
   says so and stops the root as soon as it starts. The `/abort` command is
   unchanged.
+- **Terminal chat: only the turn's own answer ends it.** Any gateway `error`
+  frame ended the running turn (a stale permission answer, an expired
+  approval, a rate limit, dropped events), a late `CHAT_CANCELLED` of a
+  stopped turn ended the next one and wiped its live reply, and another tab's
+  stop ended this tab's turn. `chat.send` now takes an optional `turnId`
+  that the gateway echoes on the turn's `chat.response`, `chat.error`,
+  `chat.delivery` and on the `error` frames that answer the send (with its
+  `sessionId`; also `RATE_LIMITED` and `INVALID_MESSAGE` for a refused send).
+  The terminal ends a turn only on its own answer, its root agent, or its
+  session's stop, and shows a late answer without touching the next turn.
+  `agent.stopped` now carries the session on its envelope and `root` in its
+  payload.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

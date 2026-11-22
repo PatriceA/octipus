@@ -9,6 +9,14 @@ import type { SubagentPanel } from './components/subagent-panel';
 import { applyToolEvent, newToolGroup, type ToolGroupItem } from './components/tool-group';
 import type { TranscriptItem } from './components/messages-pane';
 
+/** What the surface knows about an event's place in the running turn (`OctipusTuiApp.trackTurn`). */
+export interface TurnContext {
+  /** A late answer of a turn that already ended: shown, but the live reply of the next turn stays. */
+  stale?: boolean;
+  /** This error ended the running turn: what it left half-streamed goes. */
+  endsTurn?: boolean;
+}
+
 export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   lastPlanSummary: string | null = null;
@@ -37,7 +45,7 @@ export class ChatSessionPresenter {
     this.activeAgentModel = undefined; this.status.setModel(null);
     this.lastPlanSummary = null; this.status.setPlan(null); this.status.setPlanDetails(null);
   }
-  handleEvent(event: AgentSessionEvent): boolean {
+  handleEvent(event: AgentSessionEvent, turn: TurnContext = {}): boolean {
     switch (event.kind) {
       case 'status':
         if (event.status === 'connected') {
@@ -104,7 +112,7 @@ export class ChatSessionPresenter {
       case 'message':
         if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
         if (event.messageId) this.seenMessageIds.add(event.messageId);
-        if (event.role === 'assistant' && !event.progress) { this.clearStream(); this.toolGroup = null; }
+        if (event.role === 'assistant' && !event.progress && !turn.stale) { this.clearStream(); this.toolGroup = null; }
         this.pushMessage(event.role, event.content);
         return true;
       case 'agent.start':
@@ -211,9 +219,14 @@ export class ChatSessionPresenter {
         this.recordTool(event.tool);
         return true;
       case 'error':
-        this.activity.setThinking(null); this.activity.setTool(null);
-        this.clearStream();
+        // A rate limit or an expired approval is not the turn failing: the
+        // live reply and the activity row stay.
+        if (turn.endsTurn) { this.activity.setThinking(null); this.activity.setTool(null); this.clearStream(); }
         this.pushMessage('system', `Error: ${event.message}`);
+        return true;
+      case 'chat.error':
+        // The turn's own `error` frame (or the surface) says what failed.
+        if (!turn.stale) { this.activity.setThinking(null); this.activity.setTool(null); this.clearStream(); this.tui.requestRender(); }
         return true;
       case 'expert':
         this.status.setExpert(event.expertId);

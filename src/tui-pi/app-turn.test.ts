@@ -43,6 +43,8 @@ function mount() {
     screen: () => strip(root.render(100)),
     key: (data: string) => input(data),
     chats: () => gateway.sendChat.mock.calls.map(call => call[1]),
+    /** The turn id the latest send carried: the gateway echoes it on that turn's answer. */
+    turnId: () => gateway.sendChat.mock.calls.at(-1)?.[5] as string,
   };
 }
 
@@ -58,12 +60,12 @@ test('a message typed during a turn is queued above the composer and sent when t
   expect(t.screen()).toContain('⧗ queued 1 · second');
   expect(t.screen()).toContain('⧗ queued 2 · third');
   expect(t.screen()).toContain('sent when the turn ends');
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply one' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply one', turnId: t.turnId() });
   // One at a time, as its own turn: the next waits for this one to end.
-  expect(gateway.sendChat.mock.calls.at(-1)).toEqual([expect.any(String), 'second', undefined, undefined, 'queue']);
+  expect(gateway.sendChat.mock.calls.at(-1)).toEqual([expect.any(String), 'second', undefined, undefined, 'queue', expect.any(String)]);
   expect(t.screen()).not.toContain('queued 2');
   expect(t.screen()).toContain('⧗ queued 1 · third');
-  gateway.listener({ kind: 'error', message: 'model failed' });
+  gateway.listener({ kind: 'error', message: 'CHAT_ERROR: model failed', code: 'CHAT_ERROR', turnId: t.turnId() });
   expect(t.chats()).toEqual(['first', 'second', 'third']);
   expect(t.screen()).not.toContain('⧗ queued');
   await t.app.stop();
@@ -76,7 +78,7 @@ test('a queued message can be taken back to edit or remove it before it is sent'
   t.key('\x1be'); // Alt+E
   expect(t.composer.getText()).toBe('typo mesage');
   expect(t.screen()).not.toContain('⧗ queued');
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Reply', turnId: t.turnId() });
   // Nothing left in the queue: nothing goes out by itself.
   expect(t.chats()).toEqual(['first']);
   await t.app.stop();
@@ -92,7 +94,7 @@ test('Esc stops the running turn by its root agent; queued messages come back to
   expect(gateway.stopAgent).toHaveBeenCalledWith('root-1');
   expect(t.screen()).toContain('Stopping the turn (Esc)');
   expect(t.composer.getText()).toBe('follow-up');
-  gateway.listener({ kind: 'agent.stopped', agentId: 'root-1' });
+  gateway.listener({ kind: 'agent.stopped', agentId: 'root-1', root: true });
   expect(t.chats()).toEqual(['long task']);
   // The agent is idle now: the second Esc clears the draft.
   t.key(ESC);

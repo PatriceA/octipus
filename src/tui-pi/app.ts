@@ -33,7 +33,7 @@ import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItem
  * State that belongs to multiple components (cumulative tokens,
  * session list, pending overlays) lives in plain fields here.
  */
-import { ChatSessionPresenter } from './chat-session-presenter';
+import { ChatSessionPresenter, type TurnContext } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, isViewportTUI, matchesKey, type OverlayHandle, Spacer, type TUI, VStack } from '@/tui-kit';
 import { loginWithPassword } from '@/core/gateway/cli-login';
@@ -104,6 +104,9 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
 const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
 type PendingImage = { marker: string; attachment: ChatAttachment };
+/** Turn ids of turns this client gave up on, kept to recognise their late answers. */
+const ENDED_TURNS_KEPT = 32;
+
 /** Two Escapes within this long, with no turn running, clear the draft. */
 const DOUBLE_ESCAPE_MS = 1500;
 
@@ -115,6 +118,12 @@ const DOUBLE_ESCAPE_MS = 1500;
 interface RunningTurn {
   rootAgentId: string | null;
   stopping: boolean;
+  /**
+   * The id this client's `chat.send` carried, echoed on what ends it; null
+   * for a turn another tab or the server started (any reply of the session
+   * ends that one).
+   */
+  turnId: string | null;
   /** Esc came before anything of the turn had started on the server: stop the root as soon as it does. */
   stopWhenRootStarts?: boolean;
 }
@@ -166,6 +175,8 @@ export class OctipusTuiApp {
   /** Messages typed while a turn runs; the first goes out when it ends. */
   private readonly queue = new QueuedMessages<PendingImage[]>(() => getKeybindings().getKeys('app.queue.edit').map(String).join(' / ') || 'Alt+E');
   private turn: RunningTurn | null = null;
+  /** Turns of this client that ended before their answer came (stopped, disconnected): that answer is stale. */
+  private readonly endedTurnIds: string[] = [];
   /** When the last Escape was pressed, for the double Escape that clears the draft. */
   private lastEscape = 0;
   /** What was submitted from the composer, newest first (Ctrl+R). */
@@ -405,7 +416,7 @@ export class OctipusTuiApp {
   /** The turn is over (reply, error, stop): say so if nobody is looking, then send the first queued message as the next one. */
   private endTurn(outcome: 'reply' | 'error' | 'stopped' = 'reply'): void {
     if (!this.turn) return;
-    this.turn = null;
+    this.forgetTurn();
     this.showState();
     if (!this.queue.size) this.attention?.notify(outcome === 'reply' ? 'The reply is ready' : outcome === 'error' ? 'The turn failed' : 'The turn was stopped');
     if (this.lastStatus === 'connected') this.sendNextQueued();
@@ -416,6 +427,27 @@ export class OctipusTuiApp {
     this.attention?.setState(this.decisions.size ? 'waiting' : this.turn ? 'working' : 'idle', this.projectPath?.split(/[/\\]/).pop());
   }
 
+  /** Drop the running turn, remembering its id so a late answer to it is recognised as stale. */
+  private forgetTurn(): void {
+    const id = this.turn?.turnId;
+    this.turn = null;
+    if (!id) return;
+    this.endedTurnIds.push(id);
+    if (this.endedTurnIds.length > ENDED_TURNS_KEPT) this.endedTurnIds.shift();
+  }
+
+  /**
+   * Whose answer a reply or failure of this session (`turnId` as echoed) is:
+   * the running turn's (`current`), one of an earlier turn this client already
+   * ended (`stale`), or neither — a background reply, another tab's turn.
+   */
+  private answerOf(turnId: string | undefined): 'current' | 'stale' | 'other' {
+    if (turnId && this.endedTurnIds.includes(turnId)) return 'stale';
+    if (!this.turn) return 'other';
+    if (this.turn.turnId === null) return 'current';
+    return turnId === this.turn.turnId ? 'current' : 'other';
+  }
+
   private sendNextQueued(): void {
     const next = this.queue.shift();
     if (!next) return;
@@ -423,48 +455,85 @@ export class OctipusTuiApp {
     this.tui.requestRender();
   }
 
-  /** Track the running turn from the gateway's events. */
-  private trackTurn(event: AgentSessionEvent): void {
+  /**
+   * Track the running turn from the gateway's events. Only what is tied to
+   * this turn ends it: its reply or failure (by `turnId`), its root agent
+   * finishing or stopped, this session's stop. Returns what the presenter
+   * must know: a stale answer must not wipe the live reply of the next turn.
+   */
+  private trackTurn(event: AgentSessionEvent): TurnContext {
     switch (event.kind) {
       case 'agent.start':
         // Only the root agent is the turn; a worker it spawned never takes its place as what Esc stops.
-        if (!event.root) return;
+        if (!event.root) return {};
         if (this.turn) this.turn.rootAgentId = event.nodeId ?? this.turn.rootAgentId;
-        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false };
+        else this.turn = { rootAgentId: event.nodeId ?? null, stopping: false, turnId: null };
         if (this.turn.stopWhenRootStarts && this.turn.rootAgentId) {
           this.turn.stopWhenRootStarts = false;
           this.adapter.stopAgent(this.turn.rootAgentId);
         }
         this.showState();
-        return;
+        return {};
       case 'session.stopped':
-        if (!this.turn) return;
-        if (event.stopped || event.droppedQueued) { this.endTurn('stopped'); return; }
+        if (!this.turn) return {};
+        if (event.stopped || event.droppedQueued) { this.endTurn('stopped'); return {}; }
         // The message is still on its way into the session's queue: nothing
         // of it runs yet, so stop its root the moment it starts.
         if (this.turn.stopping && !this.turn.rootAgentId) {
           this.turn.stopWhenRootStarts = true;
           this.pushMessage('system', 'Nothing of the turn was running yet; it is stopped as soon as it starts.');
         }
-        return;
-      case 'message':
-        if (event.role === 'assistant' && !event.progress && !event.messageId) this.endTurn();
-        return;
+        return {};
+      case 'message': {
+        if (event.role !== 'assistant' || event.progress || event.messageId) return {};
+        const whose = this.answerOf(event.turnId);
+        if (whose === 'current') this.endTurn();
+        return { stale: whose === 'stale' };
+      }
+      case 'chat.error': {
+        const whose = this.answerOf(event.turnId);
+        if (whose !== 'current' || !this.turn) return { stale: whose === 'stale' };
+        // This client's own send reported it with an `error` frame already;
+        // a turn another tab started is told here.
+        if (this.turn.turnId === null && !event.cancelled) this.pushMessage('system', `Error: The turn failed: ${event.message}`);
+        this.endTurn(this.turn.stopping || event.cancelled ? 'stopped' : 'error');
+        return {};
+      }
       case 'agent.end':
         // A positive match only: an agent the server does not mark as the
         // root (every worker) never ends the turn, whatever its id.
         if (this.turn && event.root && (this.turn.rootAgentId === null || event.nodeId === this.turn.rootAgentId)) this.endTurn();
-        return;
+        return {};
       case 'agent.stopped':
-        if (this.turn && (this.turn.rootAgentId === null || event.agentId === this.turn.rootAgentId)) this.endTurn('stopped');
-        return;
+        // The root by id, or — before its id is known — an agent the server
+        // marks as a root (the adapter already dropped other sessions').
+        if (this.turn && (event.agentId === this.turn.rootAgentId || (event.root === true && this.turn.rootAgentId === null))) this.endTurn('stopped');
+        return {};
       case 'error':
-        this.endTurn(this.turn?.stopping ? 'stopped' : 'error');
-        return;
+        // Only an error frame answering this turn's send ends it; a rate
+        // limit, an expired approval, dropped events or a late CHAT_ERROR of a
+        // stopped turn are shown and nothing more.
+        if (this.turn?.turnId && event.turnId === this.turn.turnId) {
+          this.endTurn(this.turn.stopping ? 'stopped' : 'error');
+          return { endsTurn: true };
+        }
+        return {};
+      case 'delivery':
+        if (!this.turn?.turnId || event.turnId !== this.turn.turnId) return {};
+        // Folded into a turn already running (another tab's): no answer of
+        // its own comes; the running turn's answer ends this one.
+        if (event.outcome === 'steered') this.turn.turnId = null;
+        if (event.outcome === 'refused') {
+          this.pushMessage('system', `Error: Message not delivered: ${event.reason ?? 'the gateway refused it'}.`);
+          this.endTurn('error');
+        }
+        return {};
       case 'status':
         if (event.status === 'connected') { if (!this.turn) this.sendNextQueued(); }
-        else this.turn = null;
-        return;
+        else this.forgetTurn();
+        return {};
+      default:
+        return {};
     }
   }
 
@@ -593,8 +662,8 @@ export class OctipusTuiApp {
       this.speakNextReply = false;
       void this.voice?.say(event.content).catch(() => {});
     }
-    this.trackTurn(event);
-    if (this.session.handleEvent(event)) return;
+    const turn = this.trackTurn(event);
+    if (this.session.handleEvent(event, turn)) return;
     switch (event.kind) {
       case 'status':
         // Reconnect bookkeeping (subagent reset, plan poll) lives in the presenter.
@@ -681,6 +750,7 @@ export class OctipusTuiApp {
       case 'agent.edit':
       case 'agent.stopped':
       case 'session.stopped':
+      case 'delivery':
         return;
     }
   }
@@ -718,11 +788,11 @@ export class OctipusTuiApp {
   private sendNow(text: string, images: PendingImage[], mode?: 'queue'): void {
     this.pushMessage('user', text);
     this.sessionUsed = true;
-    this.turn = { rootAgentId: null, stopping: false };
+    const turnId = randomUUID();
+    this.turn = { rootAgentId: null, stopping: false, turnId };
     this.showState();
-    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), mode);
-    else if (mode) this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode);
-    else this.adapter.sendChat(this.sessionId, text, this.projectPath);
+    if (images.length) void this.sendWithImages(text, images.map(image => image.attachment), turnId, mode);
+    else this.adapter.sendChat(this.sessionId, text, this.projectPath, undefined, mode, turnId);
   }
 
   /**
@@ -731,7 +801,7 @@ export class OctipusTuiApp {
    * so its size cap does not limit the image. A session the server has not
    * seen yet is created by the upload, and the TUI continues in it.
    */
-  private async sendWithImages(text: string, images: ChatAttachment[], mode?: 'queue'): Promise<void> {
+  private async sendWithImages(text: string, images: ChatAttachment[], turnId: string, mode?: 'queue'): Promise<void> {
     const from = this.sessionId;
     let prepared: Awaited<ReturnType<GatewayAdapter['uploadAttachments']>>;
     try {
@@ -745,8 +815,7 @@ export class OctipusTuiApp {
     this.sessionId = prepared.sessionId;
     const content = [text, ...prepared.uploaded.map(file => `Attached file: ${file.path}`)].join('\n\n');
     const refs = prepared.uploaded.map(file => ({ path: file.path }));
-    if (mode) this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode);
-    else this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs);
+    this.adapter.sendChat(prepared.sessionId, content, this.projectPath, refs, mode, turnId);
   }
 
   private async attachImage(path?: string): Promise<void> {
@@ -947,7 +1016,7 @@ export class OctipusTuiApp {
   private resumeSession(id: string): void {
     this.sessionBeforeResume = this.sessionId;
     this.pendingImages = [];
-    this.turn = null;
+    this.forgetTurn();
     if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
     this.sessionId = id;
     this.sessionUsed = true;

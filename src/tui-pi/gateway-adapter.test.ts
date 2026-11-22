@@ -191,6 +191,13 @@ describe('decodeGatewayEvent', () => {
   test('chat.response is decoded after session filtering', () => {
     const out = decodeGatewayEvent({ type: 'chat.response', payload: { response: 'hi' } });
     expect(out).toEqual([{ kind: 'message', role: 'assistant', content: 'hi' }]);
+    // The send's turn id, echoed by message-handler.ts, rides along.
+    expect(decodeGatewayEvent({ type: 'chat.response', payload: { response: { response: 'hi', outcome: 'success' }, turnId: 't-1' } }))
+      .toEqual([{ kind: 'message', role: 'assistant', content: 'hi', turnId: 't-1' }]);
+    expect(decodeGatewayEvent({ type: 'chat.error', payload: { error: 'boom', cancelled: true, turnId: 't-1' } }))
+      .toEqual([{ kind: 'chat.error', message: 'boom', cancelled: true, turnId: 't-1' }]);
+    expect(decodeGatewayEvent({ type: 'agent.stopped', payload: { agentId: 'root-1', stoppedBy: 'u', root: true } }))
+      .toEqual([{ kind: 'agent.stopped', agentId: 'root-1', root: true }]);
   });
 
   test('unknown event type produces no events', () => {

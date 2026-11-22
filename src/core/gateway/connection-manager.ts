@@ -277,7 +277,7 @@ export class ConnectionManager {
 
     const parsed = parseClientMessage(raw);
     if (!parsed.ok) {
-      this.send(conn, { type: 'error', code: 'INVALID_MESSAGE', message: parsed.error });
+      this.send(conn, { type: 'error', code: 'INVALID_MESSAGE', message: parsed.error, ...chatSendEcho(rawFrame(raw)) });
       return;
     }
 
@@ -288,6 +288,7 @@ export class ConnectionManager {
         type: 'error',
         code: 'RATE_LIMITED',
         message: `Rate limited. Retry after ${Math.ceil((rateCheck.retryAfterMs || 0) / 1000)}s`,
+        ...chatSendEcho(parsed.message),
       });
       this.onAuditEvent?.('gateway.rate_limit.hit', {
         userId: conn.context.userId,
@@ -774,4 +775,20 @@ export class ConnectionManager {
     this.preAuthByIp.clear();
     this.rateLimiter.destroy();
   }
+}
+
+/** The frame as JSON, for reading what an invalid frame said it was; null when it is not JSON. */
+function rawFrame(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { return null; } // not JSON: there is nothing to echo, and the error already says why
+}
+
+/**
+ * A refused `chat.send` names its session and `turnId` in the error, so the
+ * client knows which of its turns will never get an answer.
+ */
+export function chatSendEcho(frame: unknown): { sessionId?: string; turnId?: string } {
+  if (!frame || typeof frame !== 'object') return {};
+  const { type, sessionId, turnId } = frame as { type?: unknown; sessionId?: unknown; turnId?: unknown };
+  if (type !== 'chat.send') return {};
+  return { ...(typeof sessionId === 'string' ? { sessionId } : {}), ...(typeof turnId === 'string' ? { turnId } : {}) };
 }

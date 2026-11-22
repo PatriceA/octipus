@@ -8,7 +8,7 @@ import type { Container, TUI } from '@/tui-kit';
 import { OctipusTuiApp } from './app';
 import { Composer } from './components/composer';
 import { installOctipusKeybindings } from './keybindings';
-import { FakeSocket, wire } from './testing/wire';
+import { errorFrame, FakeSocket, wire } from './testing/wire';
 
 vi.mock('@/core/gateway/cli-session', () => ({
   readCliSession: () => ({ token: 'test-token', userId: 'user-1', username: 'tester', isAdmin: false }),
@@ -40,7 +40,7 @@ async function mount() {
     sent,
     chats: () => chats().map(frame => frame.content),
     /** The session the chat sends under (the adapter drops events of any other). */
-    sid: () => String(chats()[0]?.sessionId),
+    sid: () => String(FakeSocket.all.flatMap(s => s.sent).find(frame => typeof frame.sessionId === 'string')?.sessionId),
     lastTurnId: () => chats().at(-1)?.turnId as string | undefined,
   };
 }
@@ -114,5 +114,89 @@ test('a session stop that stopped something ends the turn', async () => {
   // The turn is over: the next message goes out at once instead of queueing.
   t.submit('again');
   expect(t.chats()).toEqual(['quick', 'again']);
+  await t.app.stop();
+});
+
+test('errors that are not this turn failing do not end it: permission, approval, rate limit, dropped events', async () => {
+  const t = await mount();
+  t.submit('long job');
+  const sid = t.sid();
+  t.socket.event(wire.rootSpawned(sid, 'root-1'));
+  t.socket.event(wire.delta(sid, 'root-1', 'Still streaming here'));
+  t.submit('queued behind it');
+  t.socket.receive(errorFrame('PERMISSION_ERROR', 'That permission request is no longer pending (already answered, or expired).'));
+  t.socket.receive(errorFrame('APPROVAL_EXPIRED', 'The approval expired'));
+  t.socket.receive(errorFrame('RATE_LIMITED', 'Rate limited. Retry after 3s'));
+  t.socket.receive({ type: 'events_dropped', count: 4, reason: 'slow consumer' });
+  expect(t.chats()).toEqual(['long job']);
+  expect(t.screen()).toContain('⧗ queued 1 · queued behind it');
+  expect(t.screen()).toContain('Still streaming here');
+  expect(t.screen()).toContain('Rate limited');
+  // The turn's own failure does end it.
+  t.socket.receive(errorFrame('CHAT_ERROR', 'model failed', { sessionId: sid, turnId: t.lastTurnId() }));
+  expect(t.chats()).toEqual(['long job', 'queued behind it']);
+  await t.app.stop();
+});
+
+test('a refused chat.send (rate limited before the handler) ends that turn: the server echoes its turnId', async () => {
+  const t = await mount();
+  t.submit('too fast');
+  t.submit('next');
+  t.socket.receive(errorFrame('RATE_LIMITED', 'Rate limited. Retry after 3s', { sessionId: t.sid(), turnId: t.lastTurnId() }));
+  expect(t.chats()).toEqual(['too fast', 'next']);
+  await t.app.stop();
+});
+
+test('the late failure of a stopped turn neither ends the next turn nor wipes its live reply', async () => {
+  const t = await mount();
+  t.submit('first');
+  const sid = t.sid();
+  const first = t.lastTurnId();
+  t.socket.event(wire.rootSpawned(sid, 'root-1'));
+  t.key(ESC);
+  t.socket.event(wire.agentStopped(sid, 'root-1', true));
+  t.submit('second');
+  expect(t.chats()).toEqual(['first', 'second']);
+  t.socket.event(wire.rootSpawned(sid, 'root-2'));
+  t.socket.event(wire.delta(sid, 'root-2', 'Second reply streaming'));
+  t.submit('third');
+  // What the server sends for the stopped send, late.
+  t.socket.receive(errorFrame('CHAT_CANCELLED', 'Task was stopped', { sessionId: sid, turnId: first }));
+  t.socket.event(wire.chatError(sid, 'Task was stopped', { cancelled: true, turnId: first }));
+  t.socket.event(wire.chatResponse(sid, 'Stopped.', first));
+  expect(t.chats()).toEqual(['first', 'second']);
+  expect(t.screen()).toContain('Second reply streaming');
+  expect(t.screen()).toContain('⧗ queued 1 · third');
+  t.socket.event(wire.chatResponse(sid, 'Second answer.', t.lastTurnId()));
+  expect(t.chats()).toEqual(['first', 'second', 'third']);
+  await t.app.stop();
+});
+
+test('another tab stopping its own turn, or a background reply, does not end this one', async () => {
+  const t = await mount();
+  t.submit('mine');
+  const sid = t.sid();
+  t.submit('after mine');
+  // Another session's root, stopped from another tab: the adapter drops it by session.
+  t.socket.event(wire.agentStopped('99999999-0000-4000-8000-000000000000', 'root-x', true));
+  // A server without the session on the envelope: no id match, no end.
+  t.socket.event(wire.rootSpawned(sid, 'root-1'));
+  t.socket.event(wire.agentStopped(undefined, 'root-x', true));
+  // A scheduled wake-up answering in this session, with no turn id.
+  t.socket.event(wire.backgroundResponse(sid, 'Your reminder.'));
+  expect(t.chats()).toEqual(['mine']);
+  expect(t.screen()).toContain('Your reminder.');
+  t.socket.event(wire.chatResponse(sid, 'Mine answered.', t.lastTurnId()));
+  expect(t.chats()).toEqual(['mine', 'after mine']);
+  await t.app.stop();
+});
+
+test('a turn another tab started ends on its chat.error, which is shown here', async () => {
+  const t = await mount();
+  t.socket.event(wire.rootSpawned(t.sid(), 'root-7'));
+  t.submit('wait for it');
+  t.socket.event(wire.chatError(t.sid(), 'provider down'));
+  expect(t.screen()).toContain('The turn failed: provider down');
+  expect(t.chats()).toEqual(['wait for it']);
   await t.app.stop();
 });

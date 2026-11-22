@@ -36,6 +36,8 @@ export class TuiHarness {
   private writes: Promise<void> = Promise.resolve();
   private error = '';
   private stopped = false;
+  /** The `turnId` of the latest `chat.send`: the fixture gateway answers it, as the real one echoes it. */
+  private lastTurnId: string | undefined;
 
   private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions) {
     this.server = server;
@@ -67,6 +69,7 @@ export class TuiHarness {
           socket.send(JSON.stringify({ type: 'command.result', name: msg.name, result }));
         }
         if (msg.type === 'chat.send') {
+          this.lastTurnId = typeof msg.turnId === 'string' ? msg.turnId : undefined;
           this.event('chat.delta', { delta: 'A streaming reply', iteration: 1 }, msg.sessionId);
         }
       });
@@ -111,7 +114,15 @@ export class TuiHarness {
   resize(cols: number, rows: number): void {
     this.screen.resize(cols, rows); this.proc.stdin.write(JSON.stringify({ resize: [cols, rows] }) + '\n');
   }
+  /**
+   * Send an event. A `chat.response` / `chat.error` that names no `turnId`
+   * answers the latest `chat.send`, as the real gateway's reply to it does
+   * (message-handler.ts echoes the send's `turnId`); pass one to say otherwise.
+   */
   event(type: string, payload: unknown, sessionId?: string): void {
+    if ((type === 'chat.response' || type === 'chat.error') && this.lastTurnId && payload && typeof payload === 'object' && !('turnId' in payload)) {
+      payload = { ...payload, turnId: this.lastTurnId };
+    }
     for (const socket of this.sockets) socket.send(JSON.stringify({ type: 'event', event: { type, payload, sessionId } }));
   }
   async text(): Promise<string> {

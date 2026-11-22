@@ -1,6 +1,6 @@
 import { apiBaseFromGatewayUrl } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
-import type { ClientMessage, GatewayMessage, SendMode } from '@/core/gateway/protocol';
+import type { ChatDeliveryMessage, ClientMessage, GatewayMessage, SendMode } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 const DEFAULT_GATEWAY_URL = 'ws://localhost:3007/gateway';
@@ -18,12 +18,23 @@ function decodeAttachment(attachment: ChatAttachment): File {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 
+/** The parts of a gateway `error` frame a client acts on. */
+export interface GatewayErrorFrame { code: string; sessionId?: string; turnId?: string }
+
 export interface GatewayClientOptions {
   url?: string;
   onEvent?: (event: any) => void;
   onCommandResult?: (name: string, result: unknown, error?: string, data?: unknown) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
-  onError?: (error: string) => void;
+  /**
+   * An error to show. `frame` is set for the gateway's `error` frames: its
+   * code, and — when it answers a `chat.send` — that send's session and
+   * `turnId`. Errors of this client itself (a dropped socket, a frame over
+   * the size cap, dropped events) have none.
+   */
+  onError?: (error: string, frame?: GatewayErrorFrame) => void;
+  /** What became of a `chat.send` (`chat.delivery`): steered, queued, restarted or refused. */
+  onDelivery?: (delivery: ChatDeliveryMessage) => void;
   /**
    * Who this client is now acting as — null when signed out. Fires on every
    * connect and when a rejected login is cleared, so a status bar can't keep
@@ -173,9 +184,9 @@ export class GatewayClient {
    * Send a chat message. Files go up first with `uploadAttachments`; the
    * turn names them in `fileRefs`, so the frame carries no file bytes.
    * `mode` says what to do when a turn is running (`SEND_MODES`); the server
-   * defaults to `auto`.
+   * defaults to `auto`. `turnId` is echoed on what ends the turn.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): void {
     const message: ClientMessage = {
       type: 'chat.send',
       sessionId,
@@ -183,6 +194,7 @@ export class GatewayClient {
       ...(projectPath ? { projectPath } : {}),
       ...(fileRefs?.length ? { fileRefs } : {}),
       ...(mode ? { mode } : {}),
+      ...(turnId ? { turnId } : {}),
     };
     // A frame over the server's cap would close the socket mid-send; say so
     // instead, with the setting that governs it.
@@ -366,7 +378,13 @@ export class GatewayClient {
         break;
 
       case 'error':
-        this.options.onError?.(`${msg.code}: ${msg.message}`);
+        this.options.onError?.(`${msg.code}: ${msg.message}`, {
+          code: msg.code, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}), ...(msg.turnId ? { turnId: msg.turnId } : {}),
+        });
+        break;
+
+      case 'chat.delivery':
+        this.options.onDelivery?.(msg);
         break;
     }
   }

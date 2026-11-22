@@ -9,7 +9,7 @@
  * `kind` without re-parsing payload shapes.
  */
 import { type ConnectionStatus, type FileRef, GatewayClient, type GatewayClientOptions, type UploadedAttachment } from '@/core/gateway/client';
-import type { SendMode } from '@/core/gateway/protocol';
+import type { SendMode, SendOutcome } from '@/core/gateway/protocol';
 import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -57,7 +57,8 @@ export interface SessionStats {
 
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
-  | { kind: 'message';        role: Role; content: string; messageId?: string; progress?: boolean }
+  /** `turnId`: on a turn's reply, the id its `chat.send` carried (echoed by the server). */
+  | { kind: 'message';        role: Role; content: string; messageId?: string; progress?: boolean; turnId?: string }
   | { kind: 'delta';          delta: string; iteration: number }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'permission.resolved'; requestId: string; status: 'approved' | 'denied' | 'expired' }
@@ -71,7 +72,11 @@ export type AgentSessionEvent =
   /** An agent finished; `root` only for the turn's root (never inferred from a missing id). */
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string; root?: boolean }
   /** An agent was stopped on request (`agent.stop`, Esc). */
-  | { kind: 'agent.stopped';  agentId: string }
+  | { kind: 'agent.stopped';  agentId: string; root?: boolean }
+  /** A turn of this session failed or was dropped (`chat.error`, sent to every tab). */
+  | { kind: 'chat.error';     message: string; cancelled: boolean; turnId?: string }
+  /** What became of this client's `chat.send` (`chat.delivery`). */
+  | { kind: 'delivery';       outcome: SendOutcome; turnId?: string; reason?: string }
   /**
    * A `session.stop` was handled: `stopped` running agents of this user in the
    * session, `droppedQueued` of their queued messages (both 0: nothing had started).
@@ -91,7 +96,13 @@ export type AgentSessionEvent =
   /** The agent replaces `oldText` with `newText` somewhere in a file (`str_replace`, `edit`): a fragment, not the file. */
   | { kind: 'agent.edit';     path: string; oldText: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
-  | { kind: 'error';          message: string };
+  /**
+   * An error to show. `code` and `turnId` are set for a gateway `error` frame
+   * (`turnId` when it answers a chat.send that carried one); only such an
+   * error can end a turn — a dropped socket, a rate limit or a stale
+   * permission answer are not the turn failing.
+   */
+  | { kind: 'error';          message: string; code?: string; turnId?: string };
 
 export interface GatewayAdapterOptions {
   url?: string;
@@ -133,7 +144,12 @@ export class GatewayAdapter {
       getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
       onStatusChange: (status) => this.emit({ kind: 'status', status }),
       onCommandResult: (name, result, error, data) => this.emit({ kind: 'command.result', name, result, error, data }),
-      onError: (message) => this.emit({ kind: 'error', message }),
+      onError: (message, frame) => this.emit({ kind: 'error', message, ...(frame ? { code: frame.code } : {}), ...(frame?.turnId ? { turnId: frame.turnId } : {}) }),
+      onDelivery: (delivery) => {
+        const mine = this.getSessionId?.();
+        if (mine && delivery.sessionId !== mine) return;
+        this.emit({ kind: 'delivery', outcome: delivery.outcome, ...(delivery.turnId ? { turnId: delivery.turnId } : {}), ...(delivery.reason ? { reason: delivery.reason } : {}) });
+      },
       onEvent: (event) => this.decode(event),
       onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
       onLoginRequired: (reason) => this.emit({ kind: 'login_required', reason }),
@@ -187,9 +203,8 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode): void {
-    if (mode) this.client.sendChat(sessionId, content, projectPath, fileRefs, mode);
-    else this.client.sendChat(sessionId, content, projectPath, fileRefs);
+  sendChat(sessionId: string, content: string, projectPath?: string, fileRefs?: FileRef[], mode?: SendMode, turnId?: string): void {
+    this.client.sendChat(sessionId, content, projectPath, fileRefs, mode, turnId);
   }
 
   /** Stop an agent of this user (the running turn's root, for Esc). */
@@ -343,7 +358,13 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'agent.stopped': {
       const agentId = pickString(payload, 'agentId');
-      if (agentId) out.push({ kind: 'agent.stopped', agentId });
+      if (agentId) out.push({ kind: 'agent.stopped', agentId, ...(typeof payload.root === 'boolean' ? { root: payload.root } : {}) });
+      return out;
+    }
+
+    case 'chat.error': {
+      const turnId = pickString(payload, 'turnId');
+      out.push({ kind: 'chat.error', message: pickString(payload, 'error') ?? 'The turn failed', cancelled: payload.cancelled === true, ...(turnId ? { turnId } : {}) });
       return out;
     }
 
@@ -564,7 +585,8 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     case 'chat.response': {
       const response = payload.response;
       const content = typeof response === 'string' ? response : response && typeof response === 'object' ? (response as { response?: unknown }).response : '';
-      if (typeof content === 'string') out.push({ kind: 'message', role: 'assistant', content });
+      const turnId = pickString(payload, 'turnId');
+      if (typeof content === 'string') out.push({ kind: 'message', role: 'assistant', content, ...(turnId ? { turnId } : {}) });
       return out;
     }
   }

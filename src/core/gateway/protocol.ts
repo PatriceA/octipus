@@ -372,6 +372,14 @@ export const ChatSendSchema = z.object({
   inlineUi: InlineUiSendSchema.optional(),
   /** What to do when a turn is running (`SEND_MODES`); `auto` when omitted. */
   mode: SendModeSchema.optional(),
+  /**
+   * The client's own id for this turn, echoed on what ends it — its
+   * `chat.response` and `chat.error` payloads, its `chat.delivery`, and the
+   * `error` frames this send gets (with `sessionId`) — so a client can tell
+   * the answer it waits for from the late answer of a turn it already gave
+   * up on (stopped, disconnected).
+   */
+  turnId: z.string().min(1).max(64).optional(),
 });
 
 export const CommandSchema = z.object({
@@ -698,6 +706,9 @@ export interface ErrorMessage {
   type: 'error';
   code: string;
   message: string;
+  /** Set when the error answers a `chat.send`: its session, and its `turnId` when it carried one. */
+  sessionId?: string;
+  turnId?: string;
 }
 
 export interface PongMessage {
@@ -795,6 +806,8 @@ export interface ChatDeliveryMessage {
   ahead?: number;
   /** Why a `refused` was refused, or why `auto`/`restart` queued instead. */
   reason?: string;
+  /** The send's `turnId`, when it carried one. */
+  turnId?: string;
 }
 
 /** Answer to a `room.post`: stored (and queued when addressed). */

@@ -102,7 +102,7 @@ test('a refused /resume rolls the session back so the next message does not go a
   expect(gateway.getSessionId()).toBe(before);
   expect(t.text()).toContain('Could not open session 11111111: Session not found');
   t.submit('hello again');
-  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined);
+  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined, undefined, undefined, expect.any(String));
   await t.app.stop();
 });
 
@@ -187,7 +187,7 @@ test('streamed deltas draw live, an iteration change keeps the earlier text, the
 test('partial text from a failed turn is dropped, not promoted into history by the next turn', async () => {
   const t = mount();
   gateway.listener({ kind: 'delta', delta: 'half an ans', iteration: 1 });
-  gateway.listener({ kind: 'error', message: 'provider died' });
+  gateway.listener({ kind: 'chat.error', message: 'provider died', cancelled: false });
   expect(t.text()).not.toContain('half an ans');
   gateway.listener({ kind: 'agent.start', role: 'general', model: 'm', root: true });
   gateway.listener({ kind: 'delta', delta: 'fresh', iteration: 1 });
@@ -207,11 +207,11 @@ test('clipboard image is acknowledged with a placeholder, uploaded, and the turn
   t.submit('What is in [image1]?');
   expect(gateway.uploadAttachments).toHaveBeenCalledWith(expect.any(String), [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }], 'What is in [image1]?');
   await vi.waitFor(() => expect(gateway.sendChat).toHaveBeenCalledWith('created-session',
-    'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }]));
+    'What is in [image1]?\n\nAttached file: .octipus/attachments/a/clipboard.png', undefined, [{ path: '.octipus/attachments/a/clipboard.png' }], undefined, expect.any(String)));
   // The reply ends the turn; a message typed before it would wait in the queue.
-  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.' });
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'A cat.', turnId: gateway.sendChat.mock.calls.at(-1)?.[5] });
   t.submit('Next message');
-  expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined]);
+  expect(gateway.sendChat.mock.calls.at(-1)).toEqual(['created-session', 'Next message', undefined, undefined, undefined, expect.any(String)]);
   await t.app.stop();
 });
 
@@ -233,7 +233,7 @@ test('removing the image marker removes it from the outgoing message', async () 
   t.submit('/attach');
   await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
   t.submit('Text only');
-  expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
+  expect(gateway.sendChat.mock.calls.at(-1)?.[3]).toBeUndefined();
   await t.app.stop();
 });
 

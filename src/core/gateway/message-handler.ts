@@ -206,7 +206,10 @@ export function wireMessageHandler(hub: GatewayHub): void {
   hub.setMessageHandler(async (connectionId, context, message) => {
     const scopeError = frameScopeError(context, message);
     if (scopeError) {
-      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'FORBIDDEN', message: scopeError });
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error', code: 'FORBIDDEN', message: scopeError,
+        ...(message.type === 'chat.send' ? { sessionId: message.sessionId, ...(message.turnId ? { turnId: message.turnId } : {}) } : {}),
+      });
       return;
     }
     switch (message.type) {
@@ -333,13 +336,15 @@ async function handleChatSend(
   context: ConnectionContext,
   message: Extract<ClientMessage, { type: 'chat.send' }>,
 ): Promise<void> {
+  // Echoed on everything that ends this send, so the client can match it.
+  const turn = message.turnId ? { turnId: message.turnId } : {};
   try {
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
     const refused = await sessionAccessError(message.sessionId, context);
     if (refused) {
-      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused, sessionId: message.sessionId, ...turn });
       return;
     }
     // Track the session on the connection for /status command
@@ -348,7 +353,7 @@ async function handleChatSend(
     const userId = context.userId;
     const mode: SendMode = message.mode ?? 'auto';
     const deliver = (outcome: SendOutcome, extra: { ahead?: number; reason?: string } = {}) =>
-      hub.connectionManager.sendToConnection(connectionId, { type: 'chat.delivery', sessionId: message.sessionId, mode, outcome, ...extra });
+      hub.connectionManager.sendToConnection(connectionId, { type: 'chat.delivery', sessionId: message.sessionId, mode, outcome, ...extra, ...turn });
 
     // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn (`auto`,
@@ -523,7 +528,7 @@ async function handleChatSend(
       source: 'rootAgent',
       userId: context.userId,
       sessionId: message.sessionId,
-      payload: { response: result },
+      payload: { response: result, ...turn },
     });
 
     await publishSessionStats(hub, context.userId, message.sessionId);
@@ -537,6 +542,8 @@ async function handleChatSend(
       type: 'error',
       code: cancelled ? 'CHAT_CANCELLED' : 'CHAT_ERROR',
       message: (err as Error).message,
+      sessionId: message.sessionId,
+      ...turn,
     });
     // Every tab of the user showing this session stops waiting on the turn.
     hub.publishEvent({
@@ -544,7 +551,7 @@ async function handleChatSend(
       source: 'rootAgent',
       userId: context.userId,
       sessionId: message.sessionId,
-      payload: { error: (err as Error).message, ...(cancelled ? { cancelled: true } : {}) },
+      payload: { error: (err as Error).message, ...(cancelled ? { cancelled: true } : {}), ...turn },
     });
   }
 }
@@ -860,11 +867,14 @@ async function handleAgentStop(
     const droppedQueued = stopsRunningTurn ? cancelQueuedTurns(agentSession, { owner: context.userId }) : 0;
     agentManager.stop(message.agentId, { actorUserId: context.userId });
 
+    // The session rides on the envelope so a client showing another session
+    // (another tab) does not take this stop for its own turn's.
     hub.publishEvent({
       type: 'agent.stopped',
       source: `user:${context.userId}`,
       userId: context.userId,
-      payload: { agentId: message.agentId, stoppedBy: context.userId, ...(droppedQueued ? { droppedQueued } : {}) },
+      sessionId: agentSession,
+      payload: { agentId: message.agentId, stoppedBy: context.userId, root: root === true, ...(droppedQueued ? { droppedQueued } : {}) },
     });
   } catch (err) {
     coreLogger.error({ err, connectionId, agentId: message.agentId }, 'Agent stop error');
