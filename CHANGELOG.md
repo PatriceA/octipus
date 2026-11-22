@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: vim mode edits the text vim would.** `yyp` put the line
+  at the cursor instead of below it; `$` left the cursor after the last
+  character, so `$a` appended on the next line; `x` at the end of a line
+  joined it with the next; and VISUAL `d` / `y` left out the character under
+  the cursor. The NORMAL cursor now stays on the line's last character,
+  line-wise registers go below the line, `x` never joins lines, and VISUAL
+  selections are inclusive.
 - **Terminal editor: very long lines stay responsive.** With soft wrap on, a
   long line (a minified bundle, a JSON log line) was broken into rows again
   for every visible row and every cursor or scroll step: a 200 KB line took

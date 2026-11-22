@@ -284,6 +284,8 @@ The query, replacement, file filter and Save As fields accept paste, emoji and i
 | `:qa` / `:qa!` | Quit the editor (asking) / quit discarding changes |
 | `Esc` | Back to NORMAL; closes the `:` line |
 
+As in vim, outside INSERT the cursor stands on a character, never after the last one (`$a` appends on the same line, `h` and `l` stay on the line, `x` on an empty line does nothing); VISUAL selections include the character under the cursor, and `d` / `y` there delete or yank exactly that; a line yanked or deleted with `yy` / `dd` is put below the current line by `p`, other text after the cursor.
+
 `Ctrl+S` saves in every mode. Escape is recognised however the terminal sends it, including the kitty keyboard protocol's `ESC[27u`. It is a small subset of vim, not a replacement for it.
 
 Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
