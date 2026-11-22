@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: saving keeps a file's owner and works in read-only
+  folders.** The atomic save renamed a temporary file created by you over the
+  original, so a file owned by another user or group (a shared file, one
+  edited under sudo) changed owner, and a writable file in a folder you cannot
+  write to could not be saved at all. The temporary file now takes the
+  original's owner and group; where that is not allowed, or the folder refuses
+  the temporary file, the file is written in place.
 - **Terminal editor: opening a named pipe or a device no longer hangs it.**
   The editor read whatever path it was given, so a FIFO blocked it until
   something wrote to the pipe. Anything that is not a regular file is now

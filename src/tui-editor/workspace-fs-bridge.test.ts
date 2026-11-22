@@ -1,4 +1,4 @@
-import { chmodSync, linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +75,35 @@ describe('reading', () => {
 });
 
 describe('saving', () => {
+  // The temporary file was created by this process and renamed over the original, so a file owned by someone
+  // else (a group-shared file, one written under sudo) became this user's. Changing a file's owner needs root.
+  const root = typeof process.getuid === 'function' && process.getuid() === 0;
+  test.skipIf(!root)('keeps the owner and group of a file owned by someone else, and its mode', () => {
+    const path = join(dir, 'shared.txt');
+    writeFileSync(path, 'one');
+    chmodSync(path, 0o640);
+    chownSync(path, 4321, 4322);
+    const r = read(path);
+    expect(writeFileForBuffer(path, 'two', r.disk).ok).toBe(true);
+    const stat = statSync(path);
+    expect([stat.uid, stat.gid, stat.mode & 0o777]).toEqual([4321, 4322, 0o640]);
+    expect(readFileSync(path, 'utf8')).toBe('two');
+    expect(readdirSync(dir)).toEqual(['shared.txt']);
+  });
+
+  // Root bypasses folder permissions; workspace-fs-bridge.fallback.test.ts injects the error instead.
+  test.skipIf(root || process.platform === 'win32')('a writable file in a folder that is not writable is saved in place', () => {
+    const sub = join(dir, 'locked');
+    mkdirSync(sub);
+    const path = join(sub, 'f.txt');
+    writeFileSync(path, 'one');
+    chmodSync(sub, 0o555);
+    try {
+      expect(writeFileForBuffer(path, 'two', read(path).disk).ok).toBe(true);
+      expect(readFileSync(path, 'utf8')).toBe('two');
+    } finally { chmodSync(sub, 0o755); }
+  });
+
   test('is atomic: a rename over the file, no temporary file left behind, mode kept', () => {
     const path = join(dir, 'script.sh');
     writeFileSync(path, 'echo old\n');

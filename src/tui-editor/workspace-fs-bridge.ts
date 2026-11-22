@@ -16,14 +16,16 @@
  * Saving is atomic: the text goes to a temporary file next to the target,
  * which is flushed and renamed over it, so a crash or a full disk leaves the
  * old file rather than half of the new one. The temporary file takes the
- * original's mode. A file with more than one hard link is written in place,
- * since a rename would detach it from its other names.
+ * original's mode, and its owner and group when they are not this user's.
+ * A file with more than one hard link is written in place, since a rename
+ * would detach it from its other names; so is a file whose owner cannot be
+ * kept, or whose folder does not let the temporary file be created.
  *
  * Failures come back as `{ ok: false, error }` with a sentence the editor
  * shows as it is.
  */
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fchownSync, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Stats } from 'node:fs';
 
@@ -106,7 +108,7 @@ export function writeFileForBuffer(absPath: string, text: string, format: Pick<D
   }
   try {
     if (existing && existing.nlink > 1) writeInPlace(target, data);
-    else writeViaRename(target, data, format?.mode ?? (existing ? existing.mode & 0o7777 : null));
+    else writeViaRename(target, data, format?.mode ?? (existing ? existing.mode & 0o7777 : null), existing);
     const stat = statSync(target);
     return { ok: true, disk: { mtimeMs: stat.mtimeMs, size: stat.size, eol, bom, mode: stat.mode & 0o7777 } };
   } catch (error) {
@@ -114,10 +116,42 @@ export function writeFileForBuffer(absPath: string, text: string, format: Pick<D
   }
 }
 
-function writeViaRename(target: string, data: globalThis.Buffer, mode: number | null): void {
+/**
+ * Write through a temporary file renamed over the target. The temporary
+ * file is created by this process, so it is owned by its user: when the
+ * original belongs to someone else (a shared group file, a file written
+ * under sudo) it is given the original's owner and group first. Where that
+ * is not allowed (EPERM: not root, not the owner), or the temporary file
+ * cannot be created at all (EACCES / EPERM / EROFS on the folder, while the
+ * file itself is writable), the file is written in place instead — not
+ * atomic, but it keeps its owner rather than being handed to this user or
+ * not saved at all. Returns how it was written.
+ */
+function writeViaRename(target: string, data: globalThis.Buffer, mode: number | null, existing: Stats | null): 'rename' | 'in-place' {
   const tmp = join(dirname(target), `.${basename(target)}.${randomBytes(4).toString('hex')}.octipus-save`);
-  const fd = openSync(tmp, 'wx', mode ?? 0o666);
+  let fd: number;
   try {
+    fd = openSync(tmp, 'wx', mode ?? 0o666);
+  } catch (error) {
+    if (existing && isDenied(error)) { writeInPlace(target, data); return 'in-place'; }
+    throw error;
+  }
+  try {
+    if (existing) {
+      const own = fstatSync(fd);
+      if (own.uid !== existing.uid || own.gid !== existing.gid) {
+        try {
+          fchownSync(fd, existing.uid, existing.gid);
+        } catch (error) {
+          if (!isDenied(error)) throw error;
+          // Not allowed to give the file its owner back: write it in place, where it keeps them.
+          closeSync(fd);
+          unlinkSync(tmp);
+          writeInPlace(target, data);
+          return 'in-place';
+        }
+      }
+    }
     writeAll(fd, data);
     fsyncSync(fd);
   } catch (error) {
@@ -134,6 +168,7 @@ function writeViaRename(target: string, data: globalThis.Buffer, mode: number | 
     unlinkSync(tmp);
     throw error;
   }
+  return 'rename';
 }
 
 function writeInPlace(target: string, data: globalThis.Buffer): void {
@@ -168,6 +203,13 @@ export function checkDisk(absPath: string, disk: DiskInfo, savedText: string): {
   const now = readFileForBuffer(absPath);
   if (now.ok && now.text === savedText) return { changed: false, disk: { ...disk, mtimeMs: now.disk.mtimeMs, size: now.disk.size } };
   return { changed: true, deleted: false };
+}
+
+/** Not allowed: by permissions, ownership, or a read-only file system. */
+function isDenied(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  const code = (error as { code: unknown }).code;
+  return code === 'EACCES' || code === 'EPERM' || code === 'EROFS';
 }
 
 function kindOf(stat: Stats): string {

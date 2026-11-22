@@ -243,7 +243,7 @@ Open files are watched. When a file changes on disk — another editor, a format
 
 ### Saving
 
-Saving writes a temporary file next to the original and renames it into place, so a crash or a full disk leaves the old file rather than half of the new one. The file keeps its permissions, its line endings (a CRLF file is shown without `␍` and saved as CRLF) and its byte-order mark. A file that mixes CRLF and LF is saved with the more common one, and the editor says so when it opens. A file reached through a symlink is written at its target; a file with several hard links is written in place.
+Saving writes a temporary file next to the original and renames it into place, so a crash or a full disk leaves the old file rather than half of the new one. The file keeps its permissions, its owner and group, its line endings (a CRLF file is shown without `␍` and saved as CRLF) and its byte-order mark. A file that mixes CRLF and LF is saved with the more common one, and the editor says so when it opens. A file reached through a symlink is written at its target; a file with several hard links is written in place, and so is a file whose owner the editor may not give back to the temporary file, or whose folder does not let one be created there.
 
 If the file changed on disk after you opened or last saved it — another editor, a formatter, the agent — saving asks first: **r** reloads the file (one undo step brings your version back), **o** overwrites it with yours, Enter or Escape cancels. A file deleted on disk can be written again with **o**.
 
