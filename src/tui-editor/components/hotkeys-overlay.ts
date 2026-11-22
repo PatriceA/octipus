@@ -65,9 +65,11 @@ export class HotkeysOverlay implements Component, Focusable {
         body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${entry.description || entry.id}`);
       }
     }
-    body.push('');
-    body.push(heading('VIM (when on)'));
-    for (const [keys, what] of VIM_KEYS) body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${what}`);
+    for (const [title, section] of [['EDITOR', EDIT_KEYS], ['FILE TREE (focused)', TREE_KEYS], ['AGENT EDIT REVIEW', REVIEW_KEYS], ['VIM (when on)', VIM_KEYS]] as const) {
+      body.push('');
+      body.push(heading(title));
+      for (const [keys, what] of section) body.push(`  ${chalk.hex(palette.warn)(keys.padEnd(keyWidth))}${dim('  ')}${what}`);
+    }
 
     const boxWidth = Math.max(20, width);
     const help = dim('↑/↓/PgUp/PgDn scroll · Esc close');
@@ -89,6 +91,34 @@ export class HotkeysOverlay implements Component, Focusable {
     return drawBox([[...window, `${help}${indicator}`]], boxWidth, border);
   }
 }
+
+/** The editor pane's own keys; they are not rebindable. */
+const EDIT_KEYS: ReadonlyArray<[keys: string, what: string]> = [
+  ['PgUp / PgDn', 'Page up / down'],
+  ['Ctrl+Home / End', 'Start / end of the buffer'],
+  ['Shift+motion', 'Select (arrows, Home/End, pages, Ctrl+arrows)'],
+  ['Ctrl+X / Ctrl+V', 'Cut / paste (Ctrl+C copies a selection)'],
+  ['Mouse', 'Click: cursor · drag: select and copy · double click: word'],
+];
+
+/** Keys of the file tree when it has the focus. */
+const TREE_KEYS: ReadonlyArray<[keys: string, what: string]> = [
+  ['Enter', 'Open the file, expand or collapse the folder'],
+  ['n', 'New file in the selected folder'],
+  ['m', 'Rename (move) the selected file or folder'],
+  ['d / Delete', 'Delete the selected file (asks first)'],
+  ['r', 'Read the folders again'],
+];
+
+/** Keys of the agent edit review. */
+const REVIEW_KEYS: ReadonlyArray<[keys: string, what: string]> = [
+  ['y / n', 'Accept / reject this hunk, then go to the next'],
+  ['] / [', 'Next / previous hunk'],
+  ['Space', 'Flip this hunk between accepted and rejected'],
+  ['z', 'Fold / unfold unchanged lines'],
+  ['Enter', 'Apply: every hunk not rejected'],
+  ['a / r, Esc', 'Accept all / reject all'],
+];
 
 /** Vim mode's own keys and commands; they are not rebindable. */
 const VIM_KEYS: ReadonlyArray<[keys: string, what: string]> = [

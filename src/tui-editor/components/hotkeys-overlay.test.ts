@@ -13,6 +13,11 @@ describe('HotkeysOverlay', () => {
     expect(text).toMatch(/f12 .*Save As/);
     expect(text).toMatch(/alt\+m .*vim mode/);
     expect(text).toContain(':wq');
+    // The keys that are not rebindable: the editor pane, the tree, the agent edit review.
+    expect(text).toMatch(/alt\+z .*Soft wrap/);
+    expect(text).toMatch(/ctrl\+g .*Go to a line/);
+    expect(text).toMatch(/m +Rename/);
+    expect(text).toMatch(/y \/ n +Accept \/ reject this hunk/);
   });
 
   test('fits the rows it is given and scrolls inside them', () => {
