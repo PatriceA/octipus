@@ -58,21 +58,22 @@ describe('rubberStampRate', () => {
 describe('tallyAudits', () => {
   const row = (passed: boolean, fault: string | null = null, source: string | null = 'json') => ({ passed, fault, source });
 
-  test('a formatting miss and its repair count as ONE accepted verdict, not a rejection', () => {
-    // No block → repaired → accepted pass.
+  test('a reply with no verdict and its repair count as ONE accepted verdict, not a rejection', () => {
     const t = tallyAudits([row(false, 'report', 'unparseable'), row(true)]);
-    expect(t).toEqual({ total: 1, rejected: 0, repairs: 1 });
-  });
-
-  test('a coverage rejection still counts — the gate catching a rubber stamp is the signal', () => {
-    expect(tallyAudits([row(false, 'coverage'), row(true)])).toEqual({ total: 2, rejected: 1, repairs: 0 });
+    expect(t).toEqual({ total: 1, rejected: 0, thinRejected: 0, unparseable: 1 });
   });
 
   test('an unparseable row written before `fault` existed is set aside too', () => {
-    expect(tallyAudits([row(false, null, 'unparseable')])).toEqual({ total: 0, rejected: 0, repairs: 1 });
+    expect(tallyAudits([row(false, null, 'unparseable')])).toEqual({ total: 0, rejected: 0, thinRejected: 0, unparseable: 1 });
   });
 
-  test('an untagged older rejection keeps counting as it always did', () => {
-    expect(tallyAudits([row(false, null, 'json')])).toEqual({ total: 1, rejected: 1, repairs: 0 });
+  test('a parsed thin pass is still a rejected pass, shown as its own sub-number', () => {
+    // Rejected for leaving out whatIDidNotCheck, then repaired into a pass.
+    expect(tallyAudits([row(false, 'report'), row(true)])).toEqual({ total: 2, rejected: 1, thinRejected: 1, unparseable: 0 });
+  });
+
+  test('a coverage rejection counts, and so does an untagged older one', () => {
+    expect(tallyAudits([row(false, 'coverage'), row(false, null, 'json'), row(true)]))
+      .toEqual({ total: 3, rejected: 2, thinRejected: 0, unparseable: 0 });
   });
 });

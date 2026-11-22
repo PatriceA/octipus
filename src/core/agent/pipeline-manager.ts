@@ -52,7 +52,7 @@ import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages, unmetCriteria } from './audit-coverage';
+import { type AuditScopeStage, auditFault, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages, unmetCriteria } from './audit-coverage';
 
 import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock, stripPipelineControlBlocks } from './handoff';
 import {
@@ -139,37 +139,6 @@ export function verdictFenceBodies(output: string): string[] {
     if (VERDICT_FENCE_TAG.test(m[1])) bodies.push(m[2].trim());
   }
   return bodies;
-}
-
-/**
- * Top-level JSON objects written OUTSIDE any fence, each starting on its own
- * line, in reply order: a bare verdict object with prose before or after it.
- * Brace matching skips string contents, so a `}` inside a value does not end
- * the object early. Only the extraction is lenient — every candidate still
- * has to parse and still has to carry the contract's fields.
- */
-export function bareJsonObjects(output: string): string[] {
-  const text = output.replace(/```[\s\S]*?```/g, '');
-  const objects: string[] = [];
-  for (const start of text.matchAll(/^[ \t]*\{/gm)) {
-    let i = (start.index ?? 0) + start[0].length - 1;
-    const from = i;
-    let depth = 0;
-    let inString = false;
-    for (; i < text.length; i++) {
-      const ch = text[i];
-      if (inString) {
-        if (ch === '\\') i++;
-        else if (ch === '"') inString = false;
-      } else if (ch === '"') inString = true;
-      else if (ch === '{') depth++;
-      else if (ch === '}' && --depth === 0) {
-        objects.push(text.slice(from, i + 1));
-        break;
-      }
-    }
-  }
-  return objects;
 }
 
 /** Field names a verdict block uses for each part of the contract, in priority order. */
@@ -526,7 +495,7 @@ Emit the block exactly once, as the LAST thing in your reply (after the handoff 
  */
 export const QA_VERDICT_JSON_LEAD = `OUTPUT CONTRACT — read this first.
 
-Your reply MUST END with a fenced \`json\` verdict block. A report without one is rejected unread and re-run: the substance is never judged, so writing a thorough report and forgetting the block wastes the whole stage. The field list is repeated at the end of this message.
+Your reply MUST END with a fenced \`json\` verdict block. A report without one is not accepted: you will be asked again for the block alone, and if it still does not come the pipeline stops at this stage, so writing a thorough report and forgetting the block can fail the whole run. The field list is repeated at the end of this message.
 
 ---
 
@@ -1861,6 +1830,9 @@ export class PipelineManager {
         }
 
         const retryKey = `${currentItem?.id ?? "run"}:${cursor}`;
+        // A correction resumed from a checkpoint an older version wrote carries
+        // no repair count; it is this round's first repair, and is counted as one.
+        if (correcting && !verdictRepairs.get(retryKey)) verdictRepairs.set(retryKey, 1);
         const retryCount = contractRetries.get(retryKey) ?? 0;
         const retryLimit = stageTemplate.maxRetries ?? 3;
         if (contractFeedback) input += `\n\nPrevious attempt failed its stage contract: ${contractFeedback}\nCorrect this failure and provide evidence of the required work. If a real pending user decision blocks work, report blockedOnDecision with its plan item id and question. Do not fabricate edits, weaken assertions, or repeat a noisy benchmark to satisfy a file count.`;
@@ -2856,12 +2828,10 @@ export class PipelineManager {
     if (!parsed.passed) return parsed;
     const uncovered = uncoveredStages(parsed, coverageScope(scope));
     const doubted = unaddressedDoubt(parsed, scope);
-    // A rejection is a COVERAGE fault when the auditor skipped work it owed a
-    // look at; otherwise every reason is a field the block left out, and the
-    // audit itself stands. Mixed faults go to the re-audit, which is asked
-    // every reason at once and fixes both.
-    const fault: 'coverage' | 'report' | null =
-      failure === null ? null : uncovered.length > 0 || doubted.length > 0 ? 'coverage' : 'report';
+    // `report` (a verdict repair) only when nothing but the auditor's own
+    // self-description is missing; see `auditFault` for why every other
+    // reason, criteria included, needs a real re-audit.
+    const fault = auditFault(parsed, scope, acceptance, this.parseProseVerdict(output)?.passed === false);
 
     try {
       await verificationEvidenceRepository.record({
@@ -2954,13 +2924,15 @@ export class PipelineManager {
     // `passed` — a QA/code-review report often has a code block ABOVE its
     // verdict, so matching only the first fence would parse the wrong block.
     const candidates = verdictFenceBodies(output);
-    // Fenced blocks in reply order; the bare-output fallbacks are appended
-    // after, and tier 1b reverses only the fenced slice (see there).
+    // Fenced blocks in reply order; the bare-output fallback is appended after,
+    // and tier 1b reverses only the fenced slice (see there).
     const fencedCount = candidates.length;
-    candidates.push(output.trim()); // whole output, when the model emitted bare JSON
-    // An unfenced object with prose after it ("…} Let me know if…") is the
-    // same block with trailing chatter. Same field rules apply to it.
-    candidates.push(...bareJsonObjects(output));
+    // Whole output, when the model emitted bare JSON and nothing else. An
+    // unfenced object INSIDE prose is deliberately not a candidate: a report
+    // quoting a payload from the audited work on its own line (a moderation
+    // result, a review bot's {"verdict":"approve"}) would otherwise reach the
+    // alias tier ahead of the prose tier and turn the auditor's FAIL into a pass.
+    candidates.push(output.trim());
     for (const jsonStr of candidates) {
       try {
         const parsed = JSON.parse(jsonStr);

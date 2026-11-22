@@ -732,22 +732,32 @@ Three gaps remained, and this change closes them:
    prose.
 2. **A block missing a required field got a full re-audit.** Every rejection
    of a parsed pass was labelled `coverage`, including the ones whose only
-   fault was a missing `whatIDidNotCheck`, `confidence` or `criteria` entry.
-   Those now carry `auditGateReason: 'report'` and go to repair. A pass that
-   skips a stage in scope, or skips a low-confidence stage, is still
-   `coverage` and still gets a real re-audit on the edge. When both apply,
+   fault was a missing `whatIDidNotCheck` or `confidence`. Those now carry
+   `auditGateReason: 'report'` and go to repair. These two fields are the
+   auditor's description of its own audit, so restating them from its own
+   report asks for nothing it would have to look again to know. Everything
+   else is still `coverage` and gets a real re-audit on the edge (rule in
+   `auditFault`): a skipped stage in scope or low-confidence stage, any
+   acceptance-criterion fault, and a pass whose own prose says FAIL. A repair
+   told "your findings stand" would otherwise write a missing criterion entry
+   or its evidence from a report that never checked it. When both apply,
    coverage wins.
 3. **`rubberStampRate` counted the misses.** `run-health.ts` counted every
    failed `audit_coverage` row, including the `source: 'unparseable'` rows,
    which are not passing verdicts at all. That is how a 60% reading could be
-   mostly missing json blocks. Rows now carry `detail.fault` (`report` |
-   `coverage`). Report faults and older unparseable rows are counted as
-   repairs on their own line, and the repaired verdict's row is the one that
-   counts. Older thin-verdict rows have no tag and count as before.
+   mostly missing json blocks. Replies with no readable verdict are now set
+   aside on their own "no verdict" line, and the repaired verdict's row is the
+   one that counts. A parsed pass rejected for leaving out `whatIDidNotCheck`
+   or `confidence` still counts as a rejected pass, as it always did; it is
+   the thin artifact the gate exists for. Rows now carry `detail.fault`
+   (`report` | `coverage`), so those show as their own sub-number.
 
 The parser also accepts harmless variation it used to refuse: a
-`JSON`/`jsonc`/untagged fence, and an unfenced object with prose around it. It
-still fills in no missing field. The instruction now says where the block goes
+`JSON`/`jsonc`/`json5`/`js`/untagged fence, with prose after it. It still
+fills in no missing field, and an unfenced object inside prose is still not a
+verdict: the alias tier runs before the prose tier, so a quoted payload such
+as `{"verdict":"approve","blockers":[]}` would otherwise turn the auditor's
+written FAIL into a pass. The instruction now says where the block goes
 when the stage also hands off (after the handoff block), and that a prose
 status line does not replace the block. The shipped QA template's "Report:"
 heading says the same.
@@ -759,7 +769,7 @@ through. Wiring it there would be a new provider-path feature.
 
 Not measured live: no paid model was run for this change. The next real
 pipeline run should show `verdict_repair` spawns in the run log and a
-`verdict repairs` line in `run-health.ts`.
+`no verdict` line in `run-health.ts` where there were misses.
 
 ## What is actually next
 

@@ -462,8 +462,9 @@ describe('a missing verdict block is repaired, not retried', () => {
     const { pipelineId, result } = await run('never answers');
 
     const visits = await visitsByNode(pipelineId);
-    // The first answer plus VERDICT_REPAIR_LIMIT repairs, then stop.
-    expect(visits.QA).toBe(3);
+    // The first answer plus exactly VERDICT_REPAIR_LIMIT repairs, then stop.
+    const { VERDICT_REPAIR_LIMIT } = await import('./pipeline-manager');
+    expect(visits.QA).toBe(1 + VERDICT_REPAIR_LIMIT);
     expect(visits.Implement).toBe(1);
     expect(approvalsAsked).toBe(0);
     const { rows } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);

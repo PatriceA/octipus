@@ -7,7 +7,6 @@ import {
   qaVerdictCorrectionInput,
   QA_VERDICT_JSON_INSTRUCTION,
   QA_VERDICT_JSON_LEAD,
-  VERDICT_REPAIR_LIMIT,
   withQaVerdictContract,
 } from './pipeline-manager';
 
@@ -290,14 +289,14 @@ describe('parseQAResult — tolerant of the wrapper, strict about the fields', (
     expect(parse(`Report.\n\`\`\`json\n${VERDICT}\n\`\`\`\n\nLet me know if you want more detail.`)?.source).toBe('json');
   });
 
-  test('an unfenced object with prose around it is the json tier', () => {
-    const r = parse(`My report.\n\n${VERDICT}\n\nThat is my verdict — happy to elaborate.`);
-    expect(r).toMatchObject({ passed: false, source: 'json' });
-  });
-
-  test('a brace inside a string value does not cut the bare object short', () => {
-    const v = '{"passed": false, "issues": ["returns {} on empty"], "feedback": "Implementation: see }", "confidence": "low", "whatIDidNotCheck": ["x"]}';
-    expect(parse(`Report.\n${v}\nThanks.`)?.issues).toEqual(['returns {} on empty']);
+  // An unfenced object inside prose is NOT a verdict: a report quotes payloads
+  // from the work it audits, and the alias tier runs before the prose tier.
+  test.each([
+    '{"status": "approved", "confidence": "high", "label": "spam"}',
+    '{"verdict":"approve","blockers":[]}',
+  ])('a quoted unfenced payload %s cannot turn a prose FAIL into a pass', (payload) => {
+    const r = parse(`The moderation endpoint returned:\n${payload}\nbut the label is wrong.\n\nOverall status: FAIL`);
+    expect(r).toMatchObject({ passed: false, source: 'prose' });
   });
 
   test('a block under another tag is not read as the verdict', () => {
@@ -310,8 +309,12 @@ describe('parseQAResult — tolerant of the wrapper, strict about the fields', (
     expect(thinVerdictFailure(r)).not.toBeNull();
   });
 
-  test('the contract stays inert when echoed, even through the bare-object scan', () => {
+  test('the contract stays inert when echoed with trailing prose', () => {
     expect(parseQA(`${QA_VERDICT_JSON_INSTRUCTION}\n\nTrailing prose.`)).toBeNull();
+  });
+
+  test('the up-front contract no longer promises a re-run it does not do', () => {
+    expect(QA_VERDICT_JSON_LEAD).not.toMatch(/re-run/);
   });
 });
 
@@ -321,10 +324,5 @@ describe('isVerdictRepair', () => {
     expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'report' })).toBe(true);
     expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'coverage' })).toBe(false);
     expect(isVerdictRepair({})).toBe(false);
-  });
-
-  test('its bound is its own and small', () => {
-    expect(VERDICT_REPAIR_LIMIT).toBeGreaterThan(0);
-    expect(VERDICT_REPAIR_LIMIT).toBeLessThanOrEqual(3);
   });
 });
