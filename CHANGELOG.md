@@ -7,6 +7,9 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal editor: a chat message sent while disconnected is reported.** The
+  editor's chat pane showed it as sent and the gateway never got it; it now
+  says the message was not sent.
 - **Terminal clients start faster.** `octi edit` drew its first frame after
   about 2 s and now after about 0.5 s: it no longer loads the MCP bridge
   (some 200 server modules) at start, only when the MCP list (`/mcp`) is

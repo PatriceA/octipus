@@ -7,7 +7,7 @@ import type { AgentSessionEvent } from '@/tui-pi/gateway-adapter';
 import type { checkDisk, DiskInfo, ReadResult, WriteResult } from './workspace-fs-bridge';
 
 const f = vi.hoisted(() => ({
-  listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn(), getSessionId: (): string => '',
+  listener: (_event: AgentSessionEvent) => {}, sendCommand: vi.fn(), sendChat: vi.fn((): boolean => true), getSessionId: (): string => '',
   respondApproval: vi.fn(), respondPermission: vi.fn(), savedState: vi.fn(), state: {} as any, listeners: 0,
   save: vi.fn((_path: string, _text: string): WriteResult => ({ ok: true, disk: DISK })),
   disk: vi.fn((): ReturnType<typeof checkDisk> => ({ changed: false, disk: DISK })),
@@ -20,7 +20,7 @@ vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
   constructor(options: { getSessionId: () => string }) { f.getSessionId = options.getSessionId; }
   on(listener: typeof f.listener) { f.listener = listener; return () => { f.listeners -= 1; }; }
   sendCommand = f.sendCommand; respondApproval = f.respondApproval; respondPermission = f.respondPermission;
-  disconnect() {} sendChat() {} connect = f.connect;
+  disconnect() {} sendChat = f.sendChat; connect = f.connect;
 } }));
 vi.mock('./workspace-fs-bridge', () => ({ readFileForBuffer: f.read, writeFileForBuffer: f.save, checkDisk: f.disk }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => f.state, savePersistedState: f.savedState }));
@@ -34,7 +34,7 @@ let exit: ReturnType<typeof vi.fn<(code: number) => void>>;
 const text = () => root.render(120).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 const modalKey = (data: string) => modals.at(-1)?.handleInput?.(data);
 beforeEach(() => {
-  vi.clearAllMocks(); f.save.mockReturnValue({ ok: true, disk: DISK }); f.savedState.mockReturnValue(true); f.state = DEFAULT_PERSISTED_STATE;
+  vi.clearAllMocks(); f.sendChat.mockReturnValue(true); f.save.mockReturnValue({ ok: true, disk: DISK }); f.savedState.mockReturnValue(true); f.state = DEFAULT_PERSISTED_STATE;
   f.disk.mockReturnValue({ changed: false, disk: DISK }); f.read.mockReturnValue({ ok: true, text: 'on disk', disk: DISK, mixedEol: false });
   installOctipusKeybindings({}); modals = []; exit = vi.fn<(code: number) => void>();
 });
@@ -59,6 +59,13 @@ test('editor chat forwards skill selection to the shared gateway', () => {
   const editor = mount();
   (editor as unknown as { handleChatSubmit(text: string): void }).handleChatSubmit('/skills Technical Writing session');
   expect(f.sendCommand).toHaveBeenCalledWith('skills', { value: 'Technical Writing session' });
+});
+
+test('a chat message the gateway connection could not take is reported, not lost in silence', () => {
+  const editor = mount();
+  f.sendChat.mockReturnValue(false);
+  (editor as unknown as { handleChatSubmit(text: string): void }).handleChatSubmit('hello while offline');
+  expect(text()).toContain('Not connected: "hello while offline" was not sent');
 });
 
 /** An open file with an unsaved edit. */

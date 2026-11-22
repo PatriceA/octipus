@@ -326,7 +326,11 @@ export class OctipusEditorApp {
       requestQuit: () => this.requestQuit(),
       shutdownAndExit: () => this.requestQuit(),
       sendCommand: (name, value) => this.adapter.sendCommand(name, value ? { value } : undefined),
-      sendChat: (text) => this.adapter.sendChat(this.sessionId, text, this.projectPath),
+      sendChat: (text) => {
+        if (this.adapter.sendChat(this.sessionId, text, this.projectPath)) return;
+        const shown = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+        this.pushMessage('system', `Not connected: "${shown}" was not sent. Send it again once the status row says connected.`);
+      },
     };
   }
 
