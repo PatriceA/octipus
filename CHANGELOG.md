@@ -7,6 +7,48 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Recall: shown when it qualifies, everywhere an agent starts, and measured
+  by whether it was used** ([plan](docs/plans/recall-hardening.md),
+  [reference](docs/CONTEXT-HOOKS.md)).
+  - Context hooks now run for every agent start on a user's task: swarm
+    children, plan runs, side questions and agents spawned by a hook or
+    `POST /api/agents` as well as root turns and specialists. The voice
+    planning reply and retry respawns are exempt, with the reason in the docs.
+  - A passage is shown when it is similar enough, covers most of the
+    message's distinctive words, or contains an identifier from it (an
+    invoice number, a version, an error code); a keyword match no longer
+    bypasses the bar. A follow-up ("Enterprise?", "and for enterprise?") is
+    searched together with the previous typed message; an acknowledgement
+    ("ok", "thanks", "yes please") is never searched. A long message keeps
+    its head and its tail. The excerpt is the part of the passage that
+    matches the message.
+  - A passage still in view from an earlier turn is not sent again. Raising
+    the session's protection level and counting accesses happen only for
+    passages actually shown.
+  - **New recall settings** `keywordCoverage` (0.6) and `maxGap` (0.15).
+    **Default changed:** the recall block's `tokenBudget` is 1000 (was 700),
+    so the default four passages fit.
+  - When the query cannot be embedded, recall runs on its keyword rules and
+    the run is marked `embedding_failed`.
+  - **Measurement:** the stats show "used" beside "named": an answer uses a
+    passage when it repeats a number, code or uncommon word from it that the
+    question did not hold. "Named" matches titles on word boundaries and
+    counts recall passages only, over the turns where recall showed some.
+    Per hook: keyword-only runs, blocks dropped for the shared budget or a
+    failed commit, and the rule passages were shown on; the average best
+    match leaves out keyword-only passages. Numbers per event (root turns
+    apart from specialists and swarm children). A calibration warning when a
+    recall hook shows passages on 95% or more, or 5% or fewer, of at least 30
+    searched messages.
+  - **Threshold sweep:** `POST /api/context-hooks/eval/sweep` runs the eval
+    at `minSimilarity` 0.20 to 0.80 and recommends a value; the Recall page
+    applies it in one click.
+  - **Recall page:** a context note is picked from your notes instead of
+    typed as a slug; every recall setting is editable with its default shown.
+  - **Migration 0199** adds the nullable `context_turns.used_items`. Older
+    rows stay readable and are left out of "used". The row still stores no
+    message, passage or answer text.
+
 - **Interactive answers as views: forms, tables and charts that answer back**
   ([spec](docs/plans/inline-ui-views-spec.md), [reference](docs/INLINE-UI.md)).
   - An interactive answer can now be a *view*: JSON naming ready-made

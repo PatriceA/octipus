@@ -1,6 +1,7 @@
 # Recall hardening
 
-Status: plan, written before implementation (2026-11-22).
+Status: implemented (stages 1 to 3, 2026-11-22); written as a plan before
+implementation. [CONTEXT-HOOKS.md](../CONTEXT-HOOKS.md) describes what was built.
 Feature: context hooks, the `recall` module ([CONTEXT-HOOKS.md](../CONTEXT-HOOKS.md)).
 
 ## Goal
