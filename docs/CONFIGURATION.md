@@ -348,9 +348,26 @@ Live artifacts (`docs/ARTIFACTS.md`) ship hosted HTML pages. Two modes:
    the same origin as your main app. Cloudflare users: orange-cloud is
    fine; Universal SSL covers it. If you already have `*.<host>` wildcard
    DNS, no new record is needed.
-2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env.
+2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env. It must not be
+   the app's own host (`PUBLIC_URL`); if it is, it is ignored with an error
+   in the log and artifacts are served on the no-DNS fallback below.
 3. Reverse-proxy any `Host: artifacts.<your-host>` traffic to the same
-   octipus backend; the in-process router matches the host header.
+   octipus backend (or to the bundled web server, which forwards `/a/` with
+   the `Host` header intact). The proxy must pass the original `Host` header
+   through (nginx: `proxy_set_header Host $host;`): the backend compares it,
+   exactly and case-insensitively, with `ARTIFACTS_HOST`. `X-Forwarded-Host`
+   is not read.
+
+On the artifact host the backend serves the hosted pages (`/a/<slug>`,
+`/embed`, `/export/<id>`, `/data/<source>`) and the browser SDK, `GET` and
+`HEAD` only. Everything else answers 404 there: `/api/*`, `/v1/*`, sign-in,
+CORS preflights and the `/__artifacts__` fallback mount. A session cookie or
+token sent to the artifact host is ignored (only public artifacts and
+share links open there), no response from it sets a cookie, and a gateway
+socket opened on it accepts artifact viewer tokens only. In this mode the
+root `/a/<slug>` pages are not served on the app's host; the web app's own
+frame keeps using `/__artifacts__/a/<slug>/embed` on the app host, sandboxed
+as below.
 
 This puts hosted user-influenced HTML on a different origin so it cannot
 read app cookies, ride `localStorage`, or hit `/api/*` directly with
@@ -359,9 +376,14 @@ session credentials.
 ### No-DNS fallback
 
 Leave `ARTIFACTS_HOST` unset. Artifacts are served at
-`/__artifacts__/a/:slug` on the main host. The iframe still uses
-`sandbox` (no `allow-same-origin`) but a CSP-escape bug becomes a
-same-origin XSS against the app.
+`/__artifacts__/a/:slug` on the main host. The iframe uses
+`sandbox="allow-scripts"` (no `allow-same-origin`), and the embed response
+itself carries `Content-Security-Policy: …; sandbox allow-scripts`, so an
+embed URL opened directly as a page also runs with an opaque origin: it
+cannot read the app's cookies or storage, and the browser does not attach the
+`SameSite=Strict` session cookie to its requests. A browser bug that escapes
+the sandbox becomes a same-origin XSS against the app, which the subdomain
+mode does not.
 
 Acceptable for single-user / trusted-tenant deploys; **not recommended**
 when untrusted users can author artifacts in your workspace.

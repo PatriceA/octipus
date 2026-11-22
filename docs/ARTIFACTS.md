@@ -210,10 +210,32 @@ read.
 
 ## Real-time updates
 
-The embed page mints an artifact-scoped JWT (5-minute TTL, signed with a
-key separate from session JWT) and injects it into a `<meta>` tag. The SDK
-opens a WebSocket to the gateway and subscribes to `artifact.*` events.
-On `artifact.data_updated`, it re-fetches via REST and patches the DOM.
+The embed page mints a viewer token (5-minute TTL, HMAC-signed with a key
+separate from session JWTs) and injects it into a `<meta>` tag. The SDK
+opens a WebSocket to the gateway, signs in with it (`artifact_token`) and
+subscribes to `artifact:<id>`. On `artifact.data_updated` it reads the new
+snapshot from the embed's own data route, `GET <embed URL>/../data/<source>?vt=<token>`
+(`/a/<slug>/data/<source>`, or under `/__artifacts__` in path-prefix mode),
+and patches the DOM.
+
+The viewer token is the embed's only credential, and it is scoped:
+
+- **One artifact.** It is signed for one artifact id (`aud: artifact:<id>`)
+  and the workspace it was minted in; the data route also checks that the
+  slug in the URL names that artifact. It opens no other artifact's
+  events or data.
+- **Read-only.** Its scope is always `view`; a token claiming anything else
+  is refused. On the gateway it may only ping and subscribe to its own
+  artifact; the data route is `GET` only. No `/api` route accepts it — not as
+  `Bearer`, not as `ArtifactToken`, not in the query — so it cannot refresh,
+  edit, list or read anything through the app API.
+- **Expiring.** 5 minutes; an open gateway connection is closed when it
+  expires. Reloading the page re-checks access and mints a new one.
+- **Revocable.** Deleting the artifact, changing its visibility, or revoking
+  the share link a page was opened with closes its live viewer connections
+  and refuses the tokens issued before that moment (process-local cutoff).
+  A token minted from a share link records the link (`slid`) and stops
+  working as soon as the link is revoked or expires.
 
 If the WS disconnects, the SDK attempts exponential-backoff reconnect and
 flips the embed's `data-octipus-stale` attribute after 30s.
@@ -249,8 +271,26 @@ a restore copies the restored version's bundle.
 
 The outer page and the web app frame the embed with `sandbox="allow-scripts"`
 (an opaque origin). The embed's CSP header also carries `sandbox
-allow-scripts`, so an embed URL opened directly — in path-prefix mode it is on
-the app's own origin — still runs without the app's cookies and storage.
+allow-scripts` (never `allow-same-origin`), so an embed URL opened directly — in
+path-prefix mode it is on the app's own origin — still runs without the app's
+cookies and storage.
+
+Response headers on hosted artifact responses:
+
+| Response | Headers |
+|----------|---------|
+| Embed (`/embed`) | `Content-Security-Policy` (`default-src 'none'`, script hashes only, `frame-ancestors 'self'` plus `allowedEmbedOrigins`, `sandbox allow-scripts`), `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` |
+| Outer page | CSP `default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; frame-ancestors …` (no script), `Cross-Origin-Opener-Policy: same-origin`, `Referrer-Policy: no-referrer` |
+| Export, data | CSP `default-src 'none'; frame-ancestors 'none'; sandbox` (inert if opened), `nosniff`, `no-store`; the data route adds `Access-Control-Allow-Origin: *` without credentials |
+
+`allowedEmbedOrigins` takes web origins only (`https://host[:port]` or
+`https://*.host`); anything else is refused with a 400, and invalid stored
+entries are dropped from the policy, so an entry cannot add a CSP directive.
+No artifact response reflects the request's `Host` header; links are built
+from configuration (`ARTIFACTS_HOST`, `PUBLIC_URL`).
+
+Which host serves what, and why the artifact host serves nothing but these
+pages, is in [CONFIGURATION.md](./CONFIGURATION.md#artifacts-hosting).
 
 ## Saved interactive answers
 

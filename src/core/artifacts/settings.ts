@@ -52,6 +52,18 @@ function pickStr(svc: ReturnType<typeof getSettingsService>, key: string): strin
   return typeof v === 'string' ? v : '';
 }
 
+/** The host of the app's public URL (`oauth.publicUrl`, env `PUBLIC_URL`), or '' when none or unparsable. */
+function appPublicHost(svc: ReturnType<typeof getSettingsService>): string {
+  const raw = pickStr(svc, 'oauth.publicUrl').trim() || process.env.PUBLIC_URL?.trim() || '';
+  if (!raw) return '';
+  try {
+    return new URL(raw).host;
+  } catch (err) {
+    coreLogger.warn({ err, publicUrl: raw }, 'artifact.settings.public_url_unparsable');
+    return '';
+  }
+}
+
 /**
  * Resolve all artifact settings. Call once at boot after settings service
  * is initialized; the result is cached. Returns synchronously after warm.
@@ -64,7 +76,19 @@ export function resolveArtifactSettings(): ArtifactSettings {
   // Accept the origin users paste into Settings as well as a bare host.
   const hostUrl = hostSetting ? new URL(hostSetting.includes('://') ? hostSetting : `https://${hostSetting}`) : null;
   if (hostUrl && !['http:', 'https:'].includes(hostUrl.protocol)) throw new Error('Artifact host must use HTTP or HTTPS');
-  const host = hostUrl?.host ?? '';
+  let host = hostUrl?.host ?? '';
+  // The artifact host must be an origin of its own. Set to the app's own host,
+  // every request to the app would be treated as one for an artifact page
+  // (isArtifactHostRequest) and artifacts would share the app's origin. Refuse
+  // it and serve the sandboxed path-prefix fallback instead.
+  const appHost = appPublicHost(svc);
+  if (host && appHost && host === appHost) {
+    coreLogger.error(
+      { host },
+      'artifacts.host is the app\'s own host (oauth.publicUrl / PUBLIC_URL) — ignored; artifacts are served at /__artifacts__/* until it names a separate host',
+    );
+    host = '';
+  }
   const protoRaw = pickStr(svc, 'artifacts.proto') || 'https';
   const proto: 'http' | 'https' = (hostSetting.includes('://') ? hostUrl?.protocol === 'http:' : protoRaw === 'http') ? 'http' : 'https';
   const gatewaySetting = pickStr(svc, 'artifacts.gatewayWss').trim();

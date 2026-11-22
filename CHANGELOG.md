@@ -7,6 +7,32 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Live artifacts (BETA): hosting hardening and scoped viewer tokens**
+  ([docs](docs/ARTIFACTS.md#sandboxing), [hosting](docs/CONFIGURATION.md#artifacts-hosting)).
+  - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages
+    and the SDK (`GET`/`HEAD`): `/api`, `/v1`, sign-in and the
+    `/__artifacts__` mount answer 404 there, credentials sent to it are
+    ignored, no response from it sets a cookie, and its gateway socket admits
+    artifact viewer tokens only. The root `/a/<slug>` pages are no longer
+    served on the app's own host in that mode. **Operators:** the reverse
+    proxy must pass the original `Host` header (matched exactly; an
+    `ARTIFACTS_HOST` equal to the app's `PUBLIC_URL` host is ignored with an
+    error).
+  - The outer page gets a no-script CSP and `Cross-Origin-Opener-Policy`;
+    embeds, exports and data reads send no referrer and are not cached;
+    exports are inert (`sandbox` CSP) if opened.
+  - Fixed: `allowedEmbedOrigins` was spliced into the embed CSP unchecked, so
+    an entry could add a `sandbox … allow-same-origin` directive. It now takes
+    web origins only (400 otherwise).
+  - Fixed: live refresh in embeds never loaded new data — the SDK read a
+    session-only `/api` route the sandboxed page cannot authenticate to. It
+    reads the embed's own `…/data/<source>` route with its viewer token,
+    which is read-only, for one artifact, expires after 5 minutes, and is
+    refused once the artifact is deleted, its visibility changes, or the
+    share link it came from is revoked. No `/api` route accepts it.
+  - Fixed: the embed CSP kept pinning the SDK hash stored by an earlier
+    release, so after an SDK change browsers refused the new client.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).

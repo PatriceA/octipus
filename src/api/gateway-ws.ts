@@ -1,5 +1,6 @@
 import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
+import { isArtifactHostRequest } from '@/core/artifacts/host';
 import { assertDocLimits } from '@/core/docs/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getSessionManager } from '@/security/auth/session';
@@ -66,7 +67,9 @@ export function setupGatewayWebSocket(app: Elysia): void {
       // The TUI names its workspace in the socket URL (`?workspace=`); it is
       // resolved for the user at auth.
       const workspace = new URL(ws.data.request.url).searchParams.get('workspace') ?? undefined;
-      const connectionId = hub.connectionManager.handleOpen(ws as any, ip, workspace);
+      const connectionId = hub.connectionManager.handleOpen(ws as any, ip, workspace, {
+        artifactViewerOnly: isArtifactHostRequest(ws.data.request),
+      });
       if (!connectionId) {
         ws.close(4003, 'Connection rejected');
         return;

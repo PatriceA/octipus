@@ -252,7 +252,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { error: 'not found' };
       }
       store.assertWrite();
-      const badOrigin = body.allowedEmbedOrigins?.find((o) => !isEmbedOrigin(o));
+      const badOrigin = body.allowedEmbedOrigins?.find((o: string) => !isEmbedOrigin(o));
       if (badOrigin !== undefined) {
         set.status = 400;
         return { error: `allowedEmbedOrigins: "${badOrigin}" is not an origin (https://host[:port] or https://*.host)` };

@@ -307,11 +307,27 @@ export class ArtifactsRepository {
       .orderBy(desc(artifactShareLinks.createdAt));
   }
 
+  async getShareLink(id: string): Promise<ArtifactShareLink | null> {
+    const result = await this.db
+      .select()
+      .from(artifactShareLinks)
+      .where(eq(artifactShareLinks.id, id))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
+  /**
+   * Also ends the artifact's live embed viewers: a page opened through the
+   * link holds a viewer token minted from it. Viewers who reach the artifact
+   * another way reload and get a fresh token.
+   */
   async revokeShareLink(id: string): Promise<void> {
-    await this.db
+    const [revoked] = await this.db
       .update(artifactShareLinks)
       .set({ revokedAt: new Date() })
-      .where(eq(artifactShareLinks.id, id));
+      .where(eq(artifactShareLinks.id, id))
+      .returning({ artifactId: artifactShareLinks.artifactId });
+    if (revoked) await revokeArtifactViewers(revoked.artifactId, 'Share link revoked');
   }
 
   async deleteExpiredShareLinks(now: Date): Promise<number> {
