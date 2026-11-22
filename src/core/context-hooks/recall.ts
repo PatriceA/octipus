@@ -370,8 +370,14 @@ export function excerptWindow(content: string, terms: readonly string[], chars: 
     const span = hits[best.to].end - hits[best.from].at;
     const lead = Math.floor(Math.max(0, chars - span) / 2);
     start = Math.max(0, Math.min(hits[best.from].at - lead, text.length - chars));
-    // Back to the start of the word it falls in.
-    start = words.find((w) => w.end > start)?.at ?? 0;
+    // On a word start: back to the start of the word it falls in, unless that
+    // word is so long that going back pushes the last hit out of the window;
+    // then forward to the next word, which is at the first hit at the latest.
+    const within = words.findIndex((w) => w.end > start);
+    if (within >= 0 && words[within].at < start) {
+      const back = words[within].at;
+      start = back + chars >= hits[best.to].end ? back : words[within + 1]?.at ?? hits[best.from].at;
+    }
     if (start > hits[best.from].at) start = hits[best.from].at;
   }
   let end = start + chars;

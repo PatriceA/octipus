@@ -238,6 +238,15 @@ describe('excerptWindow', () => {
     expect(out.endsWith(' …')).toBe(true);
   });
 
+  test('a long token before the first hit does not push the last hit out of the window', () => {
+    // A 60-character token ends just before the first hit; going back to its start would lose "omega".
+    const content = `intro ${'x'.repeat(60)} alpha ${filler(10)} omega ${filler(40)}`;
+    const out = excerptWindow(content, ['alpha', 'omega'], 110);
+    expect(out).toContain('alpha');
+    expect(out).toContain('omega');
+    expect(out.length).toBeLessThanOrEqual(114);
+  });
+
   test('no term found: the first characters, as before', () => {
     const content = filler(200);
     const out = excerptWindow(content, ['zzzz'], 100);
