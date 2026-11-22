@@ -6,16 +6,18 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+773 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
 | GET | `/__artifacts__/a/:slug` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
+| GET | `/__artifacts__/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
+| GET | `/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
 | GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
@@ -808,7 +810,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 252 |
+| `api` | `core` | 258 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -847,7 +849,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 76 |
-| `core` | `db` | 542 |
+| `core` | `db` | 543 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
@@ -857,10 +859,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 250 |
 | `core` | `services` | 4 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 87 |
+| `core` | `shared` | 88 |
 | `core` | `skills` | 17 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 264 |
+| `core` | `utils` | 265 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -948,7 +950,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 156 |
+| `tools` | `core` | 157 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
