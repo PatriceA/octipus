@@ -1562,6 +1562,9 @@ export class SwarmSpawner {
             },
           },
           childMessage: `${feedback}\n\n${opts.childMessage}`,
+          // A fork's attempt on another model runs the ordinary child's
+          // message instead (`forkOrOrdinary`): it needs the feedback too.
+          ...(opts.ordinary ? { ordinary: { ...opts.ordinary, childMessage: `${feedback}\n\n${opts.ordinary.childMessage}` } } : {}),
           reason: 'retry',
         },
         true,
@@ -1627,12 +1630,7 @@ export class SwarmSpawner {
     opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
     isCrashRetry: boolean,
   ): Promise<ChildResult> {
-    // A retry on a backup model is not a fork any more: the seed is bound to
-    // the parent's model (and a vendor CLI cannot be seeded). Run the ordinary
-    // child that the fork replaced, with its own role prompt and tools.
-    if (opts.fork && opts.childModel !== opts.fork.model && opts.ordinary) {
-      opts = { ...opts, ...opts.ordinary, fork: undefined, ordinary: undefined };
-    }
+    opts = forkOrOrdinary(opts);
     opts.dispatchId ??= randomUUID();
     opts.requestedModel ??= opts.childModel;
     opts.attempts ??= [];
@@ -3098,6 +3096,19 @@ export {
 };
 
 let instance: SwarmSpawner | null = null;
+/**
+ * What one attempt of a child runs. A retry on a backup model is not a fork
+ * any more: the seed is bound to the parent's model (and a vendor CLI cannot
+ * be seeded). It runs the ordinary child that the fork replaced, with its own
+ * role prompt, tools and message.
+ */
+export function forkOrOrdinary<T extends { fork?: ForkSeed; childModel: string; ordinary?: object }>(opts: T): T {
+  if (opts.fork && opts.childModel !== opts.fork.model && opts.ordinary) {
+    return { ...opts, ...opts.ordinary, fork: undefined, ordinary: undefined };
+  }
+  return opts;
+}
+
 export function getSwarmSpawner(): SwarmSpawner {
   if (!instance) instance = new SwarmSpawner();
   return instance;

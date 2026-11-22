@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import { renderContractFeedback } from './scorers';
-import { SwarmSpawner, applyScorerVerdict, preferEarlierAttempt } from './spawner';
+import { SwarmSpawner, applyScorerVerdict, forkOrOrdinary, preferEarlierAttempt } from './spawner';
 import type { ChildResult } from './types';
 
 /**
@@ -54,6 +54,8 @@ async function runWith(
     wallCap?: number;
     startedAt?: number;
     signal?: AbortSignal;
+    /** A fork whose attempts run on another model than its seed's: each runs the ordinary child. */
+    forkOnOtherModel?: boolean;
   } = {},
 ): Promise<{ final: ChildResult; messages: string[]; calls: number }> {
   const spawner = new SwarmSpawner({} as never);
@@ -61,9 +63,10 @@ async function runWith(
   let calls = 0;
 
   (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
-    childMessage: string;
+    childMessage: string; childModel: string; fork?: never; ordinary?: { childMessage: string };
   }) => {
-    messages.push(o.childMessage);
+    // What the attempt actually runs, as `singleSpawnAndRun` decides it.
+    messages.push(forkOrOrdinary(o).childMessage);
     const next = results[Math.min(calls, results.length - 1)];
     calls++;
     return next;
@@ -91,6 +94,9 @@ async function runWith(
     childMessage: 'ORIGINAL TASK BODY',
     reason: 'normal',
     spawnMode: 'await',
+    ...(opts.forkOnOtherModel
+      ? { fork: { model: 'parent-model' }, ordinary: { childTools: [], childMessage: 'ORDINARY TASK BODY' } }
+      : {}),
   };
 
   const final = await (
@@ -130,6 +136,14 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     getConfig();
   });
   afterEach(() => resetConfig());
+
+  it('a fork retried on another model gets the feedback in the ordinary child it runs', async () => {
+    const { messages, calls } = await runWith([gateFailed(), result()], { forkOnOtherModel: true });
+    expect(calls).toBe(2);
+    expect(messages[0]).toBe('ORDINARY TASK BODY');
+    expect(messages[1]).toContain('file "notes.md" does not exist');
+    expect(messages[1].endsWith('ORDINARY TASK BODY')).toBe(true);
+  });
 
   it('re-dispatches a scorer-gate failure and leads the retry with the feedback', async () => {
     const { final, messages, calls } = await runWith([gateFailed(), result()]);
