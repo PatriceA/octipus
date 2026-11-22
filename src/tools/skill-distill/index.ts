@@ -4,13 +4,9 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
-import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
 import { agentPrincipal } from '@/security/principal';
-import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
-import { interpretDistillOutput, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
-import { fileSkillProposal } from '@/services/file-skill-proposal';
+import { distillToProposal } from './distill';
 import { readTrajectoryRecordLine, trajectoryToDistillMaterial } from './trajectory-source';
 
 /**
@@ -90,49 +86,8 @@ export class SkillDistillTool extends BaseTool {
           sourceRef = `session:${context.sessionId}`;
         }
 
-        // 2. Resolve the distiller model — config-driven, fail loud on unbound.
-        // 'skill_distillation' canonicalizes to the shared `background` lane
-        // (see RETIRED_TOPIC_ALIASES), so any bound background model serves it.
-        const model = await getModelRegistry().getModelForTopic('skill_distillation');
-        if (!model) {
-          return {
-            error: 'No model is bound to the background lane — bind one on the Topics page.',
-          };
-        }
-
-        // 3. Distil.
-        const result = await getLiteLLMClient().complete({
-          model: model.modelId,
-          modelConfigName: model.name,
-          messages: [
-            { role: 'system', content: SKILL_DISTILL_SYSTEM_PROMPT, timestamp: new Date() },
-            { role: 'user', content: material, timestamp: new Date() },
-          ],
-          temperature: 0.2,
-          // A full procedure in markdown, JSON-escaped, overran 1500 tokens and
-          // the cut-off JSON was misreported as "nothing worth distilling".
-          maxTokens: 6000,
-          responseFormat: { type: 'json_object' },
-          userId: context.userId,
-        });
-
-        const outcome = interpretDistillOutput(result.content ?? '', result.finishReason);
-        if (outcome.kind === 'truncated') {
-          toolLogger.warn({ model: model.modelId, userId: context.userId }, 'Skill distillation truncated at token limit');
-          return {
-            error: 'Distiller output was truncated at the token limit (finishReason=length) — no proposal filed. Retry with shorter source material.',
-          };
-        }
-        if (outcome.kind === 'malformed') {
-          toolLogger.warn({ model: model.modelId, reason: outcome.reason }, 'Skill distillation returned a malformed response');
-          return { error: `Distiller returned a malformed response (${outcome.reason}) — no proposal filed.` };
-        }
-        if (outcome.kind === 'none') {
-          return { distilled: false, message: 'Nothing worth distilling into a reusable skill.' };
-        }
-        const distilled = outcome.skill;
-
-        return fileSkillProposal(distilled, context.userId, sourceRef);
+        // 2. Distil with the background model and file the proposal.
+        return distillToProposal(material, sourceRef, context.userId);
       },
       { permissionAction: 'distill' },
     );
