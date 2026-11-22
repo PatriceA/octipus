@@ -24,6 +24,7 @@ export {
   KeybindingsManager,
   Markdown,
   matchesKey,
+  MouseRegion,
   ProcessTerminal,
   ScrollView,
   SelectList,
