@@ -42,7 +42,7 @@ export interface OctipusTuiAppOptions {
   exit?: (code: number) => void;
   /**
    * Optional shutdown hook. When set, /exit and /quit call this BEFORE
-   * exiting the process so the runtime can tear down the alt-screen and
+   * exiting the process so the runtime can restore the terminal and
    * drain stdin. Without it, the PowerShell prompt redraws inside the
    * TUI's bottom border.
    */
@@ -192,7 +192,6 @@ export class OctipusTuiApp {
     void this.stop().then(() => this.exit(0));
   }
 
-  /** The reply (or the turn) is complete: the streamed text is superseded. */
   private hotkeysText(): string {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
@@ -235,9 +234,9 @@ export class OctipusTuiApp {
     this.session.dispose();
     if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
-    // Hand off to the runtime so the alt-screen is properly torn down and
-    // stdin is drained. Without this the shell's next prompt redraws on top
-    // of the TUI border instead of starting on a fresh line.
+    // Hand off to the runtime so the terminal is restored and stdin is
+    // drained. Without this the shell's next prompt redraws on top of the
+    // TUI border instead of starting on a fresh line.
     if (this.onShutdown) {
       try { await this.onShutdown(); } catch { /* shutdown failure is non-fatal */ }
     }
@@ -265,12 +264,6 @@ export class OctipusTuiApp {
     this.tui.requestRender();
   }
 
-  /**
-   * Stream tool calls into the messages pane so the user can follow the
-   * agent live. The activity line stays the ephemeral spinner; this adds a
-   * permanent transcript entry per call. Dedupes by tool name so a pending
-   * + completed pair only writes one combined line.
-   */
   // ── Event handling ─────────────────────────────────────────────
 
   private handleEvent(event: AgentSessionEvent): void {
@@ -407,15 +400,6 @@ export class OctipusTuiApp {
     this.adapter.sendChat(prepared.sessionId, content, this.projectPath, prepared.uploaded.map(file => ({ path: file.path })));
   }
 
-  // ── Voice (push-to-talk) ───────────────────────────────────────
-
-  /**
-   * Talk-key handler. First press starts capture; second press stops, transcribes,
-   * and submits the transcript through the SAME path as typed text (`handleSubmit`
-   * → sendChat), so voice reuses the normal root agent turn. The reply to that
-   * turn is spoken back when TTS is configured.
-   * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
-   */
   private async attachImage(path?: string): Promise<void> {
     if (this.imageBusy) return;
     if (this.pendingImages.length >= 10) { this.pushMessage('system', 'Attach at most 10 images per message.'); return; }
@@ -434,6 +418,15 @@ export class OctipusTuiApp {
     } finally { this.imageBusy = false; }
   }
 
+  // ── Voice (push-to-talk) ───────────────────────────────────────
+
+  /**
+   * Talk-key handler. First press starts capture; second press stops, transcribes,
+   * and submits the transcript through the SAME path as typed text (`handleSubmit`
+   * → sendChat), so voice reuses the normal root agent turn. The reply to that
+   * turn is spoken back when TTS is configured.
+   * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
+   */
   private async toggleTalk(): Promise<void> {
     // Ignore presses during an async window (engine build or transcription) so a
     // double-tap can't start-then-instantly-stop a capture. The idle wait BETWEEN
@@ -524,20 +517,6 @@ export class OctipusTuiApp {
   }
 
   // ── Overlays ───────────────────────────────────────────────────
-
-
-
-  /**
-   * The agent has asked the user a question and is BLOCKED on the answer.
-   *
-   * Different from a permission prompt in the one way that matters: nothing
-   * happens until this is answered. So there is no silent dismissal — Esc
-   * sends a decline, because closing the box without replying leaves the agent
-   * waiting exactly as it was before the overlay appeared.
-   */
-
-
-
 
   /**
    * Sign in and reconnect as that user. The gateway connection carries the

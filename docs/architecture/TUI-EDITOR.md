@@ -43,7 +43,7 @@ Close and quit check dirty buffers. Enter/Escape cancel the unsaved prompt. Save
 
 The runtime delegates SIGINT to the editor's quit flow. SIGTERM checkpoints and shuts down without waiting for interaction. The normal editor quit path uses the same cleanup for timers, gateway connection and terminal state.
 
-Agent proposals for open files are queued as diffs. Resolving one releases its buffer lock and presents the next. Unrelated palette shortcuts cannot discard pending diffs or approvals. Accept changes the local buffer and marks it dirty. It does not imply a filesystem transaction or undo an agent write already made on disk. The optional merge mode replaces buffer text through its undo stack.
+Agent proposals for open files are queued as diffs. Resolving one releases its buffer lock and presents the next. Unrelated palette shortcuts cannot discard pending diffs or approvals. Accept changes the local buffer and marks it dirty. It does not imply a filesystem transaction or undo an agent write already made on disk.
 
 ## Highlighting
 

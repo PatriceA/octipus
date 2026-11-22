@@ -1,6 +1,8 @@
 /**
- * One-line top status bar: app name, connection dot, project label,
- * cumulative token/cost/turn counters, optional active expert.
+ * Status rows: app name, connection dot, project label, cumulative
+ * token/cost/turn counters, optional active expert, plan and model. Wraps
+ * to several rows (`setMaxRows` caps them); the chat frame puts them at
+ * the bottom of the screen, the editor at the top.
  */
 import { type Component, truncateToWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
 import type { ConnectionStatus } from '@/core/gateway/client';

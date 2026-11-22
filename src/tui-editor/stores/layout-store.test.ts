@@ -7,7 +7,6 @@ describe('LayoutStore', () => {
     expect(s.get().treeVisible).toBe(true);
     expect(s.get().chatVisible).toBe(true);
     expect(s.get().focused).toBe('editor');
-    expect(s.get().overlay).toBeNull();
   });
 
   test('toggleTree / toggleChat', () => {
@@ -35,14 +34,6 @@ describe('LayoutStore', () => {
     s.cycleFocus(1); expect(s.get().focused).toBe('chat');
     s.cycleFocus(1); expect(s.get().focused).toBe('tree');
     s.cycleFocus(1); expect(s.get().focused).toBe('editor');
-  });
-
-  test('overlay open / close', () => {
-    const s = new LayoutStore();
-    s.openOverlay({ kind: 'palette' });
-    expect(s.get().overlay).toEqual({ kind: 'palette' });
-    s.closeOverlay();
-    expect(s.get().overlay).toBeNull();
   });
 
   test('subscribe fires on change', () => {

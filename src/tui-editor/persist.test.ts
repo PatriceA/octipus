@@ -31,7 +31,6 @@ describe('persist', () => {
       activePath: '/a.ts',
       treeVisible: false,
       chatVisible: true,
-      theme: 'light' as const,
       editorMode: 'vim' as const,
       cursorByPath: { '/a.ts': { line: 4, col: 7 } },
     };

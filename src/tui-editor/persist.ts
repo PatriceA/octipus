@@ -7,7 +7,6 @@
  *     survive restart).
  *   - Active buffer path.
  *   - Pane visibility flags.
- *   - Theme name.
  *   - Editor mode (modeless vs vim).
  *
  * The per-project scoping (`pathForProject`) keeps repos isolated.
@@ -39,7 +38,6 @@ export interface PersistedState {
   activePath: string | null;
   treeVisible: boolean;
   chatVisible: boolean;
-  theme: 'dark' | 'light';
   editorMode: 'modeless' | 'vim';
   /** Cursor position per file, persisted so re-opens land where the user left off. */
   cursorByPath?: Record<string, PersistedCursor>;
@@ -52,7 +50,6 @@ export const DEFAULT_PERSISTED_STATE: PersistedState = {
   activePath: null,
   treeVisible: true,
   chatVisible: true,
-  theme: 'dark',
   editorMode: 'modeless',
   cursorByPath: {},
 };
@@ -98,7 +95,6 @@ export function loadPersistedState(path: string = legacyDefaultPath()): Persiste
       activePath: typeof parsed.activePath === 'string' ? parsed.activePath : null,
       treeVisible: typeof parsed.treeVisible === 'boolean' ? parsed.treeVisible : true,
       chatVisible: typeof parsed.chatVisible === 'boolean' ? parsed.chatVisible : true,
-      theme: parsed.theme === 'light' ? 'light' : 'dark',
       editorMode: parsed.editorMode === 'vim' ? 'vim' : 'modeless',
       cursorByPath: sanitizeCursors(parsed.cursorByPath),
       drafts: Array.isArray(parsed.drafts) ? parsed.drafts.filter(d => d && (d.path === null || typeof d.path === 'string') && typeof d.text === 'string' && typeof d.label === 'string') : [],

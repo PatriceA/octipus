@@ -9,11 +9,8 @@ import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
  *   - LayoutStore drives pane visibility + focus
  *   - BufferStore drives the open files / active buffer
  *   - WorkspaceStore tracks the active workspace slug for the gateway
- *   - AgentStore mirrors gateway events for tests / extensions (the
- *     chat pane consumes events directly via the GatewayAdapter
- *     subscription)
  *   - GatewayAdapter wraps the WebSocket protocol the chat shell
- *     also uses
+ *     also uses; the chat pane consumes its events directly
  *
  * Phase 5 ships a working skeleton: open files via Ctrl+O picker
  * (deferred to Phase 5.x; for now use --project to seed the tree),
@@ -43,7 +40,6 @@ import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
 import { WorkspacePicker } from './components/workspace-picker';
 import { loadPersistedState, pathForProject, savePersistedState } from './persist';
-import { AgentStore } from './stores/agent-store';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
 import { bindStore } from './stores/use-store';
@@ -52,7 +48,6 @@ import { readFileForBuffer, writeFileForBuffer } from './workspace-fs-bridge';
 import { StatusBar } from '@/tui-pi/components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from '@/tui-pi/gateway-adapter';
 import { createOverlayController, type OverlayController } from '@/tui-pi/overlays/registry';
-import { chalk } from '@/tui-pi/theme/defaults';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
 
 export interface OctipusEditorAppOptions {
@@ -60,9 +55,9 @@ export interface OctipusEditorAppOptions {
   exit?: (code: number) => void;
   projectPath?: string;
   /**
-   * Optional shutdown hook for /exit, /quit, and Ctrl+Q. Without it, the
-   * editor calls process.exit() directly without tearing down the alt-screen,
-   * leaving the shell prompt drawn on top of the editor's bottom border.
+   * Optional shutdown hook for /exit, /quit, and Ctrl+Q: the runtime restores
+   * the terminal and drains stdin. Without it the editor calls process.exit()
+   * with the terminal still in raw mode.
    */
   onShutdown?: () => Promise<void>;
 }
@@ -77,7 +72,6 @@ export class OctipusEditorApp {
   readonly layout = new LayoutStore();
   readonly buffers = new BufferStore();
   readonly workspace = new WorkspaceStore();
-  readonly agent = new AgentStore();
 
   private readonly status = new StatusBar();
   private readonly tabs: TabStrip;
@@ -164,7 +158,7 @@ export class OctipusEditorApp {
       },
     });
 
-    // Status bar is the single top line; mode bar is the single bottom line.
+    // Status rows on top (up to a third of the screen); the mode bar is the single bottom row.
     this.status.setProject(basenameOf(this.projectPath));
     const status = this.status;
     const root = new class extends Container {
@@ -277,7 +271,6 @@ export class OctipusEditorApp {
       activePath: buffers.buffers.find((b) => b.id === buffers.activeId)?.path ?? null,
       treeVisible: layout.treeVisible,
       chatVisible: layout.chatVisible,
-      theme: 'dark',
       editorMode: layout.editorMode,
       cursorByPath,
       drafts: buffers.buffers.filter(b => b.dirty).map(b => ({ path: b.path, text: b.buffer.text(), label: b.label })),
@@ -372,18 +365,8 @@ export class OctipusEditorApp {
       // open the file automatically and re-emit; for now skip.
       return;
     }
-    if (record.lockMode === 'merge') {
-      this.buffers.applyAgentEdit(record.id, newText);
-      this.chat.messages.push({
-        role: 'system',
-        content: `Merged agent edit into ${record.label}.`,
-        timestamp: new Date(),
-      });
-      this.tui.requestRender();
-      return;
-    }
-    // Lock mode: take the lock, open the diff overlay.
-    this.buffers.applyAgentEdit(record.id, newText);
+    // Lock the buffer until the user accepts or rejects; a queued diff holds its lock while it waits.
+    this.buffers.setAgentLocked(record.id, true);
     this.openDiffOverlay(record.id, record.label, record.buffer.text(), newText);
   }
 
@@ -689,12 +672,6 @@ export class OctipusEditorApp {
                  :                       this.editor;
     this.tui.setFocus(target);
   }
-
-  // ── Overlays (port of chat-shell logic) ────────────────────────
-
-
-
-
 }
 
 function buildEditorPane(tabs: TabStrip, editor: TextEditor): Container {
@@ -725,6 +702,3 @@ function deriveApiBase(gatewayUrl: string | undefined): string {
     return 'http://localhost:3005/api';
   }
 }
-
-// Quiet down lint about unused chalk import that pulls the theme defaults eagerly.
-void chalk;

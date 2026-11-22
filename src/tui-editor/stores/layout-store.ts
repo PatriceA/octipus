@@ -6,15 +6,6 @@
  * tiny `useStore(store, selector)` hook (defined alongside).
  */
 export type PaneId = 'tree' | 'editor' | 'chat';
-export type OverlayId =
-  | { kind: 'palette' }
-  | { kind: 'file-picker' }
-  | { kind: 'workspace-picker' }
-  | { kind: 'goto-line' }
-  | { kind: 'find' }
-  | { kind: 'replace' }
-  | { kind: 'help' }
-  | null;
 
 export type EditorMode = 'modeless' | 'vim';
 
@@ -22,7 +13,6 @@ export interface LayoutState {
   treeVisible: boolean;
   chatVisible: boolean;
   focused: PaneId;
-  overlay: OverlayId;
   /** Last terminal size we know about — used by editor scroll math. */
   cols: number;
   rows: number;
@@ -42,7 +32,6 @@ export class LayoutStore {
     treeVisible: true,
     chatVisible: true,
     focused: 'editor',
-    overlay: null,
     cols: 120,
     rows: 30,
     editorMode: 'modeless',
@@ -80,9 +69,6 @@ export class LayoutStore {
   }
 
   focus(p: PaneId): void { this.set({ focused: p }); }
-
-  openOverlay(o: OverlayId): void { this.set({ overlay: o }); }
-  closeOverlay(): void { this.set({ overlay: null }); }
 
   setSize(cols: number, rows: number): void { this.set({ cols, rows }); }
 
