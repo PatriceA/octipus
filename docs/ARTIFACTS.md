@@ -195,6 +195,33 @@ ship custom JS, pass it as a bundle (see "Custom JS" below).
 Three built-in templates are available out of the box for the `dashboard`,
 `news`, and `table` artifact types.
 
+## Slugs
+
+A slug (lowercase letters, digits and dashes, 1–64 characters) is unique per
+workspace among live artifacts; deleting an artifact frees its slug at once.
+A slug that is taken is a `409` from `POST /api/artifacts` (and the same
+result from `create_live_artifact` and "save as artifact" in the chat):
+
+```json
+{ "error": "slug \"report\" is already used in this workspace",
+  "code": "slug_taken", "slug": "report", "suggestedSlug": "report-2" }
+```
+
+`suggestedSlug` is the first free `<slug>-<n>` (null when none up to `-99`
+is free). It is advice only: nothing is reserved, and the retry goes through
+the same unique index. Two creates racing for one slug are decided by that
+index, so exactly one succeeds and the other gets this `409`, never a server
+error. The web app's "new artifact" form and the chat's save dialog show the
+conflict with a button to take the suggestion; the agent tool returns
+`code` and `suggested_slug`.
+
+Public links (`/a/<slug>`) name no workspace, so a public artifact needs a
+slug no other workspace has public: creating or switching an artifact to
+`public` under such a slug is a `409` with `code: "public_slug_taken"`. This
+is a check before the write, not an index (installs may already hold such a
+pair); if two workspaces publish one slug at the same moment, or held a pair
+from before the check, the oldest artifact keeps the public link.
+
 ## Visibility
 
 | Value      | Who can view |

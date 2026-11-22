@@ -15,3 +15,15 @@ export function slugFromTitle(title: string): string {
     .slice(0, 64)
     .replace(/-+$/g, '');
 }
+
+/** Why a slug cannot be used: taken in the workspace, or already another workspace's public link. */
+export type SlugConflictCode = 'slug_taken' | 'public_slug_taken';
+
+/** The 409 body of a slug conflict (REST API), also what the agent tool reports. */
+export interface SlugConflict {
+  error: string;
+  code: SlugConflictCode;
+  slug: string;
+  /** A slug free in the workspace (and not public elsewhere when publishing); null when none was found. */
+  suggestedSlug: string | null;
+}

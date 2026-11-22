@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   jsonb,
@@ -62,8 +63,8 @@ export const artifacts = pgTable(
   },
   (table) => ({
     workspaceIdx: index('artifacts_workspace_id_idx').on(table.workspaceId),
-    /** Slug unique per workspace, not globally. */
-    workspaceSlugUq: uniqueIndex('artifacts_workspace_id_slug_uq').on(table.workspaceId, table.slug),
+    /** Slug unique per workspace among live artifacts (a deleted one frees its slug), not globally. */
+    workspaceSlugUq: uniqueIndex('artifacts_workspace_id_slug_uq').on(table.workspaceId, table.slug).where(sql`${table.deletedAt} IS NULL`),
     createdByUserIdx: index('artifacts_created_by_user_id_idx').on(table.createdByUserId),
   }),
 );

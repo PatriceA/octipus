@@ -1,5 +1,5 @@
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notExists, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, ne, notExists, or, sql } from 'drizzle-orm';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
 import { workspaces } from '../schema/organizations';
@@ -66,15 +66,52 @@ export class ArtifactsRepository {
     return result[0] ?? null;
   }
 
-  /** A live public artifact with this slug, in whichever workspace (slugs are unique per workspace only). */
+  /**
+   * The live public artifact with this slug, in whichever workspace (slugs
+   * are unique per workspace only). Publishing refuses a slug another
+   * workspace already has public (`publicSlugConflict`); should two exist all
+   * the same (published concurrently, or before that check), the oldest
+   * keeps the link, never whichever row the database happens to return.
+   */
   async findPublicBySlug(slug: string): Promise<Artifact | null> {
     const result = await this.db
       .select()
       // i2: public artifacts only, the visibility is the access rule
       .from(artifacts)
       .where(and(eq(artifacts.slug, slug), eq(artifacts.visibility, 'public'), isNull(artifacts.deletedAt)))
+      .orderBy(asc(artifacts.createdAt), asc(artifacts.id))
       .limit(1);
     return result[0] ?? null;
+  }
+
+  /** Whether a live public artifact of another workspace than `workspaceId` holds this slug. */
+  async publicSlugHeldElsewhere(slug: string, workspaceId: string): Promise<boolean> {
+    const result = await this.db
+      .select({ id: artifacts.id })
+      // i2: public artifacts only, ids only
+      .from(artifacts)
+      .where(and(
+        eq(artifacts.slug, slug),
+        eq(artifacts.visibility, 'public'),
+        isNull(artifacts.deletedAt),
+        ne(artifacts.workspaceId, workspaceId),
+      ))
+      .limit(1);
+    return result.length > 0;
+  }
+
+  /** The live slugs of a workspace that are `base` or start with `base-` (a slug never holds `%` or `_`). */
+  async slugsWithBase(workspaceId: string, base: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ slug: artifacts.slug })
+      // i2: by workspace id the caller resolved, slugs only
+      .from(artifacts)
+      .where(and(
+        eq(artifacts.workspaceId, workspaceId),
+        isNull(artifacts.deletedAt),
+        or(eq(artifacts.slug, base), like(artifacts.slug, base + '-%')),
+      ));
+    return rows.map((r) => r.slug);
   }
 
   async getBySlug(workspaceId: string, slug: string): Promise<Artifact | null> {

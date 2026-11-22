@@ -7,7 +7,7 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
-- **Live artifacts (BETA): hosting hardening and scoped viewer tokens**
+- **Live artifacts (BETA): hosting hardening, scoped viewer tokens, retention, slug conflicts**
   ([docs](docs/ARTIFACTS.md#sandboxing), [hosting](docs/CONFIGURATION.md#artifacts-hosting)).
   - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages
     and the SDK (`GET`/`HEAD`): `/api`, `/v1`, sign-in and the
@@ -38,6 +38,14 @@ labels reflect blast radius, not contract guarantees.
     the trash keeps them before they are removed with their versions, data
     and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
     no existing artifact is deleted by upgrading.
+  - **Slug collisions:** a taken slug is a `409` with `code: "slug_taken"`
+    and a free `suggestedSlug`, from the API, the agent tool and the chat's
+    save dialog; the web forms offer the suggestion. Concurrent creates are
+    decided by the unique index (one `201`, the rest `409`). A deleted
+    artifact frees its slug at once (migration `0200` makes the index cover
+    live artifacts only). Publishing a slug another workspace already has
+    public is a `409` `public_slug_taken`; an ambiguous public slug now
+    resolves to the oldest artifact instead of an arbitrary one.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
