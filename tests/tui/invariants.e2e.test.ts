@@ -11,7 +11,13 @@
  *   - the composer (the draft typed at the start) above it, with the cursor
  *     on its row — unless a decision box is open and has the focus;
  *   - no row wider than the terminal (no row the terminal had to wrap);
- *   - the cursor inside the screen.
+ *   - the cursor inside the screen;
+ *   - the alternate screen still showing (every fourth seed runs `--inline`
+ *     and must stay in the normal buffer), and no scrollback erase (`ESC[3J`)
+ *     ever written.
+ *
+ * Mouse traffic is part of the mix on the alternate screen: wheel notches
+ * over the transcript and the footer, and drags that select and copy.
  *
  *   TUI_FUZZ_SEEDS=500 npm run test:tui -- tests/tui/invariants   # more seeds
  *   TUI_FUZZ_SEED=17 npx vitest run tests/tui/invariants          # one seed
@@ -67,6 +73,14 @@ function stepFrom(rand: () => number, pending: number, agents: string[]): Step {
   const roll = rand();
   const text = () => textFrom(rand);
   if (pending > 0 && roll < 0.25) return { label: 'answer decision (Esc)', run: h => h.send('\x1b'), answer: true };
+  if (roll < 0.05) {
+    const col = 1 + Math.floor(rand() * 30); const row = 1 + Math.floor(rand() * 10); const up = rand() < 0.6;
+    return { label: `wheel ${up ? 'up' : 'down'} at ${col},${row}`, run: h => h.send(`\x1b[<${up ? 64 : 65};${col};${row}M`) };
+  }
+  if (roll < 0.08) {
+    const col = 1 + Math.floor(rand() * 20); const row = 1 + Math.floor(rand() * 6); const to = row + Math.floor(rand() * 4);
+    return { label: `drag ${col},${row} → ${col + 10},${to}`, run: h => h.send(`\x1b[<0;${col};${row}M\x1b[<32;${col + 10};${to}M\x1b[<0;${col + 10};${to}m`) };
+  }
   if (roll < 0.12) {
     const cols = 30 + Math.floor(rand() * 131); const rows = 8 + Math.floor(rand() * 43);
     return { label: `resize ${cols}x${rows}`, run: h => h.resize(cols, rows) };
@@ -105,12 +119,14 @@ function stepFrom(rand: () => number, pending: number, agents: string[]): Step {
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 70));
 
-async function violations(h: TuiHarness, decisionOpen: boolean): Promise<string[]> {
+async function violations(h: TuiHarness, decisionOpen: boolean, inline: boolean): Promise<string[]> {
   const rows = (await h.text()).split('\n');
   const found: string[] = [];
+  const buffer = h.screen.buffer.active;
+  if (buffer.type !== (inline ? 'normal' : 'alternate')) found.push(`showing the ${buffer.type} buffer`);
+  if (h.rawOutput().includes('\x1b[3J')) found.push('the scrollback was erased (ESC[3J)');
   const statusRows = rows.flatMap((row, index) => row.includes(STATUS) ? [index] : []);
   if (statusRows.length !== 1 || statusRows[0] !== rows.length - 1) found.push(`status line at rows [${statusRows.join(', ')}] of ${rows.length}`);
-  const buffer = h.screen.buffer.active;
   if (!decisionOpen) {
     const draft = rows.findIndex(row => row.includes(DRAFT));
     if (draft < 0 || draft >= rows.length - 1) found.push(`composer draft at row ${draft}`);
@@ -127,10 +143,11 @@ describe.skipIf(process.platform === 'win32')('chat frame invariants under rando
   test.each(SEEDS)('seed %i', async seed => {
     const rand = random(seed);
     const cols = 40 + Math.floor(rand() * 120); const rows = 12 + Math.floor(rand() * 38);
-    tui = await TuiHarness.start('src/tui-pi/index.ts', cols, rows);
+    const inline = seed % 4 === 0;
+    tui = await TuiHarness.start('src/tui-pi/index.ts', cols, rows, inline ? ['--inline'] : []);
     await tui.waitFor('connected');
     tui.send(DRAFT); await tui.waitFor(DRAFT);
-    const log = [`start ${cols}x${rows}`];
+    const log = [`start ${cols}x${rows}${inline ? ' inline' : ''}`];
     let pending = 0;
     const agents: string[] = [];
     for (let n = 0; n < STEPS; n++) {
@@ -140,7 +157,7 @@ describe.skipIf(process.platform === 'win32')('chat frame invariants under rando
       if (step.decision) pending++;
       if (step.answer) pending--;
       await settle();
-      const broken = await violations(tui, pending > 0);
+      const broken = await violations(tui, pending > 0, inline);
       if (broken.length) {
         expect.fail(`seed ${seed}, step ${n + 1} (${step.label}): ${broken.join('; ')}\nsteps: ${log.join(' → ')}\nrerun: TUI_FUZZ_SEED=${seed} npx vitest run tests/tui/invariants.e2e.test.ts\n${await tui.text()}`);
       }
