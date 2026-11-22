@@ -781,7 +781,7 @@ export class EmbeddingService {
         ageDays: Math.round(Number(r.ageDays) || 0),
       }))
       .filter(r => r.similarity >= minSimilarity);
-    this.recordAccess(out.map((r) => r.id));
+    if (!scope?.skipAccess) this.recordAccess(out.map((r) => r.id));
     return out;
   }
 

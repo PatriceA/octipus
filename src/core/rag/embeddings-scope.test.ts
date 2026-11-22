@@ -197,3 +197,19 @@ describe('re-indexing identical content', () => {
     expect(rows[0]).toMatchObject({ last_accessed_at: null, access_count: 0, verified: true });
   });
 });
+
+describe('search and access counting', () => {
+  test('search counts what it returns as read, unless skipAccess', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw('TRUNCATE TABLE embeddings');
+    const userId = randomUUID();
+    await svc.store({ ownerUserId: userId, workspaceId: null }, 'note', `note:${randomUUID()}`, 'kiln cools overnight', vec);
+    vi.spyOn(svc, 'generateEmbedding').mockResolvedValue(vec);
+    const recorded = vi.spyOn(svc, 'recordAccess').mockImplementation(() => {});
+    const knowledge = { kind: 'personal' as const, userId, workspaceId: null };
+    expect(await svc.search(knowledge, 'kiln', 5, 'note', 0, { skipAccess: true })).toHaveLength(1);
+    expect(recorded).not.toHaveBeenCalled();
+    expect(await svc.search(knowledge, 'kiln', 5, 'note', 0)).toHaveLength(1);
+    expect(recorded).toHaveBeenCalledTimes(1);
+  });
+});
