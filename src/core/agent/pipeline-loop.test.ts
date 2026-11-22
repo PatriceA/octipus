@@ -400,6 +400,97 @@ describe('a failed QA verdict sends the item back', () => {
   });
 });
 
+// The 2026-08-07 failure: the auditor wrote a good prose report, omitted the
+// verdict block, and each omission spent a QA retry until the run had none left
+// for the substance. A formatting miss is now repaired — the same auditor is
+// re-asked for the block alone — on a bound of its own, and no edge is taken.
+describe('a missing verdict block is repaired, not retried', () => {
+  const PROSE_ONLY = 'Implement: I ran the item end to end and it holds up. Overall I am satisfied.';
+
+  async function edgeTraversals(pipelineId: string): Promise<Record<string, number>> {
+    const { rows } = await queryRaw(
+      `SELECT condition, SUM(traversals)::int AS n FROM pipeline_edges WHERE pipeline_id = '${pipelineId}' GROUP BY condition`,
+    );
+    return Object.fromEntries(rows.map((r) => [String(r.condition), Number(r.n)]));
+  }
+
+  test('a repaired verdict spends no retry: the implementer is not re-run, no retry edge is taken', async () => {
+    replies = { QA: [PROSE_ONLY, QA_PASS] };
+    const { pipelineId } = await run('repair the verdict');
+
+    const visits = await visitsByNode(pipelineId);
+    // Item one: QA misses the block, is repaired, passes. Item two: passes.
+    expect(visits.Implement).toBe(2);
+    expect(visits.QA).toBe(3);
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    const traversed = await edgeTraversals(pipelineId);
+    expect(traversed.qa_fail ?? 0).toBe(0);
+    expect(traversed.audit_gate_failed ?? 0).toBe(0);
+
+    // The repair hands the auditor its own report and asks for the block only.
+    const repair = calls.filter((c) => c.stageName === 'QA')[1].input;
+    expect(repair).toMatch(/Do NOT re-run the audit/);
+    expect(repair).toContain(PROSE_ONLY);
+
+    // Recorded: a report fault on the ledger, the repair on the run log.
+    const { rows } = await queryRaw(
+      `SELECT passed, detail FROM verification_evidence WHERE pipeline_id = '${pipelineId}' AND kind = 'audit_coverage' ORDER BY created_at`,
+    );
+    const details = rows.map((r) => r.detail as Record<string, unknown>);
+    expect(details[0]).toMatchObject({ source: 'unparseable', fault: 'report' });
+    expect(rows[1]).toMatchObject({ passed: true });
+    expect(details[1]).toMatchObject({ repairAttempt: 1 });
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    await vi.waitFor(async () => {
+      const starts = (await pipelineRepository.getStageHistory(pipelineId))
+        .filter((e) => e.event === 'spawn').map((e) => String((e.payload as Record<string, unknown>).startReason));
+      expect(starts.some((s) => s.startsWith('verdict_repair 1/2:'))).toBe(true);
+    });
+  });
+
+  test('a block missing a required field is repaired too, not re-audited', async () => {
+    const THIN_PASS = '```json\n{"passed": true, "issues": [], "feedback": "Implement: ran it.", "confidence": "high"}\n```';
+    replies = { QA: [THIN_PASS, QA_PASS] };
+    const { pipelineId } = await run('repair a thin verdict');
+    expect((await visitsByNode(pipelineId)).Implement).toBe(2);
+    expect(calls.filter((c) => c.stageName === 'QA')[1].input).toMatch(/Do NOT re-run the audit/);
+    expect((await edgeTraversals(pipelineId)).audit_gate_failed ?? 0).toBe(0);
+  });
+
+  test('repairs that never produce a block stop the run — never a pass', async () => {
+    replies = { QA: [PROSE_ONLY] };
+    const { pipelineId, result } = await run('never answers');
+
+    const visits = await visitsByNode(pipelineId);
+    // The first answer plus exactly VERDICT_REPAIR_LIMIT repairs, then stop.
+    const { VERDICT_REPAIR_LIMIT } = await import('./pipeline-manager');
+    expect(visits.QA).toBe(1 + VERDICT_REPAIR_LIMIT);
+    expect(visits.Implement).toBe(1);
+    expect(approvalsAsked).toBe(0);
+    const { rows } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(rows[0].status).toBe('failed');
+    expect(result).toContain('audit_gate_failed');
+    expect(await planItemStatuses(pipelineId)).not.toContain('done');
+  });
+
+  test('a real rejection still spends a retry, and formatting misses around it do not', async () => {
+    // maxRetries is 2. Three misses and two real rejections on one item would
+    // have exhausted both budgets before; now only the rejections count.
+    replies = { QA: [PROSE_ONLY, qaFail('first defect'), PROSE_ONLY, qaFail('second defect'), PROSE_ONLY, QA_PASS] };
+    const { pipelineId } = await run('misses around real failures');
+
+    const visits = await visitsByNode(pipelineId);
+    expect(visits.Implement).toBe(4); // item one: 1 + 2 reworks; item two: 1
+    expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+    const traversed = await edgeTraversals(pipelineId);
+    expect(traversed.qa_fail).toBe(2);
+    expect(traversed.audit_gate_failed ?? 0).toBe(0);
+    const reworks = calls.filter((c) => c.stageName === 'Implement').map((c) => c.input);
+    expect(reworks[1]).toContain('first defect');
+    expect(reworks[2]).toContain('second defect');
+  });
+});
+
 describe('an item discovered mid-run joins the same loop', () => {
   test('the loop re-reads the plan, so an appended item is picked up', async () => {
     // The live-plan property the `plan` tool's docstring promises: a stage that
