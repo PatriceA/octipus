@@ -160,3 +160,34 @@ export async function bootstrapArtifactSettings(): Promise<void> {
     );
   }
 }
+
+export interface ArtifactRetention {
+  /** Days without activity before an artifact is moved to the trash; 0 = never. */
+  retentionDays: number;
+  /** Days an artifact stays in the trash before it is removed for good. */
+  trashDays: number;
+}
+
+export const DEFAULT_TRASH_DAYS = 30;
+
+/**
+ * The retention policy, read fresh on every cleanup pass (not cached: it is
+ * consulted hourly and must follow a settings change). A value that is not a
+ * whole number in range is reported and replaced by the setting's safe
+ * value — no expiry, and the default trash window — never by a shorter one.
+ */
+export function resolveArtifactRetention(): ArtifactRetention {
+  const svc = getSettingsService();
+  const read = (key: string, min: number, fallback: number): number => {
+    const raw = svc.getSync(key);
+    const value = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'number' && Number.isInteger(value) && value >= min && value <= 36_500) return value;
+    coreLogger.error({ key, value: raw }, `artifact.settings.invalid_retention — ${key} must be a whole number of days >= ${min}; using ${fallback}`);
+    return fallback;
+  };
+  return {
+    retentionDays: read('artifacts.retentionDays', 0, 0),
+    trashDays: read('artifacts.trashDays', 1, DEFAULT_TRASH_DAYS),
+  };
+}

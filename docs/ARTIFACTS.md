@@ -325,10 +325,32 @@ fired:
 DB-backed user hook bindings will arrive in a follow-up `trigger_type`
 enum migration.
 
-## Cleanup
+## Cleanup and retention
 
-A recurring `artifact:cleanup` task runs hourly and:
+A recurring `artifact:cleanup` task runs hourly (the `artifacts-cleanup` job
+of the `artifacts` module; off, it deletes nothing) and:
 
-- Prunes snapshots beyond the newest 50 per source
-- Deletes soft-deleted artifacts older than 30 days (cascade)
-- Removes expired share links
+- **Expires inactive artifacts — only when configured.** With
+  `artifacts.retentionDays` (env `ARTIFACTS_RETENTION_DAYS`) above 0, an
+  artifact that has not been edited and has had no data refresh for that many
+  days is moved to the trash, as if its owner had deleted it: it disappears
+  from lists and its pages and viewer tokens stop working, but nothing is
+  removed yet. A refresh only runs while someone has the artifact open, so a
+  viewed artifact does not expire. At most 500 expire per pass; each is
+  logged (`artifact.cleanup.expired`, with workspace and slug). The default is
+  `0`: nothing expires, which is how every install behaved before the setting
+  existed.
+- **Empties the trash** after `artifacts.trashDays` (env
+  `ARTIFACTS_TRASH_DAYS`, default 30 — the window that was always used):
+  the row goes with its versions, sources, snapshots, transforms, widgets,
+  exports and share links (database cascade), and its bundle directory is
+  removed from disk (`artifact.cleanup.purged`).
+- Prunes snapshots beyond the newest 50 per source.
+- Keeps the bundles of the current version and the 5 newest versions of each
+  artifact, removing older ones from disk.
+- Removes expired share links.
+
+These removals are written to the server log, not the audit log: they are
+unattended sweeps like session retention (`sessions.retentionDays`), which
+is not audited either. A deletion a user makes goes through the API and is
+recorded by the request audit like any other change.

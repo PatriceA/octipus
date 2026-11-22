@@ -32,6 +32,12 @@ labels reflect blast radius, not contract guarantees.
     share link it came from is revoked. No `/api` route accepts it.
   - Fixed: the embed CSP kept pinning the SDK hash stored by an earlier
     release, so after an SDK change browsers refused the new client.
+  - **Retention:** `artifacts.retentionDays` (`ARTIFACTS_RETENTION_DAYS`)
+    moves artifacts with no edit and no data refresh for that many days to
+    the trash; `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
+    the trash keeps them before they are removed with their versions, data
+    and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
+    no existing artifact is deleted by upgrading.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),

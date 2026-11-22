@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const settings = vi.hoisted(() => new Map<string, string>());
+const settings = vi.hoisted(() => new Map<string, unknown>());
 vi.mock('@/config/settings-service', () => ({ getSettingsService: () => ({ getSync: (key: string) => settings.get(key) }) }));
-import { resetArtifactSettingsCache, resolveArtifactSettings } from './settings';
+import { resetArtifactSettingsCache, resolveArtifactRetention, resolveArtifactSettings } from './settings';
 import { buildArtifactOuterUrl } from './host';
 afterEach(() => { settings.clear(); resetArtifactSettingsCache(); });
 describe('artifact host settings', () => {
@@ -28,5 +28,19 @@ describe('artifact host settings', () => {
     const onDisk = readFileSync(join(process.cwd(), 'web/public/octipus-artifact-client.sha256.txt'), 'utf8').trim();
     expect(onDisk).toMatch(/^[0-9a-f]{64}$/);
     expect(resolveArtifactSettings().sdkSha256).toBe(onDisk);
+  });
+  it('retention defaults to never expiring, with the 30-day trash', () => {
+    expect(resolveArtifactRetention()).toEqual({ retentionDays: 0, trashDays: 30 });
+    settings.set('artifacts.retentionDays', 90);
+    settings.set('artifacts.trashDays', '7');
+    expect(resolveArtifactRetention()).toEqual({ retentionDays: 90, trashDays: 7 });
+  });
+  it('an invalid retention value falls back to the safe one, never a shorter window', () => {
+    settings.set('artifacts.retentionDays', -3);
+    settings.set('artifacts.trashDays', 0);
+    expect(resolveArtifactRetention()).toEqual({ retentionDays: 0, trashDays: 30 });
+    settings.set('artifacts.retentionDays', 'soon');
+    settings.set('artifacts.trashDays', 1.5);
+    expect(resolveArtifactRetention()).toEqual({ retentionDays: 0, trashDays: 30 });
   });
 });

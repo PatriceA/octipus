@@ -1,5 +1,5 @@
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
-import { and, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notExists, sql } from 'drizzle-orm';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
 import { workspaces } from '../schema/organizations';
@@ -416,6 +416,28 @@ export class ArtifactsRepository {
     await this.db
       .delete(artifactExports)
       .where(and(eq(artifactExports.artifactId, artifactId), eq(artifactExports.exportId, exportId)));
+  }
+
+  // ── retention ────────────────────────────────────────────────
+  /**
+   * Live artifacts with no activity since `cutoff`: not edited (`updated_at`,
+   * which a version or settings change bumps) and no snapshot captured — a
+   * refresh, which runs only while someone views the artifact, or a manual
+   * one. Oldest first, at most `limit`.
+   */
+  async listInactiveSince(cutoff: Date, limit: number): Promise<Array<Pick<Artifact, 'id' | 'workspaceId' | 'slug' | 'updatedAt'>>> {
+    const recentSnapshot = this.db
+      .select({ one: sql`1` })
+      .from(artifactDataSnapshots)
+      .innerJoin(artifactDataSources, eq(artifactDataSources.id, artifactDataSnapshots.sourceId))
+      .where(and(eq(artifactDataSources.artifactId, artifacts.id), gte(artifactDataSnapshots.capturedAt, cutoff)));
+    return this.db
+      .select({ id: artifacts.id, workspaceId: artifacts.workspaceId, slug: artifacts.slug, updatedAt: artifacts.updatedAt })
+      // i2: retention sweep across workspaces, ids only
+      .from(artifacts)
+      .where(and(isNull(artifacts.deletedAt), lt(artifacts.updatedAt, cutoff), notExists(recentSnapshot)))
+      .orderBy(asc(artifacts.updatedAt))
+      .limit(limit);
   }
 
   // ── soft-delete cleanup ──────────────────────────────────────
