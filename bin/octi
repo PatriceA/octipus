@@ -876,6 +876,19 @@ start_web() {
   open_browser "http://localhost:$WEB_PORT"
 }
 
+# Run a terminal client straight from the source with Node, the way
+# `package.json`'s `tui` / `tui:edit` scripts do but without `npm run` and the
+# `tsx` CLI in front of it: those two added a process each and about 0.4 s
+# before the first frame (0.85 s through npm against 0.45 s direct, in a PTY;
+# docs/guides/tui.md, "Terminal compatibility"). Signals reach the client
+# directly.
+exec_tui_client() {
+  local entry="$1"
+  shift
+  cd "$PROJECT_DIR"
+  API_PORT="$API_PORT" exec node --import tsx --import ./scripts/md-loader.mjs "$entry" "$@"
+}
+
 # Attach whichever client the target names. TUI and desktop replace this
 # process, so nothing after them runs.
 launch_target() {
@@ -887,8 +900,7 @@ launch_target() {
       echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
       echo ""
       log_step "Launching TUI..."
-      cd "$PROJECT_DIR"
-      API_PORT="$API_PORT" exec npm run tui -- --project "$LAUNCH_CWD"
+      exec_tui_client src/tui-pi/index.ts --project "$LAUNCH_CWD"
       ;;
     web)
       start_web
@@ -1265,13 +1277,10 @@ cmd_tui() {
   local user_cwd="$PWD"
   log_info "Connecting TUI to gateway at localhost:$API_PORT..."
   log_hint "Project: $user_cwd"
-  cd "$PROJECT_DIR"
-  # The `--` is load-bearing: without it npm claims `--project` as its own
-  # config flag ("Unknown cli config") and never forwards it, so the TUI opened
-  # with no project at all while this function's banner promised one. The agent
-  # then answered questions about "this directory" from the user's default
-  # workspace. `cmd_edit` below has always had the separator.
-  API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd" "$@"
+  # Node directly: no npm in between to claim `--project` as its own config
+  # flag (it once did, when the `--` separator was missing, and the TUI opened
+  # with no project while this banner promised one).
+  exec_tui_client src/tui-pi/index.ts --project "$user_cwd" "$@"
 }
 
 cmd_edit() {
@@ -1286,8 +1295,7 @@ cmd_edit() {
   local user_cwd="$PWD"
   log_info "Launching TUI editor (gateway at localhost:$API_PORT)..."
   log_hint "Project: $user_cwd"
-  cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec npm run tui:edit -- --project "$user_cwd" "$@"
+  exec_tui_client src/tui-editor/index.ts --project "$user_cwd" "$@"
 }
 
 cmd_doctor() {
