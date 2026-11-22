@@ -2,6 +2,38 @@
 import type { Terminal, TUI } from '@mariozechner/pi-tui';
 import type { MessagesPane } from './components/messages-pane';
 
+/** An SGR mouse report: `ESC [ < button ; x ; y M` for a press, `… m` for a release. */
+export interface MouseReport { button: number; column: number; row: number; release: boolean }
+
+export function parseMouseReport(data: string): MouseReport | null {
+  const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+  if (!match) return null;
+  return { button: Number(match[1]), column: Number(match[2]), row: Number(match[3]), release: match[4] === 'm' };
+}
+
+/** Vertical wheel notches only; horizontal wheel (66/67) and releases are not scrolling. */
+export function wheelDirection(data: string): 'up' | 'down' | null {
+  const report = parseMouseReport(data);
+  if (!report || report.release || !(report.button & 64)) return null;
+  if ((report.button & 3) === 0) return 'up';
+  if ((report.button & 3) === 1) return 'down';
+  return null;
+}
+
+/**
+ * Input listener, installed ahead of the apps' own: mouse reporting is on for
+ * the wheel, so clicks, drags and releases arrive too. None of them means
+ * anything to a component yet, and a report that reached a text field could
+ * be taken for typing. A wheel notch goes on to the app's scroll handling
+ * unless an overlay is open — overlays do not scroll.
+ */
+export function mouseReportFilter(tui: Pick<TUI, 'hasOverlay'>): (data: string) => { consume: true } | undefined {
+  return data => {
+    if (!parseMouseReport(data)) return undefined;
+    return wheelDirection(data) && !tui.hasOverlay() ? undefined : { consume: true };
+  };
+}
+
 export function setMouseCapture(terminal: Pick<Terminal, 'write'>, enabled: boolean): void {
   terminal.write(enabled ? '\x1b[?1000h\x1b[?1006h' : '\x1b[?1000l\x1b[?1006l');
 }

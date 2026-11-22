@@ -89,3 +89,10 @@ test('multiple file diffs are reviewed in sequence without orphaning locks', () 
   expect(app.buffers.findByPath(a.path!)?.agentLocked).toBe(false); expect(modals).toHaveLength(1);
   modalKey('r'); expect(app.buffers.findByPath(b.path!)?.agentLocked).toBe(false); expect(modals).toHaveLength(0);
 });
+
+test('a wheel notch outside the chat pane is not passed to the editor or the tree', () => {
+  mount();
+  expect(key('\x1b[<64;10;5M')).toEqual({ consume: true });
+  expect(key('\x1b[<65;10;5M')).toEqual({ consume: true });
+  expect(key('a')).toBeUndefined();
+});

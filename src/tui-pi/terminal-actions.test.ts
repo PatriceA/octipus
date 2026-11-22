@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import type { TUI } from '@mariozechner/pi-tui';
-import { handleTerminalCommand, setMouseCapture } from './terminal-actions';
+import { handleTerminalCommand, mouseReportFilter, parseMouseReport, setMouseCapture, wheelDirection } from './terminal-actions';
 import { MessagesPane } from './components/messages-pane';
 import { StatusBar } from './components/status-bar';
 
@@ -49,4 +49,29 @@ test('empty, invalid, and oversized copies do not overwrite the clipboard or sil
   expect(f.write).not.toHaveBeenCalled();
   expect(f.notify).toHaveBeenLastCalledWith(expect.stringContaining('exceeds'));
   expect(f.run('/unknown')).toBe(false);
+});
+
+test('mouse reports: presses and releases parse, only vertical wheel notches scroll', () => {
+  expect(parseMouseReport('\x1b[<0;10;5M')).toEqual({ button: 0, column: 10, row: 5, release: false });
+  expect(parseMouseReport('\x1b[<0;10;5m')).toEqual({ button: 0, column: 10, row: 5, release: true });
+  expect(parseMouseReport('\x1b[A')).toBeNull();
+  expect(wheelDirection('\x1b[<64;1;1M')).toBe('up');
+  expect(wheelDirection('\x1b[<65;1;1M')).toBe('down');
+  expect(wheelDirection('\x1b[<66;1;1M')).toBeNull(); // horizontal
+  expect(wheelDirection('\x1b[<64;1;1m')).toBeNull();
+  expect(wheelDirection('\x1b[<0;1;1M')).toBeNull();
+});
+
+test('non-wheel mouse reports never reach a component; wheel notches reach the app unless an overlay is open', () => {
+  let overlay = false;
+  const filter = mouseReportFilter({ hasOverlay: () => overlay });
+  for (const report of ['\x1b[<0;10;5M', '\x1b[<0;10;5m', '\x1b[<2;3;4m', '\x1b[<32;10;5M', '\x1b[<35;10;5M', '\x1b[<66;1;1M']) {
+    expect(filter(report)).toEqual({ consume: true });
+  }
+  expect(filter('\x1b[<64;10;5M')).toBeUndefined();
+  expect(filter('a')).toBeUndefined();
+  expect(filter('\x1b[5~')).toBeUndefined();
+  overlay = true;
+  expect(filter('\x1b[<64;10;5M')).toEqual({ consume: true });
+  expect(filter('a')).toBeUndefined();
 });

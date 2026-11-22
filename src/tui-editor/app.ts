@@ -1,4 +1,4 @@
-import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
+import { handleTerminalCommand, wheelDirection } from '@/tui-pi/terminal-actions';
 import { UnsavedPrompt } from './components/unsaved-prompt';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
 import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
@@ -474,6 +474,8 @@ export class OctipusEditorApp {
     if (this.layout.get().focused === 'chat') {
       if (this.chat.messages.handleScrollInput(data)) { this.tui.requestRender(); return { consume: true }; }
     }
+    // The tree and the editor do not scroll by wheel yet; a notch must not reach them as input.
+    if (wheelDirection(data)) return { consume: true };
     if (kb.matches(data, 'app.tree.toggle'))   { this.layout.toggleTree(); return { consume: true }; }
     if (kb.matches(data, 'app.chat.toggle'))   { this.layout.toggleChat(); return { consume: true }; }
     if (kb.matches(data, 'app.pane.cycle'))    { this.layout.cycleFocus(1); this.refocus(); return { consume: true }; }

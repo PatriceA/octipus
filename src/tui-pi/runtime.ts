@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { type KeybindingsManager, ProcessTerminal, TUI } from '@mariozechner/pi-tui';
-import { setMouseCapture } from './terminal-actions';
+import { mouseReportFilter, setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings } from './keybindings';
 
 export interface RuntimeOptions {
@@ -84,6 +84,7 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   }();
   const tui = new TUI(terminal, options.showHardwareCursor ?? false);
   const keybindings = installOctipusKeybindings();
+  tui.addInputListener(mouseReportFilter(tui));
 
   if (options.title) terminal.setTitle(options.title);
 

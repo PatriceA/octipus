@@ -3,6 +3,7 @@ import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wr
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 import { displayText } from '../terminal-text';
+import { wheelDirection } from '../terminal-actions';
 
 export interface ChatMessage {
   role: Role;
@@ -41,10 +42,9 @@ export class MessagesPane implements Component {
   setHeight(rows: number): void { this.height = Math.max(0, rows); }
   /** Scroll the in-app transcript; terminal scrollback contains only painted rows. */
   handleScrollInput(data: string): boolean {
-    const mouse = /^\x1b\[<(\d+);\d+;\d+M$/.exec(data);
-    if (mouse && (Number(mouse[1]) & 64)) {
-      if ((Number(mouse[1]) & 3) === 0) this.scrollUp(3);
-      else if ((Number(mouse[1]) & 3) === 1) this.scrollDown(3);
+    const wheel = wheelDirection(data);
+    if (wheel) {
+      if (wheel === 'up') this.scrollUp(3); else this.scrollDown(3);
       return true;
     }
     if (matchesKey(data, 'pageUp')) { this.scrollUp(); return true; }
