@@ -115,6 +115,8 @@ export class TuiHarness {
     const b = this.screen.buffer.active;
     return Array.from({ length: this.screen.rows }, (_, row) => b.getLine(b.viewportY + row)?.translateToString(true) ?? '').join('\n');
   }
+  /** What the program wrote to stderr (the error an exit printed). */
+  stderr(): string { return this.error; }
   /** Everything written so far, decoded; wait for `text()` first so it is complete up to the screen. */
   rawOutput(): string { return Buffer.concat(this.output).toString('utf8'); }
   async waitFor(needle: string, absent = false): Promise<void> {
