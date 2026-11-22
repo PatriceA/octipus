@@ -33,6 +33,10 @@ describe.skipIf(process.platform === 'win32')('the terminal is restored on every
       expect(lastIndex(raw, '\x1b[?25l')).toBeGreaterThan(-1);
       expect(lastIndex(raw, '\x1b[?25h')).toBeGreaterThan(lastIndex(raw, '\x1b[?25l'));
       expect(raw).toContain('raw-after-exit:false');
+      // The user's window title is saved before the app sets its own, and put back on the way out.
+      expect(raw.indexOf('\x1b[22;0t')).toBeGreaterThan(-1);
+      expect(raw.indexOf('\x1b[22;0t')).toBeLessThan(raw.indexOf('\x1b]0;exit paths'));
+      expect(lastIndex(raw, '\x1b[23;0t')).toBeGreaterThan(lastIndex(raw, '\x1b]0;'));
       if (message) {
         // Printed once the screen is back, not inside the frame.
         expect(raw.indexOf(message)).toBeGreaterThan(lastIndex(raw, mouseOff));

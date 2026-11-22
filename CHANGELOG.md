@@ -656,6 +656,8 @@ labels reflect blast radius, not contract guarantees.
   cost about 3 s of CPU). The text is now sanitised incrementally and a long
   reply is redrawn on a budget that grows with its length; the finished reply
   still takes exactly the rows of the last streamed frame.
+- **Terminal chat and editor: the window title is restored on exit.** It kept
+  the app's last title; the terminal's title stack now saves and restores it.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 
