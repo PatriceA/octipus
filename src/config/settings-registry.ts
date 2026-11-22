@@ -1268,7 +1268,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'artifacts',
     valueType: 'string',
     defaultValue: '',
-    description: 'Sha256 of /octipus-artifact-client.js — auto-loaded from web/public/octipus-artifact-client.sha256.txt at boot. Override only if hosting the SDK from a different path.',
+    description: 'Sha256 of /octipus-artifact-client.js, pinned in the embed CSP. Read from web/public/octipus-artifact-client.sha256.txt (the file this server serves) and stored at boot; this value is used only when that file is missing.',
     isSecret: false,
     envVar: 'ARTIFACT_SDK_SHA256',
   },

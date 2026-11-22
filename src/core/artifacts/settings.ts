@@ -74,8 +74,11 @@ export function resolveArtifactSettings(): ArtifactSettings {
   if (gatewayUrl && !['ws:', 'wss:'].includes(gatewayUrl.protocol)) throw new Error('Artifact gateway must use WS or WSS');
   const gatewayWss = gatewayUrl?.href ?? '';
   const tokenSecret = pickStr(svc, 'artifacts.tokenSecret');
-  const sdkSetting = pickStr(svc, 'artifacts.sdkSha256');
-  const sdkSha256 = sdkSetting || readSdkShaFromDisk();
+  // The SDK this backend serves is the file on disk, so its hash is what the
+  // CSP must pin. A stored hash is only the fallback for a missing sidecar:
+  // preferring it kept pinning the previous release's SDK after an upgrade,
+  // and the browser refused the new one (no live refresh, no error).
+  const sdkSha256 = readSdkShaFromDisk() || pickStr(svc, 'artifacts.sdkSha256');
   const bundlesDir = pickStr(svc, 'artifacts.bundlesDir') || join(process.cwd(), 'data', 'artifacts');
 
   cached = { host, proto, gatewayWss, tokenSecret, sdkSha256, bundlesDir };
@@ -105,13 +108,12 @@ export async function ensureArtifactTokenSecret(): Promise<void> {
   coreLogger.info('artifact.settings.token_secret.generated — persisted to settings (artifacts.tokenSecret)');
 }
 
-/** Auto-populate the SDK sha256 from disk if not set in DB. */
+/** Keep the stored SDK sha256 equal to the built file's (it changes with every SDK release). */
 export async function ensureSdkSha256(): Promise<void> {
   const svc = getSettingsService();
   const existing = pickStr(svc, 'artifacts.sdkSha256');
-  if (existing) return;
   const fromDisk = readSdkShaFromDisk();
-  if (!fromDisk) return;
+  if (!fromDisk || existing === fromDisk) return;
   await svc.set('artifacts.sdkSha256', fromDisk, 'system:bootstrap');
   resetArtifactSettingsCache();
   coreLogger.info({ sdkSha256: fromDisk }, 'artifact.settings.sdk_sha256.populated_from_disk');

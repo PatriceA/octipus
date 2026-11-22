@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const settings = vi.hoisted(() => new Map<string, string>());
 vi.mock('@/config/settings-service', () => ({ getSettingsService: () => ({ getSync: (key: string) => settings.get(key) }) }));
@@ -20,5 +22,11 @@ describe('artifact host settings', () => {
   it('rejects non-web schemes', () => {
     settings.set('artifacts.host', 'file:///etc');
     expect(() => resolveArtifactSettings()).toThrow('HTTP or HTTPS');
+  });
+  it('pins the SDK file it serves, not a hash stored by an earlier release', () => {
+    settings.set('artifacts.sdkSha256', 'f'.repeat(64));
+    const onDisk = readFileSync(join(process.cwd(), 'web/public/octipus-artifact-client.sha256.txt'), 'utf8').trim();
+    expect(onDisk).toMatch(/^[0-9a-f]{64}$/);
+    expect(resolveArtifactSettings().sdkSha256).toBe(onDisk);
   });
 });
