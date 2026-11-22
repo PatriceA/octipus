@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
-  buildRecallQuery, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isDistinctive, lexicalCoverage,
-  MAX_QUERY_CHARS, messageIdentifiers, type QualifiedBy, qualifyHit, queryTerms, relativeCut,
+  buildRecallQuery, carriesSubject, containsIdentifier, distinctiveLexemes, excerptWindow, headAndTail, isAcknowledgement, isDistinctive,
+  lexicalCoverage, MAX_QUERY_CHARS, messageIdentifiers, type QualifiedBy, qualifyHit, queryTerms, relativeCut, searchesWithPreviousMessage,
+  skipsShortMessage,
 } from './recall';
 
 describe('distinctive lexemes', () => {
@@ -129,6 +130,54 @@ describe('buildRecallQuery', () => {
     expect(head.split(' ').every((w) => /^word\d+$/.test(w))).toBe(true);
     expect(tail.split(' ').every((w) => /^word\d+$/.test(w))).toBe(true);
     expect(tail.endsWith('word599')).toBe(true);
+  });
+});
+
+describe('a short message', () => {
+  const previous = 'What do we charge for a website?';
+
+  test('a one-word follow-up that names something is searched when an earlier message gives it its subject', () => {
+    expect(skipsShortMessage('Enterprise?')).toBe(true);
+    expect(skipsShortMessage('Enterprise?', previous)).toBe(false);
+    expect(skipsShortMessage('INV-2024-119?', 'What was on invoice INV-2024-118?')).toBe(false);
+    expect(skipsShortMessage('Unternehmen?', 'Was kostet eine Webseite?')).toBe(false);
+    // An unspaced script: a run of two characters or more names something.
+    expect(skipsShortMessage('企业版？', '网站建设的报价是多少？')).toBe(false);
+    expect(searchesWithPreviousMessage('Enterprise?')).toBe(true);
+    expect(buildRecallQuery({ query: 'Enterprise?', previousMessage: previous })).toBe(`${previous}\nEnterprise?`);
+  });
+
+  test('a bare acknowledgement is not searched, with or without an earlier message', () => {
+    for (const ack of ['ok', 'thanks', 'Thanks!', 'yes please', 'ok great, thanks', 'Thank you very much!', 'got it', 'Bedankt!', 'merci', '谢谢', '好的', 'ありがとう', '👍']) {
+      expect(skipsShortMessage(ack, previous), ack).toBe(true);
+      expect(skipsShortMessage(ack), ack).toBe(true);
+      expect(searchesWithPreviousMessage(ack), ack).toBe(false);
+    }
+    expect(buildRecallQuery({ query: 'yes please', previousMessage: previous })).toBe('yes please');
+  });
+
+  test('a short message that names nothing is not a follow-up: "why?" stays skipped', () => {
+    expect(skipsShortMessage('why?', previous)).toBe(true);
+    expect(skipsShortMessage('Bob?', previous)).toBe(true);
+    expect(searchesWithPreviousMessage('why?')).toBe(false);
+    // The same message as the previous one adds nothing.
+    expect(skipsShortMessage('Enterprise?', 'Enterprise?')).toBe(true);
+  });
+
+  test('two content words or more are searched as before, alone or as a follow-up', () => {
+    expect(skipsShortMessage('try one?')).toBe(false);
+    expect(skipsShortMessage('and for enterprise?')).toBe(false);
+    expect(skipsShortMessage('good morning, pricing?')).toBe(false);
+    expect(searchesWithPreviousMessage('and for enterprise?')).toBe(true);
+  });
+
+  test('what counts as an acknowledgement and as a subject', () => {
+    expect(isAcknowledgement('Okay, thanks a lot!')).toBe(true);
+    expect(isAcknowledgement('thanks, and the hosting?')).toBe(false);
+    expect(isAcknowledgement('')).toBe(false);
+    expect(carriesSubject('Enterprise?')).toBe(true);
+    expect(carriesSubject('perfect!')).toBe(false);
+    expect(carriesSubject('v2?')).toBe(true);
   });
 });
 

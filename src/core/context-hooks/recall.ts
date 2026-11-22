@@ -149,14 +149,96 @@ function distinctiveWords(text: string): string[] {
   return (text.match(/[\p{L}\p{N}][\p{L}\p{N}'._-]*/gu) ?? []).filter(isDistinctive);
 }
 
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+const UNSPACED_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]+/gu;
+
+/**
+ * Words that can carry meaning: a message with fewer than two ("ok",
+ * "thanks!") is not looked up on its own. Scripts written without spaces
+ * (Chinese, Japanese, Thai, …) count two characters as a word, since a whole
+ * sentence of them is one unbroken run.
+ */
+export function contentWords(text: string): number {
+  const unspaced = text.match(UNSPACED)?.length ?? 0;
+  const spaced = (text.replace(UNSPACED, ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? []).length;
+  return spaced + Math.floor(unspaced / 2);
+}
+
+/**
+ * Words (and, in scripts written without spaces, whole runs) that only
+ * acknowledge, thank or agree. A message made of nothing else is not a
+ * question, whatever came before it. Lower case; a few languages beyond
+ * English, kept short on purpose: a word left out only costs a search.
+ */
+export const ACKNOWLEDGEMENTS: ReadonlySet<string> = new Set([
+  // English
+  'ok', 'okay', 'okey', 'k', 'kk', 'yes', 'yeah', 'yep', 'yup', 'no', 'nope', 'sure', 'fine', 'good', 'great', 'cool', 'nice',
+  'perfect', 'awesome', 'excellent', 'lovely', 'brilliant', 'wonderful', 'thanks', 'thank', 'thx', 'ty', 'cheers', 'please',
+  'pls', 'done', 'right', 'alright', 'agreed', 'noted', 'understood', 'got', 'it', 'you', 'very', 'much', 'a', 'lot', 'so',
+  'and', 'go', 'ahead', 'sounds', 'lol', 'haha', 'wow', 'hi', 'hello', 'hey', 'bye',
+  // Dutch, German, French, Spanish, Portuguese, Italian
+  'ja', 'nee', 'oké', 'dank', 'dankjewel', 'dankje', 'bedankt', 'merci', 'prima', 'super', 'top', 'graag', 'goed', 'mooi',
+  'nein', 'danke', 'schön', 'gut', 'klar', 'genau', 'perfekt', 'bitte', 'oui', 'non', "d'accord", 'parfait', 'bien', 'génial',
+  'sí', 'si', 'vale', 'gracias', 'genial', 'claro', 'bueno', 'sim', 'obrigado', 'obrigada', 'grazie', 'perfetto', 'certo',
+  // Scripts without spaces
+  '好', '好的', '谢谢', '谢谢你', '多谢', '是', '是的', '对', '行', '可以', '嗯', '收到', '明白', '了解',
+  'はい', 'うん', 'ありがとう', 'ありがとうございます', 'わかりました', '了解です', 'ขอบคุณ', 'ครับ', 'ค่ะ', 'โอเค',
+]);
+
+/** The message's words, lower case, and its runs of unspaced script, each as one token. */
+function messageTokens(message: string): { spaced: string[]; unspaced: string[] } {
+  const unspaced = message.match(UNSPACED_RUN) ?? [];
+  const spaced = (message.replace(UNSPACED_RUN, ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'’._-]*/gu) ?? [])
+    .map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[.'_-]+$/, ''));
+  return { spaced, unspaced };
+}
+
+/** Nothing but acknowledgements ("ok", "thanks!", "yes please", "谢谢"): not looked up, even with an earlier message. */
+export function isAcknowledgement(message: string): boolean {
+  const { spaced, unspaced } = messageTokens(message);
+  const tokens = [...spaced, ...unspaced];
+  return tokens.length > 0 && tokens.every((t) => ACKNOWLEDGEMENTS.has(t));
+}
+
+/**
+ * Whether a short message names something of its own: a distinctive word
+ * (`isDistinctive`) that is not an acknowledgement ("Enterprise?",
+ * "INV-2024-119?"), or a run of two or more characters of an unspaced script
+ * ("企业版？"). "and you?" or "why?" name nothing.
+ */
+export function carriesSubject(message: string): boolean {
+  const { spaced, unspaced } = messageTokens(message);
+  return spaced.some((w) => isDistinctive(w) && !ACKNOWLEDGEMENTS.has(w))
+    || unspaced.some((run) => [...run].length >= 2 && !ACKNOWLEDGEMENTS.has(run));
+}
+
+/**
+ * Whether recall skips this message (`short_message`) instead of searching.
+ * A bare acknowledgement is always skipped. A message of two content words or
+ * more is searched. A shorter one is searched only as a follow-up: when an
+ * earlier typed message is there to give it its subject and the message
+ * itself names something ("Enterprise?" after "What do we charge for a
+ * website?"); "why?" or "ok" after a question is not a search.
+ */
+export function skipsShortMessage(message: string, previousMessage?: string): boolean {
+  const text = message.trim();
+  if (isAcknowledgement(text)) return true;
+  if (contentWords(text) >= 2) return false;
+  const previous = previousMessage?.trim();
+  return !(previous && previous !== text && carriesSubject(text));
+}
+
 /**
  * Whether `buildRecallQuery` searches this message together with the
- * previous typed one: a message too short to carry its own subject. A caller
- * that would have to read the previous message asks this first and skips the
- * read when it cannot matter.
+ * previous typed one: a message too short to carry its own subject, that is
+ * not a bare acknowledgement and is not skipped whatever came before. A
+ * caller that would have to read the previous message asks this first and
+ * skips the read when it cannot matter.
  */
 export function searchesWithPreviousMessage(message: string): boolean {
-  return distinctiveWords(message.trim()).length < SHORT_QUERY_WORDS;
+  const text = message.trim();
+  if (distinctiveWords(text).length >= SHORT_QUERY_WORDS || isAcknowledgement(text)) return false;
+  return contentWords(text) >= 2 || carriesSubject(text);
 }
 
 /**

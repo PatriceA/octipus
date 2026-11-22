@@ -168,6 +168,19 @@ describe('which passages qualify', () => {
     expect((await lastRecord()).items[0].qualifiedBy).toContain('coverage');
   });
 
+  test('a one-word follow-up is searched with the previous message; an acknowledgement after a question is not', async () => {
+    await chunk('Enterprise plans', 'Enterprise website plans start at 9000 euro a year, with priority support and a named contact.');
+    const previousMessage = 'What do we charge for a website?';
+    expect((await run('Enterprise?')).text).not.toContain('Enterprise plans');
+    expect(await lastRecord()).toMatchObject({ status: 'skipped', reason: 'short_message' });
+    const followUp = await run('Enterprise?', { previousMessage });
+    expect(followUp.text).toContain('Note "Enterprise plans"');
+    for (const ack of ['thanks', 'yes please']) {
+      expect((await run(ack, { previousMessage })).text).not.toContain('<recalled-knowledge>');
+      expect(await lastRecord()).toMatchObject({ status: 'skipped', reason: 'short_message' });
+    }
+  });
+
   test('the default four passages fit the default budget, with their excerpts', async () => {
     const long = (topic: string) => `${topic} website pricing notes. ${'The quoted price covers design, build, testing and one round of changes for the client. '.repeat(10)}`;
     for (const t of ['Studio', 'Agency', 'Freelance', 'Retainer']) await chunk(`${t} pricing`, long(t));

@@ -29,8 +29,10 @@ import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import {
   buildRecallQuery, distinctiveLexemes, excerptWindow, messageIdentifiers, type QualifiedBy, type QualifyContext,
-  qualifyHit, queryTerms, relativeCut,
+  qualifyHit, queryTerms, relativeCut, skipsShortMessage,
 } from './recall';
+
+export { contentWords } from './recall';
 import type { ContextHookInput, ContextHookItem, ContextHookKind, ContextHookResult } from './types';
 
 const RECALL_PURPOSES = ['note', 'document', 'knowledge_artifact', 'image_description'] as const;
@@ -99,20 +101,6 @@ export function fitTokens(text: string, tokens: number): string {
   return `${(space > cut.length * 0.6 ? cut.slice(0, space) : cut).trimEnd()} …`;
 }
 
-const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
-
-/**
- * Words that can carry meaning: a message with fewer than two ("ok",
- * "thanks!") is not looked up. Scripts written without spaces (Chinese,
- * Japanese, Thai, …) count two characters as a word, since a whole sentence
- * of them is one unbroken run.
- */
-export function contentWords(text: string): number {
-  const unspaced = text.match(UNSPACED)?.length ?? 0;
-  const spaced = (text.replace(UNSPACED, ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? []).length;
-  return spaced + Math.floor(unspaced / 2);
-}
-
 const skipped = (reason: string): ContextHookResult => ({ status: 'skipped', reason, text: '', items: [], tokens: 0 });
 const abstained = (reason: string): ContextHookResult => ({ status: 'abstained', reason, text: '', items: [], tokens: 0 });
 
@@ -176,7 +164,9 @@ export async function selectRecallPassages(
 ): Promise<RecallSelection> {
   const none = (status: RecallSelection['status'], reason: string, degraded?: 'embedding_failed'): RecallSelection =>
     ({ status, reason, ...(degraded ? { degraded } : {}), passages: [], text: '', tokens: 0 });
-  if (contentWords(input.query) < 2) return none('skipped', 'short_message');
+  // A short message is searched only as a follow-up of the previous one, and
+  // a bare acknowledgement never (`skipsShortMessage`).
+  if (skipsShortMessage(input.query, input.previousMessage)) return none('skipped', 'short_message');
 
   const { getEmbeddingService } = await import('@/core/rag/embeddings');
   const knowledge = agentKnowledgeScope({ userId: input.userId, workspaceId: input.workspaceId, space: input.space });
