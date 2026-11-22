@@ -55,24 +55,41 @@ view; anything else is a part-1 HTML block.
 }
 ```
 
-A node is `{ "component": "<Name>", …props }`, with an optional `id`.
-Children are written inline (nested nodes). The A2UI flat form is accepted
-too: `"components": [ { "id": "root", … }, … ]` with children given as ids,
-instead of `root`.
+A node is `{ "component": "<Name>", …props }`, with an optional `id`
+(1–64 letters, digits, `_`, `-`). Children are written inline (nested
+nodes). The A2UI flat form is accepted too: `"components": [ { "id": "root",
+… }, … ]` with children given as ids, instead of `root`; every entry needs an
+`id` and the root is the one with id `root`. The two can be combined: any
+child may be a node or the id of a node written elsewhere (in `components`
+or nested with an `id`), and `root` may itself be an id.
+
+Every component has exactly one parent: an id used twice is refused
+(`shared-child`; a shared node would render as many times as it is reached,
+which a chain of them makes exponential), as is a cycle. An entry of
+`components` that no parent reaches is ignored (repairable). Other top-level
+keys are ignored (repairable).
 
 ### 2.3 Stored document (normalized)
 
 `normalizeView` turns either form into the A2UI adjacency list, with
-deterministic ids for nodes that have none (`root`, `root_0`, `root_0_1`, …):
+deterministic ids for nodes that have none: the root is `root`, the i-th
+child (or tab, or step) of `p` is `p_i`, a template of `p` is `p_template`. A
+generated id that a written id already holds gets `-2`, `-3`, …. Unknown
+props are dropped.
 
 ```ts
 interface InlineUiView {
   version: 1;
-  components: Array<{ id: string; component: string; [prop: string]: unknown }>; // children are ids
-  data: Record<string, unknown>;
+  root: string;                          // id of the root, also components[0]
+  components: InlineUiViewComponent[];   // depth-first, root first; children are ids
+  data: JsonObject;
   computed: Record<string, string>;
 }
 ```
+
+`viewToAuthored` writes the nested form back (for `inline-ui__source`),
+leaving out ids that normalizing would generate again, so
+`normalizeView(viewToAuthored(v))` is `v`.
 
 ### 2.4 Dynamic values
 
@@ -85,7 +102,13 @@ Any prop documented as dynamic takes:
 | `{"@expr": "price * qty"}` | an expression (§2.5) |
 | a string containing `${…}` | each `${expr}` is replaced by the expression's value as text (`\${` is a literal) |
 
-An input's `value` must be `{"@path": …}`: the input writes there.
+An input's `value` (and `Table.selected`) must be `{"@path": …}`: the input
+writes there. A ref is exactly that one key; anything else with an `@` key is
+refused. Resolution is shallow: a literal list or object is used as written,
+and where the catalog declares dynamic fields inside one (`KeyValue.items`),
+each field is resolved on its own. A relative path outside a template is
+refused. `__proto__`, `constructor` and `prototype` segments are refused in
+every path.
 
 ### 2.5 Expressions
 
@@ -94,18 +117,42 @@ A small pure language, parsed by our own parser — never `eval`/`Function`.
 - Literals: numbers, `'single'` or `"double"` quoted strings, `true`, `false`, `null`.
 - Names: `usage`, `plan.price`, `plans[0].name`. Resolution order: a
   `computed` name, then a key of the template item, then a key of the data
-  model. `$item` is the template item, `$index` its index. Unknown name →
-  `null`. Own properties only; `__proto__`, `constructor`, `prototype` are
-  never read.
+  model. `$item` is the template item, `$index` its index (using either
+  outside a template is a validation error). Unknown name → `null`. Own
+  properties only; `__proto__`, `constructor`, `prototype` are never read;
+  `.length` works on lists and strings. There are no list or object
+  literals. A computed name sees the data model and other computed names,
+  never a template item, so it has one value per evaluation (and is
+  evaluated once per evaluation).
 - Operators: `+ - * / % ^`, unary `-` and `!`, `== != < <= > >=`, `&& ||`,
   `c ? a : b`, parentheses. `+` concatenates when either side is a string.
+  Precedence, loosest first: `?:`, `||`, `&&`, `== !=`, `< <= > >=`,
+  `+ -`, `* / %`, unary `- !`, `^` (right-associative; `-2^2` is -4).
+  Arithmetic reads numbers as they are, booleans as 1/0, numeric strings as
+  numbers, everything else (null included) as NaN. `==` is structural
+  equality. `<` on two strings compares text, otherwise numbers. Truthiness
+  and `&&`/`||` are JavaScript's (they return an operand; empty lists are
+  true).
 - Functions (fixed table): `min max round(x, digits?) floor ceil abs sqrt
   pow sum(list, key?) avg(list, key?) count(list) len(x) if(c, a, b)
   contains(listOrString, v) lower upper formatNumber(x, digits?)
   formatCurrency(x, code) formatPercent(x, digits?) formatDate(x, style?)`.
-- Bounds: source ≤ 500 characters, nesting ≤ 32, a step budget per
-  evaluation, computed names may reference each other without cycles (a cycle
-  is a validation error). A number that is not finite renders as `—`.
+  `min`/`max` take numbers or one list; they, `sum` and `avg` skip
+  non-numbers. `formatPercent` takes a ratio (0.25 → 25%). `formatDate` takes
+  an ISO string or epoch milliseconds and a style `short`, `medium`
+  (default), `long`, `full`, `time` or `datetime`; a date-only string is a
+  calendar date and never shifts with the time zone. A bad currency code or
+  style is an evaluation error. Formatting uses a locale and time zone the
+  caller passes, default `en-US` and `UTC` (server text and tests are
+  deterministic; the web passes the viewer's). A value written as text
+  (interpolation, `+`) uses the locale without grouping; lists join with
+  `, `; null is empty.
+- Bounds: source ≤ 500 characters per expression, nesting ≤ 32
+  (parentheses, brackets, calls, unary operators, `?:`), 10 000 steps per
+  evaluation (one per node, one per list item a function reads), computed
+  names may reference each other without cycles (a cycle is a validation
+  error). A number that is not finite renders as `—`. Inside `${…}`, a `}`
+  in a quoted string does not end the expression.
 
 ### 2.6 Catalog
 
@@ -125,7 +172,10 @@ Every component also takes `visible` (dynamic boolean, default true).
 
 `children` is a list of nodes (or ids), or a template:
 `{"path": "/plans", "template": <node or id>}` — one copy per item of the
-list at `path`, at most 200.
+list at `path`, at most 200, and at most 2 000 components rendered in all
+(so a template whose copy has 20 components shows 100 items; the renderer
+says how many are hidden). Templates do not nest: a template inside a
+template's subtree is refused.
 
 **Display**
 
@@ -140,8 +190,10 @@ list at `path`, at most 200.
 | `Chart` | `type` (`bar`/`line`/`area`/`pie`), `data` *dyn* (list of objects), `x` (key), `series`: `[{ key, label? }]`, `stacked?`, `height?` |
 | `Link` | `text` *dyn*, `url` *dyn* (`https:` only) |
 
-A column `format` is `text`, `number`, `currency:EUR`, `percent` or `date`.
-Limits: 200 table rows, 500 chart points.
+A column `format` is `text`, `number`, `currency:EUR`, `percent` or `date`;
+a column `align` is `start`, `center` or `end`. Limits: 200 table rows, 500
+chart points (checked on literals and on the initial data at a `@path`; the
+renderer caps live data). A choice `value` is a string, number or boolean.
 
 **Input** (`value` is a `@path`)
 
@@ -151,7 +203,7 @@ Limits: 200 table rows, 500 chart points.
 | `Slider` | `label`, `value`, `min`, `max`, `step?`, `format?` |
 | `CheckBox` | `label`, `value` |
 | `ChoicePicker` | `label?`, `options` *dyn*: `[{ label, value, description? }]`, `value`, `multiple?`, `display?` (`radio`/`chips`/`select`) |
-| `DateTimeInput` | `label`, `value`, `enableDate?` (default true), `enableTime?`, `min?`, `max?` |
+| `DateTimeInput` | `label`, `value`, `enableDate?` (default true), `enableTime?`, `min?`, `max?` (ISO 8601 strings) |
 | `Button` | `label` *dyn*, `action`, `variant?` (`primary`/`default`/`borderless`/`danger`), `disabled?` *dyn* |
 
 There is no password or file input, and none will be added (S12).
@@ -167,12 +219,17 @@ There is no password or file input, and none will be added (S12).
 | `{"event": {"name": "plan_chosen", "context": { "plan": <dyn>, … }, "userMessage"?: "I'll take ${plan.name}"}}` | answers the agent (§4) |
 
 `name` matches `^[a-z][a-z0-9_]{0,39}$`. `context` has at most 20 keys.
+Steps run in order on one click: each `set` sees the writes before it (a
+template item is read again from its path), and an event's context is
+resolved after them. A link that does not resolve to an `https:` URL stops
+the click with an error. Only `Button` carries `action`.
 
 ### 2.8 Limits
 
-View JSON ≤ 24 000 characters; ≤ 200 components; nesting ≤ 12; `data`
-≤ 16 000 characters serialized; ≤ 20 computed names; per-reply and
-per-session caps as in part 1.
+View JSON ≤ 24 000 characters; ≤ 200 components; nesting ≤ 12 (the root is
+level 1); `data` ≤ 16 000 characters serialized; ≤ 20 computed names;
+per-reply and per-session caps as in part 1. All numbers are
+`INLINE_UI_VIEW_LIMITS` in `src/shared/inline-ui/limits.ts`.
 
 ## 3. Validation and repair
 
@@ -185,7 +242,19 @@ so the existing repair round and notices apply unchanged.
   `value` is not a `@path`, an expression that does not parse (with the
   expression and position), a bad event name, a URL literal that is not
   `https:`, a limit exceeded.
-- **repairable**: an unknown prop (named; it is ignored).
+- **repairable**: an unknown prop or top-level key (named; it is ignored), a
+  component no parent reaches, a name an expression outside a template reads
+  that is neither a data key, a computed name, nor a key an input or `set`
+  writes (`unknown-name`; it would be null).
+
+Issue codes: `cut-off`, `too-large`, `invalid-json`, `not-object`,
+`no-root`, `bad-node`, `bad-id`, `duplicate-id`, `unknown-component`,
+`unknown-child`, `cycle`, `shared-child`, `too-deep`,
+`too-many-components`, `bad-data`, `bad-computed`, `missing-prop`,
+`bad-prop`, `input-binding`, `bad-path`, `bad-expr`, `bad-action`,
+`bad-event-name`, `bad-url`, `nested-template` (fatal); `unknown-prop`,
+`unknown-key`, `unused-component`, `unknown-name` (repairable). At most 20
+issues are listed, then one `more-issues` line.
 
 Messages are written for the model: what is wrong, where (component id and
 prop), and what is accepted.
@@ -202,7 +271,12 @@ A `Button` with an `event` action sends a message in the conversation:
 Server (`resolveInlineUiTurnNotes`): the block must be a view of this
 session, the component must exist and carry an event of that name, the
 context keys must be the declared ones, the context is JSON of at most 4 000
-characters and depth 4. A request that fails any check is refused with a
+characters and depth 4 (a flat object is depth 1) — `validateViewAction`
+in the shared module; `validateViewData` checks the `data` sent for the
+state. The web builds the payload with `runViewActions` /
+`resolveEventAction`: context values resolved, numbers that are not finite
+sent as null, `userMessage` (else the label, else the event name) cleaned
+like a suggestion and capped at 1 000 characters. A request that fails any check is refused with a
 specific message (fail loud), not silently stripped. Then:
 
 - the model reads one line in the volatile part, after the provenance line:
@@ -237,13 +311,18 @@ stays the tool; a view is for structured answers at the end of a reply.
   dependency). No click-to-run, no live-frame cap, no freeze marker: no
   generated code runs. **View source** shows the JSON. **Save as artifact**
   is not offered for a view.
-- **Streaming preview**: the fence body so far is healed (open strings,
-  arrays and objects closed) and rendered with inputs disabled when it
-  validates; otherwise the "Building “T”…" line alone.
+- **Streaming preview**: the fence body so far is healed (`healPartialJson`:
+  open strings, arrays and objects closed; a trailing incomplete key,
+  literal or number dropped with its key; null when there is nothing usable)
+  and linted as closed, then rendered with inputs disabled when it
+  validates; otherwise the "Building “T”…" line alone. A string still being
+  written is kept (text streams), so a half-written component name fails
+  the lint for a chunk; the preview keeps its last good render.
 - **Other surfaces**: `inlineUiViewText(view)` writes a view as plain
   markdown (headings, text, `label: value`, tables of at most 20 rows, a
   chart as its table, inputs with their current value, buttons as a list of
-  choices). Server-side surfaces that know the session — channel replies,
+  choices; locale `en-US` and `UTC` unless given; `opts.data` shows a stored
+  answer's data; an expression that fails at render shows as `⚠ <reason>`). Server-side surfaces that know the session — channel replies,
   `POST /api/chat` without `renders`, the OpenAI-compatible API, room
   notifications — use it in place of part 1's one-line fallback. Clients that
   only hold the marker (the terminal UIs, MCP) keep the line.
@@ -292,7 +371,16 @@ guard reads a view's JSON with the reply. Promotion refuses a view (409).
   collection, numbers over time) and view-specific negatives. The gate and
   its "not yet run" status are as in part 1 (it needs a live model).
 
-## 9. Not in this change
+## 9. Shared module
+
+`src/shared/inline-ui/view/` (exported from `src/shared/inline-ui`), pure
+TypeScript with no runtime imports outside `src/shared/inline-ui`:
+`types.ts` (documents, components, actions, state), `catalog.ts` (the one
+table the normalizer, the lint and `inlineUiViewCatalogPrompt()` are built
+from), `expr.ts`, `format.ts`, `json.ts`, `data.ts`, `normalize.ts`,
+`lint.ts`, `actions.ts`, `text.ts`, `partial.ts`.
+
+## 10. Not in this change
 
 Native channel widgets (Telegram keyboards, Slack blocks, terminal selects);
 views written by child agents; binding a tool result into the data model
