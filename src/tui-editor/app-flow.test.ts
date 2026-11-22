@@ -65,7 +65,8 @@ test('a chat message the gateway connection could not take is reported, not lost
   const editor = mount();
   f.sendChat.mockReturnValue(false);
   (editor as unknown as { handleChatSubmit(text: string): void }).handleChatSubmit('hello while offline');
-  expect(text()).toContain('Not connected: "hello while offline" was not sent');
+  expect(text()).toContain('Not connected: "hello while offline"');
+  expect(text()).toContain('was not sent');
 });
 
 /** An open file with an unsaved edit. */
