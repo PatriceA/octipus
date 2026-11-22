@@ -76,7 +76,11 @@ const median = (ns: number[]): number => {
  */
 export function reconstructPageText(items: PdfTextItem[]): string {
   const positioned: Positioned[] = items
-    .filter((i) => typeof i.str === 'string' && i.str.length > 0 && Array.isArray(i.transform))
+    // Whitespace-only items carry no text, only a width: pdfjs inserts one
+    // across a gap between two runs, as wide as the gap itself, so keeping it
+    // closed every column gutter and cell gap on a real PDF. The gap test
+    // below puts the right amount of space back.
+    .filter((i) => typeof i.str === 'string' && i.str.trim().length > 0 && Array.isArray(i.transform))
     .map((i) => ({
       str: i.str,
       // pdfjs transform is [scaleX, skewX, skewY, scaleY, translateX, translateY].
