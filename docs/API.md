@@ -1038,8 +1038,38 @@ curl https://your-host/v1/chat/completions \
 
 - Agent-mode usage has no prompt/completion split: the observed total is
   reported in `completion_tokens` and `total_tokens`, with `prompt_tokens: 0`.
-- **Streaming** (`stream: true`) is protocol-correct SSE that chunks the final
-  message text. Token-true streaming (per-delta) is a planned follow-up.
+- **Streaming** (`stream: true`) is OpenAI-style SSE: a role chunk, content
+  chunks, a chunk with `finish_reason: "stop"`, then `data: [DONE]`, every
+  chunk with the request's one `chatcmpl-…` id. The content chunks concatenate
+  to exactly the `message.content` the same request returns without `stream`.
+  - **Passthrough** (a registry model id) streams **token-true**: content
+    chunks leave as the provider produces them. Text is held back only while
+    the provider-reply normalisation could still change it: leading whitespace
+    until the first visible character, a reply that opens with `{` (it may be
+    a leaked `{"thought": …}` wrapper that is stripped) in full, and anything
+    from DeepSeek tool-template markup (`｜`) on. If the normalised reply does
+    not continue what was already sent, the stream ends with an OpenAI error
+    frame (`data: {"error": …}`) instead of a finish chunk. Tool-call deltas
+    are never sent as text. Every provider with a real `stream()` (OpenAI,
+    Anthropic, Gemini, Vertex, OpenRouter, Mistral, DeepSeek, Grok, Moonshot,
+    Meta, z.ai, Ollama, the LiteLLM proxy, custom OpenAI-, Anthropic- and
+    Gemini-compatible providers) streams this way; CLI providers, and Ollama
+    with `think: false` or JSON mode, produce their whole reply as one chunk. A stream
+    that fails before its first chunk is completed without streaming; a
+    refusal before it (unknown model, quota, open circuit) keeps its HTTP
+    status and error envelope. A client that disconnects aborts the provider
+    call. `agent.streaming: false` turns this off (the finished reply is
+    chunked). Chunks carry the requested model id; usage is not streamed
+    (`stream_options` is not supported).
+  - **Agent mode** (`octipus/agent`) chunks the turn's **final** answer once
+    the turn ends. The answer is not final while the model writes it: the
+    output guard decides on the whole text and may replace it, inline-UI blocks
+    become markers, child results are relayed into it, swarm scaffolding is
+    stripped, and an empty reply becomes the last status update. SSE cannot
+    take sent text back, so nothing is sent before those passes have run.
+    Text written before a tool call and sub-agent output are never part of the
+    stream. The web chat and the TUI still receive the root agent's live text
+    (`chat.delta`) over the gateway, where the final message replaces it.
 - `octipus/<role>` model ids (forced single-role) are **not yet wired** and
   return `400 model_not_found`; use `octipus/agent` or a registry model.
 - Errors use the OpenAI error envelope (`invalid_request_error`,

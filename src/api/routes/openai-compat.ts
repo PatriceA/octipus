@@ -3,8 +3,11 @@ import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
+import { passthroughSse, toChunk } from '@/api/openai-token-stream';
+import { getConfig } from '@/config';
 import { getAgentService } from '@/core/agent';
 import type { AgentMessage } from '@/core/types';
+import type { CompletionOptions, StreamChunk } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
 import { getProviderRouter } from '@/models/providers';
@@ -36,8 +39,11 @@ import { inlineUiFallbackTextResolved } from '@/core/inline-ui/fallback';
  * app-level `.derive()` + `authGuard` cover `/v1` too). The `api:chat` scope is
  * enforced on completions. Errors use the OpenAI error envelope so SDKs behave.
  *
- * Streaming (`stream: true`) is protocol-correct SSE that chunks the *final*
- * text (WS6 step 1). Token-true streaming is a later step; see `src/api/sse.ts`.
+ * Streaming (`stream: true`): passthrough streams token-true from the
+ * provider's `stream()` (`src/api/openai-token-stream.ts`). Agent mode chunks
+ * the turn's *final* text: the turn rewrites its answer after the model has
+ * written it (the output guard's whole-text verdict, inline-UI markers, relay
+ * and scaffolding passes), and SSE cannot take streamed text back.
  */
 
 /**
@@ -98,17 +104,6 @@ function toChatCompletion(
       },
     ],
     usage,
-  };
-}
-
-/** One streaming chunk in the `chat.completion.chunk` shape. */
-function toChunk(id: string, model: string, created: number, delta: Record<string, unknown>, finish: string | null) {
-  return {
-    id,
-    object: 'chat.completion.chunk' as const,
-    created,
-    model,
-    choices: [{ index: 0, delta, finish_reason: finish }],
   };
 }
 
@@ -249,7 +244,7 @@ export const openaiCompatRoutes = new Elysia()
           set.status = 400;
           return oaiError(`Unknown model "${model}"`, 'invalid_request_error', 'model_not_found');
         }
-        const result = await getProviderRouter().complete({
+        const options: CompletionOptions = {
           model: row?.modelId ?? model,
           modelConfigName: row?.name,
           messages: agentMessages,
@@ -258,7 +253,17 @@ export const openaiCompatRoutes = new Elysia()
           topP: body.top_p,
           stopSequences: normalizeStop(body.stop),
           userId: user.id,
-        });
+        };
+        // `agent.streaming: false` means no streamed provider calls at all;
+        // the reply is then chunked whole, as below.
+        if (wantStream && getConfig().agent?.streaming !== false) {
+          const streamed = await openPassthroughStream(id, model, options, request.signal);
+          if (streamed) {
+            set.headers = { ...set.headers, ...SSE_HEADERS };
+            return streamed;
+          }
+        }
+        const result = await getProviderRouter().complete(options);
 
         const usage = {
           prompt_tokens: result.usage.inputTokens,
@@ -314,6 +319,37 @@ export const openaiCompatRoutes = new Elysia()
       detail: { tags: ['openai-compat'] },
     },
   );
+
+/**
+ * Start a token-true passthrough stream. The provider is read up to its first
+ * chunk before any byte is sent, so a request it refuses (unknown model, quota,
+ * an open circuit) still gets its HTTP status and error envelope. A stream
+ * that fails before that first chunk returns null: the caller completes
+ * without streaming, as the root agent does (nothing was shown yet). The
+ * client going away aborts the provider call.
+ */
+async function openPassthroughStream(id: string, model: string, options: CompletionOptions, clientSignal: AbortSignal) {
+  const controller = new AbortController();
+  const onClientGone = () => controller.abort(clientSignal.reason);
+  if (clientSignal.aborted) onClientGone();
+  else clientSignal.addEventListener('abort', onClientGone, { once: true });
+  const release = () => {
+    clientSignal.removeEventListener('abort', onClientGone);
+    controller.abort();
+  };
+  const opts: CompletionOptions = { ...options, signal: controller.signal };
+  const chunks = getProviderRouter().stream(opts);
+  let first: IteratorResult<StreamChunk>;
+  try {
+    first = await chunks.next();
+  } catch (err) {
+    release();
+    if (clientSignal.aborted) throw err;
+    apiLogger.warn({ err, model }, '/v1/chat/completions: stream failed before its first chunk — completing without streaming');
+    return null;
+  }
+  return passthroughSse({ id, model, chunks, first, options: opts, aborted: () => clientSignal.aborted, release });
+}
 
 /** Normalize OpenAI `stop` (string | string[] | undefined) to string[] | undefined. */
 function normalizeStop(stop: string | string[] | undefined): string[] | undefined {

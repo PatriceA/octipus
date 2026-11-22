@@ -7,6 +7,20 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **`/v1/chat/completions` passthrough streams token by token**
+  ([API](docs/API.md#notes--limits)). With a registry model id and
+  `stream: true`, content chunks now leave as the provider produces them,
+  instead of after the whole reply; the chunks still concatenate to exactly
+  the non-streamed `message.content`. Text is held back only while the reply
+  normalisation could still change it (leading whitespace, a reply opening
+  with `{`, DeepSeek template markup). A refusal before the first chunk keeps
+  its HTTP status; a disconnecting client now aborts the provider call. CLI
+  providers still answer as one chunk, and `agent.streaming: false` turns it
+  off. Agent mode (`octipus/agent`) still chunks the turn's final answer: the
+  output guard and the other answer passes decide on the whole text, and SSE
+  cannot take sent text back. Any streamed `/v1` response whose client goes
+  away now releases what it held.
+
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
   [reference](docs/CONTEXT-HOOKS.md)).
