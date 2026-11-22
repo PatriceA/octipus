@@ -441,6 +441,25 @@ describe('reconstructPageText — tables', () => {
     expect(text).toContain('| r1 | 1 | 2 |');
   });
 
+  test('a page with a huge number of items takes the plain path, fast', () => {
+    // 20,000 gapped items on one baseline (a pathological producer): column
+    // and table detection are skipped, and the line reads as it always did.
+    const many = Array.from({ length: 20000 }, (_, k) => item('ab', 50 + k * 30, 700));
+    const started = performance.now();
+    const text = reconstructPageText(many);
+    expect(performance.now() - started).toBeLessThan(300);
+    expect(text.split('  ').length).toBe(20000);
+  });
+
+  test('a dense grid just under those bounds is still bounded', () => {
+    // 20 lines of 499 gapped items: ~500 persistent gutters. Pairing every
+    // gutter run with every other took ~7.7s; they are now not paired at all.
+    const grid = Array.from({ length: 20 }, (_, l) => Array.from({ length: 499 }, (_, k) => item('ab', 50 + k * 30, 700 - l * 12))).flat();
+    const started = performance.now();
+    reconstructPageText(grid);
+    expect(performance.now() - started).toBeLessThan(1500);
+  });
+
   test('a long run that is neither columns nor a table stays fast', () => {
     // Every line starts a candidate table that runs to the foot of the page
     // and is then refused (two columns, no header): the worst case for the scan.

@@ -135,6 +135,13 @@ const MAX_TABLE_ROW_STEP_RATIO = 2.5;
 /** A line closer than this fraction of the row pitch continues the row above (a wrapped cell). */
 const CONTINUATION_STEP_RATIO = 0.75;
 
+/** Above this many items on a page, or on one baseline, the page is read line by line only. */
+const MAX_LAYOUT_ITEMS = 10000;
+const MAX_LAYOUT_LINE_ITEMS = 500;
+
+/** Above this many persistent gutters on a page, it is not read as column bands. */
+const MAX_GUTTER_RUNS = 16;
+
 /** Starts retried inside a run refused as a table before the rest of it is skipped. */
 const MAX_TABLE_RETRIES = 3;
 
@@ -364,6 +371,10 @@ function findColumnBands(lines: Line[], charWidth: number, pitch: number): Band[
   const runs = followGutters(lines, minWidth, eps, edgeStep).filter(
     (r) => r.evidence >= (r.x1 - r.x0 >= charWidth * WIDE_GUTTER_RATIO ? MIN_GUTTER_LINES : MIN_NARROW_GUTTER_LINES),
   );
+  // Prose pages have a gutter or three. Dozens of persistent gutters are a
+  // grid (a wide table), which the table pass reads; pairing every run with
+  // every other here would be quadratic in them for nothing.
+  if (runs.length > MAX_GUTTER_RUNS) return [];
   for (const run of runs) {
     // Lines below the last two-sided line belong to the band only while they
     // stay close: a short footer far below the body would otherwise be read
@@ -677,6 +688,15 @@ export function reconstructPageText(items: PdfTextItem[]): string {
   // one figure or a page break would drag an average and split every paragraph.
   const pitch = medianPitch(lines);
   const charWidth = charWidthOf(positioned);
+
+  // Column and table detection compare gaps across lines and grow faster
+  // than the item count when one baseline holds thousands of gapped items.
+  // No real page is near these bounds (a dense page is ~5k items, a line a
+  // few hundred at one item per glyph); a producer that is gets the plain
+  // line-by-line reading rather than a stalled worker.
+  if (positioned.length > MAX_LAYOUT_ITEMS || lines.some((l) => l.items.length > MAX_LAYOUT_LINE_ITEMS)) {
+    return renderFlow(lines, pitch).join('\n').trim();
+  }
 
   const out: string[] = [];
   const block = (rendered: string[]) => {
