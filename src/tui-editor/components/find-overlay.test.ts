@@ -75,12 +75,12 @@ describe('FindOverlay', () => {
 
   test('hands its matches and the current one to the buffer view, and clears them on close', () => {
     const buffers = new BufferStore();
-    buffers.openFile('/tmp/file.ts', 'ab ab ab');
+    const rec = buffers.openFile('/tmp/file.ts', 'ab ab ab');
     const calls: Array<[string | null, number, number | null]> = [];
     const overlay = new FindOverlay({ buffers, onClose: () => {}, onMatches: (id, matches, current) => calls.push([id, matches.length, current?.col ?? null]) });
     overlay.handleInput('a'); overlay.handleInput('b');
     overlay.handleInput('\r');
-    expect(calls.at(-1)).toEqual(['file:/tmp/file.ts', 3, 3]);
+    expect(calls.at(-1)).toEqual([rec.id, 3, 3]);
     overlay.handleInput('\x1b');
     expect(calls.at(-1)).toEqual([null, 0, null]);
   });

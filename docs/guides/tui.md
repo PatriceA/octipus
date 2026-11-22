@@ -198,6 +198,7 @@ At 80 columns and wider, the editor shows a file tree, buffer editor and chat. B
 | `Alt+Z` | Soft wrap on or off |
 | `Ctrl+Shift+F` / `Alt+G` | Search the project |
 | `Alt+N` | New file |
+| `Alt+Y` | Resolve what is waiting: a file changed on disk under unsaved edits, an agent edit to review |
 | `Ctrl+Q` | Quit, with unsaved-change protection |
 
 In the file:
@@ -213,7 +214,7 @@ Long lines scroll horizontally to keep the cursor visible, or break into rows wi
 
 Undo (`Ctrl+Z`, redo `Ctrl+Y`) works in steps you would expect: a burst of typing, a paste, a replace-all or an accepted agent edit is one step. The unsaved marker (`●`) compares the buffer with the file as last opened or saved, so undoing back to it clears the marker.
 
-Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode, `/wrap [on|off]` soft wrap, `/goto <line[:column]>` goes to a line, `/search [query]` searches the project, and `/new-file`, `/rename`, `/delete` and `/revert` work on files (below).
+Editor commands, typed in the chat composer: `/new` opens a scratch buffer, `/save-as [path]` saves the active buffer under a path (relative to the project, or absolute; without a path it asks), `/vim [on|off]` switches vim mode, `/wrap [on|off]` soft wrap, `/goto <line[:column]>` goes to a line, `/search [query]` searches the project, and `/new-file`, `/rename`, `/delete` and `/revert` work on files (below). A command's argument is taken as typed after the first space, so a path can hold runs of spaces.
 
 ### The mouse
 
@@ -235,18 +236,18 @@ The wheel scrolls the pane under the pointer, whatever has the focus. While a bo
 | --- | --- |
 | `Alt+N`, `/new-file [path]`, `n` in the tree | Create an empty file and open it; refuses a path that exists or a folder that does not |
 | `/rename [path]`, `m` in the tree | Rename (move) the file — or, from the tree, a folder — taking its open tabs with it, unsaved edits included |
-| `/delete`, `d` or `Delete` in the tree | Delete the file after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
+| `/delete [path]`, `d` or `Delete` in the tree | Delete the file (the path given, else the active tab's) after asking (`y` deletes, Enter or Escape cancel; it says when the tab has unsaved changes). Folders are not deleted from the editor |
 | `/revert` | Put the file on disk back into the buffer (one undo step) |
 
-Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone and you are asked once: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.
+Open files are watched. When a file changes on disk — another editor, a formatter, switching branches — a tab without unsaved edits is reloaded and the bottom bar says so (`Ctrl+Z` brings the old text back); a tab with unsaved edits is left alone, and nothing opens over what you are typing: the bottom bar says `⚑ <file> changed on disk — press alt+y to resolve` until you do. `Alt+Y` (or saving that tab) asks: **r** reload, **o** overwrite with yours, Enter or Escape keep editing (saving asks again). Each version of the file is offered once. A file deleted on disk is reported once; the tab keeps its text and `Ctrl+S` writes it again.
 
 ### Saving
 
-Saving writes a temporary file next to the original and renames it into place, so a crash or a full disk leaves the old file rather than half of the new one. The file keeps its permissions, its line endings (a CRLF file is shown without `␍` and saved as CRLF) and its byte-order mark. A file that mixes CRLF and LF is saved with the more common one, and the editor says so when it opens. A file reached through a symlink is written at its target; a file with several hard links is written in place.
+Saving writes a temporary file next to the original and renames it into place, so a crash or a full disk leaves the old file rather than half of the new one. The file keeps its permissions, its owner and group, its line endings (a CRLF file is shown without `␍` and saved as CRLF) and its byte-order mark. A file that mixes CRLF and LF is saved with the more common one, and the editor says so when it opens. A file reached through a symlink is written at its target; a file with several hard links is written in place, and so is a file whose owner the editor may not give back to the temporary file, or whose folder does not let one be created there.
 
 If the file changed on disk after you opened or last saved it — another editor, a formatter, the agent — saving asks first: **r** reloads the file (one undo step brings your version back), **o** overwrites it with yours, Enter or Escape cancels. A file deleted on disk can be written again with **o**.
 
-The editor does not open a file it could not save back unchanged: a file that is not valid UTF-8, a binary file (it contains NUL bytes), a folder, or a file over 5 MB is refused with the reason.
+The editor does not open a file it could not save back unchanged: a file that is not valid UTF-8, a binary file (it contains NUL bytes), a folder, a file over 5 MB, or anything that is not a regular file (a named pipe, a device, a socket) is refused with the reason.
 
 Scratch buffers are saved with Save As: Ctrl+S on one asks for a path. Save As refuses a folder that does not exist and a path already open in another tab, and asks for a second Enter before replacing an existing file.
 
@@ -283,6 +284,8 @@ The query, replacement, file filter and Save As fields accept paste, emoji and i
 | `:qa` / `:qa!` | Quit the editor (asking) / quit discarding changes |
 | `Esc` | Back to NORMAL; closes the `:` line |
 
+As in vim, outside INSERT the cursor stands on a character, never after the last one (`$a` appends on the same line, `h` and `l` stay on the line, `x` on an empty line does nothing); VISUAL selections include the character under the cursor, and `d` / `y` there delete or yank exactly that; a line yanked or deleted with `yy` / `dd` is put below the current line by `p`, other text after the cursor.
+
 `Ctrl+S` saves in every mode. Escape is recognised however the terminal sends it, including the kitty keyboard protocol's `ESC[27u`. It is a small subset of vim, not a replacement for it.
 
 Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
@@ -295,7 +298,7 @@ The state file is private to its owner. Changes are checkpointed after a short d
 
 ### Reviewing the agent's edits
 
-When the agent writes a file, its edit is shown as a diff before it reaches the buffer: the buffer is locked until you decide, and edits to several files are reviewed one after another. A file that is not open is opened in a tab for the review (a new file is compared with nothing); a change to a file the agent names relative to the project reaches its tab too.
+When the agent writes a file, its edit is shown as a diff before it reaches the buffer. The review does not open on its own — its single-letter keys would take whatever you were typing as an answer — and it does not switch tabs: the bottom bar says `⚑ agent edit to <file> ready for review — press alt+y to resolve` (with how many more are waiting), and `Alt+Y`, or saving that tab, opens it. Edits to several files wait in order; a newer edit to the same file replaces the waiting one. An edit that replaces one fragment (`str_replace_editor`'s `str_replace`, `edit` with `old_string`) is made in the text the agent works from — its edit still waiting, else the open tab, else the file on disk — and reviewed as the whole file; if the fragment it replaces is not there, or is there more than once, the bottom bar and the transcript say so and nothing is guessed. While the review is open the buffer is locked. A file that is not open is opened in a background tab for the review (a new file is compared with nothing); a change to a file the agent names relative to the project reaches its tab too.
 
 The diff is split into **hunks** — runs of changed lines — marked with the current one (`▌`) and your decision (`✓` / `✗`):
 
@@ -309,9 +312,11 @@ The diff is split into **hunks** — runs of changed lines — marked with the c
 | `a` / `r` or Escape | Accept / reject every hunk and apply |
 | Up/Down, PageUp/PageDown, Home/End | Scroll |
 
+If the tab has unsaved edits, only the agent's changes are hunks — the agent wrote against the file, not against your unsaved text — and accepting them keeps your edits; the tab stays unsaved while it differs from the file. A change of the agent's that overlaps or touches lines you changed is a **conflict**, marked `!`: it starts rejected (Enter keeps your lines), and accepting it replaces your lines in that block with the agent's.
+
 Within a changed line and its replacement, the words that changed are drawn inverted. The result — the accepted hunks from the agent, the rest as they were — replaces the buffer as one undo step. The agent's text is compared without the CRs of a CRLF file, so only the lines that really changed show, and the file is saved CRLF again. A change too large to compare line by line (a file rewritten throughout) is shown as one replacement, and the box says so.
 
-The review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after accepting everything it is clean (buffer and disk agree), after rejecting or a partial accept it shows as unsaved, and Ctrl+S writes your version back over the agent's. If the file changed on disk by something other than the agent while you reviewed, the transcript says so and Ctrl+S asks before overwriting it.
+The review controls the editor buffer; it does not undo a filesystem write the agent already performed. If the agent has already written the file when you decide, the tab says so: after accepting everything it is clean (buffer and disk agree), after rejecting or a partial accept it shows as unsaved, and Ctrl+S writes your version back over the agent's. If you rejected some of the agent's edit and the agent writes the file only afterwards, the file is not reloaded over your choice: the tab keeps your version, shown as unsaved against the agent's file, and the bottom bar says so. If the file changed on disk by something other than the agent while you reviewed, the transcript says so and Ctrl+S asks before overwriting it.
 
 Opening the workspace picker (`Ctrl+K`) or the MCP list (`Ctrl+E`) again while it loads does nothing; a workspace request that gets no answer within 5 seconds, or fails, is shown in the picker with the reason.
 
@@ -334,7 +339,7 @@ OCTIPUS_TUI_ICONS=ascii octi edit
 OCTIPUS_TUI_ICONS=emoji octi tui
 ```
 
-Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own are `app.file.saveAs` and `app.vim.toggle`). The editor's `/reload` reloads those bindings; `/hotkeys` (`F5`) displays them, with vim mode's keys and commands.
+Keybindings can be overridden in `~/.octipus/keybindings.json` (the editor's own include `app.file.saveAs`, `app.vim.toggle` and `app.pending.open`, the key that resolves a waiting prompt). The editor's `/reload` reloads those bindings; `/hotkeys` (`F5`) displays them, with vim mode's keys and commands.
 
 If either surface stops on an error, or the terminal closes under it, it first turns mouse reporting off, shows the cursor and leaves raw mode, then prints the error and exits with a non-zero status, so the shell you return to works normally.
 

@@ -27,6 +27,8 @@ export interface CommandHost {
   /** Copy the editor's selection, when the editor has the focus and something selected; returns whether it did. */
   copySelection(): boolean;
   newScratch(): void;
+  /** Open the oldest background prompt (file changed on disk, agent edit to review). */
+  openPending(): void;
   saveAsCommand(path: string): void;
   reloadKeybindings(): void;
   closeActiveBuffer(): void;
@@ -46,9 +48,10 @@ export function handleChatSubmit(host: CommandHost, rawText: string): void {
   ctx.tui.requestRender();
 
   if (text.startsWith('/')) {
-    const parts = text.slice(1).split(/\s+/);
-    const name = parts[0];
-    const value = parts.slice(1).join(' ').trim();
+    // The name ends at the first whitespace; the rest is the argument as typed: a path may hold runs of spaces.
+    const match = /^(\S*)\s*([\s\S]*)$/.exec(text.slice(1));
+    const name = match?.[1] ?? '';
+    const value = match?.[2] ?? '';
     // TUI-local commands intercepted before going to the gateway.
     if (name === 'plan-hide') { host.hidePlanDetails(); return; }
     if (name === 'vim') {
@@ -64,7 +67,7 @@ export function handleChatSubmit(host: CommandHost, rawText: string): void {
     if (name === 'search') { host.overlays.openProjectSearch(value); return; }
     if (name === 'new-file') { host.fileCommands.newFile(value); return; }
     if (name === 'rename') { host.fileCommands.rename(value); return; }
-    if (name === 'delete') { host.fileCommands.delete(); return; }
+    if (name === 'delete') { host.fileCommands.deleteCommand(value); return; }
     if (name === 'revert') { host.fileCommands.revert(); return; }
     if (name === 'save-as') { host.saveAsCommand(value); return; }
     if (name === 'quit' || name === 'exit' || name === 'q') { host.shutdownAndExit(); return; }
@@ -103,6 +106,7 @@ export function handleGlobalKey(host: CommandHost, data: string): { consume: tru
   if (kb.matches(data, 'app.goto.line'))     { host.goToLine(''); return { consume: true }; }
   if (kb.matches(data, 'app.search.project')) { overlays.openProjectSearch(''); return { consume: true }; }
   if (kb.matches(data, 'app.file.new'))      { host.fileCommands.newFile(''); return { consume: true }; }
+  if (kb.matches(data, 'app.pending.open'))  { host.openPending(); return { consume: true }; }
   if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
   if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
   if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }

@@ -21,6 +21,7 @@ declare module '@/tui-kit' {
     'app.goto.line': true;
     'app.search.project': true;
     'app.file.new': true;
+    'app.pending.open': true;
   }
 }
 
@@ -31,6 +32,7 @@ export const EDITOR_KEYBINDINGS = {
   'app.goto.line':    { defaultKeys: 'ctrl+g', description: 'Go to a line (line or line:column)' },
   'app.search.project': { defaultKeys: ['ctrl+shift+f', 'alt+g'], description: 'Search the project\'s files' },
   'app.file.new':     { defaultKeys: 'alt+n', description: 'Create a new file and open it' },
+  'app.pending.open': { defaultKeys: 'alt+y', description: 'Resolve what is waiting: a file changed on disk, an agent edit to review' },
 } as const satisfies KeybindingDefinitions;
 
 /**

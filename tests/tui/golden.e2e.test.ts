@@ -73,6 +73,8 @@ describe.skipIf(process.platform === 'win32')('golden screens', () => {
     tui.send(KEY.CtrlO); await tui.waitFor('Open file');
     tui.send('example.ts'); tui.send(KEY.Enter); await tui.waitFor('const greeting');
     toolCall(tui, 'write_file', { path: 'example.ts', content: 'const greeting = "hi";\nconst farewell = "bye";\n' });
+    // The edit waits in the mode bar until asked for: Alt+Y opens the review.
+    await tui.waitFor('ready for review'); tui.send('\x1by');
     await tui.waitFor('hunk 1/');
     await golden(tui, 'editor-review');
   });

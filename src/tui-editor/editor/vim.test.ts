@@ -39,7 +39,7 @@ describe('vim — motions in NORMAL', () => {
     b.setCursor({ line: 0, col: 5 });
     let s = newVimState();
     s = step(b, k('$'), s).state;
-    expect(b.getCursor()).toEqual({ line: 0, col: 11 });
+    expect(b.getCursor()).toEqual({ line: 0, col: 10 }); // on the last character
     s = step(b, k('0'), s).state;
     expect(b.getCursor()).toEqual({ line: 0, col: 0 });
   });
@@ -52,7 +52,7 @@ describe('vim — motions in NORMAL', () => {
     s = step(b, k('g'), s).state;
     expect(b.getCursor()).toEqual({ line: 0, col: 0 });
     s = step(b, k('G'), s).state;
-    expect(b.getCursor()).toEqual({ line: 2, col: 1 });
+    expect(b.getCursor()).toEqual({ line: 2, col: 0 }); // on the last line's character, not after it
   });
 
   test('pending leader expires on a non-matching key', () => {
@@ -127,7 +127,7 @@ describe('vim — edits', () => {
     s = step(b, k('y'), s).state;
     expect(s.register).toBe('hello\n');
     s = step(b, k('p'), s).state;
-    expect(b.text()).toBe('hello\nhello'); // paste at cursor
+    expect(b.text()).toBe('hello\nhello'); // put below the line
   });
 
   test('u undoes', () => {
@@ -233,5 +233,88 @@ describe('vim — VISUAL mode', () => {
     s = step(b, k('y'), s).state;
     expect(s.mode).toBe('NORMAL');
     expect(s.register.length).toBeGreaterThan(0);
+  });
+});
+
+// Review findings: yyp put the line at the cursor, $ stood past the last character so $a appended on the next
+// line, x at the end of a line joined it with the next, and VISUAL left out the character under the cursor.
+describe('vim — text it must get right', () => {
+  test('yyp puts the yanked line below the current one, whatever the column', () => {
+    const b = new Buffer('first\nsecond');
+    b.setCursor({ line: 0, col: 2 });
+    let s = newVimState();
+    for (const c of 'yyp') s = step(b, k(c), s).state;
+    expect(b.text()).toBe('first\nfirst\nsecond');
+    expect(b.getCursor()).toEqual({ line: 1, col: 0 });
+    b.setCursor({ line: 2, col: 3 });
+    for (const c of 'ddp') s = step(b, k(c), s).state;
+    expect(b.text()).toBe('first\nfirst\nsecond');
+  });
+
+  test('a character-wise register is put after the cursor', () => {
+    const b = new Buffer('abc');
+    let s = newVimState();
+    for (const c of 'vly') s = step(b, k(c), s).state;
+    expect(s.register).toBe('ab');
+    s = step(b, k('p'), s).state;
+    expect(b.text()).toBe('aabbc');
+  });
+
+  test('$ stands on the last character, so $a appends on the same line', () => {
+    const b = new Buffer('hello\nnext');
+    let s = newVimState();
+    s = step(b, k('$'), s).state;
+    expect(b.getCursor()).toEqual({ line: 0, col: 4 });
+    s = step(b, k('a'), s).state;
+    expect(b.getCursor()).toEqual({ line: 0, col: 5 });
+    b.type('!');
+    expect(b.text()).toBe('hello!\nnext');
+    s = step(b, ESC, s).state;
+    expect(b.getCursor()).toEqual({ line: 0, col: 5 }); // Esc steps back onto the last character
+    s = step(b, k('l'), s).state;
+    expect(b.getCursor()).toEqual({ line: 0, col: 5 }); // l does not leave the line
+    s = step(b, k('j'), s).state;
+    expect(b.getCursor()).toEqual({ line: 1, col: 3 });
+  });
+
+  test('the NORMAL cursor clamps to the last grapheme, a wide one included', () => {
+    const b = new Buffer('ab👍🏽');
+    step(b, k('$'), newVimState());
+    expect(b.getCursor()).toEqual({ line: 0, col: 2 });
+  });
+
+  test('x at or after the end of a line does nothing; it never joins lines', () => {
+    const b = new Buffer('\nkeep');
+    step(b, k('x'), newVimState());
+    expect(b.text()).toBe('\nkeep');
+    const c = new Buffer('ab\ncd');
+    let s = newVimState();
+    for (const key of '$xxx') s = step(c, k(key), s).state;
+    expect(c.text()).toBe('\ncd');
+  });
+
+  test('VISUAL is inclusive: v d deletes the character under the cursor, vlld three, and y yanks what d would delete', () => {
+    const b = new Buffer('abcdef');
+    let s = newVimState();
+    for (const c of 'vd') s = step(b, k(c), s).state;
+    expect(b.text()).toBe('bcdef');
+    expect(s.register).toBe('a');
+    for (const c of 'vlld') s = step(b, k(c), s).state;
+    expect(b.text()).toBe('ef');
+    expect(s.register).toBe('bcd');
+    const y = new Buffer('one two');
+    let t = newVimState();
+    y.setCursor({ line: 0, col: 4 });
+    for (const c of 'v$y') t = step(y, k(c), t).state;
+    expect(t.register).toBe('two');
+    expect(y.text()).toBe('one two');
+    expect(y.getCursor()).toEqual({ line: 0, col: 4 });
+    // Backwards: the anchor's character is in too.
+    const back = new Buffer('abcdef');
+    back.setCursor({ line: 0, col: 3 });
+    let u = newVimState();
+    for (const c of 'vhhd') u = step(back, k(c), u).state;
+    expect(back.text()).toBe('aef');
+    expect(u.register).toBe('bcd');
   });
 });

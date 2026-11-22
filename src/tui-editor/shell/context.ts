@@ -8,12 +8,15 @@ import type { TUI } from '@/tui-kit';
 import type { BufferStore } from '../stores/buffer-store';
 import type { LayoutStore } from '../stores/layout-store';
 import type { OverlaySlots } from './overlay-slots';
+import type { PendingPrompts } from './pending-prompts';
 
 export interface EditorContext {
   readonly tui: TUI;
   readonly buffers: BufferStore;
   readonly layout: LayoutStore;
   readonly overlays: OverlaySlots;
+  /** Background questions waiting for the resolve key (never opened on their own). */
+  readonly pending: PendingPrompts;
   readonly projectPath: string;
   /** A line in the mode bar: an error until replaced, `info` until the next key. */
   notice(text: string, tone?: 'error' | 'info'): void;

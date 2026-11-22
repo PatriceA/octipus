@@ -962,7 +962,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `voice` | 7 |
 | `tui-editor` | `mcp` | 1 |
 | `tui-editor` | `shared` | 1 |
-| `tui-editor` | `tui-kit` | 42 |
+| `tui-editor` | `tui-kit` | 43 |
 | `tui-editor` | `tui-pi` | 34 |
 | `tui-editor` | `utils` | 2 |
 | `tui-pi` | `core` | 3 |

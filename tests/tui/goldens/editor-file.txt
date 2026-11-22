@@ -25,7 +25,7 @@
 24|                         │~                                        │────────────────────────────────
 25|                         │~                                        │
 26|                         │~                                        │────────────────────────────────
-27|EDIT  focus:editor  example.ts  typescript  L1:1
+27|EDIT  focus:editor  L1:1  example.ts  typescript
 
 --- styles
 00|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -55,7 +55,7 @@
 24|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbggggggggggggggggggggggggggggggggg
 25|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbgbk
 26|bbbbbbbbbbbbbbbbbbbbbbbbbgdbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbggggggggggggggggggggggggggggggggg
-27|ffffbbddddddddddddbbccccccccccbbddddddddddbbdddd
+27|ffffbbddddddddddddbbddddbbccccccccccbbdddddddddd
 
 --- legend
 a = fg #92c9c5 bg default

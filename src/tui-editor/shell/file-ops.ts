@@ -12,8 +12,9 @@ import { getKeybindings, type OverlayOptions } from '@/tui-kit';
 import { ExternalChangePrompt } from '../components/external-change-prompt';
 import { SaveAsPrompt } from '../components/save-as-prompt';
 import { UnsavedPrompt } from '../components/unsaved-prompt';
-import { checkDisk, readFileForBuffer, writeFileForBuffer } from '../workspace-fs-bridge';
+import { checkDisk, type ReadResult, readFileForBuffer, writeFileForBuffer } from '../workspace-fs-bridge';
 import type { EditorContext } from './context';
+import { externalKey } from './pending-prompts';
 
 /** Small questions (Save As, file changed on disk) sit low, like the other prompts. */
 export const PROMPT_OVERLAY: OverlayOptions = { anchor: 'bottom-center', width: '60%', minWidth: 40, margin: { bottom: 2, left: 2, right: 2 } };
@@ -74,6 +75,8 @@ export class FileOps {
 
   /** Ctrl+S, `:w`: save, asking for a path (scratch) or a decision (changed on disk) when needed. */
   saveBuffer(id: string, overwrite = false): boolean {
+    // Something is waiting about this buffer (changed on disk, an agent edit to review): that comes first.
+    if (!overwrite && this.ctx.pending.openFor(id)) return false;
     const outcome = this.writeBuffer(id, overwrite);
     const record = this.ctx.buffers.byId(id);
     if (outcome.ok) {
@@ -96,6 +99,7 @@ export class FileOps {
     const { overlays, tui } = this.ctx;
     const record = this.ctx.buffers.byId(id);
     if (!record?.path || overlays.isOpen('external')) return;
+    this.ctx.pending.remove(externalKey(id));
     const prompt = new ExternalChangePrompt(record.label, deleted, (choice) => {
       overlays.hide('external');
       if (choice === 'overwrite') this.saveBuffer(id, true);
@@ -106,11 +110,11 @@ export class FileOps {
     overlays.show('external', prompt, PROMPT_OVERLAY);
   }
 
-  /** Replace the buffer with the file on disk, as one undoable step. */
-  reloadFromDisk(id: string): void {
+  /** Replace the buffer with the file on disk, as one undoable step. `read` is the file when the caller has just read it. */
+  reloadFromDisk(id: string, read: ReadResult | null = null): void {
     const record = this.ctx.buffers.byId(id);
     if (!record?.path) return;
-    const read = readFileForBuffer(record.path);
+    read ??= readFileForBuffer(record.path);
     if (!read.ok) { this.ctx.notice(read.error); this.ctx.pushMessage('system', `Error: ${read.error}`); return; }
     record.buffer.setText(read.text);
     this.ctx.buffers.markSaved(id, read.text, read.disk);

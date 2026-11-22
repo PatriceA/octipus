@@ -1,7 +1,8 @@
 /**
  * Bottom status / mode bar. One line: editor mode (EDIT, or VIM with its
  * sub-mode and the `:` command being typed), focused pane, buffer, language,
- * cursor position, dirty/lock indicators. A notice replaces the line: an
+ * cursor position, dirty/lock indicators, and what waits for the resolve key
+ * (a file changed on disk, an agent edit to review). A notice replaces the line: an
  * informational one until the next key, an error until the next notice; a
  * failed recovery checkpoint replaces it until a checkpoint succeeds.
  */
@@ -16,6 +17,8 @@ export interface ModeBarOptions {
   getVimMode?: () => VimMode;
   /** The vim `:` command being typed, or null. */
   getVimCommandLine?: () => string | null;
+  /** What waits for the resolve key (`PendingPrompts.summary`), shown until it is resolved. */
+  getAttention?: () => string | null;
 }
 
 export class ModeBar implements Component {
@@ -49,11 +52,16 @@ export class ModeBar implements Component {
     const parts: string[] = [];
     parts.push(chalk.bold.hex(palette.accent)(this.modeBadge(layout.editorMode)));
     parts.push(chalk.hex(palette.dim)(`focus:${layout.focused}`));
+    // The cursor position stays near the start: a long notice of what is waiting must not push it off a narrow bar.
     if (active) {
       const cursor = active.buffer.getCursor();
+      parts.push(chalk.hex(palette.dim)(`L${cursor.line + 1}:${cursor.col + 1}`));
+    }
+    const attention = this.options.getAttention?.() ?? null;
+    if (attention) parts.push(chalk.bold.hex(palette.warn)(`⚑ ${displayLine(attention)}`));
+    if (active) {
       parts.push(chalk.hex(palette.statusFg)(`${displayLine(active.label)}${active.dirty ? ' ●' : ''}`));
       parts.push(chalk.hex(palette.dim)(active.language));
-      parts.push(chalk.hex(palette.dim)(`L${cursor.line + 1}:${cursor.col + 1}`));
       if (active.agentLocked) parts.push(chalk.hex(palette.warn)('agent-lock'));
     }
     return [truncateToWidth(parts.join('  '), width)];

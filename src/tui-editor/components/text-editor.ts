@@ -42,6 +42,14 @@ import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 /** Rows kept between the cursor and the top or bottom of the pane while it moves. */
 export const SCROLLOFF = 3;
+/** Said when a paste arrives while an agent edit to the buffer is under review. */
+const LOCKED_PASTE = 'Not pasted: an agent edit to this buffer is under review. Finish the review, then paste again.';
+/** A line longer than this is highlighted and styled only where it is on screen, not whole. */
+export const LONG_LINE = 2_000;
+/** For a long line with wrap off: the line is indexed in pieces this many cells wide, to find the visible part. */
+const WINDOW_CELLS = 512;
+/** Lines whose rows are remembered; past it the cache starts over. */
+const SEGMENT_CACHE_LINES = 4_096;
 
 export interface EditorClipboard {
   /** Put text on the clipboard (the app's chain: native tool, tmux, OSC 52). */
@@ -155,6 +163,7 @@ export class TextEditor implements Component, Focusable {
       const end = this.paste.indexOf('\x1b[201~');
       if (end >= 0) {
         if (!active.agentLocked) active.buffer.insert(this.paste.slice(0, end).replace(/\r\n?/g, '\n'));
+        else this.options.onNotice?.(LOCKED_PASTE);
         const rest = this.paste.slice(end + '\x1b[201~'.length);
         this.paste = null;
         // Keystrokes that arrived in the same chunk as the paste terminator.
@@ -265,7 +274,8 @@ export class TextEditor implements Component, Focusable {
     if (!clipboard) return;
     void clipboard.paste().then((text) => {
       if (text === null) { this.options.onNotice?.('Nothing to paste: the clipboard cannot be read here and nothing was copied in the editor.'); return; }
-      if (this.buffers.active()?.id !== active.id || active.agentLocked) return;
+      if (this.buffers.active()?.id !== active.id) { this.options.onNotice?.(`Not pasted: the tab changed before the clipboard was read (${active.label}).`); return; }
+      if (this.buffers.byId(active.id)?.agentLocked) { this.options.onNotice?.(LOCKED_PASTE); return; }
       active.buffer.insert(text.replace(/\r\n?/g, '\n'));
       this.scrollIntoView(active);
       this.options.requestRender?.();
@@ -395,8 +405,45 @@ export class TextEditor implements Component, Focusable {
   private wrapWidth(): number { return Math.max(1, (this.lastInner ?? 80) - 1); }
   private lastInner: number | null = null;
 
+  /**
+   * A line's rows, remembered by (line text, width): breaking a line into
+   * rows measures every grapheme, and the layout asks for the same lines
+   * many times per frame and per key (scrolling, the cursor's row, the page).
+   */
   private segmentsOf(active: BufferRecord, line: number): Segment[] {
-    return lineSegments(active.buffer.getLine(line), this.wrapWidth(), this.wrap);
+    return this.cachedSegments(active.buffer.getLine(line), this.wrapWidth());
+  }
+
+  private readonly segmentCache = new Map<number, Map<string, Segment[]>>();
+  private cachedSegments(text: string, width: number): Segment[] {
+    let byText = this.segmentCache.get(width);
+    if (!byText) {
+      // Only the wrap width in use and the window index are kept.
+      for (const w of [...this.segmentCache.keys()]) if (w !== WINDOW_CELLS) this.segmentCache.delete(w);
+      byText = new Map();
+      this.segmentCache.set(width, byText);
+    }
+    let segments = byText.get(text);
+    if (!segments) {
+      if (byText.size >= SEGMENT_CACHE_LINES) byText.clear();
+      segments = lineSegments(text, width, true);
+      byText.set(text, segments);
+    }
+    return segments;
+  }
+
+  /**
+   * The part of a long line that cells [fromCell, toCell) fall in, as columns
+   * [start, end) and the cell `start` is drawn at: whole pieces of the line's
+   * window index, so the part starts and ends on grapheme boundaries.
+   */
+  private windowOf(text: string, fromCell: number, toCell: number): { start: number; end: number; startCell: number } {
+    const pieces = this.cachedSegments(text, WINDOW_CELLS);
+    let first = pieces.findIndex((p) => p.endCell > fromCell);
+    if (first < 0) first = pieces.length - 1;
+    let last = first;
+    while (last + 1 < pieces.length && pieces[last].endCell < toCell) last++;
+    return { start: pieces[first].start, end: pieces[last].end, startCell: pieces[first].startCell };
   }
 
   private rowsOf(active: BufferRecord, line: number): number {
@@ -458,17 +505,25 @@ export class TextEditor implements Component, Focusable {
     while (lines.length < this.height && pos.line < totalLines) {
       const i = pos.line;
       const raw = buf.getLine(i);
-      const segments = this.wrap ? this.segmentsOf(active, i) : lineSegments(raw, 0, false);
+      const long = raw.length > LONG_LINE;
+      // With wrap off the row is the scrolled window; its segment only says the line is one row.
+      const segments = this.wrap ? this.segmentsOf(active, i) : [{ start: 0, end: raw.length, startCell: 0, endCell: 0 }];
       const segment = segments[pos.sub] ?? segments[0];
       const last = pos.sub >= segments.length - 1;
       const isCursorLine = i === cursor.line;
       const gutter = formatGutter(pos.sub === 0 ? i + 1 : null, gutterW, palette, isCursorLine);
-      let styled = styledCache.get(i);
+      const rowStart = this.wrap ? segment.startCell : this.scrollLeft;
+      const rowWidth = this.wrap && !last ? segment.endCell - segment.startCell : innerW;
+      // A long line is styled only where this row shows it: the row's own columns with wrap on, the scrolled window with it off.
+      const part = !long ? { start: 0, end: raw.length, startCell: 0 }
+        : this.wrap ? { start: segment.start, end: segment.end, startCell: segment.startCell }
+        : this.windowOf(raw, rowStart, rowStart + rowWidth);
+      let styled = long ? undefined : styledCache.get(i);
       if (styled === undefined) {
         // Tell the tree-sitter highlighter which buffer and row we're about to
         // paint so its per-buffer cache lookup hits. Without this every line
         // falls through to the regex fallback.
-        hintLine(active.id, i);
+        if (!long) hintLine(active.id, i);
         const marks: Mark[] = [];
         const highlights = this.highlights?.bufferId === active.id ? this.highlights.byLine.get(i) : undefined;
         for (const m of highlights ?? []) marks.push({ start: m.col, end: m.col + m.length, kind: m === this.highlights?.current ? 'current' : 'match' });
@@ -479,20 +534,23 @@ export class TextEditor implements Component, Focusable {
           // A selection that runs on past this line takes its line break: shown as one selected cell.
           selectedEol = i < selection[1].line;
         }
-        styled = renderLineTokens(raw, active.language, palette, marks);
-        if (selectedEol) styled += chalk.bgHex(palette.selection)(' ');
-        styledCache.set(i, styled);
+        const shifted = long ? marks.flatMap((m) => {
+          const start = Math.max(m.start, part.start) - part.start;
+          const end = Math.min(m.end, part.end) - part.start;
+          return end > start ? [{ ...m, start, end }] : [];
+        }) : marks;
+        styled = renderLineTokens(long ? raw.slice(part.start, part.end) : raw, active.language, palette, shifted, part.startCell);
+        if (selectedEol && part.end === raw.length) styled += chalk.bgHex(palette.selection)(' ');
+        if (!long) styledCache.set(i, styled);
       }
-      const rowStart = this.wrap ? segment.startCell : this.scrollLeft;
-      const rowWidth = this.wrap && !last ? segment.endCell - segment.startCell : innerW;
-      let body = sliceByColumn(styled, rowStart, rowWidth, true);
+      let body = sliceByColumn(styled, rowStart - part.startCell, rowWidth, true);
       const cursorHere = this.focused && isCursorLine && (this.wrap ? segmentAt(segments, cursor.col) === pos.sub : true);
       if (cursorHere) {
         const cursorX = cursorCell - rowStart;
-        const before = sliceByColumn(styled, rowStart, cursorX, true);
+        const before = sliceByColumn(styled, rowStart - part.startCell, cursorX, true);
         const pad = ' '.repeat(Math.max(0, cursorX - visibleWidth(before)));
-        const glyph = sliceByColumn(displayText(raw) + ' ', cursorCell, cursorWidth, true) || ' ';
-        const after = sliceByColumn(styled, cursorCell + cursorWidth, Math.max(0, rowWidth - cursorX - cursorWidth), true);
+        const glyph = sliceByColumn(`${displayText(atCursor === ' ' ? '' : atCursor, cursorCell)} `, 0, cursorWidth, true) || ' ';
+        const after = sliceByColumn(styled, cursorCell + cursorWidth - part.startCell, Math.max(0, rowWidth - cursorX - cursorWidth), true);
         body = before + pad + CURSOR_MARKER + chalk.bgHex(palette.cursor).hex(palette.cursorFg)(glyph) + after;
       }
       lines.push(truncateToWidth(gutter + body, gutterW + innerW, ''));
@@ -552,7 +610,8 @@ const TOKEN_COLORS: Record<TokenKind, keyof ReturnType<typeof getPalette> | null
 /** A range of a line drawn with a background: the selection, a find match, the current match, the matching brackets. */
 interface Mark { start: number; end: number; kind: 'selection' | 'match' | 'current' | 'bracket' }
 
-function renderLineTokens(line: string, language: string, palette: ReturnType<typeof getPalette>, marks: readonly Mark[]): string {
+/** `line` styled; `startCell` is the cell it is drawn from (a piece of a long line), which tab stops count from. */
+function renderLineTokens(line: string, language: string, palette: ReturnType<typeof getPalette>, marks: readonly Mark[], startCell = 0): string {
   if (line.length === 0) return '';
   // Route through the pluggable `highlight()` API rather than calling the
   // regex highlighter directly: it is the surface that
@@ -565,7 +624,7 @@ function renderLineTokens(line: string, language: string, palette: ReturnType<ty
   for (const m of marks) { cuts.add(m.start); cuts.add(m.end); }
   let out = '';
   let col = 0;
-  let cell = 0;
+  let cell = startCell;
   for (const tok of tokens) {
     const colorKey = TOKEN_COLORS[tok.kind];
     const tokEnd = col + tok.text.length;

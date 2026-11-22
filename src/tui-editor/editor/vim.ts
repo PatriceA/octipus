@@ -45,12 +45,23 @@
  *
  *   In VISUAL mode motions extend the selection. Esc returns to
  *   NORMAL; `d` / `x` / `y` operate on the selection and return.
+ *   As in vim the selection is inclusive: the characters under the
+ *   anchor and under the cursor are both in it.
+ *
+ *   Outside INSERT the cursor stands on a character, never after
+ *   the last one: it is clamped to the line's last grapheme (so `$a`
+ *   appends on the same line), `h` / `l` stay on the line, Esc from
+ *   INSERT steps back one, and `x` on an empty line does nothing.
+ *   A register that ends with a newline (`yy`, `dd`) is line-wise:
+ *   `p` puts it below the current line; any other is put after the
+ *   cursor.
  *
  * Multi-key sequences (`gg`, `dd`, `yy`) buffer the leader and
  * flush on the second key or on a 600ms timeout. The TextEditor
  * component holds the state instance.
  */
-import type { Buffer } from './buffer';
+import type { Buffer, Position } from './buffer';
+import { nextBoundary, prevBoundary } from './columns';
 
 export type VimMode = 'NORMAL' | 'INSERT' | 'VISUAL';
 
@@ -162,6 +173,41 @@ export interface VimResult {
  * existing modeless handler types the character into the buffer.
  */
 export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
+  const wasInsert = state.mode === 'INSERT';
+  const result = stepKey(buf, key, state);
+  if (result.state.mode !== 'INSERT') {
+    // Esc from INSERT steps back onto the character typed last, as in vim.
+    if (wasInsert && key.escape) {
+      const c = buf.getCursor();
+      if (c.col > 0) buf.setCursor({ line: c.line, col: prevBoundary(buf.getLine(c.line), c.col) });
+    }
+    clampToCharacter(buf, result.state.mode === 'VISUAL');
+  }
+  return result;
+}
+
+/** Outside INSERT the cursor stands on the line's last grapheme at most, not after it. */
+function clampToCharacter(buf: Buffer, visual: boolean): void {
+  const c = buf.getCursor();
+  const line = buf.getLine(c.line);
+  if (line.length === 0 || c.col < line.length) return;
+  const to = { line: c.line, col: prevBoundary(line, line.length) };
+  const selection = buf.getSelection();
+  if (visual && selection) buf.select(selection.anchor, to);
+  else buf.setCursor(to);
+}
+
+/** The VISUAL selection with the character under its far end included: [start, end). */
+function inclusiveRange(buf: Buffer): [Position, Position] {
+  const cursor = buf.getCursor();
+  const [a, b] = buf.selectionRange() ?? [cursor, cursor];
+  const line = buf.getLine(b.line);
+  if (b.col < line.length) return [a, { line: b.line, col: nextBoundary(line, b.col) }];
+  // On an empty line (or its end) the line break is what is under the cursor.
+  return b.line + 1 < buf.lineCount() ? [a, { line: b.line + 1, col: 0 }] : [a, b];
+}
+
+function stepKey(buf: Buffer, key: VimKey, state: VimState): VimResult {
   if (state.commandLine !== null) return commandLineStep(key, state);
 
   // Esc always returns to NORMAL and clears pending.
@@ -219,8 +265,14 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
   const extend = state.mode === 'VISUAL';
 
   // Motions
-  if (c === 'h') { buf.moveCursor(0, -1, extend); return { state, consumed: true }; }
-  if (c === 'l') { buf.moveCursor(0, 1, extend); return { state, consumed: true }; }
+  // h and l stay on the line.
+  if (c === 'h') { if (buf.getCursor().col > 0) buf.moveCursor(0, -1, extend); return { state, consumed: true }; }
+  if (c === 'l') {
+    const at = buf.getCursor();
+    const line = buf.getLine(at.line);
+    if (nextBoundary(line, at.col) < line.length) buf.moveCursor(0, 1, extend);
+    return { state, consumed: true };
+  }
   if (c === 'j') { buf.moveCursor(1, 0, extend); return { state, consumed: true }; }
   if (c === 'k') { buf.moveCursor(-1, 0, extend); return { state, consumed: true }; }
   if (c === 'w') { buf.moveWordRight(extend); return { state, consumed: true }; }
@@ -233,34 +285,11 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
   // `y` delete / yank the selection rather than starting a dd / yy
   // leader sequence.
   if (state.mode === 'VISUAL') {
-    if (c === 'd' || c === 'x') {
-      const range = buf.selectionRange();
-      if (range) {
-        const [a, b] = range;
-        const lines = buf.getLines();
-        const text = lines.slice(a.line, b.line + 1).map((line, i) => {
-          const start = i === 0 ? a.col : 0;
-          const end = i === b.line - a.line ? b.col : line.length;
-          return line.slice(start, end);
-        }).join('\n');
-        state = writeRegister(state, text);
-      }
-      buf.deleteForward();
-      return { state: { ...state, mode: 'NORMAL' }, consumed: true };
-    }
-    if (c === 'y') {
-      const range = buf.selectionRange();
-      if (range) {
-        const [a, b] = range;
-        const lines = buf.getLines();
-        const text = lines.slice(a.line, b.line + 1).map((line, i) => {
-          const start = i === 0 ? a.col : 0;
-          const end = i === b.line - a.line ? b.col : line.length;
-          return line.slice(start, end);
-        }).join('\n');
-        state = writeRegister(state, text);
-      }
-      buf.clearSelection();
+    if (c === 'd' || c === 'x' || c === 'y') {
+      const [a, b] = inclusiveRange(buf);
+      state = writeRegister(state, buf.textInRange(a, b));
+      if (c === 'y') buf.setCursor(a);
+      else { buf.replaceRange(a, b, ''); buf.setCursor(a); }
       return { state: { ...state, mode: 'NORMAL' }, consumed: true };
     }
   }
@@ -296,12 +325,33 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
     if (c === 'v') return { state: { ...state, mode: 'VISUAL' }, consumed: true };
 
     // Edits
-    if (c === 'x') { buf.deleteForward(); return { state, consumed: true }; }
+    // x deletes the character under the cursor; past the end of a line there is none (it never joins lines).
+    if (c === 'x') {
+      const at = buf.getCursor();
+      if (at.col < buf.getLine(at.line).length) buf.deleteForward();
+      return { state, consumed: true };
+    }
     if (c === 'u') { buf.undo(); return { state, consumed: true }; }
     if (key.ctrl && c === 'r') { buf.redo(); return { state, consumed: true }; }
     if (c === 'p') {
       const value = readRegister(state);
-      buf.insert(value);
+      if (value.endsWith('\n')) {
+        // Line-wise: below the current line, the cursor at the start of the first line put.
+        const line = buf.getCursor().line;
+        buf.transact(() => {
+          buf.setCursor({ line, col: buf.getLine(line).length });
+          buf.insert(`\n${value.slice(0, -1)}`);
+        });
+        buf.setCursor({ line: line + 1, col: 0 });
+      } else if (value) {
+        const at = buf.getCursor();
+        const text = buf.getLine(at.line);
+        buf.setCursor({ line: at.line, col: at.col < text.length ? nextBoundary(text, at.col) : at.col });
+        buf.insert(value);
+        // On the last character put.
+        const end = buf.getCursor();
+        buf.setCursor({ line: end.line, col: prevBoundary(buf.getLine(end.line), end.col) });
+      }
       return { state: { ...state, activeRegister: DEFAULT_REGISTER }, consumed: true };
     }
   }

@@ -40,7 +40,7 @@ describe.skipIf(process.platform === 'win32')('file operations in a real POSIX t
     await tui.waitFor(' renamed.md ×', true);
   });
 
-  test('a file changed on disk while open is reloaded when clean, and offers reload when it has unsaved edits', async () => {
+  test('a file changed on disk while open is reloaded when clean, and waits for Alt+Y when it has unsaved edits', async () => {
     tui = await TuiHarness.start('src/tui-editor/index.ts', 120, 28);
     await openExample(tui);
     const path = join(tui.project, 'example.ts');
@@ -50,8 +50,12 @@ describe.skipIf(process.platform === 'win32')('file operations in a real POSIX t
 
     tui.send('MINE '); await tui.waitFor('MINE const changedOutside');
     writeFileSync(path, 'const changedAgain = 2;\n');
-    await tui.waitFor('File changed on disk');
-    expect(await tui.text()).toContain('MINE const changedOutside');
+    // No prompt over the typing: the mode bar says so, and the next keys still go to the editor.
+    await tui.waitFor('example.ts changed on disk — press alt+y to resolve');
+    expect(await tui.text()).not.toContain('File changed on disk');
+    tui.send('or'); await tui.waitFor('MINE orconst changedOutside');
+    tui.send('\x7f\x7f'); await tui.waitFor('MINE const changedOutside');
+    tui.send('\x1by'); await tui.waitFor('File changed on disk');
     tui.send('r'); await tui.waitFor('const changedAgain');
     await tui.waitFor('MINE', true);
     tui.send('\x1a'); await tui.waitFor('MINE const changedOutside'); // the reload is one undo step

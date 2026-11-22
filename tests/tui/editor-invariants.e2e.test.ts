@@ -76,7 +76,7 @@ const KEYS: ReadonlyArray<[string, string]> = [
   ['alt+z wrap', '\x1bz'], ['alt+m vim', '\x1bm'], ['ctrl+\\ focus', '\x1c'], ['ctrl+b tree', '\x02'], ['alt+j chat', '\x1bj'],
   ['alt+. next buffer', '\x1b.'], ['ctrl+w close', '\x17'], ['ctrl+o open', '\x0f'], ['ctrl+f find', '\x06'], ['alt+r replace', '\x1br'],
   ['alt+g project search', '\x1bg'], ['ctrl+g go to line', '\x07'], ['alt+n new file', '\x1bn'], ['f5 hotkeys', '\x1b[15~'],
-  ['review y', 'y'], ['review n', 'n'], ['review ]', ']'], ['review z', 'z'], ['review a', 'a'], ['review r', 'r'], ['alt+enter', '\x1b\r'],
+  ['alt+y resolve', '\x1by'], ['review y', 'y'], ['review n', 'n'], ['review ]', ']'], ['review z', 'z'], ['review a', 'a'], ['review r', 'r'], ['alt+enter', '\x1b\r'],
 ];
 
 type Step = { label: string; run: (h: TuiHarness) => void };

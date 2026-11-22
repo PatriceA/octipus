@@ -24,7 +24,7 @@ vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
 } }));
 vi.mock('./workspace-fs-bridge', () => ({ readFileForBuffer: f.read, writeFileForBuffer: f.save, checkDisk: f.disk }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => f.state, savePersistedState: f.savedState }));
-vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: f.parse, dropSource: f.drop, installTreeSitterHighlighter() {}, hintLine() {} }));
+vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: f.parse, dropSource: f.drop, installTreeSitterHighlighter() {}, hintLine() {}, onHighlighterProblem: () => () => {} }));
 vi.mock('@/mcp/bridge', () => ({ getMCPBridge: () => ({ getAllConnections: () => [] }) }));
 let app: OctipusEditorApp;
 let key: (data: string) => unknown;
@@ -107,9 +107,12 @@ test('multiple file diffs are reviewed in sequence without orphaning locks', () 
   const app = mount(); const a = app.buffers.openFile('/tmp/a.ts', 'a'); const b = app.buffers.openFile('/tmp/b.ts', 'b');
   f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'new a' });
   f.listener({ kind: 'agent.write', path: '/tmp/b.ts', newText: 'new b' });
-  expect(modals).toHaveLength(1); modalKey('r');
-  expect(app.buffers.findByPath(a.path!)?.agentLocked).toBe(false); expect(modals).toHaveLength(1);
+  expect(modals).toHaveLength(0); expect(text()).toContain('agent edit to a.ts ready for review — press alt+y to resolve (+1 more)');
+  key('\x1by'); expect(modals).toHaveLength(1); expect(modalText()).toContain('Agent edit: a.ts'); modalKey('r');
+  expect(app.buffers.findByPath(a.path!)?.agentLocked).toBe(false); expect(modals).toHaveLength(0);
+  key('\x1by'); expect(modalText()).toContain('Agent edit: b.ts');
   modalKey('r'); expect(app.buffers.findByPath(b.path!)?.agentLocked).toBe(false); expect(modals).toHaveLength(0);
+  expect(text()).not.toContain('ready for review');
 });
 
 test('a wheel notch outside the chat pane is not passed to the editor or the tree', () => {
@@ -196,6 +199,7 @@ test('an agent write to a path relative to the project reaches its open buffer',
   const app = mount();
   app.buffers.openFile(`${process.cwd()}/src/x.ts`, 'old', { disk: DISK });
   f.listener({ kind: 'agent.write', path: 'src/x.ts', newText: 'new' });
+  key('\x1by');
   expect(modals).toHaveLength(1);
   expect(modalText()).toContain('Agent edit: x.ts');
 });
@@ -203,6 +207,7 @@ test('an agent write to a path relative to the project reaches its open buffer',
 test('rejecting an agent edit the agent already wrote leaves the buffer unsaved against the disk', () => {
   const app = mount(); app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
   f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  key('\x1by');
   f.disk.mockReturnValue({ changed: true, deleted: false });
   f.read.mockReturnValue({ ok: true, text: 'agent', disk: { ...DISK, mtimeMs: 2 }, mixedEol: false });
   modalKey('r');
@@ -215,6 +220,7 @@ test('rejecting an agent edit the agent already wrote leaves the buffer unsaved 
 test('accepting an agent edit the agent already wrote leaves the buffer clean', () => {
   const app = mount(); app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
   f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  key('\x1by');
   f.disk.mockReturnValue({ changed: true, deleted: false });
   f.read.mockReturnValue({ ok: true, text: 'agent', disk: { ...DISK, mtimeMs: 2 }, mixedEol: false });
   modalKey('a');
@@ -326,6 +332,7 @@ test('an agent edit to a file that is not open opens it in a review tab instead 
   const path = `${process.cwd()}/package.json`; // exists; its content comes from the mocked read
   f.read.mockReturnValue({ ok: true, text: 'one\ntwo\nthree', disk: DISK, mixedEol: false });
   f.listener({ kind: 'agent.write', path: 'package.json', newText: 'one\nTWO\nthree' });
+  key('\x1by');
   expect(app.buffers.active()?.path).toBe(path);
   expect(app.buffers.active()?.agentLocked).toBe(true);
   expect(modalText()).toContain('Agent edit: package.json');
@@ -339,6 +346,7 @@ test('a partial accept puts the accepted hunks in the buffer as one undo step', 
   const app = mount();
   const rec = app.buffers.openFile('/tmp/a.ts', 'a\nb\nc\nd\ne', { disk: DISK });
   f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'a\nB\nc\nD\ne' });
+  key('\x1by');
   modalKey('y'); modalKey('n'); modalKey('\r');
   expect(rec.buffer.text()).toBe('a\nB\nc\nd\ne');
   expect(modals).toHaveLength(0);
@@ -351,6 +359,7 @@ test('an agent edit with CRLF line ends is compared without the CRs', () => {
   const app = mount();
   const rec = app.buffers.openFile('/tmp/w.txt', 'first\nsecond', { disk: { ...DISK, eol: '\r\n' } });
   f.listener({ kind: 'agent.write', path: '/tmp/w.txt', newText: 'first\r\nSECOND' });
+  key('\x1by');
   expect(modalText()).not.toContain('- first');
   modalKey('a');
   expect(rec.buffer.text()).toBe('first\nSECOND');
@@ -360,6 +369,7 @@ test('a file changed on disk by something else during the review is not taken as
   const app = mount();
   const rec = app.buffers.openFile('/tmp/a.ts', 'mine', { disk: DISK });
   f.listener({ kind: 'agent.write', path: '/tmp/a.ts', newText: 'agent' });
+  key('\x1by');
   f.disk.mockReturnValue({ changed: true, deleted: false });
   f.read.mockReturnValue({ ok: true, text: 'a third version', disk: { ...DISK, mtimeMs: 3 }, mixedEol: false });
   modalKey('a');
@@ -369,4 +379,110 @@ test('a file changed on disk by something else during the review is not taken as
   editorKey('\x13');
   expect(modalText()).toContain('changed on disk');
   expect(f.save).not.toHaveBeenCalled();
+});
+
+test('after Save As a.ts → b.ts, reopening a.ts gives its own tab: Ctrl+S there writes a.ts and closing it leaves b.ts open', () => {
+  const app = mount();
+  const files = (app as unknown as { files: import('./shell/file-ops').FileOps }).files;
+  const a = `${process.cwd()}/a-original.ts`; const b = `${process.cwd()}/b-copy.ts`;
+  app.buffers.openFile(a, 'on disk', { disk: DISK });
+  expect(files.saveAs(app.buffers.active()!.id, 'b-copy.ts', 'b-copy.ts')).toBe('saved');
+  files.openFile(a);
+  const reopened = app.buffers.active()!;
+  expect(reopened.path).toBe(a);
+  reopened.buffer.setText('edited a');
+  f.save.mockClear();
+  editorKey('\x13');
+  expect(f.save).toHaveBeenCalledWith(a, 'edited a', DISK);
+  key('\x17');
+  expect(app.buffers.get().buffers.map((r) => r.path)).toEqual([b]);
+});
+
+test('an agent edit while the user types in another tab waits: no prompt, no tab switch, keys go on to the editor; Ctrl+S on that buffer opens the review', () => {
+  const app = mount();
+  const target = app.buffers.openFile('/tmp/target.ts', 'old', { disk: DISK });
+  const typing = app.buffers.openFile('/tmp/typing.ts', '', { disk: DISK });
+  f.listener({ kind: 'agent.write', path: '/tmp/target.ts', newText: 'agent' });
+  expect(modals).toHaveLength(0);
+  expect(app.buffers.active()?.id).toBe(typing.id);
+  for (const c of 'ar') editorKey(c); // a = accept all, r = reject all in the review box
+  expect(typing.buffer.text()).toBe('ar');
+  expect(target.buffer.text()).toBe('old');
+  expect(text()).toContain('agent edit to target.ts ready for review');
+  app.buffers.setActive(target.id);
+  editorKey('\x13');
+  expect(f.save).not.toHaveBeenCalled();
+  expect(modalText()).toContain('Agent edit: target.ts');
+  modalKey('a');
+  expect(target.buffer.text()).toBe('agent');
+});
+
+test('an agent edit to a file that is not open opens it in a background tab, not the active one', () => {
+  const app = mount();
+  const typing = app.buffers.openFile('/tmp/typing.ts', '', { disk: DISK });
+  f.read.mockReturnValue({ ok: true, text: 'one', disk: DISK, mixedEol: false });
+  f.listener({ kind: 'agent.write', path: 'package.json', newText: 'two' });
+  expect(app.buffers.active()?.id).toBe(typing.id);
+  expect(app.buffers.findByPath(`${process.cwd()}/package.json`)).not.toBeNull();
+  expect(modals).toHaveLength(0);
+});
+
+// The chat adapter reports str_replace_editor's str_replace and edit's old_string as agent.edit; the editor dropped them.
+test('an agent.edit replaces its one occurrence in the buffer and is reviewed like a write', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/e.ts', 'one\ntwo\nthree', { disk: DISK });
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'two\r\n', newText: 'TWO\r\nTWO-B\r\n' });
+  expect(text()).toContain('agent edit to e.ts ready for review');
+  key('\x1by');
+  expect(modalText()).toContain('Agent edit: e.ts');
+  modalKey('a');
+  expect(rec.buffer.text()).toBe('one\nTWO\nTWO-B\nthree');
+});
+
+test('an agent.edit whose old text is missing or occurs twice is reported, not guessed', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/e.ts', 'x = 1;\nx = 1;\n', { disk: DISK });
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'y = 2;', newText: 'y = 3;' });
+  expect(text()).toContain('the text it replaces is not in the file');
+  f.listener({ kind: 'agent.edit', path: '/tmp/e.ts', oldText: 'x = 1;', newText: 'x = 2;' });
+  expect(chatLog()).toContain('occurs more than once');
+  expect(text()).not.toContain('ready for review');
+  key('\x1by');
+  expect(modals).toHaveLength(0);
+  expect(rec.buffer.text()).toBe('x = 1;\nx = 1;\n');
+});
+
+test('an agent.edit to a file that is not open reads it from disk; one after a waiting edit applies to the agent text', () => {
+  const app = mount();
+  f.read.mockReturnValue({ ok: true, text: 'alpha\nbeta\n', disk: DISK, mixedEol: false });
+  f.listener({ kind: 'agent.edit', path: 'package.json', oldText: 'beta', newText: 'BETA' });
+  const rec = app.buffers.findByPath(`${process.cwd()}/package.json`);
+  expect(rec?.buffer.text()).toBe('alpha\nbeta\n');
+  f.listener({ kind: 'agent.edit', path: 'package.json', oldText: 'alpha', newText: 'ALPHA' });
+  key('\x1by'); modalKey('a');
+  expect(rec?.buffer.text()).toBe('ALPHA\nBETA\n');
+});
+
+// The agent's file is based on the disk, not on the unsaved buffer: a two-way diff showed the user's edits as hunks to revert.
+test('accepting an agent edit keeps the unsaved edits; a change over them is a conflict that starts rejected; the buffer stays unsaved', () => {
+  const app = mount();
+  const rec = app.buffers.openFile('/tmp/m.ts', 'a\nb\nc\nd\ne\nf\ng', { disk: DISK });
+  rec.buffer.setText('MINE\nb\nc\nd\nmine too\nf\ng');
+  f.listener({ kind: 'agent.write', path: '/tmp/m.ts', newText: 'a\nb\nc\nd\nAGENT\nf\nG' });
+  key('\x1by');
+  expect(modalText()).toContain('1 conflict with your unsaved edits');
+  expect(modalText()).not.toContain('- MINE');
+  modalKey('\r');
+  expect(rec.buffer.text()).toBe('MINE\nb\nc\nd\nmine too\nf\nG');
+  expect(app.buffers.byId(rec.id)?.dirty).toBe(true);
+  f.listener({ kind: 'agent.write', path: '/tmp/m.ts', newText: 'a\nb\nc\nd\nAGENT\nf\ng' });
+  key('\x1by'); modalKey('a');
+  expect(rec.buffer.text()).toBe('MINE\nb\nc\nd\nAGENT\nf\nG');
+  expect(app.buffers.byId(rec.id)?.dirty).toBe(true);
+});
+
+// An unparsable gateway URL used to send API calls to localhost:3005 without a word.
+test('a gateway URL that is not a URL is refused with the reason, not replaced by localhost', () => {
+  const tui = { terminal: { rows: 28, columns: 120 }, addChild() {}, addInputListener: () => () => {}, setFocus() {}, requestRender() {}, start() {}, hasOverlay: () => false, showOverlay: () => ({ focus() {}, hide() {} }) } as unknown as TUI;
+  expect(() => new OctipusEditorApp(tui, { exit, gatewayUrl: 'not a url' })).toThrow('The gateway URL "not a url" is not a URL');
 });

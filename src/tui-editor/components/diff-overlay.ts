@@ -2,7 +2,10 @@
  * Review of an agent edit, hunk by hunk.
  *
  * Shows the diff of the buffer (`before`) against the agent's text
- * (`after`) as `- old` / `+ new` rows. Every run of changed lines is a hunk
+ * (`after`) as `- old` / `+ new` rows. Given the buffer's saved text
+ * (`base`), it is a three-way review (`editor/merge.ts`): only the agent's
+ * changes are hunks, the user's unsaved edits are kept, and a change that
+ * overlaps them is marked as a conflict (`!`) and starts rejected. Every run of changed lines is a hunk
  * that is accepted or rejected on its own; the text that results — the
  * accepted hunks from the agent, the rest as they were — is handed to
  * `onApply`. Within a changed line paired with its replacement, the words
@@ -30,6 +33,7 @@ import { drawBox } from '@/tui-kit/overlay-frame';
 import { displayText } from '../editor/columns';
 import { diffLines, diffStats, type LineOp } from '../editor/diff';
 import { applyHunks, buildHunks, type Hunk, intraLineChanges, type Span } from '../editor/hunks';
+import { reviewDiff } from '../editor/merge';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
 export interface ReviewResult {
@@ -44,6 +48,8 @@ export interface DiffOverlayOptions {
   bufferLabel: string;
   before: string;
   after: string;
+  /** The text the buffer was read or saved as, which the agent's text is based on: a three-way review. */
+  base?: string;
   /** Number of visible diff body rows (excluding the header/footer chrome). */
   height?: number;
   /** The review is done; `result.text` is what the buffer should hold. */
@@ -68,6 +74,8 @@ export class DiffOverlay implements Component, Focusable {
   readonly stats: { adds: number; dels: number };
   /** The diff was too large to compare line by line and shows the change as one replacement. */
   readonly coarse: boolean;
+  /** Per hunk: it overlaps the user's unsaved edits (starts rejected). */
+  readonly conflicts: readonly boolean[];
   private readonly decisions: Decision[];
   /** The hunk each op belongs to (-1 for an unchanged line). */
   private readonly hunkOf: Int32Array;
@@ -80,12 +88,22 @@ export class DiffOverlay implements Component, Focusable {
   private readonly spans = new Map<number, Span[] | null>();
 
   constructor(private readonly options: DiffOverlayOptions) {
-    const diff = diffLines(options.before, options.after);
-    this.ops = diff.ops;
-    this.coarse = diff.coarse;
-    this.hunks = buildHunks(this.ops);
+    if (options.base !== undefined && options.base !== options.before) {
+      const review = reviewDiff(options.base, options.before, options.after);
+      this.ops = review.ops;
+      this.coarse = review.coarse;
+      this.hunks = review.hunks;
+      this.conflicts = review.conflicts;
+    } else {
+      const diff = diffLines(options.before, options.after);
+      this.ops = diff.ops;
+      this.coarse = diff.coarse;
+      this.hunks = buildHunks(this.ops);
+      this.conflicts = this.hunks.map(() => false);
+    }
     this.stats = diffStats(this.ops);
-    this.decisions = this.hunks.map(() => 'pending');
+    // A conflict replaces the user's own unsaved lines: rejected unless they say otherwise.
+    this.decisions = this.hunks.map((h) => (this.conflicts[h.index] ? 'rejected' : 'pending'));
     this.hunkOf = new Int32Array(this.ops.length).fill(-1);
     for (const h of this.hunks) for (let i = h.start; i < h.end; i++) this.hunkOf[i] = h.index;
     this.bodyRows = Math.max(4, options.height ?? DEFAULT_BODY_ROWS);
@@ -136,7 +154,9 @@ export class DiffOverlay implements Component, Focusable {
     const rejected = this.decisions.filter((d) => d === 'rejected').length;
     const position = this.hunks.length === 0 ? ' · no changes'
       : ` · hunk ${this.current + 1}/${this.hunks.length}${accepted || rejected ? ` · ${accepted} accepted, ${rejected} rejected` : ''}`;
-    const stats = `${ok(`+${this.stats.adds}`)} ${error(`-${this.stats.dels}`)}${dim(position)}${this.coarse ? dim(' · too large to compare line by line: shown as one replacement') : ''}`;
+    const conflicts = this.conflicts.filter(Boolean).length;
+    const conflictNote = conflicts ? chalk.hex(palette.warn)(` · ${conflicts} conflict${conflicts === 1 ? '' : 's'} with your unsaved edits (!), rejected unless you accept`) : '';
+    const stats = `${ok(`+${this.stats.adds}`)} ${error(`-${this.stats.dels}`)}${dim(position)}${conflictNote}${this.coarse ? dim(' · too large to compare line by line: shown as one replacement') : ''}`;
     const help = dim('y/n accept/reject hunk · ]/[ next/prev · z fold · Enter apply · a/r all');
 
     const headerLines = this.compact ? [`${header} ${stats}`] : [header, stats];
@@ -163,7 +183,8 @@ export class DiffOverlay implements Component, Focusable {
     const hunk = this.hunkOf[row.op];
     if (hunk < 0) return chalk.hex(palette.dim)(`    ${displayText(op.text)}`);
     const decision = this.decisions[hunk];
-    const gutter = hunk === this.current ? chalk.hex(palette.accent)('▌') : ' ';
+    const conflict = this.conflicts[hunk];
+    const gutter = hunk === this.current ? chalk.hex(conflict ? palette.warn : palette.accent)('▌') : conflict ? chalk.hex(palette.warn)('!') : ' ';
     const mark = decision === 'accepted' ? chalk.hex(palette.ok)('✓') : decision === 'rejected' ? chalk.hex(palette.error)('✗') : ' ';
     const colour = op.op === 'add' ? palette.ok : palette.error;
     // A rejected hunk's agent lines and an accepted hunk's old lines are the ones going away.

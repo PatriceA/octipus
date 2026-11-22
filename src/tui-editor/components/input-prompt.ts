@@ -44,8 +44,8 @@ export class InputPrompt implements Component, Focusable {
     return [
       chalk.bold.hex(p.accent)(displayLine(this.options.title)),
       label + this.field.render(Math.max(1, width - this.options.label.length), true),
-      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(this.error), Math.max(1, width)) : []),
-      chalk.hex(p.dim)(this.options.hint),
+      ...(this.error ? wrapTextWithAnsi(chalk.hex(p.error)(displayLine(this.error)), Math.max(1, width)) : []),
+      chalk.hex(p.dim)(displayLine(this.options.hint)),
     ].map(line => truncateToWidth(line, width, ''));
   }
 }

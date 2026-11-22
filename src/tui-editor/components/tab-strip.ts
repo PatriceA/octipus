@@ -7,7 +7,7 @@
  * Ctrl+W closes). With the mouse, a click on a tab activates it and a
  * click on its `×` closes it (`onClose`, which asks about unsaved changes).
  */
-import { type Component, truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult, visibleWidth } from '@/tui-kit';
+import { type Component, displayLine, truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult, visibleWidth } from '@/tui-kit';
 import type { BufferStore } from '../stores/buffer-store';
 import { chalk, getPalette } from '@/tui-pi/theme/defaults';
 
@@ -36,7 +36,8 @@ export class TabStrip implements Component {
     let at = 0;
     const tabs = state.buffers.map((b, i) => {
       const dirty = b.dirty ? '● ' : '';
-      const label = ` ${dirty}${b.label} `;
+      // A file name can hold escape sequences and control bytes: drawn (and measured for clicks) as displayLine shows it.
+      const label = ` ${dirty}${displayLine(b.label)} `;
       const close = '× ';
       const start = at + (i > 0 ? 1 : 0);
       const labelWidth = visibleWidth(label);

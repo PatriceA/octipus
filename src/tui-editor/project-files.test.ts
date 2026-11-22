@@ -54,6 +54,6 @@ describe('indexProjectFiles', () => {
 describe('listFolder', () => {
   test('one folder, sorted, skipped folders left out, folders marked', () => {
     files({ 'b.txt': '', 'a/x.ts': '', 'dist/out.js': '' });
-    expect(listFolder(root).map((e) => [e.name, e.isDir])).toEqual([['a', true], ['b.txt', false]]);
+    expect(listFolder(root).entries.map((e) => [e.name, e.isDir])).toEqual([['a', true], ['b.txt', false]]);
   });
 });

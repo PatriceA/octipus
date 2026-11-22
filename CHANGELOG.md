@@ -29,6 +29,99 @@ labels reflect blast radius, not contract guarantees.
   is missing (`TUI_PTY_PYTHON` picks another), and golden screens
   (`tests/tui/goldens/`, `UPDATE_TUI_GOLDENS=1`) guard the main states of both
   clients.
+- **Terminal editor: failures it used to swallow are now said.** A folder that
+  cannot be read shows `⚠ cannot read this folder: …` in the tree and is named
+  in the file picker; the fallback project search says how many files it could
+  not read, and its preview why one could not be shown; a corrupt saved state
+  or a failing recovery checkpoint, a tree-sitter module or grammar that did
+  not load (highlighting falls back to the line highlighter), and an
+  unavailable MCP status are written to the transcript once each; a gateway
+  URL that is not a URL is refused instead of replaced by `localhost:3005`. A
+  file removed since it was listed, or a dangling symlink, is still skipped
+  quietly.
+- **Terminal editor: a paste into a tab under agent review says it was not
+  pasted.** It used to vanish silently; the bottom bar now says the review has
+  to be finished first.
+- **Terminal editor: `/delete <path>` deletes that path, and paths keep their
+  spaces.** `/delete` ignored its argument and offered to delete the active
+  tab's file instead; `/rename` and `/save-as` collapsed a run of spaces in
+  the path to one. The argument is now everything after the command name, as
+  typed.
+- **Terminal editor: project search results keep non-ASCII text intact.**
+  ripgrep's output was decoded one chunk at a time, so a character split
+  between two chunks showed as `��` and shifted the match highlight. The
+  output is now decoded as one stream.
+- **Terminal editor: saving keeps a file's owner and works in read-only
+  folders.** The atomic save renamed a temporary file created by you over the
+  original, so a file owned by another user or group (a shared file, one
+  edited under sudo) changed owner, and a writable file in a folder you cannot
+  write to could not be saved at all. The temporary file now takes the
+  original's owner and group; where that is not allowed, or the folder refuses
+  the temporary file, the file is written in place.
+- **Terminal editor: opening a named pipe or a device no longer hangs it.**
+  The editor read whatever path it was given, so a FIFO blocked it until
+  something wrote to the pipe. Anything that is not a regular file is now
+  refused with the reason.
+- **Terminal editor: vim mode edits the text vim would.** `yyp` put the line
+  at the cursor instead of below it; `$` left the cursor after the last
+  character, so `$a` appended on the next line; `x` at the end of a line
+  joined it with the next; and VISUAL `d` / `y` left out the character under
+  the cursor. The NORMAL cursor now stays on the line's last character,
+  line-wise registers go below the line, `x` never joins lines, and VISUAL
+  selections are inclusive.
+- **Terminal editor: very long lines stay responsive.** With soft wrap on, a
+  long line (a minified bundle, a JSON log line) was broken into rows again
+  for every visible row and every cursor or scroll step: a 200 KB line took
+  about 25 seconds to draw and move through. Rows are now cached per line text
+  and width, and a line over 2,000 characters is highlighted and styled only
+  where it is on screen, with or without wrap.
+- **Terminal editor: escape sequences in file names stay text.** A file named
+  with ESC, OSC or BEL bytes reached the terminal through the tab strip, the
+  unsaved-changes prompt and the rename / Save As fields prefilled with its
+  path, so a file name could change the window title, clear the screen or ring
+  the bell, and its tab's clickable `×` drifted. Tab labels, prompt labels and
+  errors are drawn without escape sequences, and text fields show control
+  bytes as pictures (`␛`, `␇`).
+- **Terminal editor: auto-reload no longer grows memory without bound.** Every
+  reload of a changed file kept a full copy of the old and new text in the
+  undo history (up to 200 steps), so a log file appended to every second could
+  take hundreds of MB. A reload now records only what changed, the undo
+  history is capped by size as well as by steps, and the watcher reads a
+  changed file once per check instead of three times.
+- **Terminal editor: a rejected agent edit stays rejected.** The agent's edit
+  reaches the editor before the tool writes the file, so after you rejected it
+  the watcher saw the file change a moment later and reloaded the agent's
+  version into the clean tab. Now, when the file becomes the text you
+  rejected, the tab keeps your version, unsaved against the new file, and says
+  so.
+- **Terminal editor: accepting an agent edit no longer reverts your unsaved
+  changes.** The review compared the buffer with the agent's whole file, which
+  was written against the file on disk, so your unsaved edits showed as hunks
+  and accepting everything undid them. The review is now three-way: only the
+  agent's changes are hunks, your edits are kept, a change over lines you
+  edited is marked as a conflict (`!`) and starts rejected, and the tab stays
+  unsaved while it differs from the file.
+- **Terminal editor: fragment edits by the agent are reviewed.** A
+  `str_replace_editor` `str_replace`, or an `edit` with `old_string`, reached
+  the editor as an edit of one fragment and was dropped. It is now applied to
+  the text the agent works from (its waiting edit, the open tab, or the file
+  on disk) and reviewed hunk by hunk like a whole-file write; a fragment that
+  is not in the file, or occurs more than once, is reported instead of
+  guessed.
+- **Terminal editor: background prompts no longer take the keyboard.** A file
+  changed on disk under unsaved edits and an agent edit ready for review used
+  to open their prompt at once, switching tabs and taking focus mid-typing, so
+  the next keystroke (`r`, `o`, `a`) picked reload, overwrite, accept-all or
+  reject-all. Both now wait: the mode bar shows `⚑ … — press alt+y to
+  resolve`, and the prompt opens on `Alt+Y` (`app.pending.open`) or when you
+  save that tab. An agent edit to a file that is not open opens it in a
+  background tab. Prompts you open yourself (Ctrl+S on a changed file) work as
+  before.
+- **Terminal editor: Save As no longer leaves two tabs sharing one identity.**
+  Saving `a.ts` as `b.ts` and then opening `a.ts` again gave both tabs the
+  same internal id, so Ctrl+S in the `a.ts` tab wrote `b.ts`, closing one tab
+  closed the other and highlighting mixed the two files. Every buffer now has
+  an id of its own that never follows its path.
 - **Terminal editor: review the agent's edits hunk by hunk.** The diff box
   accepts (`y`) or rejects (`n`) each change on its own, moves between them
   with `]` / `[`, folds unchanged lines (`z`), highlights the words that

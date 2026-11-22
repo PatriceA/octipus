@@ -34,7 +34,7 @@ import { EditorPane } from './components/editor-pane';
 import { InputPrompt, parseLineTarget } from './components/input-prompt';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
-import { installTreeSitterHighlighter } from './editor/highlight-tree-sitter';
+import { installTreeSitterHighlighter, onHighlighterProblem } from './editor/highlight-tree-sitter';
 import type { VimCommand } from './editor/vim';
 import { installEditorKeybindings } from './keybindings';
 import { AgentReview } from './shell/agent-review';
@@ -46,6 +46,7 @@ import { FileOps, PROMPT_OVERLAY } from './shell/file-ops';
 import { HighlightParses } from './shell/highlight-parses';
 import { EditorOverlays } from './shell/overlay-actions';
 import { APP_OVERLAYS, OverlaySlots } from './shell/overlay-slots';
+import { PendingPrompts } from './shell/pending-prompts';
 import { EditorPersistence } from './shell/persistence';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
@@ -70,6 +71,8 @@ export class OctipusEditorApp {
   readonly layout = new LayoutStore();
   readonly buffers = new BufferStore();
   readonly workspace = new WorkspaceStore();
+  /** Background questions (file changed on disk, agent edit to review) waiting for the resolve key. */
+  readonly pending = new PendingPrompts();
 
   private readonly status = new StatusBar();
   private readonly tabs: TabStrip;
@@ -101,6 +104,8 @@ export class OctipusEditorApp {
   private readonly disposers: Array<() => void> = [];
   /** What the editor copied last: pasted when the system clipboard cannot be read. */
   private lastCopy: string | null = null;
+  /** Why the MCP status could not be read last, told once until it changes. */
+  private mcpProblem: string | null = null;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
@@ -120,6 +125,7 @@ export class OctipusEditorApp {
       buffers: this.buffers,
       layout: this.layout,
       overlays: this.slots,
+      pending: this.pending,
       projectPath: this.projectPath,
       notice: (text, tone) => this.modeBar.setNotice(text, tone),
       pushMessage: (role, content) => this.pushMessage(role, content),
@@ -137,7 +143,7 @@ export class OctipusEditorApp {
     this.parses = new HighlightParses(this.buffers, () => this.tui.requestRender());
     this.files = new FileOps(this.ctx, (id) => this.parses.reparse(id));
     this.review = new AgentReview(this.ctx, this.files);
-    this.watcher = new FileWatcher(this.ctx, this.files);
+    this.watcher = new FileWatcher(this.ctx, this.files, this.review);
     this.persistence = new EditorPersistence(this.ctx, this.files, (failed) => this.modeBar.setRecoveryFailed(failed));
 
     const copy = terminalClipboard(tui);
@@ -165,6 +171,7 @@ export class OctipusEditorApp {
     this.modeBar = new ModeBar(this.layout, this.buffers, {
       getVimMode: () => this.editor.getVimState().mode,
       getVimCommandLine: () => this.editor.getVimState().commandLine,
+      getAttention: () => this.pending.summary(),
     });
     this.tree = new FileTree({
       root: this.projectPath,
@@ -240,6 +247,11 @@ export class OctipusEditorApp {
       tui.addInputListener((data) => this.handleGlobalKey(data)),
       // Re-parse highlighting after edits; forget the parse of a closed buffer.
       this.buffers.subscribe((state) => this.parses.schedule(state.buffers)),
+      // Why tree-sitter highlighting is not in use (a grammar that did not load), once per reason.
+      onHighlighterProblem((problem) => this.ctx.log(problem)),
+      // A closed buffer's waiting prompts and agent edits go with it.
+      this.buffers.subscribe(() => { this.pending.prune((id) => this.buffers.byId(id) !== null); this.review.prune(); }),
+      this.pending.subscribe(() => this.tui.requestRender()),
     );
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
@@ -293,6 +305,10 @@ export class OctipusEditorApp {
       goToLine: (target) => this.goToLine(target),
       copySelection: () => this.layout.get().focused === 'editor' && this.editor.copySelection(),
       newScratch: () => { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); },
+      openPending: () => {
+        if (!this.pending.openNext()) this.modeBar.setNotice('Nothing is waiting: no file changed on disk, no agent edit to review.', 'info');
+        this.tui.requestRender();
+      },
       saveAsCommand: (value) => {
         const active = this.buffers.active();
         if (!active) { this.pushMessage('system', 'Error: No buffer to save.'); return; }
@@ -322,9 +338,12 @@ export class OctipusEditorApp {
         connected: all.filter((c) => c.status === 'connected').length,
         total: all.length,
       });
+      this.mcpProblem = null;
     } catch (error) {
       this.status.setMcp(null);
-      this.modeBar.setNotice(`MCP status unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      const problem = error instanceof Error ? error.message : String(error);
+      if (problem !== this.mcpProblem) this.ctx.log(`MCP server status is not available: ${problem}`);
+      this.mcpProblem = problem;
     }
     this.tui.requestRender();
   }
@@ -418,6 +437,7 @@ export class OctipusEditorApp {
       case 'permission': this.decisions.push(event); return;
       case 'approval': this.decisions.push(event); return;
       case 'agent.write': this.review.handleWrite(event.path, event.newText); return;
+      case 'agent.edit': this.review.handleEdit(event.path, event.oldText, event.newText); return;
       case 'login_required':
         // The editor has no login prompt of its own; the chat TUI stores the
         // login both of them use.
@@ -455,7 +475,12 @@ export class OctipusEditorApp {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.parses.dispose();
     this.decisions.dispose(); this.session.dispose(); this.adapter.disconnect();
-    try { if (this.onShutdown) await this.onShutdown(); } catch { /* terminal cleanup is best effort */ }
+    try {
+      if (this.onShutdown) await this.onShutdown();
+    } catch (error) {
+      // The terminal may not be restored: say so where it can still be read.
+      process.stderr.write(`Octipus editor: restoring the terminal failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   }
 
   private refocus(): void {
@@ -479,11 +504,13 @@ function basenameOf(path: string): string {
  */
 function deriveApiBase(gatewayUrl: string | undefined): string {
   if (!gatewayUrl) return 'http://localhost:3005/api';
+  let u: URL;
   try {
-    const u = new URL(gatewayUrl);
-    const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-    return `${protocol}//${u.host}/api`;
-  } catch {
-    return 'http://localhost:3005/api';
+    u = new URL(gatewayUrl);
+  } catch (error) {
+    // Not a URL: the gateway connection would fail too. Say which, rather than talk to localhost instead.
+    throw new Error(`The gateway URL ${JSON.stringify(gatewayUrl)} is not a URL: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  return `${protocol}//${u.host}/api`;
 }

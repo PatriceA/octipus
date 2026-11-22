@@ -12,7 +12,9 @@
  * `dirty` is a comparison, not a flag: the buffer's text differs from the
  * saved text. Undoing back to what was saved makes the buffer clean again.
  *
- * Path keys are absolute. Display labels strip the workspace root
+ * Ids are a counter, not the path (two records never share one, whatever
+ * Save As and rename do); `findByPath` is the only path lookup. Paths are
+ * absolute. Display labels strip the workspace root
  * for shorter tab labels.
  */
 import { Buffer as TextBuffer } from '../editor/buffer';
@@ -21,7 +23,12 @@ import { detectLanguage, type Language } from '../editor/lang';
 import type { DiskInfo } from '../workspace-fs-bridge';
 
 export interface BufferRecord {
-  id: string;            // stable id; `file:<absPath>` for buffers opened from a file
+  /**
+   * `buffer:<n>`, unique for the store's life and never derived from the
+   * path: Save As and rename change `path`, never `id`, and a path opened
+   * again after its buffer moved away gets a new id.
+   */
+  id: string;
   path: string | null;   // absolute path; null for scratch buffers
   label: string;         // display name (basename or "Scratch <n>")
   language: Language;
@@ -53,12 +60,18 @@ export interface BufferState {
 export interface OpenFileOptions {
   label?: string;
   disk?: DiskInfo | null;
+  /** False: open it as a tab without making it the active one (a file opened in the background). */
+  activate?: boolean;
 }
 
 export class BufferStore {
   private state: BufferState = { buffers: [], activeId: null };
   private listeners = new Set<BufferListener>();
   private scratchCounter = 1;
+  /** Never reset, not even by `reset()`: an id handed out once is never handed out again. */
+  private idCounter = 0;
+
+  private nextId(): string { return `buffer:${++this.idCounter}`; }
 
   get(): BufferState { return this.state; }
 
@@ -94,11 +107,11 @@ export class BufferStore {
   openFile(absPath: string, savedText: string, options: OpenFileOptions = {}): BufferRecord {
     const existing = this.findByPath(absPath);
     if (existing) {
-      this.set({ activeId: existing.id });
+      if (options.activate !== false) this.set({ activeId: existing.id });
       return existing;
     }
     const rec = this.track({
-      id: `file:${absPath}`,
+      id: this.nextId(),
       path: absPath,
       label: options.label ?? basename(absPath),
       language: detectLanguage(absPath),
@@ -110,7 +123,8 @@ export class BufferStore {
       agentLocked: false,
       createdAt: Date.now(),
     });
-    this.set({ buffers: [...this.state.buffers, rec], activeId: rec.id });
+    const background = options.activate === false && this.state.activeId !== null;
+    this.set({ buffers: [...this.state.buffers, rec], activeId: background ? this.state.activeId : rec.id });
     return rec;
   }
 
@@ -118,7 +132,7 @@ export class BufferStore {
   openScratch(language: Language = 'text'): BufferRecord {
     const n = this.scratchCounter++;
     const rec = this.track({
-      id: `scratch:${n}`,
+      id: this.nextId(),
       path: null,
       label: `Scratch ${n}`,
       language,

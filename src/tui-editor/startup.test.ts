@@ -22,7 +22,7 @@ vi.mock('@/tui-pi/gateway-adapter', () => ({ GatewayAdapter: class {
   async connect() {}
 } }));
 vi.mock('./persist', async original => ({ ...await original<typeof import('./persist')>(), loadPersistedState: () => DEFAULT_PERSISTED_STATE, savePersistedState: () => true }));
-vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: async () => {}, dropSource() {}, installTreeSitterHighlighter() {}, hintLine() {} }));
+vi.mock('./editor/highlight-tree-sitter', () => ({ setSource: async () => {}, dropSource() {}, installTreeSitterHighlighter() {}, hintLine() {}, onHighlighterProblem() { return () => {}; } }));
 
 let app: OctipusEditorApp | undefined;
 afterEach(async () => { await app?.stop(); app = undefined; });

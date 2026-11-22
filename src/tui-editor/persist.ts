@@ -84,7 +84,12 @@ export function pathForProject(projectPath?: string): string {
  * result of `pathForProject(projectPath)`. Tests can pass any temp
  * path.
  */
-export function loadPersistedState(path: string = legacyDefaultPath()): PersistedState {
+/**
+ * A state that cannot be read (corrupt JSON, permission denied) starts the
+ * editor with the defaults, and `report` is told why; a missing one, or one
+ * of another version, is the defaults without a word.
+ */
+export function loadPersistedState(path: string, report: (problem: string) => void): PersistedState {
   try {
     if (!existsSync(path)) return DEFAULT_PERSISTED_STATE;
     const raw = readFileSync(path, 'utf8');
@@ -101,7 +106,9 @@ export function loadPersistedState(path: string = legacyDefaultPath()): Persiste
       ...(parsed.softWrap === true ? { softWrap: true } : {}),
       drafts: Array.isArray(parsed.drafts) ? parsed.drafts.filter(d => d && (d.path === null || typeof d.path === 'string') && typeof d.text === 'string' && typeof d.label === 'string') : [],
     };
-  } catch {
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT') return DEFAULT_PERSISTED_STATE;
+    report(`The editor's saved state (${path}) could not be read, so the editor started without it: ${error instanceof Error ? error.message : String(error)}`);
     return DEFAULT_PERSISTED_STATE;
   }
 }
@@ -123,7 +130,8 @@ function sanitizeCursors(value: unknown): Record<string, PersistedCursor> {
   return out;
 }
 
-export function savePersistedState(state: PersistedState, path: string = legacyDefaultPath()): boolean {
+/** False when the state could not be written; `report` is told why. */
+export function savePersistedState(state: PersistedState, path: string, report: (problem: string) => void): boolean {
   try {
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -132,7 +140,8 @@ export function savePersistedState(state: PersistedState, path: string = legacyD
     restrictToOwner(tmp);
     renameSync(tmp, path);
     return true;
-  } catch {
+  } catch (error) {
+    report(`The recovery checkpoint (${path}) could not be written: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 }

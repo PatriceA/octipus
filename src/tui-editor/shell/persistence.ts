@@ -10,6 +10,8 @@ import type { FileOps } from './file-ops';
 
 export class EditorPersistence {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** The last checkpoint failure told in the transcript: a failing checkpoint every 500 ms is said once. */
+  private lastProblem: string | null = null;
 
   constructor(
     private readonly ctx: EditorContext,
@@ -21,7 +23,7 @@ export class EditorPersistence {
   /** Restore layout, open files, cursors and drafts; then checkpoint on every change. Returns the unsubscribers. */
   hydrate(): Array<() => void> {
     const { layout, buffers } = this.ctx;
-    const persisted = loadPersistedState(pathForProject(this.ctx.projectPath));
+    const persisted = loadPersistedState(pathForProject(this.ctx.projectPath), (problem) => this.ctx.pushMessage('system', `Error: ${problem}`));
     if (persisted.treeVisible !== undefined && persisted.treeVisible !== layout.get().treeVisible) layout.toggleTree();
     if (persisted.chatVisible !== undefined && persisted.chatVisible !== layout.get().chatVisible) layout.toggleChat();
     if (persisted.editorMode) layout.setEditorMode(persisted.editorMode);
@@ -78,7 +80,11 @@ export class EditorPersistence {
       softWrap: layout.softWrap,
       cursorByPath,
       drafts: buffers.buffers.filter(b => b.dirty).map(b => ({ path: b.path, text: b.buffer.text(), label: b.label })),
-    }, pathForProject(this.ctx.projectPath));
+    }, pathForProject(this.ctx.projectPath), (problem) => {
+      if (problem !== this.lastProblem) this.ctx.pushMessage('system', `Error: ${problem}`);
+      this.lastProblem = problem;
+    });
+    if (saved) this.lastProblem = null;
     if (this.setFailed(!saved)) this.ctx.tui.requestRender();
   }
 

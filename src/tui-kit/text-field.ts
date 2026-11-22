@@ -34,9 +34,20 @@ export class TextField {
   render(width: number, focused: boolean, placeholder = ''): string {
     if (!focused && this.value === '') return placeholder;
     this.input.focused = focused;
+    // The value can hold control bytes (a file name prefilled for rename or Save As): Input would write them
+    // to the terminal as they are. Drawn as control pictures, one code unit for one, so the cursor stays put.
+    const value = this.input.getValue();
+    const shown = controlPictures(value);
+    if (shown !== value) this.input.setValue(shown);
     // Input draws a "> " prompt; the overlay's own label takes its place.
-    const row = this.input.render(width + 2)[0] ?? '';
-    const shown = row.startsWith('> ') ? row.slice(2) : row;
-    return focused || visibleWidth(shown) > 0 ? shown : placeholder;
+    let row: string;
+    try { row = this.input.render(width + 2)[0] ?? ''; } finally { if (shown !== value) this.input.setValue(value); }
+    const drawn = row.startsWith('> ') ? row.slice(2) : row;
+    return focused || visibleWidth(drawn) > 0 ? drawn : placeholder;
   }
+}
+
+/** C0 controls, DEL and C1 controls as visible one-unit characters (␛, ␇, ␉, ␡, �). */
+function controlPictures(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => (c === '\x7f' ? '\u2421' : c > '\x7f' ? '\ufffd' : String.fromCharCode(0x2400 + c.charCodeAt(0))));
 }
