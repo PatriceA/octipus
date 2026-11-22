@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Message } from '@/db/schema/messages';
 import type { SessionContext } from '@/db/schema/sessions';
-const fixture = vi.hoisted(() => ({ rows: [] as Message[], context: {} as SessionContext, requests: [] as any[], clearDuringCall: false }));
+const fixture = vi.hoisted(() => ({ rows: [] as Message[], context: {} as SessionContext, requests: [] as any[], clearDuringCall: false, refuse: undefined as Error | undefined }));
 vi.mock('@/skills/selection', () => ({ buildSelectedSkillPrompt: async () => '\n\nFULL SELECTED SKILL' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 's', userId: 'u', context: fixture.context, metadata: { showSources: false } }),
@@ -17,6 +17,7 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
 } }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: async (options: any) => {
   fixture.requests.push(structuredClone(options));
+  if (fixture.refuse) throw fixture.refuse;
   if (fixture.clearDuringCall) fixture.context = { clearedAt: '2030-01-01T00:00:00Z' };
   return { content: 'answer', usage: { totalTokens: 2 } };
 } }) }));
@@ -26,7 +27,7 @@ vi.mock('@/core/personas/resolver', () => ({ resolvePersonaForUser: async () => 
 vi.mock('@/db/repositories/profile-repository', () => ({ ProfileRepository: class { async findUserProfile() { return null; } } }));
 import { directResponse } from './direct-response';
 const selector = { selectByComplexity: async () => ({ modelId: 'model', name: 'model' }) } as any;
-beforeEach(() => { fixture.rows = []; fixture.context = {}; fixture.requests = []; fixture.clearDuringCall = false; });
+beforeEach(() => { fixture.rows = []; fixture.context = {}; fixture.requests = []; fixture.clearDuringCall = false; fixture.refuse = undefined; });
 test('casual turns retain the full checkpoint suffix and append immutable live context', async () => {
   fixture.rows = Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', content: `prior ${i}`, createdAt: new Date(0) } as Message));
   fixture.context.checkpoint = { generation: '', through: { id: 'm1', createdAt: new Date(0).toISOString() },
@@ -60,4 +61,11 @@ test('a casual reply caches its conversation only after another casual reply', a
   // A second casual turn follows a casual reply: its history is worth caching.
   await directResponse('and another thing', 's', 'u', selector);
   expect(fixture.requests[1].historyCache).toBe(true);
+});
+test('a call refused for the protection level answers with the refusal, not a provider outage', async () => {
+  const { ProtectionRoutingError } = await import('@/core/protection/routing');
+  fixture.refuse = new ProtectionRoutingError(3, 'This conversation holds confidential content (protection level 3), which stays on local models, and model is not a local model.');
+  const result = await directResponse('what does the contract say?', 's', 'u', selector);
+  expect(result.response).toBe(fixture.refuse.message);
+  expect(fixture.rows.at(-1)).toMatchObject({ role: 'assistant', content: fixture.refuse.message });
 });

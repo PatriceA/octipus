@@ -255,7 +255,12 @@ async function directResponseInternal(
       { err, message, stack, name, model: modelName },
       'Direct response failed',
     );
-    const errorMsg = `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
+    // A call refused because the session's content may not leave the house
+    // is not a provider outage: its message says why and what to do.
+    const { ProtectionRoutingError } = await import('@/core/protection/routing');
+    const errorMsg = err instanceof ProtectionRoutingError
+      ? err.message
+      : `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
     await persistAnswer(errorMsg);
     return {
       response: errorMsg,
