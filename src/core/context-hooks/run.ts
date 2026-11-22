@@ -302,7 +302,8 @@ export async function finishContextTurn(
       cli,
       knowledgeToolCalls: Math.max(0, end.knowledge - turn.startUse.knowledge),
       notesToolCalls: Math.max(0, end.notes - turn.startUse.notes),
-      citedItems: citedItems(done.response ?? '', turn.citable),
+      // A title that only repeats what was searched for is not counted as named.
+      citedItems: citedItems(done.response ?? '', turn.citable, [...new Set(turn.shown.map((s) => s.query))].join('\n')),
       // Measured only when recall showed something; no answer uses nothing.
       usedItems: turn.shown.length ? usedPassages(done.response ?? '', turn.shown) : null,
       outcome: done.outcome ?? null,

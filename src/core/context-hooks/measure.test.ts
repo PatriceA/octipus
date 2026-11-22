@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  CALIBRATION_MIN_RUNS, calibrationMessage, calibrationSample, calibrationVerdict, citedItems, namesTitle, passageUsed, recommendThreshold,
-  SWEEP_THRESHOLDS, usedPassages,
+  CALIBRATION_MIN_RUNS, calibrationMessage, calibrationSample, calibrationVerdict, canonicalNumber, citedItems, MAX_MEASURED_CHARS, namesTitle,
+  passageUsed, recommendThreshold, SWEEP_THRESHOLDS, usedPassages,
 } from './measure';
 
 describe('passageUsed', () => {
@@ -14,11 +14,11 @@ describe('passageUsed', () => {
     expect(passageUsed('That is 2,400.00 euro.', excerpt, query)).toBe(true);
   });
 
-  test('an identifier, a date, a time', () => {
-    const ex = 'Invoice INV-2024-118 for Bakery Smit was paid on 2024-05-14 at 14:30.';
+  test('an identifier, a date, a time off the quarter hour', () => {
+    const ex = 'Invoice INV-2024-118 for Bakery Smit was paid on 2024-05-14 at 14:37.';
     expect(passageUsed('INV-2024-118 is paid.', ex, 'what about the bakery invoice?')).toBe(true);
     expect(passageUsed('It was paid on 2024-05-14.', ex, 'when was the bakery invoice paid?')).toBe(true);
-    expect(passageUsed('Around 14:30.', ex, 'what time?')).toBe(true);
+    expect(passageUsed('Around 14:37.', ex, 'what time?')).toBe(true);
   });
 
   test('what the query already held does not count: the answer may repeat the question', () => {
@@ -54,6 +54,69 @@ describe('passageUsed', () => {
     expect(passageUsed('2400', '', query)).toBe(false);
   });
 
+  // Each row: excerpt, answer, whether the answer used it. The false rows
+  // were all counted as used before numbers were read by their value.
+  test.each([
+    // A grouping mark before three digits, in either convention: the number keeps its digits.
+    ['Der Preis beträgt 1.000 EUR.', 'Step 1: open the app.', false],
+    ['Der Preis beträgt 1.000 EUR.', 'Der Preis ist 1000 Euro.', true],
+    ['Der Preis beträgt 1.000 EUR.', 'It costs 1,000 euro.', true],
+    ['10.000 Nutzer sind registriert.', 'Here are 10 tips.', false],
+    ['10.000 Nutzer sind registriert.', 'About 10,000 users.', true],
+    // A zero decimal part is dropped, and what is left of $5.00 or €1,00 is one digit: no evidence.
+    ['The basic plan costs $5.00 per month.', 'Do this:\n1. Sign up\n2. Pick a plan\n3. Pay\n4. Confirm\n5. Start', false],
+    ['Der Kaffee kostet 1,00 €.', 'We have 100 seats.', false],
+    // European and English decimals are the same number.
+    ['Total: 1.234,50 EUR', 'The total was 1,234.50.', true],
+    ['Total: 1,234.50 EUR', 'Das waren 1.234,5 Euro.', true],
+    ['Zinsen: 12,75 Prozent', 'At 12.75 it is fine.', true],
+    // A percentage is not the bare number, and a round one is no evidence.
+    ['The room has 100 seats.', 'I am 100% sure.', false],
+    ['Growth was 37% and churn 4.5%.', 'Growth: 37 %, churn: 4,5 %.', true],
+    ['Half of them, 50%, and then 25%.', 'Maybe 50% or 25%.', false],
+    // A time on the quarter hour is no evidence.
+    ['The shop opens at 10:00.', 'Meet at 10:00.', false],
+    ['The train leaves at 09:47.', 'It leaves at 9:47.', true],
+    // List numbering in the answer is no evidence, however many items.
+    ['We have 12 offices in 15 countries.', 'Steps:\n12. Open\n13. Check\n14. Save\n15. Close', false],
+    ['We have 12 offices in 15 countries.', 'There are 12 offices across 15 countries.', true],
+  ])('%s / %s → %s', (excerpt, answer, used) => {
+    expect(passageUsed(answer, excerpt, 'what is it?')).toBe(used);
+  });
+
+  test.each([
+    ['1.000', '1000'], ['1,000', '1000'], ['10.000', '10000'], ['1.000.000', '1000000'], ["1'000", '1000'], ['1_000', '1000'],
+    ['2,400.00', '2400'], ['2.400,00', '2400'], ['1,000.50', '1000.5'], ['1.000,50', '1000.5'], ['5.00', '5'], ['1,00', '1'],
+    ['3.5', '3.5'], ['2,5', '2.5'], ['3.14159', '3.14159'], ['2400', '2400'], ['007', '007'],
+    // Not one number: grouping groups of another size, a mark used for both, a mixed grouping.
+    ['192.168.0.1', null], ['1.000.00', null], ['1,000.000,5', null], ['12.34.567', null], ['1,000.500', null],
+  ])('canonicalNumber(%s) = %s', (token, value) => {
+    expect(canonicalNumber(token)).toBe(value);
+  });
+
+  test('one normal form: NFD and NFC are the same text', () => {
+    const nfc = 'Die Überweisungsgebühr und die Kontoführungsgebühr steigen.';
+    const nfd = 'Überweisungsgebühr, Kontoführungsgebühr'.normalize('NFD');
+    expect(nfd).not.toBe(nfd.normalize('NFC'));
+    expect(passageUsed(nfd, nfc, 'was kostet das?')).toBe(true);
+    expect(passageUsed(nfc, nfd.normalize('NFD'), 'was kostet das?')).toBe(true);
+  });
+
+  test('a word of an Indic script keeps its vowel signs: two long Hindi words are two weak tokens, not fragments', () => {
+    const ex = 'प्रतिपूर्ति प्रक्रियाओं के लिए अनुमोदनकर्ता की आवश्यकता होती है।';
+    expect(passageUsed('प्रतिपूर्ति के लिए अनुमोदनकर्ता चाहिए।', ex, 'क्या चाहिए?')).toBe(true);
+    // Fragments a split at vowel signs produced do not match on their own: one word in common is one weak token.
+    expect(passageUsed('प्रतिपूर्ति नहीं।', ex, 'क्या चाहिए?')).toBe(false);
+  });
+
+  test('Korean: a word of four syllables or more is weak, compared on its first three, whatever particle follows', () => {
+    const ex = '환불정책은 구매 후 십사일 이내에 적용되며 영수증사본이 필요합니다.';
+    // 환불정책은 / 환불정책을, 영수증사본이 / 영수증사본을: two weak tokens.
+    expect(passageUsed('환불정책을 보면 영수증사본을 내야 합니다.', ex, '환불은 어떻게 하나요?')).toBe(true);
+    // One word in common is not enough, and a sentence-final predicate (…니다) is never evidence.
+    expect(passageUsed('환불정책을 확인하세요. 필요합니다.', ex, '환불은 어떻게 하나요?')).toBe(false);
+  });
+
   test('usedPassages counts per passage', () => {
     const passages = [{ excerpt, query }, { excerpt: 'The studio closes from 24 December to 2 January.', query }];
     expect(usedPassages('A website is 2400 euro.', passages)).toBe(1);
@@ -78,6 +141,23 @@ describe('citedItems', () => {
     expect(citedItems('AI is mentioned here.', items)).toBe(0);
     expect(citedItems('', items)).toBe(0);
   });
+
+  test('a title whose every word the query held is not named by its title: the answer repeats the question\'s topic', () => {
+    const pricing = [{ id: '44444444-4444-4444-4444-444444444444', sourceId: 'note:p', title: 'Pricing' }];
+    expect(citedItems('Our pricing: a website is 2400 euro.', pricing, "What's our pricing?")).toBe(0);
+    // Without that query, or when the title adds a word the query did not hold, it is.
+    expect(citedItems('Our pricing: a website is 2400 euro.', pricing, 'What do we charge for a website?')).toBe(1);
+    expect(citedItems('See Pricing 2026: a website is 2400 euro.', items, "What's our pricing?")).toBe(1);
+    // A long word is compared on its stem, as for "used": "renovations" holds "Renovation".
+    const renovation = [{ id: '55555555-5555-5555-5555-555555555555', sourceId: 'note:r', title: 'Renovation' }];
+    expect(citedItems('From the Renovation note: per project.', renovation, 'how do we price renovations?')).toBe(0);
+    // A title in a script without spaces, held whole by the query.
+    const zh = [{ id: '66666666-6666-6666-6666-666666666666', sourceId: 'note:z', title: '网站价格表' }];
+    expect(citedItems('根据网站价格表，两千欧元。', zh, '网站价格表里写了什么？')).toBe(0);
+    expect(citedItems('根据网站价格表，两千欧元。', zh, '网站多少钱？')).toBe(1);
+    // The id still names it.
+    expect(citedItems('As note:p says.', pricing, "What's our pricing?")).toBe(1);
+  });
 });
 
 describe('namesTitle', () => {
@@ -98,6 +178,36 @@ describe('namesTitle', () => {
     expect(namesTitle('From the   note\nPricing  2026.', 'Pricing 2026')).toBe(true);
     // A script without spaces: the title sits inside a run of text.
     expect(namesTitle('根据网站价格表，建站两千欧元。', '网站价格表')).toBe(true);
+  });
+
+  test('NFD and NFC are the same title, and a combining mark is part of the word', () => {
+    expect(namesTitle('Siehe Überweisungsgebühr.'.normalize('NFD'), 'Überweisungsgebühr')).toBe(true);
+    expect(namesTitle('Siehe Überweisungsgebühr.', 'Überweisungsgebühr'.normalize('NFD'))).toBe(true);
+    // नीति ("policy") inside नीतियाँ is not named: the vowel signs after it continue the word.
+    expect(namesTitle('सभी नीतियाँ देखें', 'नीति')).toBe(false);
+    expect(namesTitle('यह नीति देखें', 'नीति')).toBe(true);
+  });
+
+  test('reads the first MAX_MEASURED_CHARS characters of the answer', () => {
+    const filler = 'x '.repeat(MAX_MEASURED_CHARS / 2);
+    expect(namesTitle(`${filler} Pricing`, 'Pricing')).toBe(false);
+    expect(namesTitle(`Pricing ${filler}`, 'Pricing')).toBe(true);
+    expect(passageUsed(`${filler} INV-2024-118`, 'Invoice INV-2024-118.', 'what?')).toBe(false);
+    expect(passageUsed(`INV-2024-118 ${filler}`, 'Invoice INV-2024-118.', 'what?')).toBe(true);
+  });
+
+  test('a long answer full of the title inside other words is read in linear time', () => {
+    // ~3,600 occurrences, none on a word boundary: each was a copy of the
+    // whole prefix and suffix before, 1.7 s for one title on 50k characters.
+    const answer = 'Testx '.repeat(8_400);
+    expect(answer.length).toBeGreaterThan(50_000);
+    const passages = Array.from({ length: 10 }, (_, i) => ({ excerpt: `Passage ${i}: Testx and E${1000 + i}.`, query: 'q' }));
+    const items = Array.from({ length: 10 }, (_, i) => ({ id: `id-${i}`, sourceId: `note:${i}`, title: 'Test' }));
+    const started = performance.now();
+    expect(citedItems(answer, items)).toBe(0);
+    usedPassages(answer, passages);
+    // The old code took over 10 s for these ten titles; a slow runner does this in well under one.
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   test('four characters at the least, after the extension is stripped', () => {

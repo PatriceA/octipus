@@ -238,11 +238,12 @@ describe('a run', () => {
   });
 
   test('finishing a turn records what the agent looked up and which source it named; the stats count it', async () => {
-    await note(userId, 'Pricing', 'Website pricing: 900 euro.');
+    // A title the query does not already hold: naming "Pricing" for "website pricing" would only repeat the question (measure.test.ts).
+    await note(userId, 'Rates 2026', 'Website pricing: 900 euro.');
     const { finishContextTurn, noteToolUse } = await import('@/core/context-hooks');
     const first = await run('website pricing');
     noteToolUse('sess-1', 'knowledge', 'search_knowledge', 'root-1');
-    await finishContextTurn(first.turn, { response: 'From the note Pricing: 900 euro.', outcome: 'success' });
+    await finishContextTurn(first.turn, { response: 'From the note Rates 2026: 900 euro.', outcome: 'success' });
     const second = await run('quarterly tax deadline');
     noteToolUse('sess-1', 'notes', 'search_notes', 'root-1');
     noteToolUse('sess-1', 'notes', 'read_note', 'root-1');
