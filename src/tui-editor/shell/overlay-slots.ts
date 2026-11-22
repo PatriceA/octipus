@@ -13,10 +13,10 @@ import type { OverlayController } from '@/tui-pi/overlays/registry';
 
 export type OverlaySlot =
   | 'palette' | 'hotkeys' | 'filePicker' | 'find' | 'replace' | 'workspace' | 'mcp' | 'saveAs'
-  | 'diff' | 'unsaved' | 'external';
+  | 'prompt' | 'diff' | 'unsaved' | 'external';
 
 /** The overlays a new app-level overlay replaces (stack discipline: one app overlay at a time). */
-export const APP_OVERLAYS: readonly OverlaySlot[] = ['palette', 'hotkeys', 'filePicker', 'find', 'replace', 'workspace', 'mcp', 'saveAs'];
+export const APP_OVERLAYS: readonly OverlaySlot[] = ['palette', 'hotkeys', 'filePicker', 'find', 'replace', 'workspace', 'mcp', 'saveAs', 'prompt'];
 
 export class OverlaySlots {
   private readonly handles = new Map<OverlaySlot, OverlayHandle>();

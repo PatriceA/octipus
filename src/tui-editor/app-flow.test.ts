@@ -303,6 +303,23 @@ test('Alt+Z and /wrap switch soft wrap, remembered in the checkpoint', async () 
   expect(f.savedState.mock.lastCall?.[0].softWrap).toBe(true);
 });
 
+test('Ctrl+G goes to a line, or line:column; a line out of range is refused in the box', async () => {
+  const { parseLineTarget } = await import('./components/input-prompt');
+  expect(parseLineTarget('3:4', 5)).toEqual({ line: 2, col: 3 });
+  expect(parseLineTarget('x', 5)).toEqual({ error: 'Type a line number, or line:column.' });
+  const app = mount(); const rec = app.buffers.openFile('/tmp/g.ts', 'a\nb\nc\nd', { disk: DISK });
+  key('\x07');
+  expect(modalText()).toContain('Go to line in g.ts (1–4)');
+  modalKey('9'); modalKey('\r');
+  expect(modalText()).toContain('There are 4 lines');
+  modalKey('\x7f'); modalKey('3'); modalKey(':'); modalKey('2'); modalKey('\r');
+  expect(modals).toHaveLength(0);
+  expect(rec.buffer.getCursor()).toEqual({ line: 2, col: 1 });
+  (app as unknown as { handleChatSubmit(t: string): void }).handleChatSubmit('/goto 1');
+  expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 0 });
+  expect(app.layout.get().focused).toBe('editor');
+});
+
 // docs/plans/tui-modernization.md §7, Phase 5 item 2: hunk-level review.
 test('an agent edit to a file that is not open opens it in a review tab instead of being dropped', () => {
   const app = mount();

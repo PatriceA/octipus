@@ -18,6 +18,7 @@ declare module '@/tui-kit' {
     'app.file.saveAs': true;
     'app.vim.toggle': true;
     'app.view.wrap': true;
+    'app.goto.line': true;
   }
 }
 
@@ -25,6 +26,7 @@ export const EDITOR_KEYBINDINGS = {
   'app.file.saveAs':  { defaultKeys: 'f12',   description: 'Save the active buffer under a new path (Save As)' },
   'app.vim.toggle':   { defaultKeys: 'alt+m', description: 'Switch vim mode on or off' },
   'app.view.wrap':    { defaultKeys: 'alt+z', description: 'Soft wrap long lines on or off' },
+  'app.goto.line':    { defaultKeys: 'ctrl+g', description: 'Go to a line (line or line:column)' },
 } as const satisfies KeybindingDefinitions;
 
 /**

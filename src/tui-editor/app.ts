@@ -31,6 +31,7 @@ import { FileTree } from './components/file-tree';
 import { ModeBar } from './components/mode-bar';
 import { SplitPane } from './components/split-pane';
 import { EditorPane } from './components/editor-pane';
+import { InputPrompt, parseLineTarget } from './components/input-prompt';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
 import { installTreeSitterHighlighter } from './editor/highlight-tree-sitter';
@@ -39,10 +40,10 @@ import { installEditorKeybindings } from './keybindings';
 import { AgentReview } from './shell/agent-review';
 import { type CommandHost, handleChatSubmit, handleGlobalKey } from './shell/commands';
 import type { EditorContext } from './shell/context';
-import { FileOps } from './shell/file-ops';
+import { FileOps, PROMPT_OVERLAY } from './shell/file-ops';
 import { HighlightParses } from './shell/highlight-parses';
 import { EditorOverlays } from './shell/overlay-actions';
-import { OverlaySlots } from './shell/overlay-slots';
+import { APP_OVERLAYS, OverlaySlots } from './shell/overlay-slots';
 import { EditorPersistence } from './shell/persistence';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
@@ -261,6 +262,7 @@ export class OctipusEditorApp {
         this.modeBar.setNotice(on ? 'Soft wrap on: long lines break into rows.' : 'Soft wrap off: long lines scroll sideways.', 'info');
         this.tui.requestRender();
       },
+      goToLine: (target) => this.goToLine(target),
       copySelection: () => this.layout.get().focused === 'editor' && this.editor.copySelection(),
       newScratch: () => { this.buffers.openScratch(); this.layout.focus('editor'); this.refocus(); },
       saveAsCommand: (value) => {
@@ -328,6 +330,36 @@ export class OctipusEditorApp {
         break;
     }
     this.tui.requestRender();
+  }
+
+  /** Ctrl+G, `/goto N[:C]`: put the cursor on a line of the active buffer. */
+  private goToLine(target: string): void {
+    const active = this.buffers.active();
+    if (!active) { this.modeBar.setNotice('No buffer open to go to a line in.'); this.tui.requestRender(); return; }
+    const go = (input: string): string | null => {
+      const parsed = parseLineTarget(input, active.buffer.lineCount());
+      if ('error' in parsed) return parsed.error;
+      active.buffer.setCursor(parsed);
+      this.layout.focus('editor');
+      this.refocus();
+      this.tui.requestRender();
+      return null;
+    };
+    if (target) { const error = go(target); if (error) this.pushMessage('system', `Error: ${error}`); return; }
+    if (this.slots.isOpen('prompt')) return;
+    this.slots.hideAll(APP_OVERLAYS);
+    const prompt = new InputPrompt({
+      title: `Go to line in ${active.label} (1–${active.buffer.lineCount()})`,
+      label: 'line: ',
+      hint: 'A line, or line:column · Enter go · Esc cancel',
+      onCancel: () => this.slots.close('prompt'),
+      onSubmit: (value) => {
+        const error = go(value);
+        if (error) { prompt.setError(error); this.tui.requestRender(); return; }
+        this.slots.close('prompt');
+      },
+    });
+    this.slots.show('prompt', prompt, PROMPT_OVERLAY);
   }
 
   /** Switch vim mode on or off (Alt+M, `/vim`). */

@@ -20,6 +20,8 @@ export interface CommandHost {
   hidePlanDetails(): void;
   setVimMode(on: boolean): void;
   setSoftWrap(on: boolean): void;
+  /** Go to `target` (`N` or `N:C`), or ask for it when empty. */
+  goToLine(target: string): void;
   /** Copy the editor's selection, when the editor has the focus and something selected; returns whether it did. */
   copySelection(): boolean;
   newScratch(): void;
@@ -56,6 +58,7 @@ export function handleChatSubmit(host: CommandHost, rawText: string): void {
       return;
     }
     if (name === 'new') { host.newScratch(); return; }
+    if (name === 'goto' || name === 'line') { host.goToLine(value); return; }
     if (name === 'save-as') { host.saveAsCommand(value); return; }
     if (name === 'quit' || name === 'exit' || name === 'q') { host.shutdownAndExit(); return; }
     if (name === 'keys' || name === 'hotkeys' || name === 'help-keys') { host.overlays.openHotkeys(); return; }
@@ -90,6 +93,7 @@ export function handleGlobalKey(host: CommandHost, data: string): { consume: tru
   if (kb.matches(data, 'app.file.saveAs'))   { host.openSaveAsForActive(); return { consume: true }; }
   if (kb.matches(data, 'app.vim.toggle'))    { host.setVimMode(ctx.layout.get().editorMode !== 'vim'); return { consume: true }; }
   if (kb.matches(data, 'app.view.wrap'))     { host.setSoftWrap(!ctx.layout.get().softWrap); return { consume: true }; }
+  if (kb.matches(data, 'app.goto.line'))     { host.goToLine(''); return { consume: true }; }
   if (kb.matches(data, 'app.find.open'))     { overlays.openFind(); return { consume: true }; }
   if (kb.matches(data, 'app.replace.open'))  { overlays.openReplace(); return { consume: true }; }
   if (kb.matches(data, 'app.workspace.switch')) { void overlays.openWorkspacePicker(); return { consume: true }; }
