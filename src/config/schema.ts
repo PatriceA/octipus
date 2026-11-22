@@ -944,9 +944,10 @@ export const configSchema = z.object({
     /** A candidate not seen again for this many days is deleted by the daily consolidation. */
     candidateTtlDays: z.number().int().min(1).default(30),
     /**
-     * A lesson note (written by a learning review) that is not pinned, older
-     * than this many days and not shown to an agent within them is archived
-     * by the daily consolidation. 0 never archives one.
+     * A lesson note (written by a learning review) that is not pinned and
+     * was neither updated (edited, merged, seen again by a review) nor shown
+     * to an agent for this many days is archived by the daily consolidation.
+     * 0 never archives one.
      */
     lessonTtlDays: z.number().int().min(0).default(90),
     /** Lesson notes one learning review may write or merge into; 0 writes none. */

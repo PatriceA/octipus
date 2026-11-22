@@ -231,7 +231,8 @@ describe('migration 0200', () => {
 });
 
 describe('consolidation of lesson notes', () => {
-  async function seedLesson(fields: { body: string; workspaceId?: string; owner?: string; pinned?: boolean; createdDaysAgo?: number; sightings?: number }) {
+  /** A lesson note; its creation and last update both `createdDaysAgo` days back unless `updatedDaysAgo` says otherwise. */
+  async function seedLesson(fields: { body: string; workspaceId?: string; owner?: string; pinned?: boolean; createdDaysAgo?: number; updatedDaysAgo?: number; sightings?: number }) {
     const { getNoteService } = await import('@/core/knowledge/notes');
     const { personalNoteScope } = await import('@/db/repositories/note-repository');
     const result = await getNoteService().save({
@@ -240,7 +241,8 @@ describe('consolidation of lesson notes', () => {
       frontmatter: { sessionId: `s-${randomUUID()}`, learningJobId: 'j-legacy', sources: ['event:1'], ...(fields.sightings ? { sightings: fields.sightings } : {}) },
     });
     const days = fields.createdDaysAgo ?? 0;
-    await rows(`UPDATE notes SET pinned = $2, created_at = now() - ($3 || ' days')::interval WHERE id = $1`, [result.note.id, fields.pinned ?? false, String(days)]);
+    await rows(`UPDATE notes SET pinned = $2, created_at = now() - ($3 || ' days')::interval, updated_at = now() - ($4 || ' days')::interval WHERE id = $1`,
+      [result.note.id, fields.pinned ?? false, String(days), String(fields.updatedDaysAgo ?? days)]);
     return result.note.id;
   }
 
@@ -283,9 +285,11 @@ describe('consolidation of lesson notes', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
-  test('expiry archives only unpinned, old, unaccessed lessons; lessonTtlDays 0 archives none', async () => {
+  test('expiry archives only unpinned lessons neither updated nor shown within the TTL; lessonTtlDays 0 archives none', async () => {
     learning.lessonTtlDays = 90;
     const stale = await seedLesson({ body: 'Deploys go out on Tuesdays.', createdDaysAgo: 120 });
+    // Old, never shown, but edited (or merged into) within the TTL: kept.
+    const edited = await seedLesson({ body: 'Releases are signed with the release key.', createdDaysAgo: 120, updatedDaysAgo: 20 });
     const pinned = await seedLesson({ body: 'Builds use node 24.', createdDaysAgo: 120, pinned: true });
     const young = await seedLesson({ body: 'Logs are kept a week.', createdDaysAgo: 10 });
     const recalled = await seedLesson({ body: 'Tests run on CI only.', createdDaysAgo: 120 });
@@ -300,6 +304,22 @@ describe('consolidation of lesson notes', () => {
     expect((await consolidation.consolidateProposals(userId)).notesArchived).toBe(2);
     expect((await note(stale)).archived_at).not.toBeNull();
     expect((await note(ignoredLongAgo)).archived_at).not.toBeNull();
-    for (const id of [pinned, young, recalled]) expect((await note(id)).archived_at).toBeNull();
+    for (const id of [pinned, young, recalled, edited]) expect((await note(id)).archived_at).toBeNull();
+  });
+
+  test('a lesson re-sighted recently but never shown to an agent is kept', async () => {
+    learning.lessonTtlDays = 90;
+    const old = await seedLesson({ body: 'Deploys go out on Tuesdays.', createdDaysAgo: 120 });
+    expect((await rows(`SELECT count(*)::int AS n FROM embeddings WHERE source_id = $1 AND last_accessed_at IS NOT NULL`, [`note:${old}`]))[0].n).toBe(0);
+    // Seen again in yesterday's review: merged into, one more sighting.
+    complete.mockResolvedValue(reply('unchanged'));
+    const filed = await lessons.fileLessonNote(item('Deploys go out on Tuesdays.', { extends: `note:${old}` }), ctx());
+    expect(filed).toMatchObject({ status: 'merged', id: old });
+    expect((await note(old)).frontmatter.sightings).toBe(2);
+    // Indexing the merged text stamps no access: it was still never shown.
+    expect((await rows(`SELECT count(*)::int AS n FROM embeddings WHERE source_id = $1 AND last_accessed_at IS NOT NULL`, [`note:${old}`]))[0].n).toBe(0);
+
+    expect((await consolidation.consolidateProposals(userId)).notesArchived).toBe(0);
+    expect((await note(old)).archived_at).toBeNull();
   });
 });

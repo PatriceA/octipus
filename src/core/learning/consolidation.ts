@@ -20,9 +20,9 @@
  *      within what is left of `maxMerges`: the target is the pinned one, then
  *      the one seen more often (`sightings`), then the older; the other is
  *      archived with `frontmatter.mergedInto` (`absorbLessonNote`);
- *   6. lesson notes not pinned, older than `learning.lessonTtlDays` and not
- *      shown to an agent within it (no `last_accessed_at` of their chunks in
- *      that window) are archived. 0 days archives none.
+ *   6. lesson notes not pinned and neither updated (`updated_at`) nor shown
+ *      to an agent (`last_accessed_at` of their chunks) within
+ *      `learning.lessonTtlDays` are archived. 0 days archives none.
  *
  * `runDailyLearningMaintenance()` runs that for every user with open
  * proposals or live lesson notes and then the skill curator, at most once per 24 hours across all
@@ -341,18 +341,24 @@ export async function consolidateLessonNotes(userId: string, opts: { maxMerges: 
 }
 
 /**
- * Step 6: archive `userId`'s lesson notes that are not pinned, were created
- * more than `learning.lessonTtlDays` ago, and none of whose chunks was shown
- * to an agent (`last_accessed_at`) within that many days. A lesson never
- * shown has no `last_accessed_at`: its age is measured from its creation.
- * Archived, never deleted. Returns how many; 0 days archives none.
+ * Step 6: archive `userId`'s lesson notes that are not pinned and were
+ * neither updated nor shown within `learning.lessonTtlDays`: the later of the
+ * note's `updated_at` and its chunks' latest `last_accessed_at` is older than
+ * that. `updated_at` moves on every save (an edit, a merge from a review that
+ * saw the lesson again, a consolidation merge into it) and on pin or unpin;
+ * `last_accessed_at` moves when a search returns the chunk (recall counts only
+ * the passages it shows; search_notes, search_knowledge, the knowledge API and
+ * link suggestions count what they return), never when it is indexed. A
+ * re-index replaces the chunks (no `last_accessed_at`), but it comes with a
+ * save, which moves `updated_at`. Archived, never deleted. Returns how many;
+ * 0 days archives none.
  */
 export async function expireLessonNotes(userId: string): Promise<number> {
   const { lessonTtlDays } = getConfig().learning;
   if (lessonTtlDays <= 0) return 0;
   const cutoff = new Date(Date.now() - lessonTtlDays * 24 * 60 * 60 * 1000);
   const archived = await getDb().update(notes).set({ archivedAt: new Date(), updatedAt: new Date() }).where(and(
-    liveLessonsOf(userId), eq(notes.pinned, false), lt(notes.createdAt, cutoff),
+    liveLessonsOf(userId), eq(notes.pinned, false), lt(notes.updatedAt, cutoff),
     sql`NOT EXISTS (SELECT 1 FROM ${embeddings} e WHERE e.source_id = 'note:' || ${notes.id}::text AND e.user_id = ${userId}::uuid
       AND e.last_accessed_at >= ${cutoff.toISOString()}::timestamptz)`,
   )).returning({ id: notes.id });

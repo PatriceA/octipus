@@ -1823,7 +1823,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'learning',
     valueType: 'number',
     defaultValue: 90,
-    description: 'Days after which a lesson note from a learning review that is not pinned and was not shown to an agent in that time is archived by the daily consolidation (0: never).',
+    description: 'Days after which a lesson note from a learning review that is not pinned and was neither updated (edited, merged, seen again) nor shown to an agent in that time is archived by the daily consolidation (0: never).',
     isSecret: false,
   },
   {
