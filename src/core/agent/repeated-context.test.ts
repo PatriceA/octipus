@@ -106,3 +106,74 @@ describe('an in-turn compaction that summarizes the earlier copy', () => {
     expect(restoreOmittedContext([user('summary only')], state)).toBeUndefined();
   });
 });
+
+describe('a group repeated per part (the recall block)', () => {
+  const head = '\n\n<recalled-knowledge>\nRetrieved automatically from the user\'s own knowledge base and notes because it matches this message.\n';
+  const tail = '</recalled-knowledge>\n';
+  const pricing = 'Note "Pricing"\nPricing: a website costs 2400 euro. That covers design, build and one round of changes; hosting is billed apart.\n';
+  const hosting = 'Note "Hosting"\nHosting: every website we build runs on our own servers for 15 euro a month, backups and updates included.\n';
+  const group = (...parts: string[]) => ({ head, tail, parts });
+  const block = (...parts: string[]) => `${head}${parts.join('')}${tail}`;
+
+  test('a passage still in view is left out, a new one is sent inside the fence', () => {
+    const history = [user(`${turn(date, block(pricing))}\n\nfirst question`)];
+    const sent = withoutRepeatedContext(turn(date, block(pricing, hosting)), [group(pricing, hosting)], history);
+    expect(sent.text).not.toContain('2400 euro');
+    expect(sent.text).toContain('backups and updates');
+    expect(sent.text.match(/<recalled-knowledge>/g)).toHaveLength(1);
+    expect(sent.text.indexOf('backups and updates')).toBeLessThan(sent.text.indexOf('</recalled-knowledge>'));
+    expect(sent.text.endsWith(REPEATED_CONTEXT_NOTE)).toBe(true);
+    expect(sent.omitted).toEqual([pricing.trim()]);
+    expect(sent.fences).toEqual([{ head, tail, parts: [pricing.trim()] }]);
+    // The hook's block is still partly there: the composition keeps counting it.
+    expect(sent.leftOut).toEqual([]);
+  });
+
+  test('every passage in view: the fence goes too, no empty shell', () => {
+    const history = [user(turn(date, block(pricing))), user(turn(date, block(hosting)))];
+    const sent = withoutRepeatedContext(turn('\n\nCURRENT DATE & TIME: later', block(pricing, hosting)), [memory, group(pricing, hosting)], history);
+    expect(sent.text).not.toContain('recalled-knowledge');
+    expect(sent.text).toBe(`CURRENT DATE & TIME: later\n\n${REPEATED_CONTEXT_NOTE}`);
+    expect(sent.leftOut).toEqual([block(pricing, hosting).trim()]);
+  });
+
+  test('a short passage is not worth leaving out; a malformed group is ignored', () => {
+    const short = 'Note "Hours"\nOpen 9 to 5.\n';
+    const history = [user(turn(date, block(short)))];
+    const ctx = turn(date, block(short));
+    expect(withoutRepeatedContext(ctx, [group(short)], history).text).toBe(ctx);
+    expect(withoutRepeatedContext(ctx, [{ head, tail, parts: [1] }, { head }], history).text).toBe(ctx);
+  });
+
+  test('a restore puts a passage back inside the fence still in the message', () => {
+    const earlier = user(`${turn(date, block(pricing))}\n\nfirst question`);
+    const sent = withoutRepeatedContext(turn(date, block(pricing, hosting)), [group(pricing, hosting)], [earlier]);
+    const message = user(`${sent.text}\n\nsecond question`);
+    const history: AgentMessage[] = [{ role: 'system', content: '[Context Summary] pricing came up', timestamp: new Date() }, message];
+    expect(restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences })).toBeUndefined();
+    const content = message.content as string;
+    expect(content.match(/<recalled-knowledge>/g)).toHaveLength(1);
+    const close = content.indexOf('</recalled-knowledge>');
+    expect(content.indexOf('2400 euro')).toBeGreaterThan(content.indexOf('<recalled-knowledge>'));
+    expect(content.indexOf('2400 euro')).toBeLessThan(close);
+    expect(content).not.toContain(REPEATED_CONTEXT_NOTE);
+    expect(content.endsWith('second question')).toBe(true);
+  });
+
+  test('a restore of a fully omitted group brings the fence back, and keeps tracking what is still above', () => {
+    const history0 = [user(turn(date, block(pricing))), user(turn(date, memory, block(hosting)))];
+    const sent = withoutRepeatedContext(turn(date, memory, block(pricing, hosting)), [memory, group(pricing, hosting)], history0);
+    expect(sent.text).not.toContain('recalled-knowledge');
+    const message = user(`${sent.text}\n\nthird question`);
+    // The compaction dropped the turn with the pricing passage; the one with memory and hosting stays.
+    const history = [history0[1], message];
+    const next = restoreOmittedContext(history, { content: message.content as string, omitted: sent.omitted, fences: sent.fences });
+    const content = message.content as string;
+    expect(content).toContain(`<recalled-knowledge>`);
+    expect(content).toContain('2400 euro');
+    expect(content).not.toContain('backups and updates');
+    expect(content).toContain(REPEATED_CONTEXT_NOTE);
+    expect(next?.omitted.sort()).toEqual([memory.trim(), hosting.trim()].sort());
+    expect(next?.fences).toEqual([{ head, tail, parts: [hosting.trim()] }]);
+  });
+});

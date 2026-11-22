@@ -739,7 +739,7 @@ export class AgentWorker extends BaseAgentWorker {
   async addUserMessage(content: string): Promise<void> {
     // A retrieved block an earlier turn still in view carries is not sent again
     // (`repeated-context.ts`); the stored row records what was actually sent.
-    const { text: promptContext, omitted } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
+    const { text: promptContext, omitted, fences, leftOut } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
     // Images this turn shows the model itself (root-runner → `userMedia`):
     // references on the message, bytes only in each request (hydrateMedia).
@@ -748,8 +748,8 @@ export class AgentWorker extends BaseAgentWorker {
       role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date(),
       ...(userMedia.length ? { media: userMedia } : {}),
     };
-    this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
-    const composition = this.measurePromptComposition(content, omitted);
+    this.omittedContext = omitted.length ? { content: message.content as string, omitted, ...(fences.length ? { fences } : {}) } : undefined;
+    const composition = this.measurePromptComposition(content, leftOut);
     this.messages.push(message);
 
     // Only persist for the root agent — and never in a room, where the
