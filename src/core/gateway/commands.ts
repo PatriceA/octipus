@@ -360,7 +360,9 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       const session = await sessionRepository.findById(ctx.sessionId);
       if (!(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
       const { messageRepository } = await import('@/db/repositories/message-repository');
-      const rows = (await messageRepository.getLastMessages(ctx.sessionId, 50)).reverse();
+      // The conversation as the web shows it: user and assistant rows, never
+      // a row marked internal (a companion's private check-in).
+      const rows = await messageRepository.findRecentBySession(ctx.sessionId, 50, ['user', 'assistant']);
       const data = rows
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
         .map((m) => ({ role: m.role, content: m.content, at: m.createdAt.toISOString() }));

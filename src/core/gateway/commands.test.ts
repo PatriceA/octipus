@@ -235,7 +235,7 @@ describe('/sessions and /history (TUI resume)', () => {
 
   test('/history refuses another user\'s session and an unknown one alike', async () => {
     const findById = vi.spyOn(sessionRepository, 'findById');
-    const getLast = vi.spyOn(messageRepository, 'getLastMessages');
+    const getLast = vi.spyOn(messageRepository, 'findRecentBySession');
     findById.mockResolvedValue({ id: 'sess-1', userId: '22222222-2222-4333-8444-555555555555' } as never);
     expect((await registry.execute('/history', ctx))!.text).toBe('Session not found.');
     findById.mockResolvedValue(null);
@@ -246,10 +246,10 @@ describe('/sessions and /history (TUI resume)', () => {
   test('/history replays user and assistant turns oldest first, skipping tool rows', async () => {
     const at = (s: number) => new Date(1_700_000_000_000 + s * 1000);
     vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
-    vi.spyOn(messageRepository, 'getLastMessages').mockResolvedValue([
-      { role: 'assistant', content: 'hi back', createdAt: at(2) },
-      { role: 'tool', content: '{"ok":true}', createdAt: at(1) },
+    vi.spyOn(messageRepository, 'findRecentBySession').mockResolvedValue([
       { role: 'user', content: 'hello', createdAt: at(0) },
+      { role: 'tool', content: '{"ok":true}', createdAt: at(1) },
+      { role: 'assistant', content: 'hi back', createdAt: at(2) },
     ] as never);
     const result = await registry.execute('/history', ctx);
     expect(result!.data).toEqual([
@@ -257,6 +257,21 @@ describe('/sessions and /history (TUI resume)', () => {
       { role: 'assistant', content: 'hi back', at: at(2).toISOString() },
     ]);
     expect(result!.text).toBe('❯ hello\n\n  hi back');
+  });
+
+  test('/history asks for visible user and assistant rows only: a companion\'s internal check-in is not replayed', async () => {
+    vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
+    // Every row of the session, newest first — what an unfiltered read returns.
+    vi.spyOn(messageRepository, 'getLastMessages').mockResolvedValue([
+      { role: 'assistant', content: 'Internal briefing', createdAt: new Date(2), metadata: { visibility: 'internal' } },
+      { role: 'user', content: 'hello', createdAt: new Date(1) },
+    ] as never);
+    const recent = vi.spyOn(messageRepository, 'findRecentBySession').mockResolvedValue([
+      { role: 'user', content: 'hello', createdAt: new Date(1) },
+    ] as never);
+    const result = await registry.execute('/history', ctx);
+    expect(recent).toHaveBeenCalledWith('sess-1', 50, ['user', 'assistant']);
+    expect(JSON.stringify(result!.data)).not.toContain('Internal briefing');
   });
 
   test('/history without a session says so', async () => {
