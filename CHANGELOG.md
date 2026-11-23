@@ -273,15 +273,27 @@ labels reflect blast radius, not contract guarantees.
     left, right or centre edge) comes out as a Markdown table: header row,
     `---:` for a right-aligned column, empty cells kept, `|` escaped, a
     wrapped cell joined to its row when rows are spaced wider than lines.
+  - A table with no header row is a table too, under an empty header row
+    (`| | |`), when its grid is unmistakable: four or more rows, each with two
+    or more cells, 80% of every column on one edge, and a column of numbers
+    all the way down (both columns, for a two-column grid). Numbered lists,
+    label/value lines (`Total  415.00`), contents pages and grids that only
+    roughly line up keep their lines.
+  - A table that runs onto the next page stays one table: rows at the head of
+    the next page whose columns sit where the table's did continue it, with no
+    header of their own (a single row only when it has a number in the
+    table's column of numbers); a repeated header is dropped, and so is one
+    page number at the foot and one at the head, recognised by position (set
+    apart from the table and on none of its column edges). A number in a
+    column, such as a total, is kept, and anything else between the halves
+    (a running title) still splits the table in two; no other text is dropped.
   - A page where neither reading holds comes out exactly as before. Label/value
-    forms, bullet lists, tables of contents and tables without a header row
-    keep their lines; a gutter under three glyphs wide needs six lines, not
-    three; a page of over 10,000 fragments (or a line of over 500) skips
-    detection. Not handled: merged or spanning cells, tables whose columns
-    do not line up or whose cells are long text,
-    wrapped cells in tables without row spacing, columns that never share a
-    baseline, tables continuing onto the next page (read as two tables),
-    rotated and right-to-left text.
+    forms, bullet lists and tables of contents keep their lines; a gutter
+    under three glyphs wide needs six lines, not three; a page of over 10,000
+    fragments (or a line of over 500) skips detection. Not handled: merged or
+    spanning cells, tables whose columns do not line up or whose cells are
+    long text, wrapped cells in tables without row spacing, columns that
+    never share a baseline, rotated and right-to-left text.
   - Fixed: the gap between two runs of text on a line was lost on real PDFs,
     because pdfjs reports it as a whitespace item as wide as the gap; column
     and cell gaps came out as one space. Whitespace-only items no longer count

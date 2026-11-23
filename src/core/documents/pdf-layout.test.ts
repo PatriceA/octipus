@@ -8,7 +8,7 @@
  * undifferentiated run.
  */
 import { describe, expect, test } from 'vitest';
-import { type PdfTextItem, reconstructPageText } from './pdf-layout';
+import { joinPdfPages, type PdfPageText, type PdfTextItem, reconstructPage, reconstructPageText } from './pdf-layout';
 
 /** One text fragment at (x, y), sized for a ~10pt font. */
 const item = (str: string, x: number, y: number, charW = 5, height = 10): PdfTextItem => ({
@@ -471,5 +471,378 @@ describe('reconstructPageText — tables', () => {
     // Retried from every line this took ~250ms; bounded retries take ~30ms.
     expect(performance.now() - started).toBeLessThan(2000);
     expect(text).not.toContain('|');
+  });
+});
+
+/** Rows of cells at fixed x positions, 12pt apart from `top`; a column [x] starts at x, [x, 'right'] ends there. */
+const grid = (top: number, xs: Array<[number, 'right'?]>, cells: string[][]): PdfTextItem[] =>
+  cells.flatMap((r, k) => row(top - k * 12, r.map((s, c): [string, number, 'right'?] => [s, xs[c][0], xs[c][1]])));
+
+describe('reconstructPageText — tables without a header row', () => {
+  test('a three-column grid of words and numbers comes out under an empty header', () => {
+    const text = reconstructPageText(
+      grid(700, [[50], [200], [400, 'right']], [
+        ['Widget', 'Red', '1,200'],
+        ['Gadget', 'Blue', '35'],
+        ['Sprocket', 'Green', '7'],
+        ['Flange', 'Black', '410'],
+        ['Bolt', 'Grey', '12'],
+      ]),
+    );
+    expect(lines(text)).toEqual([
+      '| | | |',
+      '| --- | --- | ---: |',
+      '| Widget | Red | 1,200 |',
+      '| Gadget | Blue | 35 |',
+      '| Sprocket | Green | 7 |',
+      '| Flange | Black | 410 |',
+      '| Bolt | Grey | 12 |',
+    ]);
+  });
+
+  test('a two-column grid of numbers is a table', () => {
+    const text = reconstructPageText(
+      grid(700, [[50], [300, 'right']], [
+        ['2019', '1,200'],
+        ['2020', '1,350'],
+        ['2021', '980'],
+        ['2022', '1,410'],
+      ]),
+    );
+    expect(lines(text)).toEqual(['| | |', '| --- | ---: |', '| 2019 | 1,200 |', '| 2020 | 1,350 |', '| 2021 | 980 |', '| 2022 | 1,410 |']);
+  });
+
+  test('a wide grid of numbers keeps every column', () => {
+    const xs: Array<[number, 'right']> = Array.from({ length: 8 }, (_, c) => [100 + c * 60, 'right']);
+    const values = Array.from({ length: 6 }, (_, r) => Array.from({ length: 8 }, (_, c) => `${(r + 1) * (c + 3) * 7}`));
+    const text = reconstructPageText(grid(700, xs, values));
+    expect(lines(text)).toEqual([
+      `|${' |'.repeat(8)}`,
+      `| ${Array(8).fill('---:').join(' | ')} |`,
+      ...values.map((r) => `| ${r.join(' | ')} |`),
+    ]);
+  });
+
+  test('a ragged last column, some of it empty, is still the table', () => {
+    const text = reconstructPageText(
+      grid(700, [[50], [200, 'right'], [260]], [
+        ['A-100', '4', 'steel bracket'],
+        ['A-101', '12', ''],
+        ['A-102', '7', 'zinc plated washer'],
+        ['A-103', '30', 'nut'],
+        ['A-104', '2', ''],
+      ]),
+    );
+    expect(lines(text)).toEqual([
+      '| | | |',
+      '| --- | ---: | --- |',
+      '| A-100 | 4 | steel bracket |',
+      '| A-101 | 12 |  |',
+      '| A-102 | 7 | zinc plated washer |',
+      '| A-103 | 30 | nut |',
+      '| A-104 | 2 |  |',
+    ]);
+  });
+
+  test('text around a header-less table stays outside it', () => {
+    const text = reconstructPageText([
+      item('Measurements', 50, 740),
+      ...grid(710, [[50], [200, 'right'], [300, 'right']], [
+        ['north', '12.5', '3.1'],
+        ['south', '11.0', '2.8'],
+        ['east', '13.2', '3.4'],
+        ['west', '10.9', '2.6'],
+      ]),
+      item('All values in metres.', 50, 650),
+    ]);
+    expect(order(text)).toEqual([
+      'Measurements',
+      '',
+      '| | | |',
+      // Numbers of one width: left and right edges agree, and left is the default.
+      '| --- | --- | --- |',
+      '| north | 12.5 | 3.1 |',
+      '| south | 11.0 | 2.8 |',
+      '| east | 13.2 | 3.4 |',
+      '| west | 10.9 | 2.6 |',
+      '',
+      'All',
+    ]);
+  });
+
+  // What lines up in columns and is still not a table.
+
+  test('three header-less rows are too few', () => {
+    const text = reconstructPageText(
+      grid(700, [[50], [200], [400, 'right']], [
+        ['Widget', 'Red', '1,200'],
+        ['Gadget', 'Blue', '35'],
+        ['Sprocket', 'Green', '7'],
+      ]),
+    );
+    expect(text).not.toContain('|');
+  });
+
+  test('a header-less grid whose numbers only roughly line up is not a table', () => {
+    // The number column shares its edge on three rows of five: enough for a
+    // table with a header, not for one without.
+    const text = reconstructPageText([
+      ...row(700, [['Widget', 50], ['Red', 200], ['1,200', 400, 'right']]),
+      ...row(688, [['Gadget', 50], ['Blue', 200], ['35', 420, 'right']]),
+      ...row(676, [['Sprocket', 50], ['Green', 200], ['7', 400, 'right']]),
+      ...row(664, [['Flange', 50], ['Black', 200], ['410', 440, 'right']]),
+      ...row(652, [['Bolt', 50], ['Grey', 200], ['12', 400, 'right']]),
+    ]);
+    expect(text).not.toContain('|');
+  });
+
+  test('a numbered list with a number column keeps its lines', () => {
+    const steps: Array<[string, string]> = [
+      ['Preheat the oven', '200'],
+      ['Mix the flour', '250'],
+      ['Add the eggs', '2'],
+      ['Bake', '40'],
+      ['Cool', '15'],
+    ];
+    const text = reconstructPageText(grid(700, [[50], [75], [300, 'right']], steps.map(([s, n], k) => [`${k + 1}.`, s, n])));
+    expect(lines(text)).toEqual(steps.map(([s, n], k) => `${k + 1}.  ${s}  ${n}`));
+    const lettered = reconstructPageText(grid(700, [[50], [300, 'right']], steps.map(([, n], k) => [`${'abcde'[k]})`, n])));
+    expect(lettered).not.toContain('|');
+  });
+
+  test('label and number lines (a totals block, a list of dates) keep their lines', () => {
+    const totals: Array<[string, string]> = [
+      ['Subtotal', '400.00'],
+      ['Tax', '20.00'],
+      ['Shipping', '5.00'],
+      ['Discount', '-10.00'],
+      ['Total', '415.00'],
+    ];
+    expect(lines(reconstructPageText(grid(700, [[50], [300, 'right']], totals)))).toEqual(totals.map(([l, v]) => `${l}  ${v}`));
+    const dates = reconstructPageText(
+      grid(700, [[50], [200]], [
+        ['Issued', '2026-11-02'],
+        ['Due', '2026-12-02'],
+        ['Paid', '2026-11-20'],
+        ['Reminder', '2026-12-09'],
+      ]),
+    );
+    expect(dates).not.toContain('|');
+  });
+
+  test('a contents page with section numbers is not a table', () => {
+    const toc: string[][] = [
+      ['1', 'Introduction', '1'],
+      ['1.1', 'Scope', '2'],
+      ['1.2', 'Terms', '4'],
+      ['2', 'Methods', '9'],
+      ['2.1', 'Data', '11'],
+      ['3', 'Results', '20'],
+    ];
+    expect(reconstructPageText(grid(700, [[50], [90], [400, 'right']], toc))).not.toContain('|');
+  });
+
+  test('prose columns with numbers in them read as columns, not a table', () => {
+    const left = (k: number) => `${2019 + k} ${FILLER}`.slice(0, 45);
+    const rightText = (k: number) => `${k * 12} ${FILLER}`.slice(0, 45);
+    const text = reconstructPageText([
+      ...Array.from({ length: 6 }, (_, k) => item(left(k), 50, 700 - k * 12)),
+      ...Array.from({ length: 6 }, (_, k) => item(rightText(k), 320, 700 - k * 12)),
+    ]);
+    expect(lines(text)).toEqual([...Array.from({ length: 6 }, (_, k) => left(k)), ...Array.from({ length: 6 }, (_, k) => rightText(k))]);
+  });
+
+  test('justified lines with numbers and a stretched gap in one place are not a table', () => {
+    const leftPart = (k: number) => `in ${2019 + k} the figure rose by ${k + 3} percent ${FILLER}`.slice(0, 37);
+    const rightPart = (k: number) => `and ${k * 7} units were sold ${FILLER}`.slice(0, 36);
+    const text = reconstructPageText(
+      [0, 1, 2, 3, 4].flatMap((k) => [item(leftPart(k), 50, 700 - k * 12), item(rightPart(k), 50 + 37 * 5 + 12, 700 - k * 12)]),
+    );
+    expect(lines(text)).toEqual([0, 1, 2, 3, 4].map((k) => `${leftPart(k)}  ${rightPart(k)}`));
+  });
+
+  test('a long header-less grid stays fast', () => {
+    const many = grid(
+      780,
+      [[50], [200, 'right'], [300, 'right']],
+      // Not in order: a whole-number column that only goes up beside words is a contents page.
+      Array.from({ length: 400 }, (_, k) => [`r${k}`, `${k}`, `${(k * 37) % 101}`]),
+    ).map((it) => ({ ...it, height: 1.5 }));
+    const started = performance.now();
+    const text = reconstructPageText(many);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(text).toContain('| r399 | 399 | 17 |');
+  });
+});
+
+describe('reconstructPage — tables across a page break', () => {
+  /** Pages read in order, each with the table the one before left open, as the processor reads them. */
+  const read = (pages: PdfTextItem[][]): string => {
+    const out: PdfPageText[] = [];
+    let open: PdfPageText['openTable'] = null;
+    for (const items of pages) {
+      const page = reconstructPage(items, open);
+      open = page.openTable;
+      out.push(page);
+    }
+    return joinPdfPages(out);
+  };
+
+  const stockHead = row(700, [['Item', 50], ['Colour', 200], ['Qty', 400, 'right']]);
+  const stockRows = (top: number, names: string[]) =>
+    names.flatMap((n, k) => row(top - k * 12, [[n, 50], ['Red', 200], [`${(k + 1) ** 3 * 7}`, 400, 'right']]));
+
+  test('rows with no header at the head of the next page continue the table, past the page numbers', () => {
+    const text = read([
+      [item('Stock report', 50, 730), ...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket']), item('1', 300, 40)],
+      [item('- 2 -', 290, 770), ...stockRows(740, ['Flange', 'Bolt']), item('Figures as of Monday.', 50, 700)],
+    ]);
+    expect(lines(text)).toEqual([
+      'Stock report',
+      '',
+      '| Item | Colour | Qty |',
+      '| --- | --- | ---: |',
+      '| Widget | Red | 7 |',
+      '| Gadget | Red | 56 |',
+      '| Sprocket | Red | 189 |',
+      '| Flange | Red | 7 |',
+      '| Bolt | Red | 56 |',
+      '',
+      'Figures as of Monday.',
+    ]);
+  });
+
+  test('one continued row of a two-column table, which alone reads as a label and value', () => {
+    const page1 = [
+      ...row(700, [['Region', 50], ['Revenue', 300, 'right']]),
+      ...row(688, [['North', 50], ['1,200', 300, 'right']]),
+      ...row(676, [['South', 50], ['950', 300, 'right']]),
+      ...row(664, [['West', 50], ['80', 300, 'right']]),
+    ];
+    const page2 = [...row(760, [['East', 50], ['70', 300, 'right']]), item('Totals are unaudited.', 50, 700)];
+    expect(lines(read([page1, page2]))).toEqual([
+      '| Region | Revenue |',
+      '| --- | ---: |',
+      '| North | 1,200 |',
+      '| South | 950 |',
+      '| West | 80 |',
+      '| East | 70 |',
+      '',
+      'Totals are unaudited.',
+    ]);
+    // Read alone, the second page is what it always was.
+    expect(reconstructPageText(page2)).toBe('East  70\nTotals are unaudited.');
+  });
+
+  test('a header repeated on the next page is not read as a row', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])],
+      [...row(760, [['Item', 50], ['Colour', 200], ['Qty', 400, 'right']]), ...stockRows(748, ['Flange', 'Bolt'])],
+    ]);
+    expect(lines(text).filter((l) => l.startsWith('| Item'))).toHaveLength(1);
+    expect(lines(text)).toHaveLength(7);
+  });
+
+  test('a header-less table continues under its one empty header', () => {
+    const value = (y: number) => `${((y * 37) % 11) ** 3}`;
+    const page = (top: number, years: number[]) =>
+      years.flatMap((y, k) => row(top - k * 12, [[`${y}`, 50], [value(y), 300, 'right']]));
+    const text = read([page(700, [2015, 2016, 2017, 2018]), page(760, [2019, 2020])]);
+    expect(lines(text)).toEqual(['| | |', '| --- | ---: |', ...[2015, 2016, 2017, 2018, 2019, 2020].map((y) => `| ${y} | ${value(y)} |`)]);
+  });
+
+  test('a page that opens with text, or with rows in other columns, does not continue the table', () => {
+    const page1 = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    const prose = read([page1, [item('A new section begins here.', 50, 760), ...stockRows(730, ['Flange', 'Bolt'])]]);
+    expect(prose).toContain('| Sprocket | Red | 189 |\n\nA new section begins here.');
+    expect(prose).not.toContain('| Flange');
+    const moved = read([page1, row(760, [['Flange', 80], ['Red', 260], ['44', 480, 'right']])]);
+    expect(moved).not.toContain('| Flange');
+  });
+
+  test('a new table with its own header in the same columns stays a table of its own', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])],
+      [...row(760, [['Part', 50], ['Finish', 200], ['Stock', 400, 'right']]), ...stockRows(748, ['Flange', 'Bolt', 'Nut'])],
+    ]);
+    expect(lines(text).filter((l) => /^\| -/.test(l))).toHaveLength(2);
+    expect(text).toContain('\n\n| Part | Finish | Stock |');
+  });
+
+  test('a number in a column under the table is content, never dropped as a page number', () => {
+    const page1 = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    const page2 = stockRows(740, ['Flange', 'Bolt']);
+    // A total one row below, right-aligned under Qty, then the page number.
+    const total = read([[...page1, ...row(652, [['252', 400, 'right']]), item('7', 300, 40)], page2]);
+    expect(lines(total)).toContain('252');
+    expect(lines(total)).toContain('7');
+    // A year further down, but on the first column's edge.
+    const year = read([[...page1, item('2024', 50, 600)], page2]);
+    expect(lines(year)).toContain('2024');
+    // A fraction under Qty, set apart like a footer would be.
+    const fraction = read([[...page1, ...row(600, [['3/4', 400, 'right']])], page2]);
+    expect(lines(fraction)).toContain('3/4');
+  });
+
+  test('a number in a column at the head of the next page is content, never dropped', () => {
+    const page1 = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    // Carried forward, under Qty, above the continuing rows.
+    const text = read([page1, [...row(770, [['252', 400, 'right']]), ...stockRows(740, ['Flange', 'Bolt'])]]);
+    expect(lines(text)).toContain('252');
+    expect(text).toContain('Flange');
+  });
+
+  test('one continued row of a three-column table is joined', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket']), item('1', 300, 40)],
+      [item('2', 300, 770), ...row(740, [['Flange', 50], ['Blue', 200], ['8', 400, 'right']]), item(prose('After', 60), 50, 690)],
+    ]);
+    expect(lines(text).slice(0, 7)).toEqual([
+      '| Item | Colour | Qty |',
+      '| --- | --- | ---: |',
+      '| Widget | Red | 7 |',
+      '| Gadget | Red | 56 |',
+      '| Sprocket | Red | 189 |',
+      '| Flange | Blue | 8 |',
+      '',
+    ]);
+  });
+
+  test('a repeated header with no rows under it continues nothing, and a table below it stays its own', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket']), item('1', 300, 40)],
+      [
+        ...row(760, [['Item', 50], ['Colour', 200], ['Qty', 400, 'right']]),
+        ...row(660, [['Region', 50], ['City', 200], ['Sales', 400, 'right']]),
+        ...row(648, [['North', 50], ['Oslo', 200], ['30', 400, 'right']]),
+        ...row(636, [['South', 50], ['Rome', 200], ['140', 400, 'right']]),
+        ...row(624, [['East', 50], ['Kyiv', 200], ['5', 400, 'right']]),
+      ],
+    ]);
+    // Every line is kept, and the second table opens its own block.
+    expect(lines(text)).toContain('1');
+    expect(lines(text)).toContain('Item  Colour  Qty');
+    expect(text).toContain('\n\n| Region | City | Sales |\n| --- | --- | ---: |');
+    expect(lines(text).filter((l) => /^\| -/.test(l))).toHaveLength(2);
+  });
+
+  test('an aligned caption at the head of the next page is not a row of a two-column table', () => {
+    const text = read([
+      [
+        ...row(700, [['Year', 50], ['Revenue', 300, 'right']]),
+        ...row(688, [['2021', 50], ['1,200', 300, 'right']]),
+        ...row(676, [['2022', 50], ['1,350', 300, 'right']]),
+        ...row(664, [['2023', 50], ['1,500', 300, 'right']]),
+      ],
+      [...row(760, [['Figure 4', 50], ['2024', 300, 'right']]), item(prose('This figure shows', 70), 50, 700)],
+    ]);
+    expect(text).not.toContain('| Figure 4');
+    expect(text).toContain('Figure 4  2024');
+  });
+
+  test('a table followed by text leaves nothing open; one followed by a page number does', () => {
+    const body = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    expect(reconstructPage([...body, item('Note below.', 50, 640)]).openTable).toBeNull();
+    expect(reconstructPage([...body, item('Page 4 of 9', 270, 40)]).openTable).not.toBeNull();
   });
 });
