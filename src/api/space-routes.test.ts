@@ -200,6 +200,8 @@ const SPACE_ACTING = [
   'GET /api/notifications', 'POST /api/notifications/:id/read', 'POST /api/notifications/read-all',
   'GET /api/artifacts/_meta', 'GET /api/artifacts', 'POST /api/artifacts', 'GET /api/artifacts/spec/:slugOrId', 'GET /api/artifacts/:id',
   'PUT /api/artifacts/:id', 'DELETE /api/artifacts/:id', 'GET /api/artifacts/:id/versions',
+  // Agent refresh: the artifact's creator only, and refused for an artifact in a shared space.
+  'GET /api/artifacts/:id/agent-refresh', 'PUT /api/artifacts/:id/agent-refresh', 'POST /api/artifacts/:id/agent-refresh/run',
   'POST /api/artifacts/:id/versions/:versionId/restore', 'GET /api/artifacts/:id/data-sources', 'POST /api/artifacts/:id/data-sources',
   'DELETE /api/artifacts/:id/data-sources/:sourceId', 'POST /api/artifacts/:id/refresh', 'GET /api/artifacts/:id/data/:sourceName',
   'POST /api/artifacts/:id/share-links', 'GET /api/artifacts/:id/share-links', 'DELETE /api/artifacts/:id/share-links/:linkId',
