@@ -82,10 +82,17 @@ are not an instruction to expand scope during this cycle.
 - **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
   `web/app/artifacts/`, and the `create_live_artifact` meta-tool are
   live behind a BETA flag in the sidebar and on the page header.
-  Outstanding work: subdomain hosting hardening (host header /
-  CSP origin sandboxing), embed-mode auth scopes, retention &
-  garbage-collection policy, slug-collision UX, agent-authored
-  refresh loop. Stays in **Now** until the BETA flag drops.
+  Shipped 2026-11-23: hosting confinement (exact host match, the artifact
+  host serves artifact pages only, every artifact response carries its own
+  sandbox policy, no artifact script served as a file), read-only
+  single-artifact viewer tokens with expiry and share-link revocation, a
+  retention policy (`artifacts.retentionDays`, off by default) that counts
+  views, and typed slug conflicts with a suggested slug. Outstanding: the
+  agent-authored refresh loop (the `skill_query` source kind is a stub with
+  no design: it needs a deliverable, a headless execution path, budgets and
+  an injection boundary), shared token revocation for multi-node
+  deployments, and a check of the forms and live refresh in a real browser.
+  Stays in **Now** until the BETA flag drops.
 
 - **Schema directory grouping.** `src/db/schema/` currently has 58 flat
   TypeScript files.
