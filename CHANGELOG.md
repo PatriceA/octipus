@@ -13,13 +13,27 @@ labels reflect blast radius, not contract guarantees.
     was dropped, so retries came sooner than the provider asked.
   - A reset connection, including one that drops mid-reply, is a network
     failure: retried with backoff and counted by the circuit breaker, no
-    longer an unclassified abort.
+    longer an unclassified abort. A transient DNS failure (`EAI_AGAIN`) is
+    treated the same way.
+  - A refused connection or an unknown host (`ECONNREFUSED`, `ENOTFOUND`) is
+    a new `endpoint_unreachable` failure: the agent stops at once with a
+    message to check that the model server is running and its endpoint URL
+    is right, instead of retrying for about 14 s. It no longer counts
+    against the circuit breaker its provider's other models share. This
+    also applies to the plain-code errors that used to be retried as
+    network timeouts.
   - A LiteLLM proxy stream that fails after its first chunk raises a
     classified error, and one the caller aborts ends as a cancellation
-    instead of passing its partial text off as a finished answer.
-  - Proxy embeddings are matched to their inputs by `index`, not list order.
-  - A custom-provider model whose API key resolves nowhere fails as an auth
-    failure, the same as the endpoint's 401 would.
+    instead of passing its partial text off as a finished answer. A
+    cancellation is never counted against the proxy's circuit breaker.
+  - Proxy embeddings are placed by `index`. A reply with the wrong number of
+    vectors, or with repeated or out-of-range indices, fails as an invalid
+    response instead of misaligning vectors with their texts.
+  - A custom-provider model whose API key resolves nowhere fails once, as
+    an auth failure that says where to put the key; it is not retried. A
+    401 from the endpoint is unchanged.
+  - OpenAI's `insufficient_quota` (sent as HTTP 429) is an exhausted quota,
+    no longer a rate limit to wait out.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
