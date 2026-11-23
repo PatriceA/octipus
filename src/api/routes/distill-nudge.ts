@@ -29,8 +29,9 @@ export const distillNudgeRoutes = new Elysia()
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await contentRepos(principal).sessions.findById(params.id);
     if (!session) { set.status = 404; return { error: 'Session not found' }; }
-    // Another user's chat (an admin reading it) shows no offer.
-    if (session.userId !== principal.userId || principal.actorUserId) return { nudge: null };
+    // Another user's chat (an admin reading it) shows no offer. `learning`: the
+    // session's owner only, and refused in a room whoever asks.
+    if (principal.actorUserId || !(await canActInSession(session, principal.userId, 'learning'))) return { nudge: null };
     return { nudge: await openDistillNudge(session.id, principal.userId) };
   }, { params: t.Object({ id: t.String({ pattern: UUID }) }) })
   .post('/sessions/:id/distill-nudge/:messageId', async ({ user, principal, params, body, set }) => {
@@ -38,7 +39,7 @@ export const distillNudgeRoutes = new Elysia()
     if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required' }; }
     if (principal.actorUserId) { set.status = 403; return { error: 'Not available while acting as another user.' }; }
     const session = await contentRepos(principal).sessions.findById(params.id);
-    if (!session || session.userId !== principal.userId || !(await canActInSession(session, principal.userId, 'chat'))) {
+    if (!session || !(await canActInSession(session, principal.userId, 'learning'))) {
       set.status = 404; return { error: 'Session not found' };
     }
     try {

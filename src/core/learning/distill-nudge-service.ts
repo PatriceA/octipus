@@ -11,18 +11,17 @@
  * the approval prompt of a plain ASK only. The result is a pending proposal
  * the owner still approves on Skills → Proposals.
  */
-import { and, asc, desc, eq, gte, inArray, lte, ne, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, ne, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { ToolPolicyRefusalError } from '@/core/tool-execution-error';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { visibleMessages } from '@/db/repositories/message-visibility';
+import { agentEventRepository } from '@/db/repositories/agent-event-repository';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import { userRepository } from '@/db/repositories/user-repository';
-import { agentEvents } from '@/db/schema/agent-events';
 import { kvStore } from '@/db/schema/kv';
-import { messages } from '@/db/schema/messages';
-import { sessions } from '@/db/schema/sessions';
 import { skillProposals } from '@/db/schema/skill-proposals';
 import { users } from '@/db/schema/users';
 import { verificationEvidence } from '@/db/schema/verification-evidence';
@@ -92,14 +91,7 @@ async function optedOut(userId: string): Promise<boolean> {
 
 /** The run's tool calls, as far as `summarizeRunEvents` needs them: names only, never the payloads. */
 async function runActions(runId: string, userId: string): Promise<RunEventRow[]> {
-  const rows = await getDb().select({
-    agentId: agentEvents.agentId,
-    kind: sql<string | null>`${agentEvents.data}->>'type'`,
-    toolName: sql<string | null>`${agentEvents.data}->>'toolName'`,
-    toolCalls: sql<unknown>`jsonb_path_query_array(${agentEvents.data}, '$.toolCalls[*].name')`,
-  }).from(agentEvents)
-    .where(and(eq(agentEvents.runId, runId), eq(agentEvents.userId, userId), eq(agentEvents.type, 'action')))
-    .orderBy(asc(agentEvents.id)).limit(MAX_RUN_EVENTS);
+  const rows = await agentEventRepository.findRunToolCalls(runId, userId, MAX_RUN_EVENTS);
   return rows.map((row) => ({
     agentId: row.agentId,
     type: 'action',
@@ -186,11 +178,7 @@ export async function offerDistillNudge(turn: DistillNudgeTurn): Promise<{ messa
   };
   let written = false;
   try {
-    const rows = await db.update(messages)
-      .set({ metadata: sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify({ skillNudge: record })}::jsonb` })
-      .where(and(eq(messages.id, turn.answerMessageId), eq(messages.sessionId, turn.sessionId)))
-      .returning({ id: messages.id });
-    written = rows.length > 0;
+    written = await messageRepository.putSkillNudge(turn.answerMessageId, turn.sessionId, record);
   } finally {
     if (!written && claim !== 'none') await releaseCooldown(turn.userId, claim);
   }
@@ -200,14 +188,8 @@ export async function offerDistillNudge(turn: DistillNudgeTurn): Promise<{ messa
   return { messageId: turn.answerMessageId };
 }
 
-/** The id of the session's latest shown answer: the only one whose offer is open. */
-async function latestAnswer(sessionId: string): Promise<{ id: string; metadata: (typeof messages.$inferSelect)['metadata'] } | undefined> {
-  const [latest] = await getDb().select({ id: messages.id, metadata: messages.metadata }).from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'assistant'), visibleMessages,
-      sql`coalesce(${messages.metadata}->>'kind', '') <> 'progress'`))
-    .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
-  return latest;
-}
+/** The session's latest shown answer: the only one whose offer is open. A personal chat's only. */
+const latestAnswer = (sessionId: string) => messageRepository.findLatestPersonalAnswer(sessionId);
 
 /**
  * The session's open offer: on its latest shown answer, still undecided, of
@@ -232,13 +214,8 @@ export class DistillNudgeError extends Error {
 }
 
 /** Move the offer from `from` to `next`; false when it was not in `from` (decided meanwhile). */
-async function transition(messageId: string, from: DistillNudgeRecord['state'], next: DistillNudgeRecord): Promise<boolean> {
-  const rows = await getDb().update(messages)
-    .set({ metadata: sql`jsonb_set(${messages.metadata}, '{skillNudge}', ${JSON.stringify(next)}::jsonb)` })
-    .where(and(eq(messages.id, messageId), sql`${messages.metadata}->'skillNudge'->>'state' = ${from}`))
-    .returning({ id: messages.id });
-  return rows.length > 0;
-}
+const transition = (messageId: string, from: DistillNudgeRecord['state'], next: DistillNudgeRecord) =>
+  messageRepository.moveSkillNudge(messageId, from, next);
 
 /**
  * The material of an offer its owner has just accepted (`distill_skill`
@@ -249,16 +226,11 @@ async function transition(messageId: string, from: DistillNudgeRecord['state'], 
  */
 export async function acceptedRunMaterial(sessionId: string, messageId: string, userId: string): Promise<{ material: string } | { error: string }> {
   if (!UUID_RE.test(sessionId) || !UUID_RE.test(messageId)) return { error: "source='run' is only for an accepted distil offer" };
-  const db = getDb();
-  const [answer] = await db.select({ metadata: messages.metadata, createdAt: messages.createdAt }).from(messages)
-    .where(and(eq(messages.id, messageId), eq(messages.sessionId, sessionId))).limit(1);
+  const answer = await messageRepository.findPersonalInSession(messageId, sessionId);
   const nudge = answer?.metadata?.skillNudge;
   if (!answer || !nudge || nudge.state !== 'accepted' || nudge.userId !== userId) return { error: "source='run' is only for an accepted distil offer" };
   const [rows, actions] = await Promise.all([
-    db.select({ role: messages.role, content: messages.content }).from(messages)
-      .where(and(eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant']), visibleMessages,
-        gte(messages.createdAt, new Date(nudge.startedAt)), lte(messages.createdAt, answer.createdAt)))
-      .orderBy(asc(messages.createdAt), asc(messages.id)),
+    messageRepository.findPersonalBetween(sessionId, new Date(nudge.startedAt), answer.createdAt),
     runActions(nudge.runId, nudge.userId),
   ]);
   const tools = [...new Set(actions.flatMap(({ data }) => {
@@ -318,8 +290,7 @@ function isRefusal(err: unknown): boolean {
  * The caller has checked that `userId` may act in the session and is its owner.
  */
 export async function resolveDistillNudge(sessionId: string, messageId: string, userId: string, decision: DistillNudgeDecision): Promise<DistillNudgeOutcome> {
-  const [row] = await getDb().select({ metadata: messages.metadata }).from(messages)
-    .where(and(eq(messages.id, messageId), eq(messages.sessionId, sessionId))).limit(1);
+  const row = await messageRepository.findPersonalInSession(messageId, sessionId);
   const nudge = row?.metadata?.skillNudge;
   if (!row || !nudge || nudge.userId !== userId) throw new DistillNudgeError('not_found', 'No offer to distil this answer.');
   if (nudge.state !== 'offered') throw new DistillNudgeError('decided', `This offer was already ${nudge.state}.`);
@@ -359,7 +330,7 @@ export async function resolveDistillNudge(sessionId: string, messageId: string, 
 
   let result: Awaited<ReturnType<typeof dispatchDistill>>;
   try {
-    const [session] = await getDb().select({ workspaceId: sessions.workspaceId }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const session = await sessionRepository.findById(sessionId);
     result = await dispatchDistill(sessionId, session?.workspaceId ?? null, messageId, userId);
   } catch (err) {
     if (isRefusal(err)) return settle('refused', `Distilling a skill is not allowed here: ${(err as Error).message}`);

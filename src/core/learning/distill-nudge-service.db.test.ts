@@ -185,6 +185,29 @@ describe('the offer', () => {
     expect(await offer({ ...run, answerId: '00000000-0000-4000-8000-000000000000' })).toBeNull();
     expect(await offer(await finishedRun(COMPLEX))).not.toBeNull();
   });
+
+  test('a space session or a room never carries an offer, whatever its records say', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const { openDistillNudge, resolveDistillNudge } = await import('./distill-nudge-service');
+    learning.distillNudgeCooldownHours = 0;
+    const space = randomUUID();
+    await executeRaw(`INSERT INTO workspaces (id, kind, slug, name, files_dir) VALUES ('${space}', 'shared', 'space-${space.slice(0, 8)}', 'Space', '${space}')`);
+    const inSpace = await finishedRun(COMPLEX);
+    await executeRaw(`UPDATE sessions SET workspace_id = '${space}' WHERE id = '${inSpace.sessionId}'`);
+    const room = await finishedRun(COMPLEX);
+    await executeRaw(`UPDATE sessions SET kind = 'room', room_visibility = 'space', workspace_id = '${space}' WHERE id = '${room.sessionId}'`);
+    for (const run of [inSpace, room]) {
+      // Even if the turn gate were passed, the offer is not written…
+      expect(await offer(run)).toBeNull();
+      expect(await nudgeOf(run.answerId)).toBeUndefined();
+      // …and a record put there by hand is neither shown nor decidable.
+      await executeRaw(`UPDATE messages SET metadata = jsonb_build_object('skillNudge', jsonb_build_object('state', 'offered', 'runId', '${run.runId}',
+        'userId', '${userId}', 'startedAt', '${run.startedAt.toISOString()}', 'offeredAt', '${new Date().toISOString()}')) WHERE id = '${run.answerId}'`);
+      expect(await openDistillNudge(run.sessionId, userId)).toBeNull();
+      await expect(resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'not_found' });
+    }
+    expect(complete).not.toHaveBeenCalled();
+  });
 });
 
 describe('the decision', () => {
