@@ -40,6 +40,25 @@ describe('egressPolicySchema', () => {
     expect(() => policy({ rules: [{ action: 'allow', host: 'a.com', cidr: '8.8.8.0/24' }] })).toThrow(/exactly one/);
   });
 
+  test('wildcards that would match nothing are refused with a reason', () => {
+    expect(() => policy({ rules: [{ action: 'deny', host: '*.*.com' }] })).toThrow(/a wildcard is only/);
+    expect(() => policy({ rules: [{ action: 'deny', host: 'api.*' }] })).toThrow(/wildcard/);
+    expect(policy({ rules: [{ action: 'deny', host: '*' }] }).rules).toHaveLength(1);
+  });
+
+  test('an IPv4-mapped range is the IPv4 range it stands for; one too short to convert is refused', () => {
+    const p = policy({ rules: [{ action: 'deny', cidr: '::ffff:203.0.113.0/120' }] });
+    expect(evaluateEgress(p, tool, https('x.example'), ['203.0.113.7']).allowed).toBe(false);
+    expect(evaluateEgress(p, tool, https('x.example'), ['::ffff:203.0.113.7']).allowed).toBe(false);
+    expect(() => policy({ rules: [{ action: 'deny', cidr: '::ffff:0:0/90' }] })).toThrow(/address range/);
+  });
+
+  test('the number of tool and role entries is bounded', () => {
+    const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`t${i}`, { rules: [] }]));
+    expect(() => policy({ tools: many })).toThrow(/At most 200 tool entries/);
+    expect(() => policy({ roles: many })).toThrow(/At most 200 role entries/);
+  });
+
   test('malformed hosts and ranges are refused', () => {
     expect(() => policy({ rules: [{ action: 'deny', host: 'user@evil.com' }] })).toThrow();
     expect(() => policy({ rules: [{ action: 'deny', host: '*.8.8.8.8' }] })).toThrow();
@@ -124,9 +143,41 @@ describe('evaluateEgress', () => {
     expect(evaluateEgress(p, tool, https('a.example'), []).allowed).toBe(false);
   });
 
-  test('a name check before resolution refuses a denied name and leaves the rest provisional', () => {
+  test('a name check before resolution: final when no address rule applies (a denied name is never resolved)', () => {
     expect(evaluateEgress(denyByDefault, tool, https('secret.docs.example.com')).allowed).toBe(false);
-    expect(evaluateEgress(denyByDefault, tool, https('other.net'))).toMatchObject({ allowed: true, provisional: true });
+    // Deny default, no name allow, no address rule: refused on the name alone.
+    expect(evaluateEgress(denyByDefault, tool, https('other.net'))).toMatchObject({ allowed: false, rule: 'default (deny)' });
+    expect(evaluateEgress(denyByDefault, tool, https('api.example.com'))).toMatchObject({ allowed: true });
+    expect(evaluateEgress(denyByDefault, tool, https('api.example.com')).provisional).toBeUndefined();
+  });
+
+  test('a name check is provisional only where an address could still change the answer', () => {
+    const p = policy({ default: 'deny', rules: [{ action: 'allow', host: 'good.com' }, { action: 'deny', cidr: '203.0.113.0/24' }] });
+    // An allowed name may still resolve into the denied range.
+    expect(evaluateEgress(p, tool, https('good.com'))).toMatchObject({ allowed: true, provisional: true });
+    // Nothing could allow an unlisted name: refused before resolution.
+    expect(evaluateEgress(p, tool, https('evil.com'))).toMatchObject({ allowed: false, rule: 'default (deny)' });
+    // With an address allow, an unlisted name could still be allowed by where it resolves.
+    const q = policy({ default: 'deny', rules: [{ action: 'allow', cidr: '93.184.216.0/24' }] });
+    expect(evaluateEgress(q, tool, https('x.example'))).toMatchObject({ allowed: true, provisional: true });
+    expect(evaluateEgress(q, tool, https('x.example'), ['1.1.1.1']).allowed).toBe(false);
+  });
+
+  test('"*" is every host', () => {
+    const p = policy({ rules: [{ action: 'deny', host: '*' }, { action: 'allow', host: 'never.example' }] });
+    expect(evaluateEgress(p, tool, https('evil.com'), ['1.1.1.1']).allowed).toBe(false);
+    expect(evaluateEgress(p, tool, https('1.1.1.1')).allowed).toBe(false);
+    const q = policy({ default: 'deny', rules: [{ action: 'allow', host: '*', ports: [443] }] });
+    expect(evaluateEgress(q, tool, https('any.example'), ['1.1.1.1']).allowed).toBe(true);
+    expect(evaluateEgress(q, tool, http('any.example'), ['1.1.1.1']).allowed).toBe(false);
+  });
+
+  test('6to4 and IPv4-compatible addresses are judged as their IPv4', () => {
+    const p = policy({ rules: [{ action: 'deny', cidr: '8.8.8.0/24' }] });
+    expect(evaluateEgress(p, tool, https('2002:808:808::1')).allowed).toBe(false);
+    expect(evaluateEgress(p, tool, https('::8.8.8.8')).allowed).toBe(false);
+    expect(evaluateEgress(p, tool, https('name.example'), ['2002:808:801::']).allowed).toBe(false);
+    expect(canonicalAddress('::1')).toBe('::1');
   });
 
   test('tool and role rules add to the global ones; the tool default wins over the role default', () => {

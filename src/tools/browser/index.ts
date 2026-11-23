@@ -7,6 +7,8 @@ import { decide, decisionModelBound, type DecisionSite, recordShadow } from '@/m
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability, type ToolExecutionOptions } from '../base-tool';
 import { sharedChromium } from './shared-chromium';
+import { browserEgressFor, unproxiedContextError } from '@/security/browser-egress';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
 
 const DEFAULT_TIMEOUT = 30000;
 
@@ -59,6 +61,8 @@ export class BrowserTool extends BaseTool {
   }
 
   private contexts: Map<string, BrowserContext> = new Map();
+  /** Contexts routed through an egress proxy (src/security/browser-egress.ts). */
+  private judgedContexts = new WeakSet<BrowserContext>();
   private pages: Map<string, Page> = new Map();
   private pageOwners=new Map<string,string>();
   private owner(context:AgentContext):string{return `${context.userId}:${context.workspaceId??''}:${context.space?'shared':'private'}`;}
@@ -144,12 +148,13 @@ export class BrowserTool extends BaseTool {
       }),
       async (args, context) => {
         const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
+        const egress = await import('@/security/egress-policy');
+        egress.precheckEgressUrl(args.url as string, 'browser');
         const validation = await validateExternalUrl(args.url as string);
         if (!validation.valid) {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
-        const egress = await import('@/security/egress-policy');
         egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
 
         const page = await this.getOrCreatePage(args.contextId?`${this.owner(context)}:${args.contextId}`:undefined);
@@ -196,12 +201,13 @@ export class BrowserTool extends BaseTool {
       }),
       async (args, context) => {
         const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
+        const egress = await import('@/security/egress-policy');
+        egress.precheckEgressUrl(args.url as string, 'browser');
         const validation = await validateExternalUrl(args.url as string);
         if (!validation.valid) {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
-        const egress = await import('@/security/egress-policy');
         egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
 
         const page = this.getPage(args.pageId as string,context);
@@ -513,10 +519,19 @@ export class BrowserTool extends BaseTool {
     const browser = await sharedChromium.get();
 
     if (contextId && this.contexts.has(contextId)) {
-      return this.contexts.get(contextId)!.newPage();
+      const existing = this.contexts.get(contextId)!;
+      this.assertJudged(existing);
+      return existing.newPage();
     }
 
-    const context = await browser.newContext();
+    // Under an active egress policy the context is routed through its own
+    // egress proxy: every request its pages make is judged before it is sent.
+    const egress = await browserEgressFor();
+    const context = await browser.newContext(egress ? { proxy: egress.proxy } : {});
+    if (egress) {
+      this.judgedContexts.add(context);
+      context.once('close', () => egress.close());
+    }
     if (contextId) {
       this.contexts.set(contextId, context);
       return context.newPage();
@@ -538,7 +553,13 @@ export class BrowserTool extends BaseTool {
       throw new Error(`Page not found: ${pageId} (pages close with the browser after ${sharedChromium.idleMinutes} min idle)`);
     }
     sharedChromium.touch();
+    this.assertJudged(page.context());
     return page;
+  }
+
+  /** A context opened before the egress policy applied is not used under it: its traffic would not be judged. */
+  private assertJudged(context: BrowserContext): void {
+    if (!this.judgedContexts.has(context) && currentEgressSubject() && egressPolicyActive(activeEgressPolicy())) throw unproxiedContextError();
   }
 
   private generatePageId(): string {

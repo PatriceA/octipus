@@ -48,7 +48,7 @@ export class ScreenshotCapture {
   private headless: boolean;
   private log = logger.child({ component: 'screenshot' });
 
-  constructor(browserType: BrowserType = 'chromium', headless: boolean = true) {
+  constructor(browserType: BrowserType = 'chromium', headless: boolean = true, private readonly proxy?: { server: string; bypass: string }) {
     this.browserType = browserType;
     this.headless = headless;
   }
@@ -73,6 +73,8 @@ export class ScreenshotCapture {
     this.context = await this.browser.newContext({
       viewport: { width: 1920, height: 1080 },
       deviceScaleFactor: 1,
+      // The egress proxy of the tool call, when a policy applies (src/security/browser-egress.ts).
+      ...(this.proxy ? { proxy: this.proxy } : {}),
     });
 
     this.page = await this.context.newPage();

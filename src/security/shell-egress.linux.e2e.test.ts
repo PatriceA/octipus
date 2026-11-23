@@ -98,9 +98,23 @@ const direct = (p) => p === Number(proxy.port) ? Promise.resolve({ ok: false, co
   s.once('connect', () => { s.destroy(); resolve({ ok: true }); });
   s.once('error', (e) => resolve({ ok: false, code: codeOf(e) }));
 }));
+/** A server the command starts itself, fetched by curl (which honours the proxy variables and NO_PROXY). */
+const ownLoopback = () => timed(new Promise((resolve) => {
+  if (!require('node:fs').existsSync('/usr/bin/curl')) { resolve({ ok: false, code: 'NO_CURL' }); return; }
+  const srv = http.createServer((_q, r) => r.end('inner-ok'));
+  srv.listen(0, '127.0.0.1', () => {
+    require('node:child_process').execFile('/usr/bin/curl', ['-s', '--max-time', '5', 'http://localhost:' + srv.address().port + '/'], (err, stdout) => {
+      srv.close();
+      resolve(err ? { ok: false, code: codeOf(err) } : { ok: true, body: stdout });
+    });
+  });
+}));
 (async () => {
   const out = {
     proxyVar: process.env.HTTP_PROXY || null,
+    noProxy: process.env.NO_PROXY,
+    bridgeVarLeaked: 'OCTIPUS_BRIDGE_NO_PROXY' in process.env,
+    ownLoopback: await ownLoopback(),
     allowed: await get('http://allowed.test:' + port + '/'),
     denied: await get('http://denied.test:' + port + '/'),
     unlisted: await get('http://unlisted.test:' + port + '/'),
@@ -155,6 +169,10 @@ describe.skipIf(!onLinux || present.length === 0)('shell egress policy under a r
       expect(probes.unlisted, report).toMatchObject({ ok: true, status: 403 });
       expect(probes.tunnelAllowed, report).toMatchObject({ ok: true, status: 'HTTP/1.1 200 Connection Established' });
       expect(probes.tunnelDenied, report).toMatchObject({ ok: true, status: 'HTTP/1.1 403 Forbidden' });
+      // Its own loopback (a server it started) is not sent to the proxy.
+      expect(probes.noProxy, report).toBe('localhost,127.0.0.1,::1');
+      expect(probes.bridgeVarLeaked, report).toBe(false);
+      if (probes.ownLoopback.code !== 'NO_CURL') expect(probes.ownLoopback, report).toMatchObject({ ok: true, body: 'inner-ok' });
       // The command's own network namespace has no route to the upstream.
       expect(probes.direct.ok, report).toBe(false);
     }, 90_000);

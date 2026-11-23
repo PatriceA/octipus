@@ -1,4 +1,5 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { enforceGitRemotes } from '@/security/git-egress';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentShellOptions, shellOperationsFor, quoteRuntimeArg } from '@/security/environment-runtime';
@@ -304,6 +305,8 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name or URL)', required: true },
       path: { type: 'string', description: 'Local destination path' },
     }), async (args) => {
+      // gh clones over git from github.com (or GH_HOST): judged by the egress policy first.
+      await enforceGitRemotes([ghCloneUrl(args.repo as string)]);
       const ghArgs = ['repo', 'clone', args.repo as string];
       if (args.path) ghArgs.push(args.path as string);
       return { output: await this.gh(ghArgs) };
@@ -680,3 +683,15 @@ function splitList(v: unknown): string[] {
 }
 
 export const githubTool = new GitHubTool();
+
+/**
+ * The URL `gh repo clone <repo>` fetches from: the repo itself when it is a
+ * URL or `host:path`, else `https://<GH_HOST or github.com>/<owner/name>`.
+ */
+export function ghCloneUrl(repo: string): string {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(repo) || /^[^/]+:/.test(repo)) return repo;
+  const parts = repo.split('/');
+  // HOST/OWNER/REPO is gh's own three-part form.
+  if (parts.length === 3) return `https://${parts[0]}/${parts[1]}/${parts[2]}`;
+  return `https://${process.env.GH_HOST || 'github.com'}/${repo}`;
+}

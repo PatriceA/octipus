@@ -27,6 +27,7 @@
  * later phase.
  */
 
+import { fetchGuarded } from '@/utils/sanitize';
 import { resolveVaultHeaders } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
@@ -101,7 +102,8 @@ export const htmlScrapeCollector: ToolboxTool<Params, Result> = {
       workspaceId: ctx.workspaceId,
     });
     if (!headers.accept) headers.accept = 'text/html, application/xhtml+xml';
-    const res = await fetch(params.url, { headers });
+    // Model-chosen URL: SSRF guard + egress policy on every hop.
+    const res = await fetchGuarded(params.url, { headers });
     if (!res.ok) throw new Error(`html_scrape ${res.status}: ${res.statusText}`);
     const html = await res.text();
 

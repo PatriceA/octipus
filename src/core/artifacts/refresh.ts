@@ -7,6 +7,7 @@ import { assertNoCredentialTemplates } from '@/security/credential-boundary';
  * `principalId`, never the requesting viewer.
  */
 
+import { fetchGuarded } from '@/utils/sanitize';
 import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactDataSource } from '@/db/schema/artifact-data-sources';
@@ -87,7 +88,11 @@ export async function refreshSource(sourceId: string): Promise<RefreshResult> {
 
   let payload: unknown;
   try {
-    payload = await dispatch(source);
+    // Judged by the egress policy as the artifacts tool of its owner — the
+    // calling tool's subject when a tool call refreshes it, else (a scheduled
+    // refresh) the owner's (docs/EGRESS-POLICY.md).
+    const { currentEgressSubject, withEgressSubject } = await import('@/security/egress-policy');
+    payload = await withEgressSubject(currentEgressSubject() ?? { tool: 'artifacts', userId: source.principalId }, () => dispatch(source));
   } catch (err) {
     const message = (err as Error).message ?? String(err);
     coreLogger.error(
@@ -211,7 +216,9 @@ async function runHttp(source: ArtifactDataSource): Promise<unknown> {
     principalId: source.principalId,
     workspaceId: artifact.workspaceId,
   });
-  const res = await fetch(cfg.url, {
+  // The URL is model-chosen: the SSRF guard and the egress policy judge it
+  // and every redirect hop (fetchGuarded), never a bare fetch.
+  const res = await fetchGuarded(cfg.url, {
     method: cfg.method ?? 'GET',
     headers,
     body: cfg.body !== undefined ? JSON.stringify(cfg.body) : undefined,
@@ -261,7 +268,7 @@ export function applyJsonPath(data: unknown, path: string): unknown {
 // ── rss ──────────────────────────────────────────────────────────────
 async function runRss(cfg: RssSourceConfig): Promise<{ items: RssItem[] }> {
   if (!cfg.url) throw new Error('rss source: missing config.url');
-  const res = await fetch(cfg.url, { headers: { accept: 'application/rss+xml, application/xml' } });
+  const res = await fetchGuarded(cfg.url, { headers: { accept: 'application/rss+xml, application/xml' } });
   if (!res.ok) throw new Error(`rss ${res.status}`);
   const xml = await res.text();
   return { items: parseRss(xml) };

@@ -1,4 +1,5 @@
 import type { ContextTurnHandle } from '@/core/context-hooks';
+import { EGRESS_ROLE_CHAIN_KEY, egressRoleChain } from '@/security/egress-policy';
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
 import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
@@ -1866,6 +1867,10 @@ export class SwarmSpawner {
           // write) holds at every depth: the strip above covers the file
           // writers, this covers the rest of the executor's rule (repo writes).
           ...inheritedRefusal(opts.parentContext),
+          // The egress policy judges a child under its own role AND every
+          // ancestor's, so a restricted parent cannot fetch through a child
+          // of a looser role (docs/EGRESS-POLICY.md#roles).
+          [EGRESS_ROLE_CHAIN_KEY]: [...egressRoleChain(opts.parentContext.metadata), opts.parentContext.role],
           ...(opts.fork ? forkMetadata(opts.fork, opts.parentContext) : {}),
         },
       });

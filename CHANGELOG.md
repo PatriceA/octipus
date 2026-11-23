@@ -9,23 +9,36 @@ labels reflect blast radius, not contract guarantees.
 
 - **Egress policy for tools** ([docs](docs/EGRESS-POLICY.md)). Operators can
   say what tools may reach on the network: `security.egressPolicy` with
-  allow/deny rules by host (exact or `*.domain`), address range, port and
-  scheme, a default (`allow`, unchanged behaviour, or `deny`), and further
-  rules per tool (`shell`, `websearch`, `plugin:<name>`, ...) and per agent
-  role. Deny wins; host names are compared in canonical form (case, IDN,
-  trailing dots, numeric and IPv6 spellings, userinfo) and rules are also
-  checked against the addresses a request is pinned to; private and metadata
-  addresses stay blocked by the SSRF guard whatever a rule says. It applies to
-  web fetches (every redirect hop), browser and websearch pages (URL,
-  redirect chain, serving address; not sub-resources), plugin package proxies
-  (on top of the manifest), and shell commands: a sandboxed command that asks
-  for network no longer gets the host network but an egress proxy, enforced
-  under bwrap/firejail and macOS sandbox-exec. Without a sandbox it is advice
-  only (proxy variables); `requireEnforcement: true` refuses such commands
-  instead. `GET /api/settings/egress` reports what each path enforces on the
-  host. Refusals return a clear error to the model and are logged and audited
-  (`permission_denied`, resource `egress`: host, port, tool, role, rule; no
-  payloads). No policy configured: no change.
+  allow/deny rules by host (exact, `*.domain` or `*`), address range, port
+  and scheme (`http`, `https`, `ssh`), a default (`allow`, unchanged
+  behaviour, or `deny`), and further rules per tool (`shell`, `websearch`,
+  `plugin:<name>`, `artifacts`, ...) and per agent role, a role holding along
+  the whole spawn chain. Deny wins; host names are compared in canonical form
+  (case, IDN, trailing dots, numeric and IPv6 spellings, userinfo), rules are
+  also checked against the addresses a request is pinned to, a name the
+  policy refuses outright is never resolved, and private and metadata
+  addresses stay blocked whatever a rule says. Enforced for web fetches
+  (every redirect hop), artifact data sources and collectors, browser,
+  websearch and visual pages (each browser context goes through an egress
+  proxy, so redirect hops and sub-resources are judged before they are sent),
+  plugin package proxies (on top of the manifest), and sandboxed shell
+  commands, which get an egress proxy instead of the host network under
+  bwrap/firejail and macOS sandbox-exec (their own loopback stays direct).
+  git clone/pull/push and `gh repo clone` are judged on the URL git will use
+  before it starts. Without a sandbox, shell commands are advisory only; the
+  tool actions the policy cannot judge (Docker, the browser extension,
+  `mcp_add_server`, CLI agents' native tools) are listed in the docs and at
+  `GET /api/settings/egress`, and `requireEnforcement: true` refuses them and
+  unconfined shell commands. Refusals return a clear error to the model and
+  are logged and audited (`permission_denied`, resource `egress`: host, port,
+  tool, role, rule; no payloads). No policy configured: no change, except
+  two fixes below.
+- **Artifact data sources and the visual tool no longer reach private
+  addresses.** `http`/`rss` artifact sources and the `art_collect_http_json`,
+  `_http_text`, `_html_scrape` and `_rss` collectors fetched a model-chosen
+  URL with a bare `fetch` (the cloud metadata address included); `visual`
+  navigated to any URL. Both now go through the SSRF guard, so a source or
+  capture of `localhost` or a LAN address is refused.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

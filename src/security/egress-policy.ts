@@ -42,15 +42,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BlockList } from 'node:net';
 import { getConfig } from '@/config';
-import { canonicalHost, DEFAULT_EGRESS_POLICY, type EgressPolicy, type EgressRule, type EgressScheme, type EgressScope, ipFamily, parseCidr } from '@/shared/egress-policy';
+import { canonicalHost, DEFAULT_EGRESS_POLICY, type EgressPolicy, type EgressRule, type EgressScheme, type EgressScope, embeddedIPv4, ipFamily, ipv6GroupsOf, parseCidr } from '@/shared/egress-policy';
 import { coreLogger } from '@/utils/logger';
-import { ipv6Groups } from '@/utils/sanitize';
 
 export interface EgressSubject {
   /** The tool id (`websearch`, `shell`) or `plugin:<package>`. */
   tool?: string;
   /** The agent role the call runs under. */
   role?: string;
+  /**
+   * The roles of the agents that spawned it, root first: the call is judged
+   * under each of them too (a child cannot widen its parent's egress).
+   */
+  roles?: string[];
   userId?: string;
   agentId?: string;
   sessionId?: string;
@@ -102,23 +106,23 @@ export function activeEgressPolicy(): EgressPolicy {
   }
 }
 
-/** An address as the rules see it: canonical, and an IPv4-mapped IPv6 address as its IPv4. */
+/**
+ * An address as the rules see it: canonical, and an IPv6 address that stands
+ * for an IPv4 host — IPv4-mapped, IPv4-compatible, 6to4 — as that IPv4.
+ */
 export function canonicalAddress(address: string): string | null {
   const host = canonicalHost(address);
   if (!host) return null;
   if (ipFamily(host) !== 6) return host;
-  const g = ipv6Groups(host);
-  if (g && g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {
-    return [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join('.');
-  }
-  return host;
+  const groups = ipv6GroupsOf(host);
+  return (groups && embeddedIPv4(groups)) ?? host;
 }
 
 interface CompiledRule {
   rule: EgressRule;
   label: string;
-  /** A host name rule (not an IP). */
-  name?: { host: string; wildcard: boolean };
+  /** A host name rule (not an IP); `any` for `*`. */
+  name?: { host: string; wildcard: boolean; any: boolean };
   /** An address rule: a cidr, or a host rule naming an IP. */
   range?: BlockList;
 }
@@ -129,7 +133,9 @@ function compile(rule: EgressRule, label: string): CompiledRule {
   const cached = compiled.get(rule);
   if (cached && cached.label === label) return cached;
   const out: CompiledRule = { rule, label };
-  if (rule.host !== undefined) {
+  if (rule.host === '*') {
+    out.name = { host: '*', wildcard: false, any: true };
+  } else if (rule.host !== undefined) {
     const wildcard = rule.host.startsWith('*.');
     const host = canonicalHost(wildcard ? rule.host.slice(2) : rule.host);
     const ip = host ? canonicalAddress(host) : null;
@@ -137,7 +143,7 @@ function compile(rule: EgressRule, label: string): CompiledRule {
       out.range = new BlockList();
       out.range.addAddress(ip, ipFamily(ip) === 4 ? 'ipv4' : 'ipv6');
     } else if (host) {
-      out.name = { host, wildcard };
+      out.name = { host, wildcard, any: false };
     }
   } else if (rule.cidr !== undefined) {
     const cidr = parseCidr(rule.cidr);
@@ -155,15 +161,20 @@ function inRange(range: BlockList, address: string): boolean {
   return family !== 0 && range.check(address, family === 4 ? 'ipv4' : 'ipv6');
 }
 
+/** Whether a rule covers this port and scheme at all. */
+function covers(c: CompiledRule, target: EgressTarget): boolean {
+  return (!c.rule.ports || c.rule.ports.includes(target.port)) && (!c.rule.schemes || c.rule.schemes.includes(target.scheme));
+}
+
 /**
  * Whether `c` matches. A deny address rule matches when ANY address is in
  * range; an allow one only when EVERY address is (the connection may go to
  * any of them).
  */
 function matches(c: CompiledRule, host: string, target: EgressTarget, addresses: string[]): boolean {
-  if (c.rule.ports && !c.rule.ports.includes(target.port)) return false;
-  if (c.rule.schemes && !c.rule.schemes.includes(target.scheme)) return false;
+  if (!covers(c, target)) return false;
   if (c.name) {
+    if (c.name.any) return true;
     if (ipFamily(host) !== 0) return false;
     return c.name.wildcard ? host.endsWith(`.${c.name.host}`) : host === c.name.host;
   }
@@ -179,13 +190,50 @@ function describe(rule: EgressRule, scope: string, index: number): string {
   return `${scope} rule ${index + 1} (${rule.action} ${rule.host ?? rule.cidr}${rule.ports ? ` ports ${rule.ports.join(',')}` : ''}${rule.schemes ? ` ${rule.schemes.join('/')}` : ''})${rule.note ? `: ${rule.note}` : ''}`;
 }
 
+/** The context metadata key carrying the spawn chain's roles (set by the swarm spawner, server-side). */
+export const EGRESS_ROLE_CHAIN_KEY = 'egressRoleChain';
+
+/** The ancestors' roles from a context's metadata, root first. */
+export function egressRoleChain(metadata: unknown): string[] {
+  const chain = (metadata as Record<string, unknown> | undefined)?.[EGRESS_ROLE_CHAIN_KEY];
+  return Array.isArray(chain) ? chain.filter((r): r is string => typeof r === 'string') : [];
+}
+
+/** The roles a call is judged under: the agent's own and every ancestor's in its spawn chain. */
+export function subjectRoles(subject: EgressSubject): string[] {
+  return [...new Set([...(subject.roles ?? []), ...(subject.role ? [subject.role] : [])])];
+}
+
 /**
  * Decide one request. `resolved` is the list of addresses the connection will
- * use; omitted, only the name is judged (a deny on the name refuses, anything
- * else is provisional until the addresses are known). An IP-literal host is
- * its own address.
+ * use. An IP-literal host is its own address.
+ *
+ * Omitted, only the name is judged, which is final unless an address could
+ * still change the answer: a deny on the name refuses; with no address rule
+ * that covers this port and scheme, the name's allow or the default decides;
+ * with a deny default, no name allow and no address allow that could match,
+ * it refuses — before anything is resolved, so a denied name never leaves as
+ * a DNS query. Otherwise the result is `provisional`: resolve, then ask again.
+ *
+ * A call under a spawn chain of roles is judged under each of them (the
+ * agent's own and every ancestor's): it is allowed only when every one allows
+ * it, so a restricted agent cannot fetch through a child of a looser role.
  */
 export function evaluateEgress(policy: EgressPolicy, subject: EgressSubject, target: EgressTarget, resolved?: readonly string[]): EgressDecision {
+  const roles = subjectRoles(subject);
+  if (roles.length <= 1) return evaluateOne(policy, subject.tool, roles[0], target, resolved);
+  let provisional: EgressDecision | null = null;
+  let last: EgressDecision | null = null;
+  for (const role of roles) {
+    const decision = evaluateOne(policy, subject.tool, role, target, resolved);
+    if (!decision.allowed) return decision;
+    if (decision.provisional) provisional ??= decision;
+    last = decision;
+  }
+  return provisional ?? (last as EgressDecision);
+}
+
+function evaluateOne(policy: EgressPolicy, tool: string | undefined, role: string | undefined, target: EgressTarget, resolved?: readonly string[]): EgressDecision {
   const host = canonicalHost(target.host);
   const base = { port: target.port, scheme: target.scheme };
   if (!host || !Number.isInteger(target.port) || target.port < 1 || target.port > 65535) {
@@ -198,22 +246,29 @@ export function evaluateEgress(policy: EgressPolicy, subject: EgressSubject, tar
   if (!isLiteral && resolved !== undefined && addresses.length !== resolved.length) {
     return { ...base, allowed: false, host, rule: 'malformed resolved address' };
   }
-  const roleScope = subject.role ? policy.roles[subject.role] : undefined;
-  const toolScope = subject.tool ? policy.tools[subject.tool] : undefined;
+  const roleScope = role ? policy.roles[role] : undefined;
+  const toolScope = tool ? policy.tools[tool] : undefined;
   const rules: CompiledRule[] = [
     ...policy.rules.map((r, i) => compile(r, describe(r, 'global', i))),
-    ...(roleScope?.rules ?? []).map((r, i) => compile(r, describe(r, `role ${subject.role}`, i))),
-    ...(toolScope?.rules ?? []).map((r, i) => compile(r, describe(r, `tool ${subject.tool}`, i))),
+    ...(roleScope?.rules ?? []).map((r, i) => compile(r, describe(r, `role ${role}`, i))),
+    ...(toolScope?.rules ?? []).map((r, i) => compile(r, describe(r, `tool ${tool}`, i))),
   ];
   const judged = isLiteral ? literal : host;
+  const fallback = toolScope?.default ?? roleScope?.default ?? policy.default;
+  const from = toolScope?.default ? `tool ${tool} default` : roleScope?.default ? `role ${role} default` : 'default';
+  const byDefault = { ...base, allowed: fallback === 'allow', host, rule: `${from} (${fallback})` };
   const deny = rules.find((c) => c.rule.action === 'deny' && matches(c, judged, target, addresses));
   if (deny) return { ...base, allowed: false, host, rule: deny.label };
-  if (nameOnly) return { ...base, allowed: true, host, rule: 'name not denied', provisional: true };
+  if (nameOnly) {
+    const addressRules = rules.filter((c) => c.range && covers(c, target));
+    const nameAllow = rules.find((c) => c.rule.action === 'allow' && c.name && matches(c, judged, target, []));
+    if (addressRules.length === 0) return nameAllow ? { ...base, allowed: true, host, rule: nameAllow.label } : byDefault;
+    if (!nameAllow && fallback === 'deny' && !addressRules.some((c) => c.rule.action === 'allow')) return byDefault;
+    return { ...base, allowed: true, host, rule: 'name not denied; addresses not yet known', provisional: true };
+  }
   const allow = rules.find((c) => c.rule.action === 'allow' && matches(c, judged, target, addresses));
   if (allow) return { ...base, allowed: true, host, rule: allow.label };
-  const fallback = toolScope?.default ?? roleScope?.default ?? policy.default;
-  const from = toolScope?.default ? `tool ${subject.tool} default` : roleScope?.default ? `role ${subject.role} default` : 'default';
-  return { ...base, allowed: fallback === 'allow', host, rule: `${from} (${fallback})` };
+  return byDefault;
 }
 
 /** A request the egress policy refused. Its message is what the model reads. */
@@ -226,7 +281,7 @@ export class EgressDeniedError extends Error {
 }
 
 /** Where a refusal happened, for the log and the audit row. */
-export type EgressPath = 'fetch' | 'browser' | 'shell-proxy' | 'plugin-proxy';
+export type EgressPath = 'fetch' | 'browser' | 'shell-proxy' | 'plugin-proxy' | 'git';
 
 /**
  * Log and audit one refusal: host, port, scheme, tool, role and the rule —
@@ -246,16 +301,41 @@ export function reportEgressDenial(decision: EgressDecision, subject: EgressSubj
 /**
  * Judge one request of the current tool call against the configured policy
  * and throw `EgressDeniedError` when it is refused. No subject (not a tool
- * call) or no policy: nothing to do.
+ * call) or no policy: nothing to do. Without `resolved` the name alone must
+ * settle it: a provisional answer (an address rule could still apply) is a
+ * refusal here — use `precheckEgressName` before resolving instead.
  */
 export function enforceEgress(target: EgressTarget, resolved: readonly string[] | undefined, path: EgressPath, subject = currentEgressSubject()): void {
   if (!subject) return;
   const policy = activeEgressPolicy();
   if (!egressPolicyActive(policy)) return;
-  const decision = evaluateEgress(policy, subject, target, resolved);
+  let decision = evaluateEgress(policy, subject, target, resolved);
+  if (decision.provisional) decision = { ...decision, allowed: false, provisional: false, rule: 'its addresses are not known, and an address rule applies' };
   if (decision.allowed) return;
   reportEgressDenial(decision, subject, path);
   throw new EgressDeniedError(decision, subject);
+}
+
+/**
+ * The name-only check before a host is resolved: refuses what the name alone
+ * settles (a deny, or a deny default nothing could lift), so a refused name
+ * is never looked up — DNS is a channel too. A provisional answer passes:
+ * judge again with the addresses.
+ */
+export function precheckEgressName(target: EgressTarget, path: EgressPath, subject = currentEgressSubject()): void {
+  if (!subject) return;
+  const policy = activeEgressPolicy();
+  if (!egressPolicyActive(policy)) return;
+  const decision = evaluateEgress(policy, subject, target);
+  if (decision.allowed) return;
+  reportEgressDenial(decision, subject, path);
+  throw new EgressDeniedError(decision, subject);
+}
+
+/** `precheckEgressName` for a URL. */
+export function precheckEgressUrl(url: string | URL, path: EgressPath, subject = currentEgressSubject()): void {
+  const target = egressTargetOf(url);
+  if (target) precheckEgressName(target, path, subject);
 }
 
 /** The target of a URL: its host, its port (or the scheme's), its scheme. Null for a non-http(s) URL. */
@@ -277,18 +357,34 @@ export function enforceEgressForUrl(url: string | URL, resolved: readonly string
 interface NavigationResponse { request(): RedirectedRequest; serverAddr(): Promise<{ ipAddress: string } | null> }
 
 /**
- * The browser tools navigate with Playwright, which cannot be pinned to an
- * address. Judged before navigation by `enforceEgressForUrl` (name and the
- * addresses the SSRF guard resolved); after it, here: every hop of the
- * redirect chain by name, and the last one with the address the page was
- * actually served from. A refused hop means the page is not handed to the
- * model. Nothing to do outside a tool call or without a policy.
+ * After a Playwright navigation, a backstop: every hop of the redirect chain,
+ * each with the addresses it resolves to now (the last with the address the
+ * page was actually served from), against the policy; a refused hop means the
+ * page is not handed to the model. The judgement BEFORE each hop is contacted
+ * is the egress proxy the browser context is routed through
+ * (src/security/browser-egress.ts). Nothing to do outside a tool call or
+ * without a policy.
  */
-export async function assertBrowserNavigationAllowed(response: NavigationResponse | null | undefined, subject = currentEgressSubject()): Promise<void> {
+export async function assertBrowserNavigationAllowed(response: NavigationResponse | null | undefined, subject = currentEgressSubject(), resolveHost: (host: string) => Promise<string[]> = lookupAll): Promise<void> {
   if (!response || !subject || !egressPolicyActive(activeEgressPolicy())) return;
   const hops = redirectChainOf(response.request());
   const servedFrom = (await response.serverAddr())?.ipAddress;
-  hops.forEach((hop, i) => enforceEgressForUrl(hop, i === hops.length - 1 && servedFrom ? [servedFrom] : undefined, 'browser', subject));
+  for (const [i, hop] of hops.entries()) {
+    const target = egressTargetOf(hop);
+    if (!target) continue;
+    let addresses: string[] | undefined;
+    if (i === hops.length - 1 && servedFrom) addresses = [servedFrom];
+    else {
+      try { addresses = await resolveHost(target.host); }
+      catch (err) { coreLogger.debug({ host: target.host, err: (err as Error).message }, 'Egress: a redirect hop no longer resolves; judged by name alone'); }
+    }
+    enforceEgress(target, addresses, 'browser', subject);
+  }
+}
+
+async function lookupAll(host: string): Promise<string[]> {
+  const { lookup } = await import('node:dns/promises');
+  return (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
 }
 
 /** For the egress proxy: a decision function over the policy, reporting refusals. */

@@ -1,4 +1,6 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
+import { enforceGitRemotes, gitRemoteTarget } from '@/security/git-egress';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentToolHome } from '@/security/environment-identity';
 import { executionEnvironmentFor } from '@/security/execution-environments';
@@ -187,6 +189,7 @@ export class GitTool extends BaseTool {
         branch: { type: 'string', description: 'Branch name' },
       }),
       async (args) => {
+        await this.judgeRemote('fetch', args.remote as string, args.path as string);
         const gitArgs = ['pull', args.remote as string];
         if (args.branch) gitArgs.push(args.branch as string);
 
@@ -206,6 +209,7 @@ export class GitTool extends BaseTool {
         setUpstream: { type: 'boolean', description: 'Set upstream', default: false },
       }),
       async (args) => {
+        await this.judgeRemote('push', args.remote as string, args.path as string);
         const gitArgs = ['push'];
         if (args.setUpstream) gitArgs.push('-u');
         gitArgs.push(args.remote as string);
@@ -267,6 +271,7 @@ export class GitTool extends BaseTool {
         depth: { type: 'number', description: 'Shallow clone depth' },
       }),
       async (args) => {
+        await this.judgeRemote('fetch', args.url as string, '.');
         const gitArgs = ['clone'];
         if (args.depth) gitArgs.push('--depth', String(args.depth));
         gitArgs.push(args.url as string);
@@ -277,6 +282,20 @@ export class GitTool extends BaseTool {
       },
       { permissionAction: 'write' }
     );
+  }
+
+  /**
+   * Under an active egress policy, judge the URLs git is about to contact
+   * (src/security/git-egress.ts): `insteadOf` applied, push URLs for a push.
+   * Asking git for them touches no network. No policy: no extra git call.
+   */
+  private async judgeRemote(direction: 'fetch' | 'push', remote: string, cwd: string): Promise<void> {
+    if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return;
+    const named = /^[A-Za-z0-9._-]+$/.test(remote) && gitRemoteTarget(remote) === null;
+    const output = direction === 'push' && named
+      ? await this.git(['remote', 'get-url', '--push', '--all', remote], cwd)
+      : await this.git(['ls-remote', '--get-url', remote], cwd);
+    await enforceGitRemotes(output.split('\n').map((line) => line.trim()).filter(Boolean));
   }
 
   /** The agent a git call runs for: every handler runs inside it (see `registerTool`). */

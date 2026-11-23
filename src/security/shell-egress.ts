@@ -25,13 +25,13 @@
  * Only tool calls are judged (a subject is set); with no active policy
  * nothing changes.
  */
-import { join, resolve } from 'node:path';
-import { getConfig } from '@/config';
+import { join } from 'node:path';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { ownNodeBinary } from '@/mcp/transports/stdio';
 import { coreLogger } from '@/utils/logger';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from './egress-proxy';
 import { activeEgressPolicy, currentEgressSubject, egressDecider, egressPolicyActive, type EgressSubject } from './egress-policy';
+import { UNJUDGED_CLI_NATIVE_TOOLS, UNJUDGED_EGRESS } from './egress-coverage';
 import { activeSandboxRunner, getSandboxMode, type SandboxMode, type SandboxRunner, type WrapOptions } from './shell-sandbox';
 
 /** How a shell command's network relates to the egress policy. */
@@ -49,17 +49,16 @@ export interface ShellEgress {
   close(): void;
 }
 
-/** Where the proxy's socket directory goes: under the workspace root, which both runners can mount (not /tmp, see `EgressProxyOptions.socketParent`). */
-function socketParent(): string | undefined {
-  try {
-    return join(resolve(getConfig().workspace.rootPath), 'shell-egress');
-  } catch (err) {
-    coreLogger.debug({ err: (err as Error).message }, 'Shell egress: no workspace root configured; the proxy socket goes under XDG_RUNTIME_DIR or the temp directory');
-    return undefined;
-  }
+/** Where the per-command proxy sockets go: a private directory outside any workspace mount. */
+export function shellSocketParent(): string | undefined {
+  const runtime = process.env.XDG_RUNTIME_DIR;
+  return runtime ? join(runtime, 'octipus-shell-egress') : undefined;
 }
 
 let advisoryWarned = false;
+
+/** Inside a network namespace, loopback is the sandbox's own: never proxied. */
+export const SANDBOX_LOOPBACK = 'localhost,127.0.0.1,::1';
 
 export interface ShellEgressOptions {
   /** Did the command ask for network (`network: true`, or a host-services stage)? */
@@ -89,16 +88,26 @@ export async function prepareShellEgress(argv: string[], options: ShellEgressOpt
     throw new ToolNotExecutedError('shell', `The egress policy requires enforced network confinement (security.egressPolicy.requireEnforcement), but shell commands run without a process sandbox here (security.shellSandbox=${mode}${mode === 'off' ? '' : ', no working runner'}), so their network cannot be confined. The command was not run.`);
   }
   const confined = runner === 'bwrap' || runner === 'firejail';
+  if (runner === 'firejail' && !shellSocketParent()) {
+    coreLogger.warn('Shell egress under firejail without XDG_RUNTIME_DIR: the proxy socket falls back to the temp directory, which firejail hides, so the command will have no network');
+  }
   const proxy = await startEgressProxy({
     label: `shell:${subject.tool ?? 'shell'}`, allowed: [], anyHost: true,
     decide: egressDecider({ ...subject, tool: subject.tool ?? 'shell' }, 'shell-proxy'),
-    unixSocket: confined, socketParent: confined ? socketParent() : undefined,
+    // The socket directory is NOT under the workspace root: another sandboxed
+    // command, which mounts workspace folders, must not reach this command's
+    // proxy (and its subject). Default: $XDG_RUNTIME_DIR or the temp
+    // directory, which bwrap and firejail both hide from every sandbox but
+    // the one that mounts this directory by path.
+    unixSocket: confined, socketParent: shellSocketParent(),
     ...options.proxyOverrides,
   });
   const close = () => { void proxy.close(); };
   if (confined && proxy.socketPath && proxy.socketDir) {
     return {
-      argv: bridgedArgv(argv, proxy.socketPath), env: {}, enforcement: 'enforced', proxy, close,
+      // The namespace's loopback is the command's own (a server it started
+      // itself): not through the proxy, which would refuse it as private.
+      argv: bridgedArgv(argv, proxy.socketPath), env: { OCTIPUS_BRIDGE_NO_PROXY: SANDBOX_LOOPBACK }, enforcement: 'enforced', proxy, close,
       wrap: { allowNetwork: false, extraReadWrite: [proxy.socketDir], extraReadOnly: ownNodeBinary() },
     };
   }
@@ -150,7 +159,7 @@ export function shellEgressStatus(): ShellEgressStatus {
 /** One outbound path and how the egress policy holds on it. */
 export interface EgressPathStatus {
   path: string;
-  enforcement: 'enforced' | 'advisory' | 'partial' | 'not applicable';
+  enforcement: 'enforced' | 'advisory' | 'partial' | 'not covered' | 'refused' | 'not applicable';
   detail: string;
 }
 
@@ -160,15 +169,22 @@ export function egressEnforcementStatus(): { active: boolean; default: 'allow' |
   const active = egressPolicyActive(policy);
   const scopes = [...Object.values(policy.tools), ...Object.values(policy.roles)];
   const ruleCount = policy.rules.length + scopes.reduce((n, scope) => n + scope.rules.length, 0);
-  const off = (path: string): EgressPathStatus => ({ path, enforcement: 'not applicable', detail: 'No egress policy is configured.' });
   const shell = shellEgressStatus();
+  const uncovered = (path: string, why: string): EgressPathStatus => policy.requireEnforcement
+    ? { path, enforcement: 'refused', detail: `Refused under requireEnforcement: ${why}.` }
+    : { path, enforcement: 'not covered', detail: `NOT judged by the policy: ${why}.` };
+  const paths: EgressPathStatus[] = [
+    { path: 'web fetch (websearch page schema, vision, artifact data sources and collectors, plugin web:read; every redirect hop)', enforcement: 'enforced', detail: 'Judged on the canonical host before it is resolved and on the resolved addresses the connection is pinned to; private addresses refused.' },
+    { path: 'browser pages (browser, websearch search and fetch_page, visual)', enforcement: 'enforced', detail: 'The browser context is routed through an egress proxy: every request (redirect hops, sub-resources, scripts, clicks) is judged before it is sent. Not through it: WebRTC and the browser\'s DNS prefetch.' },
+    { path: 'shell commands', enforcement: shell.enforcement === 'enforced' ? 'enforced' : policy.requireEnforcement ? 'refused' : 'advisory', detail: shell.detail },
+    { path: 'git clone/pull/push, github repo_clone', enforcement: 'partial', detail: 'The remote URL git will use (insteadOf applied) is judged with its addresses before git starts; what git then does (HTTP redirects, submodules, LFS) is not.' },
+    { path: 'plugin packages (declared network hosts)', enforcement: 'enforced', detail: 'Applied on top of the manifest in the package egress proxy; where a package runs unsandboxed the proxy itself is advisory (see the package status).' },
+    ...UNJUDGED_EGRESS.map((u) => uncovered(`${u.tool}: ${u.actions.join(', ')}`, u.why)),
+    uncovered(UNJUDGED_CLI_NATIVE_TOOLS, 'their tools run inside the vendor CLI process'),
+    { path: 'github tool API calls, websearch through SearXNG, operator-configured MCP servers, SSH execution environments', enforcement: 'not covered', detail: 'Fixed or operator-chosen destinations (the GitHub API, your SearXNG, servers you configured, a remote host\'s own network), not judged by the tool policy.' },
+  ];
   return {
     active, default: policy.default, ruleCount, requireEnforcement: policy.requireEnforcement,
-    paths: active ? [
-      { path: 'web fetch (websearch page schema, vision, plugin web:read; every redirect hop)', enforcement: 'enforced', detail: 'Judged on the canonical host and the resolved addresses the connection is pinned to.' },
-      { path: 'browser pages (browser open/navigate, websearch fetch_page)', enforcement: 'partial', detail: 'The URL, every redirect hop and the serving address are judged; a refused page is not returned. Sub-resources a page loads and later clicks inside a page are not judged.' },
-      { path: 'shell commands', enforcement: shell.enforcement === 'enforced' ? 'enforced' : 'advisory', detail: shell.detail },
-      { path: 'plugin packages (declared network hosts)', enforcement: 'enforced', detail: 'The policy is applied on top of the manifest in the package egress proxy; where a package runs unsandboxed the proxy itself is advisory (see the package status).' },
-    ] : [off('web fetch'), off('browser pages'), off('shell commands'), off('plugin packages')],
+    paths: active ? paths : paths.map((p) => ({ ...p, enforcement: 'not applicable' as const, detail: `No egress policy is configured. When one is: ${p.detail}` })),
   };
 }

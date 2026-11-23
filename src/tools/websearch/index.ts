@@ -1,4 +1,5 @@
 import type { Browser, } from 'playwright';
+import { browserEgressFor } from '@/security/browser-egress';
 import { sharedChromium } from '../browser/shared-chromium';
 import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import type { ToolManifest } from '@/core/types';
@@ -178,8 +179,15 @@ export class WebSearchTool extends BaseTool {
     return { query, resultCount: results.length, results };
   }
 
-  private createBrowserContext(browser: Browser) {
-    return browser.newContext({
+  /**
+   * A browser context for one search or page. Under an active egress policy it
+   * is routed through its own egress proxy (closed with the context), so the
+   * search engine, every redirect hop and every sub-resource are judged.
+   */
+  private async createBrowserContext(browser: Browser) {
+    const egress = await browserEgressFor();
+    const context = await browser.newContext({
+      ...(egress ? { proxy: egress.proxy } : {}),
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       locale: 'en-US',
       extraHTTPHeaders: {
@@ -193,6 +201,8 @@ export class WebSearchTool extends BaseTool {
         'Upgrade-Insecure-Requests': '1',
       },
     });
+    if (egress) context.once('close', () => egress.close());
+    return context;
   }
 
   private async searchViaBrowser(query: string, maxResults: number): Promise<unknown> {
@@ -322,11 +332,12 @@ export class WebSearchTool extends BaseTool {
     const maxLength = (args.max_length as number) || 10000;
 
     const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
+    const egress = await import('@/security/egress-policy');
+    egress.precheckEgressUrl(url, 'browser');
     const validation = await validateExternalUrl(url);
     if (!validation.valid) {
       return { error: `URL blocked: ${validation.reason}` };
     }
-    const egress = await import('@/security/egress-policy');
     egress.enforceEgressForUrl(url, validation.addresses, 'browser');
 
     const browser = await this.getOrCreateBrowser();

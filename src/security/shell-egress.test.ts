@@ -6,6 +6,9 @@
  */
 import { request as httpRequest, createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { egressPolicySchema } from '@/shared/egress-policy';
 
@@ -102,6 +105,37 @@ describe('prepareShellEgress', () => {
       expect(egress?.argv).toContain(egress?.proxy.socketPath);
       expect(egress?.argv.slice(-2)).toEqual(['curl', 'https://x']);
       expect(egress?.wrap.extraReadWrite).toEqual([egress?.proxy.socketDir]);
+      // The namespace's own loopback stays direct (a server the command started).
+      expect(egress?.env).toEqual({ OCTIPUS_BRIDGE_NO_PROXY: 'localhost,127.0.0.1,::1' });
+    } finally { egress?.close(); }
+  });
+
+  test('the proxy socket is not under the workspace root, which other sandboxed commands mount', async () => {
+    policy({ default: 'deny' });
+    _forceSandboxRunnerForTests('bwrap', '/usr/bin/bwrap');
+    const runtime = mkdtempSync(join(tmpdir(), 'octi-xdg-'));
+    const previous = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = runtime;
+    const egress = await prepareShellEgress(['curl'], { allowNetwork: true, mode: 'required', subject });
+    try {
+      expect(egress?.proxy.socketDir?.startsWith(join(runtime, 'octipus-shell-egress'))).toBe(true);
+      const { getConfig } = await import('@/config');
+      expect(egress?.proxy.socketDir?.startsWith(getConfig().workspace?.rootPath ?? '/nonexistent')).toBe(false);
+    } finally {
+      egress?.close();
+      if (previous === undefined) delete process.env.XDG_RUNTIME_DIR; else process.env.XDG_RUNTIME_DIR = previous;
+      rmSync(runtime, { recursive: true, force: true });
+    }
+  });
+
+  test('under a deny default the proxy refuses an unlisted name without resolving it', async () => {
+    policy({ default: 'deny', rules: [{ action: 'allow', host: 'allowed.test' }] });
+    const resolve = vi.fn(local.resolve);
+    const egress = await prepareShellEgress(['curl'], { allowNetwork: true, subject, proxyOverrides: { resolve, allowPrivateAddresses: true } });
+    try {
+      expect(await viaProxy(egress!.proxy.port, `http://exfil-data.attacker.test:${upstreamPort}/`)).toMatchObject({ status: 403 });
+      expect(await tunnel(egress!.proxy.port, `exfil-data.attacker.test:${upstreamPort}`)).toBe('HTTP/1.1 403 Forbidden');
+      expect(resolve).not.toHaveBeenCalled();
     } finally { egress?.close(); }
   });
 
@@ -157,6 +191,9 @@ describe('operator status', () => {
     expect(shellEgressStatus()).toMatchObject({ enforcement: 'enforced', runner: 'bwrap' });
     const all = egressEnforcementStatus();
     expect(all).toMatchObject({ active: true, default: 'deny', ruleCount: 0 });
-    expect(all.paths.map((p) => p.enforcement)).toEqual(['enforced', 'partial', 'enforced', 'enforced']);
+    expect(all.paths.map((p) => p.enforcement)).toEqual(['enforced', 'enforced', 'enforced', 'partial', 'enforced', 'not covered', 'not covered', 'not covered', 'not covered', 'not covered']);
+    expect(all.paths.map((p) => p.path).join('\n')).toMatch(/docker: compose_project, start_container, build_image, exec_command/);
+    state.policy = egressPolicySchema.parse({ default: 'deny', requireEnforcement: true });
+    expect(egressEnforcementStatus().paths.filter((p) => p.enforcement === 'refused').map((p) => p.path.split(':')[0])).toEqual(['docker', 'browser-ext', 'mcp_admin', expect.stringContaining('CLI-agent')]);
   });
 });

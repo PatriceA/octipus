@@ -515,6 +515,8 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
  * It listens on the namespace's own 127.0.0.1, forwards each connection to
  * the proxy's Unix socket, and runs the command with the proxy variables
  * pointing at it, passing stdio through and exiting with its code.
+ * `OCTIPUS_BRIDGE_NO_PROXY` in its environment becomes the command's
+ * `NO_PROXY` (and is not passed on).
  */
 export const SANDBOX_BRIDGE_SOURCE = `
 const net = require('node:net');
@@ -528,7 +530,11 @@ const srv = net.createServer((c) => {
 });
 srv.listen(0, '127.0.0.1', () => {
   const url = 'http://127.0.0.1:' + srv.address().port;
-  const env = { ...process.env, NO_PROXY: '', no_proxy: '' };
+  // NO_PROXY: what the caller names in OCTIPUS_BRIDGE_NO_PROXY (the shell:
+  // the namespace's own loopback), else nothing bypasses the proxy.
+  const noProxy = process.env.OCTIPUS_BRIDGE_NO_PROXY || '';
+  const env = { ...process.env, NO_PROXY: noProxy, no_proxy: noProxy };
+  delete env.OCTIPUS_BRIDGE_NO_PROXY;
   for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) env[k] = url;
   const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env });
   for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(s, () => child.kill(s));

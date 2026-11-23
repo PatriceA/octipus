@@ -84,7 +84,13 @@ Used by `fetchGuarded`, the browser/websearch page tools, the plugin package
 proxy and a new per-command shell proxy that replaces direct network for a
 sandboxed command; where no sandbox confines the shell it is advisory and
 `GET /api/settings/egress` says so (`requireEnforcement` refuses instead).
-Refusals are logged and audited. Reference: [EGRESS-POLICY.md](../EGRESS-POLICY.md).
+Refusals are logged and audited. After review: browser contexts go through
+their own egress proxy (redirect hops and sub-resources judged before they
+are sent), artifact sources and `visual` go through the SSRF guard, git
+remotes are judged before git starts, role scopes hold along the spawn
+chain, a refused name is never resolved, and what cannot be judged (Docker,
+the browser extension, `mcp_add_server`, CLI-native tools) is listed and
+refused under `requireEnforcement`. Reference: [EGRESS-POLICY.md](../EGRESS-POLICY.md).
 
 ### Per-worker isolation: what remains
 
@@ -113,8 +119,10 @@ needs, in order:
 3. **In-process tools.** Web fetch, the shared headless Chromium, file tools
    and MCP clients still run inside the server process. The browser could run
    in its own sandboxed process with its network through the same egress
-   proxy (which would also close the "sub-resources are not judged" gap in
-   EGRESS-POLICY.md); file tools are already confined by `WorkspaceFS`.
+   proxy (its requests already go through one, but the browser process
+   itself still shares the server's host); file tools are already confined
+   by `WorkspaceFS`. git and Docker would need the same: git through the
+   shell sandbox's proxy, containers on a network whose only egress is it.
 4. **A VM/WASI execution provider** behind the dispatch waterfall, as the
    roadmap describes, for hosts where bwrap is unavailable (default Docker
    seccomp, Windows). This is the multi-week part: a provider interface, an
