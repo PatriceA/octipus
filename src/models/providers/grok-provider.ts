@@ -42,6 +42,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 export class GrokProvider implements ModelProvider {
   readonly name = 'grok';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();

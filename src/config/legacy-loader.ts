@@ -81,6 +81,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       port: parseInt(process.env.API_PORT || process.env.PORT || '3000', 10),
       corsOrigins: process.env.CORS_ORIGINS?.split(',') || defaultConfig.api!.corsOrigins!,
       rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '600', 10),
+      streamStallTimeoutMs: defaultConfig.api!.streamStallTimeoutMs!,
     },
     telegram: process.env.TELEGRAM_BOT_TOKEN
       ? {

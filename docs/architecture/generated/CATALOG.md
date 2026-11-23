@@ -812,7 +812,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `voice` | 3 |
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 29 |
+| `api` | `config` | 30 |
 | `api` | `core` | 254 |
 | `api` | `db` | 155 |
 | `api` | `extensions` | 1 |
@@ -825,7 +825,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 32 |
 | `api` | `skills` | 9 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 79 |
+| `api` | `utils` | 80 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
