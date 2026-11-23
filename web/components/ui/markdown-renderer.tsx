@@ -1,7 +1,7 @@
 'use client';
 
 import { Check, Copy } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AuthedImage } from '@/components/ui/authed-image';
@@ -50,6 +50,25 @@ export function CodeBlock({ language, code }: { language: string; code: string }
   );
 }
 
+/** Where the task list item being drawn starts in the source text (its checkbox ticks the task there). */
+const TaskOffset = createContext<number | null>(null);
+
+/** A task's checkbox: ticks the task in the source when `onToggle` is given, else a quiet read-only mark. */
+function TaskCheckbox({ checked, onToggle }: { checked: boolean; onToggle?: (offset: number, checked: boolean) => void }) {
+  const offset = useContext(TaskOffset);
+  const live = !!onToggle && offset !== null;
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled={!live}
+      aria-label={checked ? 'Mark task not done' : 'Mark task done'}
+      onChange={live ? () => onToggle(offset, !checked) : undefined}
+      className={cn('md-task-box mr-2 align-[-2px]', live && 'cursor-pointer')}
+    />
+  );
+}
+
 /** This page's origin: what text from another install may not point into. */
 function here(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
@@ -74,6 +93,7 @@ export function Markdown({
   onOpenFile,
   untrusted = false,
   listing,
+  onToggleTask,
 }: {
   content: string;
   className?: string;
@@ -93,6 +113,13 @@ export function Markdown({
   onTag?: (tag: string) => void;
   /** Open host file references in the authenticated session file viewer. */
   onOpenFile?: (path: string) => void;
+  /**
+   * Makes `- [ ]` task checkboxes clickable: called with the offset in
+   * `content` where the task's list item starts and the state asked for
+   * (`toggleTaskAt` in src/shared/note-text.ts writes it). Without it the
+   * boxes show their state and cannot be clicked.
+   */
+  onToggleTask?: (offset: number, checked: boolean) => void;
 }) {
   const enableInline = !!(onWikilink || onTag);
   // Component identity must survive polling and streaming renders. Defining
@@ -240,13 +267,28 @@ export function Markdown({
             }
             return <AuthedImage src={src} alt={alt} title={title} />;
           },
-          ul({ children }) {
+          ul({ children, className: listClass }) {
+            // A task list draws checkboxes, not bullets.
+            if (listClass?.includes('contains-task-list')) return <ul className="pl-1 space-y-0.5">{children}</ul>;
             return <ul className="list-disc pl-5 space-y-0.5">{children}</ul>;
+          },
+          li({ children, className: itemClass, node }) {
+            if (!itemClass?.includes('task-list-item')) return <li>{children}</li>;
+            const offset = node?.position?.start.offset ?? null;
+            return (
+              <li className="list-none">
+                <TaskOffset.Provider value={offset}>{children}</TaskOffset.Provider>
+              </li>
+            );
+          },
+          input({ type, checked }) {
+            if (type !== 'checkbox') return null;
+            return <TaskCheckbox checked={!!checked} onToggle={onToggleTask} />;
           },
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-  }), [onWikilink, onTag, onOpenFile, untrusted, listing]);
+  }), [onWikilink, onTag, onOpenFile, untrusted, listing, onToggleTask]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <ReactMarkdown
