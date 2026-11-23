@@ -27,3 +27,34 @@ export interface SlugConflict {
   /** A slug free in the workspace (and not public elsewhere when publishing); null when none was found. */
   suggestedSlug: string | null;
 }
+
+/** Shortest time between scheduled agent refreshes of one artifact. */
+export const AGENT_REFRESH_MIN_INTERVAL_MINUTES = 60;
+
+/** Longest a stored refresh instruction may be. */
+export const AGENT_REFRESH_MAX_INSTRUCTION_CHARS = 4000;
+
+/** The schedules the web app offers (minutes); the API takes any value at or above the minimum, up to a week. */
+export const AGENT_REFRESH_INTERVAL_CHOICES = [60, 6 * 60, 24 * 60, 7 * 24 * 60] as const;
+
+/** Longest schedule interval the API accepts (a week). */
+export const AGENT_REFRESH_MAX_INTERVAL_MINUTES = 7 * 24 * 60;
+
+/** An artifact's agent refresh as its owner sees it (`GET /api/artifacts/:id/agent-refresh`). */
+export interface AgentRefreshView {
+  instruction: string;
+  /** `agent`: written by the agent that created the page — the owner should review it before running it. */
+  instructionSetBy: 'agent' | 'owner';
+  /** Minutes between scheduled runs; null = manual only. */
+  intervalMinutes: number | null;
+  nextRunAt: string | null;
+  /** Set when the server switched the schedule off (repeated failures, owner disabled, artifact gone). */
+  scheduleDisabledReason: string | null;
+  running: boolean;
+  runStartedAt: string | null;
+  lastAttemptAt: string | null;
+  lastOutcome: 'success' | 'failed' | 'refused' | null;
+  lastError: string | null;
+  lastSuccessAt: string | null;
+  consecutiveFailures: number;
+}
