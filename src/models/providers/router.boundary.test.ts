@@ -265,12 +265,24 @@ describe('a custom OpenAI-compatible endpoint', () => {
   test.each([
     ['no key anywhere', {}],
     ['an env: reference to an unset variable', { apiKeyRef: 'env:GATEWAY_KEY_FROM_ENV' }],
-  ])('%s fails before any request, as an auth failure', async (_label, over) => {
+  ])('%s fails before any request, as an auth failure nothing retries', async (_label, over) => {
     registryDouble.add(customRow(over));
     const err = await rejection(router.complete({ model: 'wire-model', messages: hi }));
     expect(err.reason).toBe(FailoverReason.AUTH_FAILED);
+    expect(err.recovery).toBe(RecoveryAction.USER_PROMPT);
+    expect(err.isRetryable).toBe(false);
+    expect(err.message).toMatch(/Set it|Store the key|Set the model's API key/);
     expect(err.providerHint).toBe('custom-openai');
     expect(upstream.requests).toHaveLength(0);
+  });
+
+  test('a 401 from the endpoint stays a credential to rotate', async () => {
+    registryDouble.add(customRow());
+    vaultDouble.set('system', 'gateway_key', 'vault-key');
+    upstream.enqueue(openAIError(401, 'invalid api key'));
+    const err = await rejection(router.complete({ model: 'wire-model', messages: hi }));
+    expect(err.reason).toBe(FailoverReason.AUTH_FAILED);
+    expect(err.recovery).toBe(RecoveryAction.ROTATE_CREDENTIAL);
   });
 
   test.each([

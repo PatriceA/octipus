@@ -122,7 +122,7 @@ export abstract class BaseCustomProvider {
   private async resolvePersonalApiKey(model: ModelConfigEntry, requesterId: string | undefined): Promise<string> {
     const { resolveModelKey } = await import('@/models/model-key');
     const key = await resolveModelKey(model, requesterId);
-    if (!key) throw this.missingKey(`Custom provider: personal model '${model.name}' has no API key`);
+    if (!key) throw this.missingKey(`Custom provider: personal model '${model.name}' has no API key. Add one under Settings → My models.`);
     return key;
   }
 
@@ -139,7 +139,7 @@ export abstract class BaseCustomProvider {
     }
     const { getVault } = await import('@/security/vault');
     const key = await getVault().getByName('system', ref);
-    if (!key) throw this.missingKey(`Custom provider: vault secret '${ref}' for extension model '${model.name}' is not set`);
+    if (!key) throw this.missingKey(`Custom provider: vault secret '${ref}' for extension model '${model.name}' is not set. Store the key under that name.`);
     return key;
   }
 
@@ -166,7 +166,7 @@ export abstract class BaseCustomProvider {
         const envName = apiKeyRef.slice(4);
         const v = process.env[envName];
         if (v) return v;
-        throw this.missingKey(`Custom provider: env var ${envName} not set (referenced by apiKeyRef)`);
+        throw this.missingKey(`Custom provider: env var ${envName} not set (referenced by apiKeyRef). Set it, or point the model's API key at a vault secret.`);
       }
 
       try {
@@ -182,15 +182,22 @@ export abstract class BaseCustomProvider {
       }
     }
 
-    const fallback = process.env[`${this.providerName.toUpperCase().replace(/-/g, '_')}_API_KEY`];
+    const envFallback = `${this.providerName.toUpperCase().replace(/-/g, '_')}_API_KEY`;
+    const fallback = process.env[envFallback];
     if (fallback) return fallback;
 
-    throw this.missingKey(`Custom provider: no API key resolved (apiKeyRef='${apiKeyRef ?? '<none>'}')`);
+    throw this.missingKey(apiKeyRef
+      ? `Custom provider: no API key resolved (apiKeyRef='${apiKeyRef}'). Store the key as the vault secret '${apiKeyRef}', or set ${envFallback}.`
+      : `Custom provider: no API key resolved (the model names none). Set the model's API key, or set ${envFallback}.`);
   }
 
-  /** No key to send: an auth failure, like the 401 the request would have earned. */
+  /**
+   * No key to send: a credential problem, reported as one, that only a person
+   * can fix — so not retryable (USER_PROMPT), unlike a 401 from the endpoint
+   * (ROTATE_CREDENTIAL), which a rotated key may cure.
+   */
   private missingKey(message: string): ClassifiedError {
-    return new ClassifiedError({ reason: FailoverReason.AUTH_FAILED, recovery: RecoveryAction.ROTATE_CREDENTIAL, message, providerHint: this.providerName });
+    return new ClassifiedError({ reason: FailoverReason.AUTH_FAILED, recovery: RecoveryAction.USER_PROMPT, message, providerHint: this.providerName });
   }
 
   /**
