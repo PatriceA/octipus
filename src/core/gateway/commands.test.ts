@@ -279,3 +279,42 @@ describe('/sessions and /history (TUI resume)', () => {
     expect(result!.text).toBe('No active session.');
   });
 });
+
+// `/model <name>` resolves a row id first (database-backed); unresolved, it matches the caller's models by name.
+vi.mock('@/models/resolve-model', () => ({ resolveModel: async () => null }));
+
+describe('/model (the terminal\'s model picker)', () => {
+  const user = '11111111-2222-4333-8444-555555555555';
+  const ctx = { userId: user, sessionId: 'sess-model', clientType: 'tui', trustLevel: 'user' as const };
+  let registry: CommandRegistry;
+  beforeEach(async () => {
+    registry = new CommandRegistry(); registerBuiltinCommands(registry);
+    const { getModelRegistry } = await import('@/models/model-registry');
+    vi.spyOn(getModelRegistry(), 'getModelsForUser').mockResolvedValue([
+      { name: 'fast', modelId: 'small-1', provider: 'ollama', isEnabled: true, isDefault: true },
+      { name: 'off', modelId: 'old-1', provider: 'ollama', isEnabled: false, isDefault: false },
+      { name: 'deep', modelId: 'large-2', provider: 'openrouter', isEnabled: true, isDefault: false },
+    ] as never);
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    (await import('@/core/agent/session-model-override'))._resetSessionModelOverridesForTesting();
+  });
+
+  test('alone it says what is set and lists the enabled models the caller may use as data', async () => {
+    const result = await registry.execute('/model', ctx);
+    expect(result!.text).toContain('No session override set');
+    expect(result!.data).toEqual({ current: null, models: [
+      { name: 'fast', modelId: 'small-1', provider: 'ollama', isDefault: true },
+      { name: 'deep', modelId: 'large-2', provider: 'openrouter', isDefault: false },
+    ] });
+  });
+
+  test('with a name it sets the caller\'s override for the session, as the chat command does; clear drops it', async () => {
+    const set = await registry.execute('/model deep', ctx);
+    expect(set!.text).toContain('switched to `large-2`');
+    expect(((await registry.execute('/model', ctx))!.data as { current: string }).current).toBe('deep');
+    expect((await registry.execute('/model clear', ctx))!.text).toContain('override cleared');
+    expect(((await registry.execute('/model', ctx))!.data as { current: string | null }).current).toBeNull();
+  });
+});

@@ -60,17 +60,18 @@ A message you send while a turn runs is not pushed into that turn: it waits in t
 
 ## Pickers
 
-Sessions, skills, commands, themes and input history are chosen from the same list: type to filter (letters in order, `hdr` finds `header`; words separated by spaces must all match), `Up` / `Down` / `PageUp` / `PageDown` to move, `Enter` or a click to choose, `Escape` to close. The box below the list says what the highlighted entry is.
+Sessions, models, skills, commands, themes and input history are chosen from the same list: type to filter (letters in order, `hdr` finds `header`; words separated by spaces must all match), `Up` / `Down` / `PageUp` / `PageDown` to move, `Enter` or a click to choose, `Escape` to close. The box below the list says what the highlighted entry is.
 
 | Opens it | Lists | Choosing |
 | --- | --- | --- |
 | `/sessions` or `/resume` alone | Your recent sessions (title, last update, messages) | Resumes it here |
+| `/model` alone | The enabled models you may use, the default and this session's choice marked | Switches the root agent to it for this session (`/model <name>`; agents it delegates to keep their lane's model); with a choice set, the first entry, **Configured default**, drops it (`/model clear`) |
 | `/skills` alone | Your skills and how each is used now | Then pick Automatic, Always or This session; sent as `/skills <id> <mode>` |
 | `Ctrl+P` / `F4` | Every command, with what it does and where it runs | Runs it |
 | `/theme` alone | `auto`, `dark`, `light`, `high-contrast` | Switches and saves |
 | `Ctrl+R` | What you sent | Puts it in the composer |
 
-The text forms keep working: `/sessions list`, `/resume <n|id>`, `/skills <id> always`. There is no model picker: the gateway has no model command to list from.
+The text forms keep working: `/sessions list`, `/resume <n|id>`, `/skills <id> always`, `/model <name>`, `/model clear`, `/model list`. The session's model choice is the same one the chat's `/model` sets: yours only, kept in the server's memory until it restarts.
 
 ## Attention and the window title
 

@@ -18,6 +18,7 @@ import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
 import { configureLinks } from './links';
 import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
 import { isHistoryRow, OlderTurns, toChatMessage } from './older-turns';
+import { isModelList, type ModelChoice, modelCommand, modelItems } from './pickers';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -190,9 +191,9 @@ export class OctipusTuiApp {
   /** The picker open now (history, sessions, models, skills), if any. */
   private pickerHandle: OverlayHandle | null = null;
   /** The picker waiting for the gateway's list, if one is. */
-  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
+  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | { command: 'model'; list: FuzzyList<ModelChoice> } | null = null;
   /** Lists a picker asked for and was closed before they came: their late results are dropped, not shown in the transcript. */
-  private readonly cancelledLists: Array<'sessions' | 'skills'> = [];
+  private readonly cancelledLists: Array<'sessions' | 'skills' | 'model'> = [];
   private readonly search?: TranscriptSearch;
   private readonly attention?: Attention;
   private themeSetting: ThemeSetting;
@@ -760,7 +761,7 @@ export class OctipusTuiApp {
           this.sessionId = fallback;
           return;
         }
-        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills');
+        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills' | 'model');
         if (cancelled >= 0) {
           // The picker that asked was closed: keep the session list for `/resume <n>`, show nothing.
           this.cancelledLists.splice(cancelled, 1);
@@ -1157,6 +1158,19 @@ export class OctipusTuiApp {
     this.loading = { command: 'skills', list };
   }
 
+  /** `/model` alone: pick the root agent's model for this session (the gateway's `/model <name>`). */
+  private openModelPicker(): void {
+    const list = this.openPicker<ModelChoice>('Model for this session', [], choice => {
+      this.pushMessage('user', `/model ${modelCommand(choice)}`);
+      this.command('model', { value: modelCommand(choice) });
+    }, choice => choice.kind === 'clear'
+      ? 'Drop this session\'s choice: the root agent uses the configured default again.'
+      : `${choice.model.name}\nModel: ${choice.model.modelId}\nProvider: ${choice.model.provider}${choice.model.isDefault ? '\nThe configured default.' : ''}\nEnter switches the root agent to it for this session; agents it delegates to keep their lane's model.`, 'Loading models…');
+    if (!list) return;
+    if (!this.adapter.sendCommand('model')) { list.setItems([], 'Not connected: the models cannot be listed now.'); return; }
+    this.loading = { command: 'model', list };
+  }
+
   /** The list a picker was waiting for arrived (or failed). */
   private fillPicker(event: Extract<AgentSessionEvent, { kind: 'command.result' }>): void {
     const loading = this.loading;
@@ -1166,6 +1180,9 @@ export class OctipusTuiApp {
     if (loading.command === 'sessions') {
       this.sessionList = Array.isArray(event.data) ? event.data.filter(isSessionRow) : [];
       loading.list.setItems(sessionItems(this.sessionList, this.sessionId), 'No sessions yet.');
+    } else if (loading.command === 'model') {
+      if (isModelList(event.data)) loading.list.setItems(modelItems(event.data), 'No models you can use are enabled. Add one on the Models page.');
+      else loading.list.setItems([], typeof event.result === 'string' && event.result ? event.result : 'The server sent no model list: it may be older than this terminal client.');
     } else {
       const parsed = parseSkillList(typeof event.result === 'string' ? event.result : '');
       if ('unreadable' in parsed) loading.list.setItems([], parsed.unreadable || 'The server sent no skill list.');
@@ -1209,6 +1226,7 @@ export class OctipusTuiApp {
     // argument they go to the gateway as text (`/sessions list` lists).
     if (name === 'sessions' && !value) { this.openSessionPicker(); return; }
     if (name === 'skills' && !value) { this.openSkillPicker(); return; }
+    if (name === 'model' && !value) { this.openModelPicker(); return; }
 
     // `/cost` is deliberately absent: it goes to the gateway, which reads the
     // cost log — the same totals the status bar shows, plus the input/output/

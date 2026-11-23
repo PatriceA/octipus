@@ -203,6 +203,20 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   }
 
   registry.register({
+    name: 'model', aliases: [],
+    description: 'Show, set or clear this session\'s root agent model: /model [<name>|clear|list]',
+    handler: async ctx => {
+      if (!ctx.sessionId) return { text: 'No active session.' };
+      const { modelChoices, runModelCommand } = await import('@/core/commands/model');
+      const args = ctx.rawArgs.trim();
+      const { response } = await runModelCommand({ sessionId: ctx.sessionId, userId: ctx.userId, args });
+      // Alone or `list`: also the models to choose from, for a picker.
+      if (!args || args.toLowerCase() === 'list') return { text: response, data: await modelChoices(ctx.sessionId, ctx.userId) };
+      return { text: response };
+    },
+  });
+
+  registry.register({
     name: 'help',
     aliases: ['h', '?'],
     description: 'List available commands',

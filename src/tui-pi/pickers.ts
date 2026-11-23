@@ -7,9 +7,8 @@
  * rows are read here; a reply in which none can be read is returned as
  * `unreadable` so the picker shows the server's text instead of an empty list.
  *
- * There is no model picker: the gateway's command registry has no model or
- * lane command (`/model` exists only as a chat-message command, answering
- * text), so there is nothing to list from.
+ * Models come as data from the gateway's `/model` (the caller's session
+ * override and the enabled models they may use, `src/core/commands/model.ts`).
  */
 import type { FuzzyListItem } from '@/tui-kit/fuzzy-list';
 
@@ -61,4 +60,31 @@ export const SKILL_MODES: ReadonlyArray<{ mode: SkillMode; label: string; descri
 /** The `/skills` arguments that set a skill's mode for this session. */
 export function skillCommand(skill: SkillRow, mode: SkillMode): string {
   return `${skill.id} ${mode === 'automatic' ? 'auto' : mode}`;
+}
+
+export interface ModelRow { name: string; modelId: string; provider: string; isDefault: boolean }
+export interface ModelList { current: string | null; models: ModelRow[] }
+
+export const isModelList = (v: unknown): v is ModelList => {
+  const r = v as ModelList | null;
+  return !!r && Array.isArray(r.models) && r.models.every(m => !!m && typeof m.name === 'string' && typeof m.modelId === 'string');
+};
+
+/** What a model picker entry does: switch to a model, or drop the override. */
+export type ModelChoice = { kind: 'model'; model: ModelRow } | { kind: 'clear' };
+
+export function modelItems(list: ModelList): FuzzyListItem<ModelChoice>[] {
+  const items: FuzzyListItem<ModelChoice>[] = list.models.map(model => ({
+    value: { kind: 'model', model },
+    label: `${model.name}${model.name === list.current ? '  (this session)' : ''}${model.isDefault ? '  (default)' : ''}`,
+    description: `${model.modelId} · ${model.provider}`,
+    search: `${model.name} ${model.modelId} ${model.provider}`,
+  }));
+  if (list.current) items.unshift({ value: { kind: 'clear' }, label: 'Configured default', description: `Drop this session's choice (${list.current})`, search: 'default clear reset' });
+  return items;
+}
+
+/** The `/model` argument an entry sends. */
+export function modelCommand(choice: ModelChoice): string {
+  return choice.kind === 'clear' ? 'clear' : choice.model.name;
 }
