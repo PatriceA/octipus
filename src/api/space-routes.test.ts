@@ -213,8 +213,8 @@ const SPACE_ACTING = [
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
   // A live editor's text the server never got, merged through the hub (S3).
   'POST /api/notes/:id/merge',
-  'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/bundle.js', 'GET /a/:slug/export/:exportId',
-  'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
+  'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/export/:exportId',
+  'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed',
   'GET /__artifacts__/a/:slug/export/:exportId',
   // The embed's live data read: authorized by its viewer token alone (one artifact, read-only).
   'GET /a/:slug/data/:sourceName', 'GET /__artifacts__/a/:slug/data/:sourceName',

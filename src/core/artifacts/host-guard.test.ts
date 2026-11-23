@@ -75,7 +75,7 @@ describe('isArtifactHostRequest', () => {
 
 describe('isArtifactHostPath', () => {
   it('admits the hosted pages and the SDK, read-only', () => {
-    for (const p of ['/a/board', '/a/board/', '/a/board/embed', '/a/board/bundle.js', '/a/board/export/csv', '/a/board/data/feed', '/octipus-artifact-client.js']) {
+    for (const p of ['/a/board', '/a/board/', '/a/board/embed', '/a/board/export/csv', '/a/board/data/feed', '/octipus-artifact-client.js']) {
       expect(isArtifactHostPath('GET', p)).toBe(true);
     }
     expect(isArtifactHostPath('HEAD', '/a/board/embed')).toBe(true);
@@ -84,7 +84,7 @@ describe('isArtifactHostPath', () => {
   });
 
   it('refuses the app: its API, its pages, the fallback mount', () => {
-    for (const p of ['/', '/api/auth/login', '/api/artifacts', '/v1/chat/completions', '/__artifacts__/a/board/embed', '/a/board/embed/x', '/a', '/artifacts/view', '/gateway']) {
+    for (const p of ['/', '/api/auth/login', '/api/artifacts', '/v1/chat/completions', '/__artifacts__/a/board/embed', '/a/board/embed/x', '/a/board/bundle.js', '/a', '/artifacts/view', '/gateway']) {
       expect(isArtifactHostPath('GET', p)).toBe(false);
     }
   });

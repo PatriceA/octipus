@@ -286,7 +286,9 @@ the bundles directory (`<artifactId>/<versionId>/bundle.js`). Handlers become
 `data-octi-h` markers bound by `addEventListener` in the bundle, so neither
 `'unsafe-inline'` nor `'unsafe-eval'` is needed. The embed includes the built bundle inline under its exact SHA-256 CSP hash.
 This keeps private artifacts functional inside an opaque sandbox, where a
-separate bundle request would lose SameSite login cookies.
+separate bundle request would lose SameSite login cookies. The bundle is not
+served as a file on any route: artifact-authored JavaScript only ever runs
+inside the sandboxed embed.
 
 A script that does not build does not fail the write: the version is saved,
 renders without behaviour, and the caller gets the compiler message as a

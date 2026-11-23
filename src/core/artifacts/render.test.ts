@@ -175,3 +175,16 @@ describe('extractInteractiveScript', () => {
     expect(extractInteractiveScript(html)).toEqual({ template: html, source: '', warnings: [] });
   });
 });
+
+describe('renderTemplate sanitizes the expanded HTML', () => {
+  test('an expression between two halves of a tag name does not produce a script', () => {
+    const out = renderTemplate('<scr{{data.x}}ipt src="/a.js"></scr{{data.x}}ipt><p>{{data.y}}</p>', { data: { y: '<b>' } });
+    expect(out).not.toMatch(/<script/i);
+    expect(out).toContain('<p>&lt;b&gt;</p>');
+  });
+
+  test('a handler after a slash is stripped too', () => {
+    expect(renderTemplate('<img/onerror=alert(1) src=x>', { data: {} })).not.toMatch(/onerror/i);
+    expect(renderTemplate('<img/on{{data.e}}error="x" src=x>', { data: {} })).not.toMatch(/onerror/i);
+  });
+});

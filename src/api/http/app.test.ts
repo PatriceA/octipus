@@ -175,3 +175,32 @@ describe('hook scoping', () => {
     expect(seen).toEqual(['/only/here']);
   });
 });
+
+describe('response headers are keyed case-insensitively', () => {
+  const headersApp = new App()
+    .onAfterHandle(({ set }) => {
+      set.headers['Content-Security-Policy'] ??= "default-src 'self'";
+      set.headers['X-Frame-Options'] ??= 'DENY';
+    })
+    .get('/own', ({ set }) => {
+      set.headers['content-security-policy'] = "default-src 'none'; sandbox";
+      return 'x';
+    })
+    .get('/default', () => 'y');
+
+  test("a default does not replace a handler's lower-case header, and only one copy is sent", async () => {
+    const own = await headersApp.handle(new Request('http://x/own'));
+    expect(own.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(own.headers.get('x-frame-options')).toBe('DENY');
+    const plain = await headersApp.handle(new Request('http://x/default'));
+    expect(plain.headers.get('content-security-policy')).toBe("default-src 'self'");
+  });
+
+  test('a path spelling an unreserved character in percent-encoding is refused before routing', async () => {
+    const strict = new App().get('/api/thing', () => 'ok');
+    expect((await strict.handle(new Request('http://x/api/thing'))).status).toBe(200);
+    for (const p of ['/%61pi/thing', '/api/%54hing', '/api/thing%', '/api/thing%G1']) {
+      expect((await strict.handle(new Request(`http://x${p}`))).status, p).toBe(400);
+    }
+  });
+});

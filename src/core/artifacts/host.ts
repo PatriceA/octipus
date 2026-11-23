@@ -82,7 +82,7 @@ export function isSubdomainMode(): boolean {
 }
 
 /** The hosted-page routes, relative to the artifact host's root (or the `/__artifacts__` prefix). */
-const ARTIFACT_PAGE_PATH_RE = /^\/a\/[^/]+(?:\/(?:embed|bundle\.js|export\/[^/]+|data\/[^/]+))?\/?$/;
+const ARTIFACT_PAGE_PATH_RE = /^\/a\/[^/]+(?:\/(?:embed|export\/[^/]+|data\/[^/]+))?\/?$/;
 const ARTIFACT_SDK_PATH = '/octipus-artifact-client.js';
 
 /**

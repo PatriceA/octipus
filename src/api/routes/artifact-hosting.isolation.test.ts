@@ -282,3 +282,79 @@ describe('the embed viewer token: one artifact, read-only, expiring, revocable',
     expect((await data('doomed-board', token)).status).toBe(401);
   });
 });
+
+describe('path spellings cannot move an artifact page off its sandbox', () => {
+  /** A response for artifact bytes is either refused, or carries exactly the embed's sandboxing policy. */
+  async function expectNoUnsandboxedPage(res: Response, label: string) {
+    if (res.status >= 300) return;
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp.match(/default-src/g), label).toHaveLength(1);
+    expect(csp, label).toMatch(/; sandbox allow-scripts$/);
+    expect(csp, label).not.toContain('allow-same-origin');
+  }
+
+  const variants = (prefix: string) => [
+    `/%61/pub-board/embed`,
+    `/%41/pub-board/embed`,
+    `${prefix}/a/pub-board/%65mbed`,
+    `${prefix}/a/pub-board/%65MBED`,
+    `/%2561/pub-board/embed`,
+    `${prefix}/a/%70ub-board/embed`,
+    `//a/pub-board/embed`,
+    `${prefix}//a/pub-board/embed`,
+    `/./a/pub-board/embed`,
+    `${prefix}/a/./pub-board/embed`,
+    `${prefix}/a/pub-board/embed;`,
+    `${prefix}/a/pub-board;/embed`,
+    `${prefix}/a/pub-board/embed/`,
+    `/__%61rtifacts__/a/pub-board/embed`,
+    `/__artifacts__/%61/pub-board/embed`,
+    `/__%41RTIFACTS__/a/pub-board/embed`,
+    `${prefix}/a/pub-board/embed%`,
+    `${prefix}/a/pub-board/embed%zz`,
+  ];
+
+  test('a percent-encoded unreserved character or a broken escape is refused before routing', async () => {
+    for (const path of ['/%61/pub-board/embed', '/__%61rtifacts__/a/pub-board/embed', '/%61pi/sessions', '/api/%73essions', '/a/x%zz']) {
+      expect((await send('GET', path)).status, path).toBe(400);
+    }
+    // A reserved escape in a parameter is still fine.
+    expect((await send('GET', '/__artifacts__/a/pub-board/data/a%20b?vt=x')).status).toBe(401);
+  });
+
+  for (const mode of ['path-prefix', 'subdomain'] as const) {
+    for (const where of ['app host', 'artifact host'] as const) {
+      test(`${mode} mode, ${where}: every spelling is refused or sandboxed`, async () => {
+        hostSetting.host = mode === 'subdomain' ? ARTIFACT_HOST : '';
+        const host = where === 'artifact host' ? ARTIFACT_HOST : undefined;
+        for (const path of [...variants('/__artifacts__'), ...variants('')]) {
+          const res = await send('GET', path, { host });
+          await expectNoUnsandboxedPage(res, `${mode} ${where} ${path}`);
+          if (mode === 'subdomain' && where === 'app host' && !path.includes('artifacts__')) {
+            expect(res.status, `root page on the app host: ${path}`).not.toBe(200);
+          }
+        }
+      });
+    }
+  }
+
+  test('no artifact script is served as a file from any origin', async () => {
+    for (const path of ['/__artifacts__/a/pub-board/bundle.js', '/a/pub-board/bundle.js']) {
+      expect((await send('GET', path)).status, path).toBe(404);
+    }
+  });
+
+  test('a template cannot assemble a script tag around an expression', async () => {
+    const res = await asUser('POST', '/api/artifacts', {
+      slug: 'split-tag',
+      title: 'Split',
+      type: 'html',
+      visibility: 'public',
+      htmlTemplate: '<scr{{data.none}}ipt src="/x.js"></scr{{data.none}}ipt><img/onerror{{data.none}}=alert(1) src=x>',
+    });
+    expect(res.status).toBe(201);
+    const html = await (await send('GET', '/__artifacts__/a/split-tag/embed')).text();
+    expect(html).not.toMatch(/<script src="(?!\/octipus-artifact-client\.js")/);
+    expect(html).not.toMatch(/onerror/i);
+  });
+});

@@ -77,8 +77,11 @@ const SCRIPT_BLOCK_RE = /<script\b[\s\S]*?(?:<\/script\s*>|$)/gi;
 // bindings are appended to the same source instead of relying on globals.
 
 const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)(?:<\/script>|$)/gi;
-/** `on<event>=` with a double-quoted, single-quoted, or bare value. */
-const HANDLER_ATTR_RE = /\son([a-z]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+/**
+ * `on<event>=` with a double-quoted, single-quoted, or bare value, after
+ * whitespace or a `/` (`<img/onerror=…>` is an attribute too).
+ */
+const HANDLER_ATTR_RE = /[\s/]on([a-z]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 
 /**
  * `type` values that mean "this is JavaScript". Anything else — a
@@ -196,7 +199,13 @@ const EACH_RE = /\{\{#each\s+([^}]+?)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g;
 
 /** Render a template string against `data`. Two-pass: each-blocks, then expressions. */
 export function renderTemplate(template: string, input: RenderInput): string {
-  const safeTemplate = sanitizeTemplate(template);
+  // Sanitized before expansion and again after: an expression can stand
+  // between two halves of a tag name, and only the final HTML shows what the
+  // browser will parse.
+  return sanitizeTemplate(expandTemplate(sanitizeTemplate(template), input));
+}
+
+function expandTemplate(safeTemplate: string, input: RenderInput): string {
 
   const withEach = safeTemplate.replace(EACH_RE, (_, expr: string, body: string) => {
     const list = resolvePath({ data: input.data, title: input.title } as Record<string, unknown>, expr.trim());

@@ -209,10 +209,9 @@ export function createServer() {
       }
       set.headers['X-Content-Type-Options'] = 'nosniff';
       set.headers['X-XSS-Protection'] = '0';
-      // A handler may set a stricter one (artifact pages send no referrer).
-      if (!Object.keys(set.headers).some((name) => name.toLowerCase() === 'referrer-policy')) {
-        set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
-      }
+      // Defaults only: `set.headers` is case-insensitive (api/http/app.ts), so
+      // a policy a handler set (artifact pages send no referrer) is kept.
+      set.headers['Referrer-Policy'] ??= 'strict-origin-when-cross-origin';
       set.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
 
       // Artifact pages and embeds intentionally render in iframes and
@@ -224,7 +223,7 @@ export function createServer() {
       // Plugin package pages likewise: a sandboxing CSP of their own, framed by the app (routes/plugin-ui.ts).
       const isPluginPage = path.startsWith('/api/plugin-ui/');
       if (!isArtifactPage && !isPluginPage) {
-        set.headers['X-Frame-Options'] = 'DENY';
+        set.headers['X-Frame-Options'] ??= 'DENY';
         // A handler that serves its own page may set a narrower policy (the
         // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
         set.headers['Content-Security-Policy'] ??= "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";

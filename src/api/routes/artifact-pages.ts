@@ -333,37 +333,6 @@ async function handleEmbed(ctx: HandlerCtx) {
   return page.html;
 }
 
-/** Serve the current version's built JS bundle. Same auth as the embed. */
-async function handleBundle(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`bundle:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
-  if (!rl.allowed) {
-    ctx.set.status = 429;
-    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
-    return 'Too many requests';
-  }
-  const auth = await authorizeForRequest({
-    slug: ctx.params.slug,
-    user: ctx.user ?? null,
-    shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
-  });
-  if (!auth || !auth.artifact.currentVersionId) {
-    ctx.set.status = 404;
-    return 'Not found';
-  }
-
-  const file = fileAt(bundleFilePath(auth.artifact.id, auth.artifact.currentVersionId));
-  if (!(await file.exists())) {
-    ctx.set.status = 404;
-    return 'Not found';
-  }
-  ctx.set.headers['content-type'] = 'application/javascript; charset=utf-8';
-  // The URL is slug-keyed, not version-keyed — publishing a new version reuses
-  // it. Caching would serve stale JS whose hash no longer matches the embed's
-  // `integrity`, i.e. a page that silently stops working.
-  ctx.set.headers['cache-control'] = 'no-cache';
-  return file.text();
-}
-
 async function handleExport(ctx: HandlerCtx) {
   const rl = checkRateLimit(`export:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
   if (!rl.allowed) {
@@ -515,7 +484,6 @@ export const artifactPageRoutes = new Elysia()
   .get('/octipus-artifact-client.js', handleSdk)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
-  .get('/a/:slug/bundle.js', handleBundle)
   .get('/a/:slug/export/:exportId', handleExport)
   .get('/a/:slug/data/:sourceName', handleData);
 
@@ -524,6 +492,5 @@ export const artifactPageRoutesFallback = new Elysia({ prefix: '/__artifacts__' 
   .use(apiContext)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
-  .get('/a/:slug/bundle.js', handleBundle)
   .get('/a/:slug/export/:exportId', handleExport)
   .get('/a/:slug/data/:sourceName', handleData);

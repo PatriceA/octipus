@@ -21,6 +21,19 @@ labels reflect blast radius, not contract guarantees.
   - The outer page gets a no-script CSP and `Cross-Origin-Opener-Policy`;
     embeds, exports and data reads send no referrer and are not cached;
     exports are inert (`sandbox` CSP) if opened.
+  - **Behaviour change:** the outer page (`/a/<slug>`) can now be framed only
+    by the app itself and the artifact's `allowedEmbedOrigins` (before, it
+    sent no framing policy). A site that frames the outer page rather than
+    `/embed` must be added to the artifact's allowed embed origins.
+  - Fixed: a request path that percent-encodes an unreserved character (or
+    holds a broken `%` escape) is now refused with 400 everywhere, so request
+    classification and routing always see the same path. Response headers are
+    keyed case-insensitively, so a default header never replaces or
+    duplicates one a handler set; an embed always carries only its own
+    sandboxing policy.
+  - Fixed: templates are sanitized again after `{{…}}` expansion, and the
+    built artifact script is no longer served as a separate file
+    (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).
   - Fixed: `allowedEmbedOrigins` was spliced into the embed CSP unchecked, so
     an entry could add a `sandbox … allow-same-origin` directive. It now takes
     web origins only (400 otherwise).
