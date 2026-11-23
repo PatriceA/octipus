@@ -1,4 +1,5 @@
 import { codexContextReader, codexRuntimeInfo } from './cli-runtime-info';
+import { createManagedTemporaryDirectory, type ManagedTemporaryDirectory } from './temporary-directory';
 import { measureCliPayload } from './agent/cli-prompt-composition';
 import { clearContextFill, recordContextFill } from './agent/prompt-budget';
 import { takeStagedRootPrompt, recordAgentComposition, recordLatestComposition, withoutText, type StagedRootPrompt } from './agent/prompt-composition';
@@ -828,7 +829,7 @@ When a task matches one of these skills, load it with get_skill before starting 
 ` +
         `Public unauthenticated curl GET/HEAD reads and package installation (including pip inside test containers) may run directly. For other external service or MCP access, use list_tools and describe_tool to find a suitable registered integration, then call_discovered_tool with its name and arguments. Do not create or reuse curl, Python or other shell clients when a suitable integration tool is available. Tools omitted from the initial tool list may still be discoverable. If no suitable tool exists or it is technically unavailable, use an allowed fallback and briefly state the reason; a permission denial is not technical unavailability.
 ` +
-        `Octipus shell tools isolate /tmp from the host. Put test virtual environments and reusable test files inside the project/workspace, not host /tmp. A host /tmp executable missing in the sandbox is an environment mismatch; do not escalate permissions just to inspect it.\n` +
+        `Use TMPDIR/TEMP or the language runtime temporary-directory API for disposable test data. Host commands and CLI invocations receive private scratch directories, cleaned after their processes exit; sandbox temporary storage is also isolated. Put reusable virtual environments, cross-command files and deliverables inside the project/workspace. Hardcoded host /tmp paths may be unavailable in a sandbox; do not escalate permissions just to inspect them.\n` +
         `Call get_cli_run_context before working and before the final answer. Every Octipus tool response also includes fresh plan feedback and queued user guidance. Respect permissions and do not bypass a refused Octipus tool through vendor tools.
 ` +
         `Use native MCP calls when supported. Only if your CLI lacks MCP support or loading this MCP server actually fails, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
@@ -1677,7 +1678,9 @@ When a task matches one of these skills, load it with get_skill before starting 
     // In a space the CLI's tools run in the run's own tool home (§9.5),
     // removed with the context files.
     let toolHome: SpaceToolHome | null = null;
+    let scratch: ManagedTemporaryDirectory | null = null;
     const cleanupContextFiles = () => {
+      scratch?.dispose();
       clearInterval(contextTimer);
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
@@ -1717,6 +1720,12 @@ When a task matches one of these skills, load it with get_skill before starting 
     const env = toolConfig.octipusToolsOnly
       ? { ...runtimeCredentials.options.env, ...built.env }
       : runtimeCredentials.options.env;
+    try {
+      scratch = createManagedTemporaryDirectory();
+      Object.assign(env, scratch.env);
+      const launchCleanup = this.launchCleanup;
+      this.launchCleanup = () => { scratch?.dispose(); launchCleanup?.(); };
+    } catch (error) { cleanupContextFiles(); throw error; }
     if (adapterKey === 'Codex CLI') {
       const defaults = await codexRuntimeInfo(env, workspaceCwd);
       observeContext({ ...(configuredModel || defaults.model ? { model: configuredModel ?? defaults.model } : {}),
@@ -1754,7 +1763,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         // always surfaces as a timeout, not "exited with code null" (C8).
         shell: useShellForSpawn,
         windowsHide: true,
+        // A private group lets temporary cleanup wait for native descendants.
+        detached: process.platform !== 'win32',
       });
+      scratch.attach(proc.pid, process.platform !== 'win32');
       proc.once('spawn', () => {
         if (this.executionDiagnostics) this.executionDiagnostics.providerStartedAt = new Date().toISOString();
         if (toolConfig.bufferOutput && !this.aborted) {
