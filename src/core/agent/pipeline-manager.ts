@@ -1,4 +1,5 @@
 import { hasPipelineAutonomy, executionEnvironmentFor } from '@/security/execution-environments';
+import { resolve } from 'node:path';
 import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
 import { withAgentOrigin } from '@/core/agent-origin';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
@@ -77,8 +78,8 @@ import {
   type StageTemplate,
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
-import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
-import { configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
+import { changedFilePaths, countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
+import { canonicalPath, configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, MAX_TRACKED_CHANGES, pinEvidenceRoots, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -687,6 +688,30 @@ export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: 
   );
 }
 
+/**
+ * The evidence bookkeeping after a stage ran: whether passing evidence still
+ * describes the work, and which files the run has changed.
+ *
+ * A stage that may change files makes earlier evidence stale. A read-only one
+ * cannot (its snapshot gate enforces it), but only while that snapshot could
+ * see the workspace: with `changes === null` (no workspace root, a remote
+ * environment, a truncated walk) nothing enforced it, so it counts as having
+ * written. Its files are not added to the change set, which only grows from
+ * stages allowed to write.
+ */
+export function evidenceAfterStage(
+  state: 'stale' | 'passed',
+  changed: Set<string> | null,
+  readOnly: boolean,
+  changes: string[] | null,
+): { state: 'stale' | 'passed'; changed: Set<string> | null } {
+  const next = !readOnly || changes === null ? 'stale' : state;
+  if (readOnly) return { state: next, changed };
+  if (changes === null || changed === null) return { state: next, changed: null };
+  const merged = new Set([...changed, ...changes]);
+  return { state: next, changed: merged.size > MAX_TRACKED_CHANGES ? null : merged };
+}
+
 /** What a stage said it was for. Both flags are opt-in declarations from the
  *  template — never inferred from a stage's name or its prompt wording. */
 export interface StageDeclaration {
@@ -839,6 +864,17 @@ export interface WalkState {
   verdictRepairs?: Record<string, number>;
   /** Trips back to the working stage spent on failing evidence hooks, keyed like `contractRetries`. */
   evidenceRepairs?: Record<string, number>;
+  /**
+   * Absolute paths of files the run's stages changed, which decide the
+   * evidence hooks that apply. `null` (or absent, in an older checkpoint) is
+   * "unknown", and every hook under the stage folder then applies.
+   */
+  changedFiles?: string[] | null;
+  /**
+   * Set on the checkpoint taken when the end-of-run evidence check paused: a
+   * resume runs that check again, and no stage.
+   */
+  finalEvidence?: { nodeKey: string };
   contractFeedback?: string;
   cursor: string;
   previousOutput: string;
@@ -901,6 +937,9 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     contractRetries: record<number>(r.contractRetries),
     verdictRepairs: record<number>(r.verdictRepairs),
     evidenceRepairs: record<number>(r.evidenceRepairs),
+    changedFiles: Array.isArray(r.changedFiles) && r.changedFiles.every((p) => typeof p === 'string') ? (r.changedFiles as string[]) : null,
+    ...(r.finalEvidence && typeof (r.finalEvidence as { nodeKey?: unknown }).nodeKey === 'string'
+      ? { finalEvidence: { nodeKey: (r.finalEvidence as { nodeKey: string }).nodeKey } } : {}),
     contractFeedback: typeof r.contractFeedback === 'string' ? r.contractFeedback : undefined,
     previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
     handoffChain,
@@ -1292,16 +1331,32 @@ export class PipelineManager {
     // nothing for them to judge, and an auditor stage is where a deliverable
     // is accepted (`runStageEvidence`).
     const graphProduces = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].producesArtifacts === true);
+    const changeSetNote = 'Which files this run changed could not be measured, so every evidence hook rooted in its folder ran.';
     /**
      * Whether the work as it stands now has passing evidence. `passed` holds
-     * only while no stage that may change files has run since the hooks last
-     * passed; `none` means hooks are configured but none applies to this
-     * run's folder, which cannot change mid-run. Completion requires `passed`
-     * (or `none`, said in the summary), so no route to `completed` skips them.
+     * only while no stage that may have changed files has run since the hooks
+     * last passed. Completion needs `passed`; anything else runs the hooks
+     * again at the end (`stale`), so no route to `completed` skips them.
      */
-    let evidenceState: 'stale' | 'passed' | 'none' = 'stale';
+    let evidenceState: 'stale' | 'passed' = 'stale';
     let lastEvidence: EvidenceHookResult[] = [];
     let evidenceNote: string | undefined;
+    /**
+     * Each hook root as it resolved before any stage of this walk ran: a stage
+     * that swaps a root for a symlink makes its hook refuse, never vanish.
+     * Taken again on a resume, from the disk as it is then.
+     */
+    let evidencePins: Map<string, string | null> | undefined;
+    if ((getConfig().agent.evidenceHooks?.length ?? 0) > 0) {
+      try {
+        evidencePins = pinEvidenceRoots(configuredEvidenceHooks());
+      } catch (err) {
+        // `runStageEvidence` reports the invalid setting where it would run.
+        coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id }, 'Could not read agent.evidenceHooks to pin hook roots');
+      }
+    }
+    /** Files the run changed so far (absolute), or null when that is unknown. See `WalkState.changedFiles`. */
+    let runChanges: Set<string> | null = new Set();
     /** The last node the walk visited, for the end-of-run evidence check. */
     let lastNode: PipelineNodeRow | undefined;
 
@@ -1382,6 +1437,9 @@ export class PipelineManager {
       for (const [k, v] of Object.entries(r.verdictRepairs ?? {})) verdictRepairs.set(k, v);
       evidenceRepairs.clear();
       for (const [k, v] of Object.entries(r.evidenceRepairs ?? {})) evidenceRepairs.set(k, v);
+      if (!Array.isArray(r.changedFiles)) runChanges = null;
+      else if (!deferred) runChanges = new Set(r.changedFiles);
+      else if (runChanges) for (const file of r.changedFiles) runChanges.add(file);
       for (const [key, attempts] of Object.entries(r.qaAttempts ?? {})) if (Array.isArray(attempts)) qaAttempts.set(key, attempts);
       for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
@@ -1418,6 +1476,12 @@ export class PipelineManager {
         await pipelineRepository.updatePlanItem(currentItem.id, { status: 'running' });
         currentItem.status = 'running';
       }
+      if (r.finalEvidence) {
+        // Paused at the end-of-run evidence check: run only that check again.
+        lastNode = nodes.get(r.finalEvidence.nodeKey);
+        if (!lastNode) throw new Error(`Checkpoint names an unknown node "${r.finalEvidence.nodeKey}" for the end-of-run evidence check.`);
+        cursor = null;
+      }
     }
 
     while (cursor) {
@@ -1446,6 +1510,7 @@ export class PipelineManager {
         contractRetries: Object.fromEntries(contractRetries),
         verdictRepairs: Object.fromEntries(verdictRepairs),
         evidenceRepairs: Object.fromEntries(evidenceRepairs),
+        changedFiles: runChanges ? [...runChanges] : null,
         contractFeedback,
         cursor,
         previousOutput,
@@ -1764,7 +1829,10 @@ export class PipelineManager {
         // legitimately fails for the nine nobody has written yet, and would
         // bounce every early item back to the implementer.
         let lastItem = true;
-        if (isQa && !correcting && currentItem && gnode.parentKey && (stageTemplate.verifyCommand || hooksDeclared)) {
+        // Asked on a verdict-repair visit too: the hooks run there when the
+        // evidence is stale, and must not judge item 1 of N against a
+        // project-wide check either.
+        if (isQa && currentItem && gnode.parentKey && ((!correcting && stageTemplate.verifyCommand) || hooksDeclared)) {
           lastItem = isFinalPlanItem(await pipelineRepository.getPlanItems(pipeline.id), currentItem);
         }
 
@@ -1775,13 +1843,13 @@ export class PipelineManager {
         if (isQa && evidenceState === 'stale' && hooksDeclared && graphProduces && lastItem) {
           const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: b.role, hostServices: b.hostServices,
             checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
-            repair: evidenceRepairs.get(evidenceKey) ?? 0 });
+            repair: evidenceRepairs.get(evidenceKey) ?? 0, pins: evidencePins, changed: runChanges });
           if (evidence.stopped) return evidence.stopped;
           if (evidence.blocked) return this.pauseForEnvironment(pipeline, node, evidence.blocked, attemptId, currentItem?.id ?? null);
-          if (evidence.unmatched) {
-            evidenceState = 'none';
-            evidenceNote = evidence.unmatched;
-          }
+          // Nothing ran: the evidence stays stale and the end-of-run check
+          // decides again with whatever the run has changed by then.
+          if (evidence.unmatched) evidenceNote = evidence.unmatched;
+          if (evidence.changeSetUnknown) evidenceNote = changeSetNote;
           if (evidence.failed) {
             // The deliverable is not accepted, whatever an auditor would say
             // about it: the auditor is not asked. The failure goes back to
@@ -1802,6 +1870,7 @@ export class PipelineManager {
             // re-audit) is moot: the work is going back to be changed.
             pendingRejection = undefined;
             rejectedReport = undefined;
+            verdictRepairs.delete(evidenceKey);
             pendingFeedback.set(retryEdge.to, evidenceRepairFeedback(evidence.results, used + 1));
             recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, parentSubjectId: retryEdge.to, event: 'node_failed',
               payload: { pipelineId: pipeline.id, itemId: currentItem?.id ?? null, attemptId, reason: 'evidence_failed', evidenceRepair: used + 1, limit: EVIDENCE_REPAIR_LIMIT } });
@@ -1903,7 +1972,9 @@ export class PipelineManager {
         if (itemDecisions.length) input += `\n\nRECORDED USER DECISIONS: ${JSON.stringify(itemDecisions)}\nFollow these recorded answers for this item's required work; do not re-ask settled questions or invent a different rule.`;
         const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
         const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
+        let stageChanges: string[] | null = null;
         const stepResult = await this.runStepNode({
+          onChanges: (paths) => { stageChanges = paths; },
           retryContract: retryCount < retryLimit,
           pipeline,
           node,
@@ -1940,9 +2011,10 @@ export class PipelineManager {
           checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
           partial,
         });
-        // A stage that may change files makes earlier evidence stale. A
-        // read-only one cannot (the snapshot gate enforces it).
-        if (!b.readOnly && evidenceState === 'passed') evidenceState = 'stale';
+        // A stage that may have changed files makes earlier evidence stale. A
+        // read-only one cannot, but only while its snapshot could see the
+        // workspace; where it could not, it is treated as having written.
+        ({ state: evidenceState, changed: runChanges } = evidenceAfterStage(evidenceState, runChanges, b.readOnly === true, stageChanges as string[] | null));
         if (stepResult.contractFailure) {
           contractRetries.set(retryKey, retryCount + 1);
           contractFeedback = stepResult.contractFailure;
@@ -2150,12 +2222,21 @@ export class PipelineManager {
       const stage = producer ? built[producer.templateIndex] : undefined;
       const persisted = await this.getPipeline(pipeline.id);
       const evidence = await this.runStageEvidence({ pipeline, node: lastNode, sessionId, context, role: stage?.role ?? lastNode.role,
-        hostServices: stage ? stageHostServices(stage, persisted ?? pipeline) : false, checkScope: 'run:final', repair: 0 });
+        hostServices: stage ? stageHostServices(stage, persisted ?? pipeline) : false, checkScope: 'run:final', repair: 0,
+        pins: evidencePins, changed: runChanges });
       if (evidence.stopped) return evidence.stopped;
       if (evidence.blocked) {
-        return this.pauseForEnvironment(pipeline, lastNode, `End-of-run evidence check: ${evidence.blocked}`, randomUUID(), currentItem?.id ?? null);
+        // Checkpoint a position AFTER the walk, so a resume runs this check
+        // again and replays no stage.
+        await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: lastNode.nodeKey,
+          state: serializeWalk({ cursor: lastNode.nodeKey, previousOutput, handoffChain, pipelineSources, traversals: Object.fromEntries(traversals),
+            loopMarks: Object.fromEntries(loopMarks), pendingFeedback: {}, judgedContext: {}, currentItemId: null, steps,
+            evidenceRepairs: Object.fromEntries(evidenceRepairs), changedFiles: runChanges ? [...runChanges] : null,
+            finalEvidence: { nodeKey: lastNode.nodeKey } }) });
+        return this.pauseForEnvironment(pipeline, lastNode, `End-of-run evidence check: ${evidence.blocked}`, randomUUID(), null);
       }
       if (evidence.unmatched) evidenceNote = evidence.unmatched;
+      else if (evidence.changeSetUnknown) evidenceNote = changeSetNote;
       if (evidence.failed) stoppedShort = { node: lastNode.name, outcome: 'evidence_failed', detail: evidenceSummary(evidence.results) };
     } else if (!stoppedShort && !graphProduces && (getConfig().agent.evidenceHooks?.length ?? 0) > 0) {
       evidenceNote = 'Evidence hooks are configured, but this run declares no artifact-producing stage, so none ran.';
@@ -2490,7 +2571,9 @@ export class PipelineManager {
     opts.onAccepted?.();
     const resumeSignal = this.resuming.get(pipelineId)?.signal;
     await withExecutionSignal(context, resumeSignal,
-      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0), async (summary, recoveryActionIds) => {
+      // A resume of the end-of-run evidence check re-enters no stage, so stage
+      // visits alone are no reason to review a replay; recorded tool actions still are.
+      () => actionRecovery.reviewPipeline(context, pipelineId, !resumeState.finalEvidence && priorNodes.some(node => node.visits > 0), async (summary, recoveryActionIds) => {
         const permissions = getPermissionManager();
         const reviewId = await permissions.requestApproval(context.userId, `pipeline:${pipelineId}`, 'action_recovery', 'replay_pipeline',
           { warning: summary, pipelineId, recoveryActionIds, replayScope: context.metadata?.replayScope }, context.sessionId, 'Review pipeline replay', resumeSignal, context.workspaceId);
@@ -2692,13 +2775,18 @@ export class PipelineManager {
     /** Root the stage's worker writes to, re-walked here for the "after" side. */
     workspaceRoot?: string | null;
     context?: AgentContext;
+    /** Which files the stage changed, for evidence hooks; null when the snapshot cannot say. */
+    onChanges?: (paths: string[] | null) => void;
   }): Promise<void> {
     const declared: StageDeclaration = {
       producesArtifacts: args.declared?.producesArtifacts,
       runsCommands: args.declared?.runsCommands,
       readOnly: args.declared?.readOnly,
     };
-    if (!declared.producesArtifacts && !declared.runsCommands && !declared.readOnly) return;
+    if (!declared.producesArtifacts && !declared.runsCommands && !declared.readOnly) {
+      args.onChanges?.(null);
+      return;
+    }
 
     const { counters, stageName, pipelineId } = args;
     const measured = counters !== null;
@@ -2713,6 +2801,8 @@ export class PipelineManager {
     const filesTouched = countChangedFiles(args.before ?? null, after, {
       countPackages: declared.producesArtifacts === true,
     });
+    const changedPaths = changedFilePaths(args.before ?? null, after);
+    args.onChanges?.(changedPaths && args.workspaceRoot ? changedPaths.map((rel) => resolve(canonicalPath(args.workspaceRoot as string), rel)) : null);
 
     const failure = stageEvidenceFailure(declared, counters, filesTouched);
     const passed = failure === null;
@@ -3000,7 +3090,9 @@ export class PipelineManager {
     hostServices?: boolean;
     checkScope: string;
     repair: number;
-  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; unmatched?: string; stopped?: { pipelineId: string; result: string } }> {
+    pins?: ReadonlyMap<string, string | null>;
+    changed?: ReadonlySet<string> | null;
+  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; unmatched?: string; changeSetUnknown?: boolean; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node } = args;
     let hooks: ReturnType<typeof configuredEvidenceHooks>;
     try {
@@ -3013,10 +3105,11 @@ export class PipelineManager {
     const signal = this.signals.get(pipeline.id);
     let results: EvidenceHookResult[];
     let unmatched: string | undefined;
+    let changeSetUnknown: boolean | undefined;
     try {
-      ({ results, unmatched } = await runEvidenceHooks(
+      ({ results, unmatched, changeSetUnknown } = await runEvidenceHooks(
         { userId: args.context.userId, sessionId: args.sessionId, workspaceId: args.context.workspaceId, space: args.context.space, role: args.role, hostServices: args.hostServices },
-        { hooks, signal },
+        { hooks, signal, pins: args.pins, changed: args.changed ?? null },
       ));
     } catch (err) {
       return { results: [], failed: false, blocked: `Evidence hooks could not be resolved: ${(err as Error).message}` };
@@ -3055,7 +3148,7 @@ export class PipelineManager {
     }
     const refused = results.find((result) => result.refused);
     if (refused) return { results, failed: false, blocked: `Evidence hook "${refused.name}" (\`${refused.command}\`) could not run: ${refused.reason ?? 'unknown reason'}` };
-    return { results, failed: results.some((result) => !result.passed) };
+    return { results, failed: results.some((result) => !result.passed), changeSetUnknown };
   }
 
   private async recordQaEvidence(
@@ -3294,6 +3387,8 @@ export class PipelineManager {
     checkpoint?: { seq: number; state: Record<string, unknown> };
     /** What this attempt said before an earlier interruption. */
     partial?: StagePartial;
+    /** Told which files the stage changed (absolute paths), or null when the snapshot could not say. */
+    onChanges?: (paths: string[] | null) => void;
   }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, stageContext, context, registry, workspaceRoot, title, attemptId, itemId, checkpoint } = args;
     let input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
@@ -3539,6 +3634,7 @@ export class PipelineManager {
         workspaceRoot,
         context,
         counters,
+        onChanges: args.onChanges,
       });
 
       // A planner that produced no plan would send the loop straight past every

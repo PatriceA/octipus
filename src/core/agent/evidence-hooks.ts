@@ -18,7 +18,7 @@
  * configuration alone: nothing a stage wrote is substituted into it, and which
  * hooks run is decided from the session, never from model text.
  */
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
@@ -43,11 +43,15 @@ export type { EvidenceHook, EvidenceHookResult } from '@/shared/evidence-hooks';
 export const EVIDENCE_REPAIR_LIMIT = 2;
 
 /**
- * Wall clock for all the hooks of one visit together. Each hook has its own
- * timeout (at most 600 s), and fifty of them in a row would otherwise hold a
- * run for hours. Same ceiling as one scorer gate (`MAX_SCORER_GATE_MS`).
+ * Time a hook may spend beyond its own `timeoutMs` (the gate's environment
+ * check and process start). One visit's hooks together get the sum of their
+ * timeouts plus this each, so the shared cap can never cut a hook off before
+ * its own timeout would.
  */
-export const EVIDENCE_VISIT_MAX_MS = 900_000;
+export const EVIDENCE_HOOK_OVERHEAD_MS = 15_000;
+
+/** Above this many changed paths, a run's change set is kept as "unknown" rather than stored. */
+export const MAX_TRACKED_CHANGES = 2_000;
 
 /** Which stage is asking, and in what scope its commands run. */
 export interface StageCommandCaller {
@@ -122,53 +126,119 @@ export function configuredEvidenceHooks(): EvidenceHook[] {
 }
 
 /**
- * A path as the filesystem resolves it, so a root given through a symlink, or
- * in another letter case on a case-insensitive filesystem, still names the same
- * folder. A path that does not exist is kept as written: the run then refuses
- * it as a missing directory rather than skipping it.
+ * A path as the filesystem resolves it now (symlinks followed), or null when
+ * nothing is there.
  */
-export function canonicalPath(path: string): string {
+export function realPath(path: string): string | null {
   try {
     return realpathSync.native(path);
   } catch {
-    return resolve(path);
+    return null;
   }
+}
+
+/** `realPath`, falling back to the lexical path for a folder that does not exist (yet). */
+export function canonicalPath(path: string): string {
+  return realPath(path) ?? resolve(path);
+}
+
+/**
+ * What each configured hook root resolved to when the run started, before any
+ * stage could touch the disk. A stage can replace a folder with a symlink;
+ * matching on what the root resolves to LATER would let it point a hook
+ * somewhere it no longer applies. Null: nothing was there at the start.
+ */
+export function pinEvidenceRoots(hooks: EvidenceHook[]): Map<string, string | null> {
+  return new Map(hooks.map((hook) => [hook.root, realPath(hook.root)]));
 }
 
 /** Where each configured hook stands relative to the folder a stage runs commands in. */
 export interface HookPlacement {
-  /** Hooks whose root is that folder or inside it, with the folder each runs in. */
+  /** Hooks to run, with the folder each runs in (its root, resolved). */
   apply: Array<{ hook: EvidenceHook; runIn: string }>;
   /**
-   * Hooks whose root CONTAINS that folder. They are meant for this project but
-   * would run above the folder this stage may run commands in, so they are
-   * refused out loud instead of being run there or silently skipped.
+   * Hooks that belong to this stage's folder but cannot be run: the root lies
+   * above it (a hook runs in its root, and the stage may not run commands
+   * there), is missing, is not a directory, resolves outside the stage folder,
+   * or resolves somewhere other than it did when the run started.
    */
-  above: EvidenceHook[];
+  refused: Array<{ hook: EvidenceHook; reason: string }>;
+  /** Hooks under the stage folder skipped because the run changed no file under their root. */
+  unchanged: EvidenceHook[];
 }
 
-export function placeEvidenceHooks(hooks: EvidenceHook[], root: string | null): HookPlacement {
-  const placement: HookPlacement = { apply: [], above: [] };
-  if (!root) return placement;
-  const stage = canonicalPath(root);
-  for (const hook of hooks) {
-    const hookRoot = canonicalPath(hook.root);
-    if (pathInEnvironment(stage, hookRoot)) placement.apply.push({ hook, runIn: hookRoot });
-    else if (pathInEnvironment(hookRoot, stage)) placement.above.push(hook);
+export interface PlacementOptions {
+  /** `pinEvidenceRoots` taken when the run started. A root missing from it is resolved now. */
+  pins?: ReadonlyMap<string, string | null>;
+  /**
+   * Absolute paths of files the run changed so far; `null` or absent when
+   * that is unknown, in which case every hook under the stage folder applies.
+   */
+  changed?: ReadonlySet<string> | null;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
   }
-  return placement;
 }
 
 /**
- * The stage's command context with its working directory moved to `runIn`, a
- * folder at or below the stage's own. Everything else (permission, space,
- * sandbox, environment) is the stage's.
+ * Which hooks apply to a stage that runs commands in `root`.
+ *
+ * A hook belongs to the stage when its root, as configured or as it resolved
+ * at the start of the run, is the stage folder or inside it. It is then run
+ * in what its root resolves to now, which must still be a directory inside
+ * the stage folder and the same place it was at the start; anything else is a
+ * refusal (the run pauses), never a silent "does not apply". With a known
+ * change set, a belonging hook runs only when the run changed a file under
+ * its root, so a hook for another project in the same workspace is not run
+ * against this one's work.
  */
-function scorerIn(scorer: ScorerContext, stageRoot: string, runIn: string): ScorerContext {
-  if (canonicalPath(stageRoot) === runIn) return scorer;
-  return scorer.projectPath !== undefined || scorer.executionEnvironmentId
-    ? { ...scorer, projectPath: runIn }
-    : { ...scorer, workspaceRoot: runIn };
+export function placeEvidenceHooks(hooks: EvidenceHook[], root: string | null, options: PlacementOptions = {}): HookPlacement {
+  const placement: HookPlacement = { apply: [], refused: [], unchanged: [] };
+  if (!root) return placement;
+  const stageLex = resolve(root);
+  const stageReal = canonicalPath(root);
+  const changed = options.changed ?? null;
+  const touches = (dirs: string[]) => changed === null || [...changed].some((file) => dirs.some((dir) => pathInEnvironment(dir, file)));
+  for (const hook of hooks) {
+    const hookLex = resolve(hook.root);
+    const pinned = options.pins?.has(hook.root) ? options.pins.get(hook.root) ?? null : realPath(hook.root);
+    const belongs = pathInEnvironment(stageLex, hookLex) || (pinned !== null && pathInEnvironment(stageReal, pinned));
+    if (!belongs) {
+      const above = pathInEnvironment(hookLex, stageLex) || (pinned !== null && pathInEnvironment(pinned, stageReal));
+      if (above && touches([stageLex, stageReal])) {
+        placement.refused.push({ hook, reason: `its root ${hook.root} contains the folder this stage runs commands in (${root}) but lies outside it. ` +
+          'A hook runs in its root, and a stage may only run commands in its own folder or below, so it was not run. ' +
+          `Set the hook's root to ${root} or to a folder inside it.` });
+      }
+      continue;
+    }
+    const now = realPath(hook.root);
+    // A root that resolves somewhere else than at the start was changed
+    // during the run, possibly by a stage: always a refusal, whatever changed.
+    if (pinned !== null && now !== pinned) {
+      placement.refused.push({ hook, reason: `its root ${hook.root} ${now === null ? 'no longer exists' : `resolves to ${now}`} but resolved to ${pinned} when the run started, so it was not run.` });
+      continue;
+    }
+    if (!touches([hookLex, ...(now ? [now] : [])])) {
+      placement.unchanged.push(hook);
+      continue;
+    }
+    let refusal: string | undefined;
+    if (now === null) refusal = `its root ${hook.root} does not exist`;
+    else if (!isDirectory(now)) refusal = `its root ${hook.root} is not a directory`;
+    else if (!pathInEnvironment(stageReal, now)) refusal = `its root ${hook.root} resolves to ${now}, outside the folder this stage runs commands in (${stageReal})`;
+    if (refusal) {
+      placement.refused.push({ hook, reason: `${refusal}, so it was not run.` });
+      continue;
+    }
+    placement.apply.push({ hook, runIn: now as string });
+  }
+  return placement;
 }
 
 /** `formatCommandOutput`'s text without its sentence-joining prefix. */
@@ -210,7 +280,10 @@ export async function runEvidenceHook(hook: EvidenceHook, scorer: ScorerContext,
       return { ...base, ...run, passed: false, reason: how };
     }
     if (failure) {
-      return { ...base, ...run, passed: false, reason: failure.reason, ...(failure.retryable === false ? { refused: true } : {}) };
+      // The command never ran (permission, policy, missing directory or
+      // program, no time left): nothing was learned about the work, so this
+      // is a block for the operator, not a failure for the stage to repair.
+      return { ...base, ...run, passed: false, reason: failure.reason, refused: true };
     }
     // A command that hit its deadline is a failed check even if it managed an
     // exit 0 on the way down.
@@ -228,8 +301,10 @@ export interface EvidenceRun {
   results: EvidenceHookResult[];
   /** The folder the stage's commands run in, which decided the hooks. */
   root: string | null;
-  /** Set when hooks are configured but none applied here: said out loud, never silent. */
+  /** Set when hooks are configured but none ran here: said out loud, never silent. */
   unmatched?: string;
+  /** Hooks ran without a known change set, so every hook under the stage folder ran. */
+  changeSetUnknown?: boolean;
 }
 
 const refusedResult = (hook: EvidenceHook, reason: string): EvidenceHookResult =>
@@ -244,34 +319,36 @@ const refusedResult = (hook: EvidenceHook, reason: string): EvidenceHookResult =
  */
 export async function runEvidenceHooks(
   caller: StageCommandCaller,
-  options: { hooks?: EvidenceHook[]; signal?: AbortSignal } = {},
+  options: { hooks?: EvidenceHook[]; signal?: AbortSignal } & PlacementOptions = {},
 ): Promise<EvidenceRun> {
   const configured = options.hooks ?? configuredEvidenceHooks();
   if (configured.length === 0) return { results: [], root: null };
   const scope = await stageCommandScope(caller);
-  const placement = placeEvidenceHooks(configured, scope.root);
-  const results: EvidenceHookResult[] = placement.above.map(hook => refusedResult(hook,
-    `its root ${hook.root} contains the folder this stage runs commands in (${scope.root}) but lies outside it. ` +
-    'A hook runs in its root, and a stage may only run commands in its own folder or below, so it was not run. ' +
-    `Set the hook's root to ${scope.root} or to a folder inside it.`));
+  const placement = placeEvidenceHooks(configured, scope.root, options);
+  const results: EvidenceHookResult[] = placement.refused.map(({ hook, reason }) => refusedResult(hook, reason));
   if (placement.apply.length === 0 && results.length === 0) {
-    const unmatched = scope.root
-      ? `${configured.length} evidence hook(s) are configured, but none has its root at or inside ${scope.root}, the folder this run's commands run in; no hook ran.`
-      : `${configured.length} evidence hook(s) are configured, but this run has no project folder to match them against; no hook ran.`;
+    const unmatched = !scope.root
+      ? `${configured.length} evidence hook(s) are configured, but this run has no project folder to match them against; no hook ran.`
+      : placement.unchanged.length
+        ? `No evidence hook ran: the run changed no file under the root of ${placement.unchanged.map((hook) => `"${hook.name}"`).join(', ')}.`
+        : `${configured.length} evidence hook(s) are configured, but none has its root at or inside ${scope.root}, the folder this run's commands run in; no hook ran.`;
     coreLogger.warn({ sessionId: caller.sessionId, root: scope.root }, unmatched);
     return { results, root: scope.root, unmatched };
   }
-  const deadline = Date.now() + EVIDENCE_VISIT_MAX_MS;
+  // Never shorter than the hooks' own timeouts together (`EVIDENCE_HOOK_OVERHEAD_MS`).
+  const deadline = Date.now() + placement.apply.reduce((sum, { hook }) => sum + hook.timeoutMs + EVIDENCE_HOOK_OVERHEAD_MS, 0);
   for (const { hook, runIn } of placement.apply) {
     if (scope.refused) { results.push(refusedResult(hook, scope.refused)); continue; }
     if (options.signal?.aborted) break;
     if (Date.now() >= deadline) {
-      results.push({ ...refusedResult(hook, `not run: this visit's evidence hooks used their ${EVIDENCE_VISIT_MAX_MS}ms together`), refused: undefined });
+      results.push(refusedResult(hook, 'not run: the evidence hooks of this visit ran out of time together'));
       continue;
     }
-    results.push(await runEvidenceHook(hook, { ...scorerIn(scope.scorer, scope.root as string, runIn), deadline }, options.signal));
+    // Only the working directory moves; the stage's execution environment,
+    // permission and sandbox are kept.
+    results.push(await runEvidenceHook(hook, { ...scope.scorer, cwd: runIn, deadline }, options.signal));
   }
-  return { results, root: scope.root };
+  return { results, root: scope.root, ...(options.changed == null ? { changeSetUnknown: true } : {}) };
 }
 
 /** How a hook ended, in a few words. Output is appended separately where it helps. */

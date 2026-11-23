@@ -9,7 +9,7 @@
  * on disk, exactly as it would in a real run.
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -336,9 +336,11 @@ describe('runEvidenceHooks', () => {
 
 describe('where a hook applies and runs', () => {
   test('a hook rooted in a folder inside the stage folder runs there', async () => {
-    const repo = join(root, `repo-${rand(3)}`);
+    const name = `repo-${rand(3)}`;
+    const repo = join(root, name);
     mkdirSync(repo, { recursive: true });
-    writeFileSync(join(repo, 'marker.txt'), 'x');
+    // The work happens in the repo; the hook proves it ran there, not in the stage folder.
+    implementWrites = [[`${name}/marker.txt`]];
     refreshConfigKey('agent.evidenceHooks', [{ name: 'test', command: 'ls marker.txt', root: repo }]);
     const { pipelineId } = await run();
     expect((await pipelineRow(pipelineId)).status).toBe('completed');
@@ -466,5 +468,83 @@ describe('hooks that cannot run pause the run', () => {
     expect(row.status).toBe('paused');
     expect(String(row.summary)).toContain('End-of-run evidence check');
     expect(String(row.summary)).toContain('misconfigured');
+  });
+});
+
+const PROSE = 'I looked at it and it seems fine.';
+
+describe('second review', () => {
+  test('a verdict repair on a non-final plan item does not run the project-wide hooks', async () => {
+    hooks({ name: 'test', command: 'ls built.txt' });
+    implementWrites = [['draft.txt'], ['built.txt']];
+    replies = { QA: [PROSE, QA_PASS] };
+    const { pipelineId } = await run('evidence-loop');
+    expect((await pipelineRow(pipelineId)).status).toBe('completed');
+    expect(stageCalls('Implement')).toHaveLength(2);
+    const { rows: items } = await queryRaw(`SELECT id FROM plan_items WHERE pipeline_id = '${pipelineId}' AND ordinal = 1`);
+    const rows = await evidenceRows(pipelineId);
+    expect(rows.map((r) => r.passed)).toEqual([true]);
+    expect(String(rows[0].detail.checkScope)).toContain(`item:${items[0].id}`);
+  });
+
+  test('a stage swapping a hook root for a symlink pauses the run instead of switching the hook off', async () => {
+    const sub = join(root, `proj-${rand(3)}`);
+    mkdirSync(sub);
+    refreshConfigKey('agent.evidenceHooks', [{ name: 'test', command: 'ls never.txt', root: sub }]);
+    const outside = mkdtempSync(join(tmpdir(), 'evidence-outside-'));
+    onStage = { Implement: () => { if (!existsSync(`${sub}-real`)) { renameSync(sub, `${sub}-real`); symlinkSync(outside, sub); } } };
+    const { pipelineId } = await run();
+    const row = await pipelineRow(pipelineId);
+    expect(row.status).toBe('paused');
+    expect(String(row.summary)).toContain('when the run started');
+  });
+
+  test('a hook for another project in the same workspace does not judge this run', async () => {
+    const other = join(root, `unrelated-${rand(3)}`);
+    mkdirSync(other);
+    refreshConfigKey('agent.evidenceHooks', [{ name: 'other-tests', command: 'ls never.txt', root: other }]);
+    const { pipelineId } = await run();
+    const row = await pipelineRow(pipelineId);
+    expect(row.status).toBe('completed');
+    expect(String(row.summary)).toContain('changed no file under the root of "other-tests"');
+    expect(stageCalls('Implement')).toHaveLength(1);
+    expect(await evidenceRows(pipelineId)).toEqual([]);
+  });
+
+  test('a hook that never ran is a block, not failed work', async () => {
+    const { runEvidenceHooks } = await import('./evidence-hooks');
+    const { results: [result] } = await runEvidenceHooks(
+      { userId, sessionId, role: 'coding' },
+      { hooks: [{ name: 'gone', command: 'definitely-not-a-program-x7 --version', root, timeoutMs: 5_000 }] },
+    );
+    expect(result).toMatchObject({ passed: false, refused: true, exitCode: null });
+  });
+
+  test('resuming after an end-of-run block runs only the check, not the last stage', async () => {
+    hooks({ name: 'test', command: 'ls built.txt' });
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'shell', 'execute', 'DENY');
+    let pipelineId = '';
+    try {
+      ({ pipelineId } = await run('evidence-no-auditor'));
+      expect((await pipelineRow(pipelineId)).status).toBe('paused');
+    } finally {
+      await getPermissionManager().setPermission(userId, 'shell', 'execute', 'ALLOW');
+    }
+    const implementBefore = stageCalls('Implement').length;
+    await manager.resume(pipelineId);
+    expect((await pipelineRow(pipelineId)).status).toBe('completed');
+    expect(stageCalls('Implement')).toHaveLength(implementBefore);
+    expect((await evidenceRows(pipelineId)).map((r) => r.passed)).toEqual([false, true]);
+  }, 60_000);
+
+  test('an evidence failure in the middle of a verdict repair round resets that round', async () => {
+    hooks({ name: 'test', command: 'ls built.txt' });
+    let qaVisits = 0;
+    onStage = { QA: () => { if (qaVisits++ === 0) rmSync(join(root, 'built.txt')); } };
+    replies = { QA: [PROSE, PROSE, PROSE, QA_PASS] };
+    const { pipelineId } = await run('evidence-qa-writer');
+    expect((await pipelineRow(pipelineId)).status).toBe('completed');
+    expect(stageCalls('Implement')).toHaveLength(2);
   });
 });

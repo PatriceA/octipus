@@ -234,26 +234,48 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   is asked, in a run that has at least one `producesArtifacts` stage. Inside a
   plan loop they run on the last plan item only, the same rule as a stage's
   `verifyCommand`, because a project-wide command fails for items nobody has
-  written yet. A passing result stays current until a stage that is not
-  `readOnly` runs, so a verdict repair, a coverage re-audit or a contract
-  retry of a read-only auditor does not run them again; a non-read-only
-  auditor (the Bug Fix recipe's `Verify Fix`) makes them run again.
+  written yet (a verdict-repair visit on an earlier item does not run them
+  either). A passing result stays current until a stage that is not
+  `readOnly` runs, or a read-only one whose workspace snapshot could not see
+  the files (no workspace root, a remote environment, a truncated walk). So
+  a verdict repair, a coverage re-audit or a contract retry of a read-only
+  auditor does not run them again; a non-read-only auditor (the Bug Fix
+  recipe's `Verify Fix`) makes them run again.
 - **Before `completed`, always.** When the walk is about to report
   `completed` and the work as it stands has no passing result (the auditor
   was skipped by a person, the final plan item was skipped, a stage changed
   files after the auditor, or the run has no auditor), the hooks run then. A
   failure there ends the run `failed`; there is no stage left to repair
-  through.
-- **Which hooks apply, and where they run.** A hook applies when its `root`
-  is the folder the stage's commands run in (the dev-mode project, else the
-  session workspace) or a folder inside it, and it runs in its `root`. Both
-  sides are compared after `realpath`, so a symlinked root or a different
-  letter case on a case-insensitive filesystem still matches. A hook whose
-  root lies *above* that folder is not run (it would run where the stage may
-  not) and pauses the run with that explanation. When hooks are configured
-  but none applies, or the run declares no `producesArtifacts` stage, the run
-  summary says that no hook ran, a warning is logged, and a run event is
-  recorded.
+  through. If a hook cannot run there, the run pauses at a checkpoint taken
+  after the walk: resuming runs only this check, never the last stage
+  again, and asks for no replay review on account of stage visits.
+- **Which hooks apply, and where they run.** A hook belongs to the run when
+  its `root` is the folder the stage's commands run in (the dev-mode project,
+  else the session workspace) or a folder inside it. It runs in its `root`,
+  in the stage's own execution environment (only the working directory
+  moves).
+  - **Only where the run changed files.** The pipeline records which files
+    its writing stages changed (from the workspace snapshots the evidence
+    gate already takes). A belonging hook runs only when one of those files
+    lies under its root, so a hook for another project in the same workspace
+    does not judge this run. When the change set is unknown (a stage that
+    takes no snapshot, a truncated walk, more than 2000 changed files, a
+    checkpoint from before this existed), every belonging hook runs and the
+    run summary says so.
+  - **Symlinks.** Each root is resolved once when the walk starts, before any
+    stage ran. A root given through a symlink by the operator matches by what
+    it resolved to then. A root that resolves anywhere else later (a stage
+    replaced it with a symlink, or removed it), that is missing, not a
+    directory, or resolves outside the stage folder is refused and pauses the
+    run; it is never treated as "does not apply". On a resume the roots are
+    resolved again from the disk as it is then. Letter-case differences on a
+    case-insensitive filesystem are left to `realpath` and are untested.
+  - **Above the stage folder.** A hook whose root lies above that folder is
+    not run (it would run where the stage may not) and pauses the run with
+    that explanation.
+  - When hooks are configured but none ran, or the run declares no
+    `producesArtifacts` stage, the run summary says that no hook ran, a
+    warning is logged, and a run event is recorded.
 - **The auditor's `runsCommands`.** When the hooks passed for the work being
   judged, the auditor is told not to re-run them, and its `runsCommands`
   declaration is lifted for that visit, as for a `verifyCommand`.
@@ -261,8 +283,10 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   `verifyCommand`: argv only (shell syntax and builtins are refused), the shell
   tool's content policy, the session user's `shell.execute` permission, the
   process sandbox (`security.shellSandbox`) and directory checks, the hook's
-  timeout (default 120 s, at most 600 s; 900 s for all hooks of one visit) and
-  the last ~2000 characters of output. The command is the configured string,
+  timeout (default 120 s, at most 600 s; all hooks of one visit together get
+  the sum of their timeouts plus 15 s each) and the last ~2000 characters of
+  output. A hook that did not run (refused, a missing program, no time left)
+  pauses the run; only a command that ran and failed goes back for repair. The command is the configured string,
   verbatim; nothing a stage wrote is substituted into it. Output handed back
   to a stage is wrapped in `<hook-output>` and labelled as data.
 - **What is stored.** One `verification_evidence` row per hook, kind

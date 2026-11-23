@@ -11,7 +11,8 @@ labels reflect blast radius, not contract guarantees.
   New setting `agent.evidenceHooks` (default `[]`, nothing changes until set):
   `[{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]`.
   A hook applies when `root` is the folder the pipeline's stages run commands
-  in or a folder inside it, and runs in `root`. The pipeline runs the hooks
+  in or a folder inside it and the run changed a file under it, and runs in
+  `root`. The pipeline runs the hooks
   before its QA stage is asked (on the last plan item in a loop), and again
   before it reports `completed` whenever the work changed since, the QA stage
   was skipped, or there is none. When hooks are configured but none applies,
@@ -22,8 +23,9 @@ labels reflect blast radius, not contract guarantees.
   `GET /api/verification/:sessionId` and the agent page. A failing hook sends
   the work back to the implementing stage with the output, at most 2 times per
   plan item; still failing, the run ends `failed`, and a QA pass cannot
-  override it. A hook that cannot run (refused, misconfigured, or rooted above
-  the stage folder) pauses the run as environment-blocked.
+  override it. A hook that did not run (refused, misconfigured, rooted above
+  the stage folder, or a root that changed during the run) pauses the run as
+  environment-blocked; resuming after an end-of-run pause runs only the check.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

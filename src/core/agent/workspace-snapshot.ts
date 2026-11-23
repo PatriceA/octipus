@@ -308,3 +308,17 @@ export function countChangedFiles(
   }
   return changed;
 }
+
+/**
+ * Which files differ between two snapshots (relative paths: created, rewritten
+ * or deleted), or `null` when the comparison cannot be trusted, under the same
+ * rule as `countChangedFiles`. Packages count like any other file: this says
+ * WHERE the work happened, not whether it was the stage's deliverable.
+ */
+export function changedFilePaths(before: WorkspaceSnapshot | null, after: WorkspaceSnapshot | null): string[] | null {
+  if (!before || !after || before.truncated || after.truncated) return null;
+  const changed: string[] = [];
+  for (const [path, stamp] of after.files) if (before.files.get(path) !== stamp) changed.push(path);
+  for (const path of before.files.keys()) if (!after.files.has(path)) changed.push(path);
+  return changed;
+}

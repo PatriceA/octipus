@@ -510,6 +510,13 @@ export interface ScorerContext {
    * runner beside it. Not called for a command that was refused or never
    * started.
    */
+  /**
+   * Run the command in this folder instead of the context's own. Only for a
+   * caller that has already checked it lies at or below that folder
+   * (`evidence-hooks.ts`): moving the directory through `projectPath` instead
+   * would also change which execution environment the context selects.
+   */
+  cwd?: string;
   onCommandResult?: (result: { exitCode: number | null; timedOut: boolean; signal?: string | null; stdout: string; stderr: string }) => void;
 }
 
@@ -1061,7 +1068,7 @@ async function evaluate(
       const fs = scorerWorkspace(ctx);
       const context = scorerAgentContext(ctx);
       const environment = executionEnvironmentFor(context);
-      const cwd = environment ? (await import('@/security/environment-runtime')).resolveEnvironmentCwd(undefined, context) : ctx.projectPath ?? fs?.resolveOptional('.');
+      const cwd = ctx.cwd ?? (environment ? (await import('@/security/environment-runtime')).resolveEnvironmentCwd(undefined, context) : ctx.projectPath ?? fs?.resolveOptional('.'));
       if (!cwd) {
         return {
           scorer: label,
