@@ -7,6 +7,25 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Browse skill registries**
+  ([docs](docs/SKILL-EXCHANGE.md#registries)). Skills → Import → **Browse
+  registries** lists and searches the skills of static JSON indexes an
+  administrator lists in `skills.registries` (`[{ name, url, publishers }]`,
+  **empty by default: no registry is contacted until one is added**), with
+  the newest version, the signature status for that registry's publishers,
+  and an "update available" mark against the version you installed. A
+  listing installs only through the existing preview and install: the bundle
+  is downloaded through the SSRF-guarded fetch (https, public addresses,
+  1 MiB, 15 s), must hash to the index digest, match the listing, and carry a
+  valid signature by a key of one of the registry's `publishers` in
+  `plugins.trustedPublishers` (unsigned or other-key bundles are shown, not
+  installable). Nothing is ever updated automatically. New:
+  `GET /api/skills/exchange/registry`, a `registry` source on
+  `/api/skills/exchange/preview` and `/install`,
+  `octi plugin build-skill-index <dir> --base-url <https://…/>` to build an
+  index (`octipus-skill-index` v1) from a folder of signed bundles, and
+  migration `0205_skill_registry_installs` (which listing version each person
+  installed).
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

@@ -5,9 +5,11 @@
  * skills as one JSON bundle, and import a bundle or a SKILL.md — previewed in
  * full (content, signature, collisions) before anything is written, installed
  * only on Install, with a decision for every name that is already taken.
+ * Listings of the configured skill registries are browsed here too, and go
+ * through the same preview and install: there is no install without a preview.
  */
-import { useQueryClient } from '@tanstack/react-query';
-import { Download, Loader2, ShieldAlert, ShieldCheck, Upload, X } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowUpCircle, Download, Loader2, Search, ShieldAlert, ShieldCheck, Upload, X } from 'lucide-react';
 import { useState } from 'react';
 import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
@@ -19,6 +21,7 @@ import type {
   SkillImportResult,
   SkillImportSource,
 } from '../../../src/shared/skill-exchange';
+import type { SkillRegistryListing, SkillRegistryListingResponse } from '../../../src/shared/skill-registry';
 
 interface ExportableSkill {
   id: string;
@@ -125,7 +128,76 @@ export function ExportSkillsDialog({ skills, onClose }: { skills: ExportableSkil
   );
 }
 
-type SourceKind = 'file' | 'paste' | 'url';
+type SourceKind = 'file' | 'paste' | 'url' | 'registry';
+
+const SOURCE_LABELS: Record<SourceKind, string> = { file: 'Upload a file', paste: 'Paste', url: 'From a URL', registry: 'Browse registries' };
+
+/**
+ * The configured skill registries' listings, searchable. Index text is shown
+ * as plain text (never HTML). "Preview" hands the listing to the import
+ * preview; nothing installs from here.
+ */
+function RegistryBrowser({ onPreview, busy }: { onPreview: (listing: SkillRegistryListing) => void; busy: boolean }) {
+  const [query, setQuery] = useState('');
+  const [term, setTerm] = useState('');
+  const { data: result, error: failure, isFetching: loading } = useQuery({
+    queryKey: ['skill-registry', term],
+    queryFn: () => api.get<SkillRegistryListingResponse>(`/skills/exchange/registry${term ? `?q=${encodeURIComponent(term)}` : ''}`),
+  });
+  const error = failure ? message(failure, 'Could not read the skill registries') : '';
+
+  if (result && result.registries.length === 0) {
+    return (
+      <p className="text-sm text-on-surface-variant">
+        No skill registry is configured, and none is contacted until an administrator adds one (Settings → Skills, skills.registries).
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <ErrorLine message={error} />
+      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); setTerm(query.trim()); }}>
+        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search the skill registries" placeholder="Search by name, description, tag or author"
+          className="flex-1 px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
+        <button type="submit" disabled={loading} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-surface-container-high text-on-surface rounded-lg disabled:opacity-50 cursor-pointer">
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}Search
+        </button>
+      </form>
+      {result?.errors.map((e) => <p key={e.registry} className="text-xs text-warning">{e.registry}: {e.error}</p>)}
+      {result && result.listings.length === 0 && <p className="text-sm text-on-surface-variant">No skill matches.</p>}
+      <ul className="space-y-2 max-h-96 overflow-y-auto">
+        {result?.listings.map((l) => {
+          const trusted = l.signature.status === 'valid';
+          return (
+            <li key={`${l.registry}/${l.name}`} className="rounded-xs ring-1 ring-outline-variant/10 p-3 space-y-1">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="font-medium text-on-surface break-words">{l.name} <span className="text-xs text-on-surface-variant">{l.version} · {l.registry}{l.author ? ` · ${l.author}` : ''}</span></h3>
+                  <p className="text-xs text-on-surface-variant whitespace-pre-wrap break-words">{l.description}</p>
+                  <p className="text-xs text-on-surface-variant">Skills: {l.skills.join(', ')}</p>
+                  {l.tags.length > 0 && <p className="text-xs text-on-surface-variant">Tags: {l.tags.join(', ')}</p>}
+                </div>
+                <button type="button" disabled={busy} onClick={() => onPreview(l)} className="shrink-0 px-3 py-1.5 text-xs bg-primary text-on-primary rounded-xs disabled:opacity-50 cursor-pointer">
+                  Preview
+                </button>
+              </div>
+              <p className={cn('flex items-center gap-1 text-xs', trusted ? 'text-tertiary' : 'text-warning')}>
+                {trusted ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5" />}{l.signature.detail}
+              </p>
+              {l.installedVersion && (
+                <p className={cn('flex items-center gap-1 text-xs', l.updateAvailable ? 'text-primary' : 'text-on-surface-variant')}>
+                  {l.updateAvailable && <ArrowUpCircle className="w-3.5 h-3.5" />}
+                  {l.updateAvailable ? `Installed ${l.installedVersion}; ${l.version} is available (preview it to update)` : `Installed ${l.installedVersion}`}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {result?.truncated && <p className="text-xs text-on-surface-variant">More skills match than are shown; narrow the search.</p>}
+    </div>
+  );
+}
 
 /** What the user picked for one previewed skill. */
 type Choice = { action: 'create' | 'skip' | 'replace' | 'rename'; newName: string };
@@ -170,11 +242,11 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
     setText(await file.text());
   };
 
-  const runPreview = async () => {
+  const runPreview = async (from?: SkillImportSource) => {
     setError('');
     setPreview(null);
     setDone(null);
-    const next = kind === 'url' ? { url: url.trim() } : textSource(text);
+    const next = from ?? (kind === 'url' ? { url: url.trim() } : textSource(text));
     setBusy(true);
     try {
       const result = await api.post<SkillImportPreview>('/skills/exchange/preview', next);
@@ -204,7 +276,7 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
       });
       const result = await api.post<SkillImportResult>('/skills/exchange/install', { ...source, contentHash: preview.contentHash, decisions });
       setDone(result);
-      for (const key of ['skills', 'skill-usage']) void queryClient.invalidateQueries({ queryKey: [key] });
+      for (const key of ['skills', 'skill-usage', 'skill-registry']) void queryClient.invalidateQueries({ queryKey: [key] });
     } catch (err) {
       setError(message(err, 'Could not install the skills'));
     } finally {
@@ -234,10 +306,10 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
             A skill is prompt text that steers your agents. Read it in full before you install it: nothing is written until you press Install.
           </p>
           <div className="flex gap-1.5" role="tablist">
-            {(['file', 'paste', ...(isAdmin ? ['url' as const] : [])] as SourceKind[]).map((k) => (
+            {(['file', 'paste', ...(isAdmin ? ['url' as const] : []), 'registry'] as SourceKind[]).map((k) => (
               <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => { setKind(k); setPreview(null); }}
                 className={cn('px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer', kind === k ? 'bg-primary text-on-surface' : 'bg-surface-container-high text-on-surface-variant')}>
-                {k === 'file' ? 'Upload a file' : k === 'paste' ? 'Paste' : 'From a URL'}
+                {SOURCE_LABELS[k]}
               </button>
             ))}
           </div>
@@ -260,7 +332,10 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
                 className="w-full mt-1 px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
             </label>
           )}
-          {!preview && (
+          {kind === 'registry' && !preview && (
+            <RegistryBrowser busy={busy} onPreview={(l) => void runPreview({ registry: { registry: l.registry, name: l.name, version: l.version } })} />
+          )}
+          {!preview && kind !== 'registry' && (
             <div className="flex justify-end gap-2">
               <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg cursor-pointer">Cancel</button>
               <button type="button" onClick={() => void runPreview()} disabled={busy || (kind === 'url' ? !url.trim() : !text.trim())}
@@ -271,6 +346,11 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
           )}
           {preview && (
             <div className="space-y-3">
+              {preview.registry && (
+                <p className="text-xs text-on-surface-variant break-all">
+                  {preview.registry.name} {preview.registry.version} from the registry {preview.registry.registry} ({preview.url})
+                </p>
+              )}
               <SignatureLine preview={preview} />
               {preview.refusal && <ErrorLine message={preview.refusal} />}
               {preview.warnings.map((w) => <p key={w} className="text-xs text-warning">{w}</p>)}

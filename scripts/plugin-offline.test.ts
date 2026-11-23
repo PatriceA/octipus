@@ -24,6 +24,7 @@ import {
   signIndexCommand,
   signKeysCommand,
   signSkillBundleCommand,
+  buildSkillIndexCommand,
   unpackCommand,
   validateCommand,
   verifyCommand,
@@ -32,6 +33,7 @@ import {
 } from './plugin-offline';
 import { makeTarGz } from '@/test-helpers/tar';
 import { buildBundle, checkBundleTrust, parseSkillBundle } from '@/skills/exchange';
+import { parseSkillIndex } from '@/skills/registry-index';
 import { getConfig } from '@/config';
 
 const ROOT = join(__dirname, '..');
@@ -221,6 +223,55 @@ describe('sign-skill-bundle', () => {
     expect(fake.stderr).toMatch(/changed after it was exported/);
     expect(readFileSync(file, 'utf8')).toBe(tampered);
     expect(await signSkillBundleCommand(io(), [file])).toBe(2);
+  });
+});
+
+describe('build-skill-index', () => {
+  const skill = (name: string) => ({ name, category: 'writing', description: `${name}\nin two lines`, content: 'Be brief.', principles: [], bestPractices: [], antiPatterns: [], frameworks: [] });
+
+  test('indexes the bundles in a folder: digest, content hash, skills and key read from each bundle; a host parses the result', async () => {
+    const { key } = await keys();
+    const dir = temp();
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify(buildBundle([skill('Notes')])));
+    expect(await signSkillBundleCommand(io(), [join(dir, 'notes.json'), '--key', key])).toBe(0);
+    writeFileSync(join(dir, 'notes.listing.json'), JSON.stringify({ name: 'notes', version: '1.0.0', tags: ['writing'], author: 'Acme' }));
+    writeFileSync(join(dir, 'pair.json'), JSON.stringify(buildBundle([skill('One'), skill('Two')])));
+    writeFileSync(join(dir, 'pair.listing.json'), JSON.stringify({ name: 'pair', version: '2.1.0', description: 'Two skills' }));
+    writeFileSync(join(dir, 'other.json'), '{"not":"a bundle"}');
+    const fake = io();
+    expect(await buildSkillIndexCommand(fake, [dir, '--base-url', 'https://skills.example.com/acme/', '--json'])).toBe(0);
+    expect(jsonOut(fake)).toMatchObject({ entries: 2, unsigned: ['pair 2.1.0'], skipped: ['other.json'] });
+    const bytes = readFileSync(join(dir, 'index.json'));
+    const parsed = parseSkillIndex(bytes);
+    expect(parsed.problems).toEqual([]);
+    const notes = parsed.entries.find((e) => e.name === 'notes')!;
+    const bundleBytes = readFileSync(join(dir, 'notes.json'));
+    expect(notes).toMatchObject({
+      version: '1.0.0', description: 'Notes in two lines', tags: ['writing'], author: 'Acme', skills: ['Notes'],
+      bundleUrl: 'https://skills.example.com/acme/notes.json',
+      bundleSha256: `sha256:${createHash('sha256').update(bundleBytes).digest('hex')}`,
+      contentHash: parseSkillBundle(bundleBytes.toString('utf8')).contentHash,
+      publisherKeyId: parseSkillBundle(bundleBytes.toString('utf8')).signature!.keyId,
+    });
+    expect(parsed.entries.find((e) => e.name === 'pair')).toMatchObject({ skills: ['One', 'Two'], publisherKeyId: null, description: 'Two skills' });
+  });
+
+  test('refuses a bundle without listing file, a tampered bundle, a non-https or private base URL', async () => {
+    const dir = temp();
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify(buildBundle([skill('Notes')])));
+    const missing = io();
+    expect(await buildSkillIndexCommand(missing, [dir, '--base-url', 'https://skills.example.com/'])).toBe(1);
+    expect(missing.stderr).toMatch(/no notes\.listing\.json beside it/);
+    writeFileSync(join(dir, 'notes.listing.json'), JSON.stringify({ name: 'notes', version: '1.0.0' }));
+    const bundle = buildBundle([skill('Notes')]);
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify({ ...bundle, skills: [{ ...bundle.skills[0], content: 'changed' }] }));
+    const tampered = io();
+    expect(await buildSkillIndexCommand(tampered, [dir, '--base-url', 'https://skills.example.com/'])).toBe(1);
+    expect(tampered.stderr).toMatch(/notes\.json: .*changed after it was exported/);
+    expect(existsSync(join(dir, 'index.json'))).toBe(false);
+    expect(await buildSkillIndexCommand(io(), [dir, '--base-url', 'http://skills.example.com/'])).toBe(2);
+    expect(await buildSkillIndexCommand(io(), [dir, '--base-url', 'https://10.0.0.5/'])).toBe(2);
+    expect(await buildSkillIndexCommand(io(), [dir])).toBe(2);
   });
 });
 

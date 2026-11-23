@@ -29,6 +29,7 @@ import { getConfig } from '@/config';
 import type { SkillView } from '@/db/schema/skills';
 import {
   isKeyId,
+  type KeyRing,
   type SignatureCheck,
   type SignatureFile,
   type SigningKey,
@@ -388,23 +389,39 @@ function signatureView(check: SignatureCheck): BundleSignatureView {
  * unknown key or an expired one are refused under
  * `plugins.requireSignature`, or when `requireTrusted` (a URL import), and
  * otherwise imported as unsigned (an unknown or expired key with a warning).
+ *
+ * With `publishers` (a skill registry's, docs/SKILL-EXCHANGE.md#registries),
+ * only the keys of those publishers count: a valid signature by any other
+ * trusted publisher reads as `unknown_key` for this import.
  */
-export function checkBundleTrust(contentHash: string, signature: SignatureFile | null, opts: { requireTrusted: boolean }): BundleTrust {
+export function checkBundleTrust(contentHash: string, signature: SignatureFile | null, opts: { requireTrusted: boolean; publishers?: readonly string[]; source?: string }): BundleTrust {
   const plugins = getConfig().plugins;
-  const ring = trustedKeys(plugins?.trustedPublishers ?? [], (publisher, reason) => {
-    coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
-  }, { revokedKeys: plugins?.revokedKeys ?? [] });
-  const check = verifySkillBundle(contentHash, signature, ring);
+  const ring = bundleKeyRing();
+  let check = verifySkillBundle(contentHash, signature, ring);
+  if (check.status === 'valid' && opts.publishers !== undefined && !opts.publishers.includes(check.publisher)) {
+    check = { status: 'unknown_key', keyId: check.keyId };
+  }
   const view = signatureView(check);
+  if (opts.publishers !== undefined && check.status === 'unknown_key') {
+    view.detail = `Signed by a key that is not one of this registry's publishers (${opts.publishers.join(', ') || 'none listed'}): ${check.keyId}`;
+  }
   if (check.status === 'valid') return { check, view, refusal: null, warnings: [] };
   const shortfall = check.status === 'invalid' ? `The bundle's signature is invalid: ${check.reason}`
     : check.status === 'revoked' ? `The bundle is signed by a revoked key: ${check.detail}`
     : view.detail;
   if (check.status === 'invalid' || check.status === 'revoked') return { check, view, refusal: `${shortfall}; not imported`, warnings: [] };
-  if (opts.requireTrusted) return { check, view, refusal: `${shortfall}; a bundle fetched from a URL must carry a valid signature by a trusted publisher`, warnings: [] };
+  if (opts.requireTrusted) return { check, view, refusal: `${shortfall}; a bundle fetched from ${opts.source ?? 'a URL'} must carry a valid signature by a trusted publisher`, warnings: [] };
   if (plugins?.requireSignature === true) return { check, view, refusal: `${shortfall}; plugins.requireSignature accepts only bundles signed by a trusted publisher`, warnings: [] };
   if (check.status === 'unknown_key' || check.status === 'expired') return { check, view, refusal: null, warnings: [`${shortfall}: imports as unsigned`] };
   return { check, view, refusal: null, warnings: [] };
+}
+
+/** The keys of `plugins.trustedPublishers` and `plugins.revokedKeys`, read now. */
+export function bundleKeyRing(): KeyRing {
+  const plugins = getConfig().plugins;
+  return trustedKeys(plugins?.trustedPublishers ?? [], (publisher, reason) => {
+    coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
+  }, { revokedKeys: plugins?.revokedKeys ?? [] });
 }
 
 /** Why a server export is unsigned: the instance holds no publisher signing key. */

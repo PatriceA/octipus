@@ -416,6 +416,30 @@ and "Reviewed and signed by Octipus".
 - **Examples:** not in the marketplace. `reader` and `research` stay in
   Octipus only ([The examples](#the-examples)).
 
+## Skills
+
+Skills follow the same principles at a smaller size, without a hosted
+marketplace (2026-11-23, [SKILL-EXCHANGE.md#registries](../SKILL-EXCHANGE.md#registries)):
+
+- **Registries are static and operator-listed.** `skills.registries` is
+  empty by default, and Octipus ships no default skill registry: an index
+  (`octipus-skill-index` v1, built by `octi plugin build-skill-index`) is a
+  file anyone hosts.
+- **The listing has to match the download.** The bundle must hash to the
+  index digest, and its content hash, skill names and signing key must be
+  the listing's.
+- **Signatures decide.** Each registry names the publishers of
+  `plugins.trustedPublishers` trusted for it; a bundle installs only with a
+  valid signature by one of them. The digest never stands in for it. The
+  index itself is not signed (unlike a plugin index): nothing in it is
+  trusted.
+- **Informed consent.** Installing is the exchange's preview, then install,
+  with a decision for every name collision. No auto-updates: a newer version
+  is shown as available.
+
+Not built for skills: a default registry, ratings, revocation lists in the
+index, signed indexes.
+
 ## Not doing
 
 - Ratings and reviews, and paid plugins.
