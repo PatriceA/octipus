@@ -117,6 +117,13 @@ export async function fetchGuarded(url: string, init: RequestInit = {}, maxRedir
 
   const addresses = validation.addresses ?? [];
 
+  // The operator's egress policy, inside a tool call: judged on the canonical
+  // host and the vetted addresses this hop will be pinned to. Each redirect
+  // hop below comes back through here, so a redirect is judged like the
+  // first request.
+  const { enforceEgressForUrl } = await import('@/security/egress-policy');
+  enforceEgressForUrl(url, addresses, 'fetch');
+
   // Redirects must NOT be followed by the underlying fetch — the guard only
   // validated THIS hop. Force `redirect: 'manual'` and re-run the guard on each
   // redirect target so an open redirect to a private IP (e.g. cloud metadata)

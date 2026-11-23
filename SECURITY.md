@@ -39,7 +39,7 @@ issue or discussion.
 - Prompt injection leading to unintended tool use or data exfiltration
 - SSRF, command injection, path traversal, deserialization bugs
 - Vault encryption / key handling, and credential leaks past [diagnostic masking](#credential-execution-boundary)
-- Escaping a sandbox Octipus claims: the shell sandbox (bwrap, firejail, Windows), plugin package isolation and egress scopes, and the codemode script sandbox
+- Escaping a sandbox Octipus claims: the shell sandbox (bwrap, firejail, Windows), plugin package isolation and egress scopes, the egress policy where [docs/EGRESS-POLICY.md](docs/EGRESS-POLICY.md) lists it as enforced, and the codemode script sandbox
 - Crossing the boundary of an [execution environment](docs/EXECUTION_ENVIRONMENTS.md), a shared [space](docs/SPACES.md) or a federated room
 - Channel and webhook signature verification (WhatsApp, Slack, Telegram, Teams, and the Twilio, Telnyx and Plivo voice webhooks)
 - MCP server auth, including the per-run bridge capability that CLI agents receive

@@ -1,6 +1,9 @@
 /**
  * Egress proxy — per-host network for sandboxed stdio servers (plugin
- * packages, docs/PLUGIN-PACKAGES.md#network).
+ * packages, docs/PLUGIN-PACKAGES.md#network) and for sandboxed shell
+ * commands under the operator's egress policy (`anyHost` + `decide`,
+ * src/security/shell-egress.ts, docs/EGRESS-POLICY.md). Whatever the list,
+ * `decide` (the policy) is asked too, and a deny wins.
  *
  * A manifest's `network: [hosts]` used to be a boolean: any host turned the
  * whole network on. This module narrows it to the declared hosts. One proxy
@@ -53,7 +56,9 @@ import { createServer as createHttpServer, type IncomingHttpHeaders, type Incomi
 import { connect as netConnect, createServer as createNetServer, isIP, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { EgressScheme } from '@/shared/egress-policy';
 import { PLUGIN_HOST_ALIAS } from '@/shared/plugin-package';
+import type { EgressDecide } from './egress-policy';
 import { coreLogger } from '@/utils/logger';
 import { assertPublicAddress, pinnedLookup } from '@/utils/sanitize';
 
@@ -140,8 +145,19 @@ export function stripHopByHop(headers: IncomingHttpHeaders): IncomingHttpHeaders
 export interface EgressProxyOptions {
   /** Who the traffic belongs to, for the refusal log (a package name). */
   label: string;
-  /** Declared host entries (see `parseAllowEntry`). */
+  /** Declared host entries (see `parseAllowEntry`). Ignored with `anyHost`. */
   allowed: readonly string[];
+  /**
+   * No declared list: any host on any port is a candidate and `decide` (the
+   * egress policy) alone says yes or no. The sandboxed shell's proxy.
+   */
+  anyHost?: boolean;
+  /**
+   * The operator's egress policy (src/security/egress-policy.ts), on top of
+   * the declared list: asked by name before resolving (a denied name is never
+   * looked up) and again with every resolved address. Deny wins.
+   */
+  decide?: EgressDecide;
   /** Also listen on a Unix socket, for a sandbox without network (not on Windows). */
   unixSocket?: boolean;
   /**
@@ -273,6 +289,14 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     return s;
   };
 
+  const declared = (host: string, port: number) => options.anyHost === true || hostAllowed(allowed, host, port);
+  /** The policy's answer, or null when there is none or it allows. */
+  const policyRefusal = (host: string, port: number, scheme: EgressScheme, addresses?: readonly string[]): string | null => {
+    if (!options.decide) return null;
+    const decision = options.decide({ host, port, scheme }, addresses);
+    return decision.allowed ? null : `Egress policy denies ${decision.host}:${decision.port} (${decision.rule})`;
+  };
+
   const refuse = (host: string, port: number, kind: string) => {
     coreLogger.warn({ pkg: label, host, port, kind }, 'Plugin package network request refused: host not declared in its manifest');
   };
@@ -282,7 +306,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
    * address to connect to — the connection uses it, never the name, so a
    * second resolution (DNS rebinding) cannot swap in another — or why not.
    */
-  const vet = async (host: string, port: number, kind: string): Promise<{ ip: string } | { status: 403 | 502; message: string }> => {
+  const vet = async (host: string, port: number, kind: string, scheme: EgressScheme): Promise<{ ip: string } | { status: 403 | 502; message: string }> => {
     let addresses: string[];
     try {
       addresses = await resolveHost(host);
@@ -293,11 +317,15 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     if (!options.allowPrivateAddresses) {
       for (const address of addresses) {
         if (!assertPublicAddress(address).ok) {
-          coreLogger.warn({ pkg: label, host, port, address, kind }, 'Plugin package network request refused: declared host resolves to a private address');
+          coreLogger.warn({ pkg: label, host, port, address, kind }, 'Egress proxy request refused: host resolves to a private address');
           return { status: 403, message: `Host ${host} resolves to a private or reserved address (${address}); refused` };
         }
       }
     }
+    // The policy sees every address the name resolved to; the connection
+    // then goes to the first of them, which it has seen.
+    const refused = policyRefusal(host, port, scheme, addresses);
+    if (refused) return { status: 403, message: refused };
     return { ip: addresses[0] };
   };
 
@@ -351,12 +379,17 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       req.pipe(upstream);
       return;
     }
-    if (!hostAllowed(allowed, host, port)) {
+    const nameRefused = declared(host, port) ? policyRefusal(host, port, 'http') : null;
+    if (nameRefused) {
+      res.writeHead(403, { 'content-type': 'text/plain' }).end(`${nameRefused}\n`);
+      return;
+    }
+    if (!declared(host, port)) {
       refuse(host, port, 'http');
       res.writeHead(403, { 'content-type': 'text/plain' }).end(`Host ${host}:${port} is not declared in this package's network list\n`);
       return;
     }
-    const vetted = await vet(host, port, 'http');
+    const vetted = await vet(host, port, 'http', 'http');
     if (res.destroyed) return;
     if (!('ip' in vetted)) {
       res.writeHead(vetted.status, { 'content-type': 'text/plain' }).end(`${vetted.message}\n`);
@@ -391,15 +424,21 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       return;
     }
     // The host API is plain HTTP through the proxy only: no tunnel to it, whatever is declared.
-    if (authority.host === PLUGIN_HOST_ALIAS || !hostAllowed(allowed, authority.host, authority.port)) {
+    if (authority.host === PLUGIN_HOST_ALIAS || !declared(authority.host, authority.port)) {
       refuse(authority.host, authority.port, 'connect');
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nHost not declared in this package\'s network list\n');
+      return;
+    }
+    // A tunnel's contents are opaque: it is judged as https (see docs/EGRESS-POLICY.md).
+    const nameRefused = policyRefusal(authority.host, authority.port, 'https');
+    if (nameRefused) {
+      client.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\n${nameRefused}\n`);
       return;
     }
     // Hold bytes a client sends before the tunnel is up (resolution is
     // async); `pipe` resumes it, and a refusal resumes it to see the close.
     client.pause();
-    const vetted = await vet(authority.host, authority.port, 'connect');
+    const vetted = await vet(authority.host, authority.port, 'connect', 'https');
     if (client.destroyed) return;
     if (!('ip' in vetted)) {
       client.resume();

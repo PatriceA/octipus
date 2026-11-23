@@ -1396,6 +1396,13 @@ host ("Plugin package network request refused"). The server is started with
 `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (and the lower-case forms) pointing at
 the proxy and `NO_PROXY` cleared.
 
+The operator's egress policy ([EGRESS-POLICY.md](EGRESS-POLICY.md)) is
+applied in the same proxy, as `plugin:<name>`, on top of the manifest: a
+declared host the policy denies is refused, and the manifest stays the upper
+bound — the policy never adds a host. Under a `deny` default the package's
+hosts need an allow rule too (`tools["plugin:<name>"]: { "default": "allow" }`
+lets through exactly what the manifest declares).
+
 What that holds depends on the platform:
 
 | Where | A package with hosts | A package without hosts | Status `network.state` |

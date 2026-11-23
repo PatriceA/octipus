@@ -1,5 +1,6 @@
 import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { executionEnvironmentsSchema } from '@/shared/execution-environment';
+import { DEFAULT_EGRESS_POLICY, egressPolicySchema } from '@/shared/egress-policy';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
 import { createPublicKey } from 'node:crypto';
 import { isIP } from 'node:net';
@@ -104,6 +105,12 @@ export const securityConfigSchema = z.object({
    */
   executionEnvironments: executionEnvironmentsSchema.default([]),
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
+  /**
+   * What tools may reach on the network (docs/EGRESS-POLICY.md): allow/deny
+   * rules by host, address range, port and scheme, globally, per tool and per
+   * role. The default allows everything, as before the policy existed.
+   */
+  egressPolicy: egressPolicySchema.default(DEFAULT_EGRESS_POLICY),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
   shellSshAgent: z.boolean().default(false),
   companionMaintenance: companionMaintenanceSchema.default({ enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' }),

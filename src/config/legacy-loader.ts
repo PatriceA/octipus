@@ -65,6 +65,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
         return 'off';
       })(),
       shellSshAgent: process.env.SHELL_SSH_AGENT === 'true',
+      egressPolicy: { default: 'allow', rules: [], tools: {}, roles: {}, requireEnforcement: false },
       companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },
       cliRuntimes: [],
       cliKubeconfigs: [],

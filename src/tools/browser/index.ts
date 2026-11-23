@@ -149,6 +149,9 @@ export class BrowserTool extends BaseTool {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
+        const egress = await import('@/security/egress-policy');
+        egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
+
         const page = await this.getOrCreatePage(args.contextId?`${this.owner(context)}:${args.contextId}`:undefined);
         const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
 
@@ -161,6 +164,13 @@ export class BrowserTool extends BaseTool {
           // (its own context goes with it, see getOrCreatePage).
           await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a blocked page failed'));
           return { error: `URL blocked: ${addrCheck.reason}` };
+        }
+        // Every redirect hop and the address the page came from, against the egress policy.
+        try {
+          await egress.assertBrowserNavigationAllowed(response);
+        } catch (error) {
+          await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a refused page failed'));
+          throw error;
         }
 
         const pageId = this.generatePageId();
@@ -191,6 +201,9 @@ export class BrowserTool extends BaseTool {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
+        const egress = await import('@/security/egress-policy');
+        egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
+
         const page = this.getPage(args.pageId as string,context);
         const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
 
@@ -199,6 +212,12 @@ export class BrowserTool extends BaseTool {
         if (!addrCheck.ok) {
           await page.goto('about:blank').catch(() => {});
           return { error: `URL blocked: ${addrCheck.reason}` };
+        }
+        try {
+          await egress.assertBrowserNavigationAllowed(response);
+        } catch (error) {
+          await page.goto('about:blank').catch((err: unknown) => toolLogger.warn({ err }, 'Leaving a refused page failed'));
+          throw error;
         }
 
         return {

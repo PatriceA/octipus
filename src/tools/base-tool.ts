@@ -1,4 +1,5 @@
 import { executionEnvironmentFor, withExecutionEnvironment } from '@/security/execution-environments';
+import { withEgressSubject } from '@/security/egress-policy';
 import { markToolExecutionUncertain, ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord } from '@/core/tool-execution-error';
 import { redactedCommand } from '@/utils/command-log';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
@@ -294,9 +295,13 @@ export abstract class BaseTool {
     let durationMs = 0;
     try {
       if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args }, undefined, authorizationSource.slice('approval:'.length));
+      // Outbound requests made inside the handler are judged by the egress
+      // policy as this tool, under the caller's role (src/security/egress-policy.ts).
+      const egressSubject = { tool: this.id, role: context.role, userId: context.userId, agentId: context.id, sessionId: context.sessionId };
+      const run = () => withEgressSubject(egressSubject, () => withExecutionEnvironment(context, () => execute(processedArgs, toolContext)));
       const result = options?.readOnly || options?.recoverySafe || isReadOnlyAction(action)
-        ? await withExecutionEnvironment(context, () => execute(processedArgs, toolContext))
-        : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => withExecutionEnvironment(context, () => execute(processedArgs, toolContext)), async () => {
+        ? await run()
+        : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, run, async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,
             { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
           if (current.level === 'DENY' || ((current.level === 'ASK' || authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval')

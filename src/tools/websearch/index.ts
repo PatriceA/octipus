@@ -326,6 +326,8 @@ export class WebSearchTool extends BaseTool {
     if (!validation.valid) {
       return { error: `URL blocked: ${validation.reason}` };
     }
+    const egress = await import('@/security/egress-policy');
+    egress.enforceEgressForUrl(url, validation.addresses, 'browser');
 
     const browser = await this.getOrCreateBrowser();
     const context = await this.createBrowserContext(browser);
@@ -340,6 +342,8 @@ export class WebSearchTool extends BaseTool {
       if (!addrCheck.ok) {
         return { error: `URL blocked: ${addrCheck.reason}` };
       }
+      // Every redirect hop and the serving address, against the egress policy.
+      await egress.assertBrowserNavigationAllowed(response);
 
       // Let JS-heavy SPAs (fifa.com, most modern sites) actually render. A fixed
       // 1s timeout returned empty bodies as silent "ok" successes. `networkidle`

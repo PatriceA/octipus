@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-776 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+777 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -644,6 +644,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/companion-maintenance/test` | `src/api/routes/settings.ts` |
+| GET | `/api/settings/egress` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/execution-environments` | `src/api/routes/settings.ts` |
 | DELETE | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
@@ -820,7 +821,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 191 |
+| `api` | `security` | 193 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 32 |
 | `api` | `skills` | 9 |
@@ -846,7 +847,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
-| `config` | `shared` | 6 |
+| `config` | `shared` | 7 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
@@ -898,7 +899,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `utils` | 10 |
 | `mcp` | `config` | 2 |
 | `mcp` | `core` | 6 |
-| `mcp` | `security` | 9 |
+| `mcp` | `security` | 10 |
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `capabilities` | 2 |
@@ -920,14 +921,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 38 |
 | `security` | `api` | 1 |
-| `security` | `config` | 20 |
-| `security` | `core` | 41 |
-| `security` | `db` | 88 |
-| `security` | `mcp` | 2 |
+| `security` | `config` | 22 |
+| `security` | `core` | 42 |
+| `security` | `db` | 89 |
+| `security` | `mcp` | 3 |
 | `security` | `plugins` | 2 |
-| `security` | `shared` | 8 |
+| `security` | `shared` | 9 |
 | `security` | `tools` | 7 |
-| `security` | `utils` | 34 |
+| `security` | `utils` | 37 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 8 |
 | `services` | `core` | 10 |
@@ -961,7 +962,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 13 |
 | `tools` | `plugins` | 9 |
-| `tools` | `security` | 87 |
+| `tools` | `security` | 92 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 10 |
 | `tools` | `skills` | 7 |
@@ -979,7 +980,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
-| `utils` | `security` | 3 |
+| `utils` | `security` | 4 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |

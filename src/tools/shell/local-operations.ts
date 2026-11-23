@@ -117,6 +117,34 @@ function sshAgentFor(options: ShellEnvOptions) {
   }
 }
 
+type ShellEgress = import('@/security/shell-egress').ShellEgress;
+
+/**
+ * The egress policy's hold on this command's network (src/security/shell-egress.ts):
+ * null when it has none. Never for the SSH transport, whose command runs on
+ * another machine.
+ */
+async function shellEgressFor(argv: string[], options: { allowNetwork?: boolean } & ShellEnvOptions): Promise<ShellEgress | null> {
+  if (options.remoteTransport) return null;
+  const { prepareShellEgress } = await import('@/security/shell-egress');
+  return prepareShellEgress(argv, { allowNetwork: resolveAllowNetwork(options), mode: options.sandboxMode });
+}
+
+/** The wrap options the egress proxy changes: network off (the proxy is the way out) and its mounts. */
+function egressWrap(options: ShellEnvOptions, egress: ShellEgress | null) {
+  return {
+    ...(egress ? { allowNetwork: egress.wrap.allowNetwork, loopbackPorts: egress.wrap.loopbackPorts } : {}),
+    extraReadWrite: [...(options.extraReadWrite ?? []), ...(egress?.wrap.extraReadWrite ?? [])],
+    extraReadOnly: [...(options.extraReadOnly ?? []), ...(egress?.wrap.extraReadOnly ?? [])],
+  };
+}
+
+/** `wrap` whose cleanup also stops the command's egress proxy. */
+function withEgressCleanup<T extends { cleanup: () => void }>(wrap: T, egress: ShellEgress | null): T {
+  if (!egress) return wrap;
+  return { ...wrap, cleanup: () => { wrap.cleanup(); egress.close(); } };
+}
+
 export class LocalShellOperations implements ShellOperations {
   async exec(
     command: string,
@@ -181,12 +209,14 @@ export class LocalShellOperations implements ShellOperations {
     cwd = approvedCwd(cwd, options);
     assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
+    const egress = await shellEgressFor(baseArgv, options);
     let wrap: ReturnType<typeof wrapCommand>;
     let sshAgent: ReturnType<typeof sshAgentFor>;
     try {
       sshAgent = sshAgentFor(options);
-      wrap = wrapCommand(baseArgv, { sshAgent, mode: options.sandboxMode, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), allowHostUsb: options.allowHostUsb, path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
+      wrap = withEgressCleanup(wrapCommand(egress?.argv ?? baseArgv, { sshAgent, mode: options.sandboxMode, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), allowHostUsb: options.allowHostUsb, path: options.env?.PATH, ...egressWrap(options, egress) }), egress);
     } catch (error) {
+      egress?.close();
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
     const finalArgv = wrap.argv;
@@ -213,7 +243,7 @@ export class LocalShellOperations implements ShellOperations {
       // the rule and turned the lane red.
       let child: ChildProcessWithoutNullStreams;
       try {
-        const env = childEnv(options);
+        const env = { ...childEnv(options), ...egress?.env };
         if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
         const run = windowsCmdShim(finalArgv, env, process.platform, cwd);
         // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
@@ -342,19 +372,26 @@ export class LocalShellOperations implements ShellOperations {
     cwd = approvedCwd(cwd, options);
     assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
-    const sshAgent = sshAgentFor(options);
-    const wrap = wrapCommand(baseArgv, {
-      sshAgent, path: options.env?.PATH,
-      workspaceRoot: cwd,
-      mode: options.sandboxMode,
-      allowNetwork: resolveAllowNetwork(options),
-      allowHostUsb: options.allowHostUsb,
-      extraReadWrite: options.extraReadWrite,
-      extraReadOnly: options.extraReadOnly,
-    });
+    const egress = await shellEgressFor(baseArgv, options);
+    let wrap: ReturnType<typeof wrapCommand>;
+    let sshAgent: ReturnType<typeof sshAgentFor>;
+    try {
+      sshAgent = sshAgentFor(options);
+      wrap = withEgressCleanup(wrapCommand(egress?.argv ?? baseArgv, {
+        sshAgent, path: options.env?.PATH,
+        workspaceRoot: cwd,
+        mode: options.sandboxMode,
+        allowNetwork: resolveAllowNetwork(options),
+        allowHostUsb: options.allowHostUsb,
+        ...egressWrap(options, egress),
+      }), egress);
+    } catch (error) {
+      egress?.close();
+      throw error;
+    }
     const done = () => { wrap.cleanup(); options.onExit?.(); };
 
-    const env = childEnv(options);
+    const env = { ...childEnv(options), ...egress?.env };
     if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
     let run: ReturnType<typeof windowsCmdShim>;
     try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { done(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }

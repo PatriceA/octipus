@@ -1033,6 +1033,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SHELL_SANDBOX',
   },
   {
+    key: 'security.egressPolicy',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: { default: 'allow', rules: [], tools: {}, roles: {}, requireEnforcement: false },
+    description:
+      'What tools may reach on the network: { default: allow|deny, rules: [{ action: allow|deny, host: "api.example.com" | "*.example.com" | IP, or cidr: "203.0.113.0/24", ports?: [443], schemes?: ["https"], note? }], tools: { <toolId or plugin:<name>>: { default?, rules } }, roles: { <role>: { default?, rules } }, requireEnforcement }. Deny wins; private and metadata addresses stay blocked whatever it says. Applies to web fetch, browser pages, sandboxed shell network (through the egress proxy) and plugin packages. See docs/EGRESS-POLICY.md; status at GET /api/settings/egress.',
+    isSecret: false,
+  },
+  {
     key: 'security.shellSshAgent',
     category: 'security',
     valueType: 'boolean',

@@ -203,6 +203,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Ollama](docs/OLLAMA.md)** | Ollama models: size tiers, tool support, context length (`num_ctx`), lazy tool discovery, iGPU |
 | **[Direct Providers](docs/DIRECT-PROVIDERS.md)** | Caching, reasoning, tool schemas, usage and cost provenance |
 | **[Custom Providers](docs/CUSTOM-PROVIDERS.md)** | Direct OpenAI/Gemini-compatible endpoints |
+| **[Egress Policy](docs/EGRESS-POLICY.md)** | What tools may reach on the network: allow/deny by host, range, port and scheme, per tool and role; where it is enforced |
 | **[Configuration Precedence](docs/CONFIGURATION-PRECEDENCE.md)** | `.env`-bootstrap vs DB-runtime split |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search, tiered content, auto-indexing |

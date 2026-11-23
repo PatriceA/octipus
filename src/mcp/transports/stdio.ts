@@ -4,6 +4,7 @@ import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
+import { egressDecider } from '@/security/egress-policy';
 import { activeSandboxRunner, getSandboxMode, wrapCommand } from '@/security/shell-sandbox';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
@@ -112,6 +113,9 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   const seatbelt = runner === 'sandbox-exec';
   const proxy = await startEgressProxy({
     label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
+    // The operator's egress policy on top of the manifest: a declared host
+    // the policy denies is refused (docs/EGRESS-POLICY.md#plugin-packages).
+    decide: egressDecider({ tool: `plugin:${egress.label}` }, 'plugin-proxy'),
     ...(egress.hostApi ? { hostApi: egress.hostApi } : {}),
   });
   try {
