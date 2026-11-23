@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { AGENT_REFRESH_INTERVAL_CHOICES, type AgentRefreshView } from '../../../../src/shared/artifacts';
 
 interface Artifact {
   id: string;
@@ -173,6 +174,8 @@ export default function ArtifactDetailPage() {
           )}
         </Section>
 
+        <AgentRefreshSection id={id} workspaceId={workspaceId} />
+
         <Section title="Versions">
           <ul className="space-y-1 text-xs">
             {versions.data?.versions.map((v) => (
@@ -221,5 +224,119 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-on-surface-variant">{title}</h2>
       {children}
     </section>
+  );
+}
+
+const INTERVAL_LABELS: Record<number, string> = {
+  60: 'Every hour',
+  360: 'Every 6 hours',
+  1440: 'Every day',
+  10080: 'Every week',
+};
+
+/**
+ * Agent refresh (docs/ARTIFACTS.md#agent-refresh): the owner's instruction,
+ * schedule, a "Refresh with agent" button and the last attempt. Hidden for
+ * anyone but the owner (the API answers 403).
+ */
+function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: string | null }) {
+  const qc = useQueryClient();
+  const key = ['artifact', id, 'agent-refresh', workspaceId];
+  const query = useQuery({
+    queryKey: key,
+    queryFn: () => api.get<{ refresh: AgentRefreshView | null }>(`/artifacts/${id}/agent-refresh`),
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.refresh?.running ? 3000 : false),
+  });
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (body: { instruction?: string; intervalMinutes?: number | null }) =>
+      api.put<{ refresh: AgentRefreshView | null }>(`/artifacts/${id}/agent-refresh`, body),
+    onSuccess: (data) => {
+      qc.setQueryData(key, data);
+      setDraft(null);
+    },
+  });
+  const run = useMutation({
+    mutationFn: () => api.post(`/artifacts/${id}/agent-refresh/run`),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: key });
+      qc.invalidateQueries({ queryKey: ['artifact', id] });
+    },
+  });
+
+  if (query.isError) return null;
+  const r = query.data?.refresh ?? null;
+  const instruction = draft ?? r?.instruction ?? '';
+  const failure = run.error instanceof Error ? run.error.message : null;
+  const saveError = save.error instanceof Error ? save.error.message : null;
+
+  return (
+    <Section title="Agent refresh">
+      <p className="mb-2 text-xs text-on-surface-variant">
+        An agent re-runs this instruction as you, on your budget, and replaces the page when it succeeds.
+      </p>
+      {r?.instructionSetBy === 'agent' && draft === null && (
+        <div className="mb-2 rounded bg-warning-container/60 p-2 text-xs text-warning">
+          Set by agent — review before enabling. Saving it marks it as yours.
+        </div>
+      )}
+      <textarea
+        value={instruction}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={4}
+        placeholder="What should the agent look up and put on the page?"
+        className="w-full rounded border border-[#262626] bg-surface-container p-2 text-xs"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          onClick={() => save.mutate({ instruction })}
+          disabled={draft === null || !instruction.trim() || save.isPending}
+          className="rounded bg-surface-container px-3 py-1 text-xs hover:bg-surface-container-high disabled:opacity-50"
+        >
+          Save
+        </button>
+        <select
+          value={r?.intervalMinutes ?? ''}
+          disabled={!r || save.isPending}
+          onChange={(e) => save.mutate({ intervalMinutes: e.target.value ? Number(e.target.value) : null })}
+          className="rounded border border-[#262626] bg-surface-container px-2 py-1 text-xs"
+          aria-label="Refresh schedule"
+        >
+          <option value="">Manual only</option>
+          {AGENT_REFRESH_INTERVAL_CHOICES.map((m) => (
+            <option key={m} value={m}>{INTERVAL_LABELS[m] ?? `Every ${m} min`}</option>
+          ))}
+        </select>
+      </div>
+      <button
+        onClick={() => run.mutate()}
+        disabled={!r || r.running || run.isPending || draft !== null}
+        className="mt-2 rounded-xs bg-primary px-3 py-1 text-xs text-on-primary hover:bg-primary-dim disabled:opacity-50"
+      >
+        {r?.running ? 'Refreshing…' : 'Refresh with agent'}
+      </button>
+      {saveError && <div className="mt-1 text-xs text-error">{saveError}</div>}
+      {failure && <div className="mt-1 text-xs text-error">{failure}</div>}
+      {r && <AgentRefreshStatus r={r} />}
+    </Section>
+  );
+}
+
+function AgentRefreshStatus({ r }: { r: AgentRefreshView }) {
+  const at = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'never');
+  return (
+    <div className="mt-2 space-y-1 text-xs text-on-surface-variant">
+      <div>Last refreshed: {at(r.lastSuccessAt)}</div>
+      {r.lastOutcome && r.lastOutcome !== 'success' && (
+        <div className="text-error">
+          Last attempt {r.lastOutcome === 'refused' ? 'refused' : 'failed'} ({at(r.lastAttemptAt)}): {r.lastError}
+        </div>
+      )}
+      {r.intervalMinutes !== null && r.nextRunAt && <div>Next run: {at(r.nextRunAt)}</div>}
+      {r.scheduleDisabledReason && (
+        <div className="rounded bg-warning-container/60 p-2 text-warning">Schedule off: {r.scheduleDisabledReason}</div>
+      )}
+    </div>
   );
 }

@@ -20,7 +20,8 @@ import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { publicSlugConflict, type SlugConflict, slugTakenConflict } from '@/core/artifacts/slug';
 import { BaseTool, createParameterSchema } from '../base-tool';
-import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import { AGENT_REFRESH_MAX_INSTRUCTION_CHARS, ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import { artifactRefreshRepository } from '@/db/repositories/artifact-refresh-repository';
 import { uniqueViolation } from '@/db/unique-violation';
 
 /**
@@ -72,6 +73,13 @@ const CREATE_DESCRIPTION =
   '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render. ' +
   '(4) Interactive pages work: `<script>` blocks and `onclick="…"` handlers in `html_template` are compiled into a CSP-pinned bundle served with the page. Third-party/CDN `<script src>` is not allowed — inline the code. ' +
   '(5) If you author `html_template` or `css` BY HAND, call `art_toolbox_design` first — it returns the product palette, type scale and layout rules. Without it hand-authored pages come out looking like a generic default, which is the most common complaint about this feature.';
+
+const REFRESH_INSTRUCTION_DESCRIPTION =
+  'Optional. The instruction an agent re-runs later to regenerate this page with current information ' +
+  '(e.g. "Summarise the five most-discussed Rust releases this week as a table with links"). ' +
+  'The refresh agent gets ONLY this text (not the current page) and read-only web search, and must reply with a complete ```html page. ' +
+  'It is stored as "set by agent" for the owner to review; it runs only when the owner clicks "Refresh with agent" or sets a schedule on the artifact page, as the owner and on their budget. ' +
+  'Write it self-contained: say what to look up, how to lay the page out, and what to leave out.';
 
 const UPDATE_DESCRIPTION =
   'Update an artifact. Body changes (template/css) create a new version. ' +
@@ -174,12 +182,20 @@ export class ArtifactsTool extends BaseTool {
         html_template: { type: 'string', description: 'Template body. Use `{{data.<sourceName>.<path>}}` to bind to a data source — every `<sourceName>` referenced must appear in `sources[]`.' },
         css: { type: 'string', description: 'Optional CSS' },
         sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION, items: { type: 'object' } },
+        refresh_instruction: { type: 'string', description: REFRESH_INSTRUCTION_DESCRIPTION },
       }),
       async (args, context) => {
         if (!ARTIFACT_SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
         const workspaceId = requireWorkspaceId(context);
+        const refreshInstruction = typeof args.refresh_instruction === 'string' ? args.refresh_instruction.trim() : '';
+        if (refreshInstruction.length > AGENT_REFRESH_MAX_INSTRUCTION_CHARS) {
+          return { error: `refresh_instruction is longer than ${AGENT_REFRESH_MAX_INSTRUCTION_CHARS} characters` };
+        }
+        if (refreshInstruction && context.space) {
+          return { error: 'refresh_instruction: agent refresh runs as your personal agent, so it is not available on an artifact in a shared space' };
+        }
         for (const s of (args.sources as Array<{ name: string; kind: string }> | undefined) ?? []) {
           const refusal = spaceSourceRefusal(s.kind, !!context.space);
           if (refusal) return { error: `source "${s.name}": ${refusal}` };
@@ -261,6 +277,13 @@ export class ArtifactsTool extends BaseTool {
           });
           sourceIds.push(created.id);
           scheduleArtifactRefresh(created.id).catch(() => {});
+        }
+
+        if (refreshInstruction) {
+          // Stored for the owner (this agent's user), marked as the agent's: the
+          // owner reviews it on the artifact page and alone decides when, or on
+          // what schedule, it runs. This tool cannot set a schedule.
+          await artifactRefreshRepository.setInstruction(a.id, context.userId, refreshInstruction, 'agent');
         }
 
         const warnings: string[] = [...versionWarnings];

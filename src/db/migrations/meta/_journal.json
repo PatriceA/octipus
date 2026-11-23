@@ -1450,6 +1450,13 @@
       "when": 1795996800000,
       "tag": "0206_email_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1796083200000,
+      "tag": "0207_artifact_agent_refresh",
+      "breakpoints": true
     }
   ]
 }

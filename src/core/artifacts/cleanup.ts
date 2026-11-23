@@ -17,6 +17,7 @@ import { rawStore } from '@/db/cache';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { resolveArtifactRetention } from './settings';
+import { stopAgentRefreshSchedule } from './agent-refresh';
 
 export const ARTIFACT_CLEANUP_TASK = 'artifact:cleanup';
 const HOUR_MS = 60 * 60 * 1000;
@@ -47,6 +48,9 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
     const cutoff = new Date(Date.now() - retentionDays * DAY_MS);
     for (const a of await artifactsRepository.listInactiveSince(cutoff, EXPIRE_BATCH)) {
       await artifactsRepository.softDelete(a.id);
+      // Its agent refresh schedule stops with it: no run is spent on a page
+      // nobody can open, and the owner sees why on the row.
+      await stopAgentRefreshSchedule(a.id, `The artifact expired after ${retentionDays} days without activity`);
       expiredArtifacts++;
       coreLogger.info(
         { artifactId: a.id, workspaceId: a.workspaceId, slug: a.slug, lastActivity: a.updatedAt, retentionDays },
