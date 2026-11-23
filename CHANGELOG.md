@@ -71,6 +71,33 @@ labels reflect blast radius, not contract guarantees.
   `notesArchived` as well; a learning receipt's `knowledge` output can have
   the status `merged`. The thresholds are not calibrated against real data,
   and the learning evals, which need a live model, were not run.
+- **`/v1/chat/completions` passthrough streams token by token**
+  ([API](docs/API.md#notes--limits)). With a registry model id on OpenAI,
+  OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex or a custom
+  OpenAI-compatible provider and `stream: true`, content chunks now leave as
+  the provider produces them, verbatim, and concatenate to exactly the
+  non-streamed `message.content`. Other providers (LiteLLM, Anthropic,
+  Gemini, DeepSeek, Ollama, CLI, custom Anthropic/Gemini-compatible) filter
+  their streamed and completed text differently, so they still answer with
+  the finished text in chunks. An error before the first chunk is answered
+  as the non-streamed path answers it (429 for a budget refusal, 400 for an
+  unknown model, 500 otherwise) and is not retried; a client gone before the
+  provider call gets 499 and no call is made; a disconnecting client aborts the provider
+  call, except after the text is complete, when the usage chunk is still read
+  (up to 2 s). A client that stops reading is dropped after the new
+  `api.streamStallTimeoutMs` (default 60 s). `agent.streaming: false` turns
+  it off. Agent mode (`octipus/agent`) still chunks the turn's final answer:
+  the output guard and the other answer passes decide on the whole text, and
+  SSE cannot take sent text back. Any streamed `/v1` response whose client
+  goes away now releases what it held.
+- **Streams cut off before their usage are accounted.** A provider stream
+  that ended after it had started answering but before its usage chunk (its
+  reader went away, it failed midway) recorded 0 tokens and unknown cost; it
+  now records an estimate (prompt plus output so far, chars/4), marked
+  `usageEstimated` in `cost_log` metadata ([limits](docs/SPEND-BUDGETS.md)).
+  Routed streams also record their tokens in the provider's TPM window, as
+  completions did; nothing enforces that window yet, and it is now pruned on
+  every write so it no longer grows without bound.
 - **PDF text: columns in reading order, tables as Markdown tables**
   ([docs](docs/DOCUMENTS.md#pdf--text-layer)).
   - A two- or three-column page is read column by column instead of line by

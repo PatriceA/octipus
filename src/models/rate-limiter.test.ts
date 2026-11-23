@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { RateLimitError, RateLimitManager, resetRateLimitManager } from './rate-limiter';
 
 /**
@@ -22,6 +22,37 @@ describe('RateLimitError', () => {
     expect(err.message).toBe('[openai] Rate limit: rpm exceeded');
     expect(err.provider).toBe('openai');
     expect(err.retryAfterMs).toBe(5000);
+  });
+});
+
+describe('RateLimitManager — TPM window', () => {
+  test('tokens reported without a verdict count like a success\'s', async () => {
+    const m = new RateLimitManager({ globalMaxConcurrency: 10 });
+    const ticket = await m.acquire('openai'); // tpm 150000
+    ticket.reportTokens(100_000);
+    ticket.release();
+    expect(m.hasTokenBudget('openai', 40_000)).toBe(true);
+    expect(m.hasTokenBudget('openai', 60_000)).toBe(false);
+  });
+});
+
+describe('RateLimitManager — TPM window bound', () => {
+  test('writes prune what left the minute window, so it stays bounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const m = new RateLimitManager({ globalMaxConcurrency: 10 });
+      const ticket = await m.acquire('openai');
+      // One call a second for ten minutes, never read.
+      for (let i = 0; i < 600; i++) {
+        ticket.reportTokens(10);
+        vi.advanceTimersByTime(1_000);
+      }
+      ticket.release();
+      expect(m.tokenWindowSize('openai')).toBeLessThanOrEqual(60);
+      expect(m.hasTokenBudget('openai', 150_000 - 600)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

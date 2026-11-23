@@ -37,6 +37,8 @@ import { systemOneDecide } from '@/models/systemone-decision';
 export class CustomOpenAICompatProvider extends BaseCustomProvider implements ModelProvider {
   readonly name = 'custom-openai';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
   protected readonly providerName = 'custom-openai';
 
   /**

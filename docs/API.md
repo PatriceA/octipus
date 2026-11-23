@@ -1041,8 +1041,51 @@ curl https://your-host/v1/chat/completions \
 
 - Agent-mode usage has no prompt/completion split: the observed total is
   reported in `completion_tokens` and `total_tokens`, with `prompt_tokens: 0`.
-- **Streaming** (`stream: true`) is protocol-correct SSE that chunks the final
-  message text. Token-true streaming (per-delta) is a planned follow-up.
+- **Streaming** (`stream: true`) is OpenAI-style SSE: a role chunk, content
+  chunks, a chunk with `finish_reason: "stop"`, then `data: [DONE]`, every
+  chunk with the request's one `chatcmpl-…` id. For a stream that completes,
+  the content chunks concatenate to exactly the `message.content` the same
+  model reply is returned as without `stream`.
+  - **Passthrough** (a registry model id) streams **token-true** on the
+    providers whose streamed text is their completed text, unaltered on both
+    paths: OpenAI, OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex and
+    custom OpenAI-compatible providers. Their content chunks leave as the
+    provider produces them, verbatim; tool-call deltas are never sent as text.
+    Every other provider (the LiteLLM proxy, Anthropic, Gemini, DeepSeek,
+    Ollama, custom Anthropic- and Gemini-compatible providers, CLI providers)
+    normalises its streamed and its completed text differently (thinking tags,
+    trimming, a leaked JSON thinking wrapper, DeepSeek template recovery), so
+    its reply is completed and the finished text chunked, as before: streaming
+    it would show text the non-streamed answer filters.
+  - An error before the first chunk is answered from that one attempt, as the
+    non-streamed path answers it: 429 `rate_limit_exceeded` for a budget or
+    quota refusal, 400 `model_not_found` for an unknown model, 500
+    `server_error` for anything else (an open circuit, an upstream error); it
+    is not retried without streaming. A client that is already gone when the
+    provider would be called gets 499 `client_closed` and no call is made. A
+    provider that fails midway ends the stream with an OpenAI error frame
+    (`data: {"error": …}`) and `[DONE]`, not a finish chunk.
+  - A client that disconnects mid-reply aborts the provider call. One that
+    disconnects after the reply's text is complete lets the provider's usage
+    chunk be read (up to 2 s) so the call is accounted for; a stream cut off
+    before its usage is recorded with an estimate (prompt plus output so far,
+    `usageEstimated` in `cost_log` metadata; see
+    [SPEND-BUDGETS.md](SPEND-BUDGETS.md) for its limits). A client that stays connected
+    but stops reading is dropped after `api.streamStallTimeoutMs` (default
+    60 s): the provider call and its rate-limit slot are freed and the stream
+    ends without `[DONE]`.
+  - `agent.streaming: false` turns token-true streaming off (the finished
+    reply is chunked). Chunks carry the requested model id; usage is not
+    streamed (`stream_options` is not supported).
+  - **Agent mode** (`octipus/agent`) chunks the turn's **final** answer once
+    the turn ends. The answer is not final while the model writes it: the
+    output guard decides on the whole text and may replace it, inline-UI blocks
+    become markers, child results are relayed into it, swarm scaffolding is
+    stripped, and an empty reply becomes the last status update. SSE cannot
+    take sent text back, so nothing is sent before those passes have run.
+    Text written before a tool call and sub-agent output are never part of the
+    stream. The web chat and the TUI still receive the root agent's live text
+    (`chat.delta`) over the gateway, where the final message replaces it.
 - `octipus/<role>` model ids (forced single-role) are **not yet wired** and
   return `400 model_not_found`; use `octipus/agent` or a registry model.
 - Errors use the OpenAI error envelope (`invalid_request_error`,

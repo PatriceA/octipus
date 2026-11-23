@@ -172,6 +172,12 @@ export const apiConfigSchema = z.object({
    * it per-user via /admin/quotas when running true multi-tenant.
    */
   rateLimitMax: z.number().min(0).default(600),
+  /**
+   * How long a streamed `/v1/chat/completions` reply waits for its client to
+   * read the next chunk before the provider call is dropped and its rate-limit
+   * slot released. A client that stops reading would otherwise hold both.
+   */
+  streamStallTimeoutMs: z.number().min(1000).default(60_000),
 });
 
 // Telegram configuration schema
@@ -277,7 +283,7 @@ export const agentConfigSchema = z.object({
   maxIterations: z.number().min(0).default(0), // 0 = unlimited (turn timeout + token budget still bound a run)
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.general), // 0 = unlimited
-  /** Stream the root agent's text to chat clients as it is produced. Off = whole reply at the end. */
+  /** Stream the root agent's text to chat clients, and `/v1` passthrough replies, as they are produced. Off = whole reply at the end. */
   streaming: z.boolean().default(true),
   /** Write each agent run's full prompt to ~/.octipus/prompts (0600, swept after 7 days). */
   promptDumps: z.boolean().default(true),

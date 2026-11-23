@@ -264,15 +264,35 @@ class ProviderRateLimiter {
       this.metrics.latencySamples.shift();
     }
 
-    // Track TPM
-    if (tokensUsed > 0 && this.config.tpm > 0) {
-      this.tokenTimestamps.push({ ts: Date.now(), tokens: tokensUsed });
-    }
+    this.reportTokens(tokensUsed);
 
     // Adaptive: try increasing concurrency if things are going well
     if (this.config.adaptive) {
       this.tryAdaptiveIncrease();
     }
+  }
+
+  /**
+   * Count tokens a request consumed against the TPM window without judging
+   * the request: a stream its reader dropped, or one that failed midway,
+   * still used them.
+   */
+  reportTokens(tokensUsed: number): void {
+    if (tokensUsed > 0 && this.config.tpm > 0) {
+      const now = Date.now();
+      // Every routed call writes here and only `hasTokenBudget` used to prune:
+      // drop what left the window on each write, so the window holds at most
+      // one minute of entries. Entries are in time order.
+      let expired = 0;
+      while (expired < this.tokenTimestamps.length && now - this.tokenTimestamps[expired].ts >= RPM_WINDOW_MS) expired++;
+      if (expired > 0) this.tokenTimestamps.splice(0, expired);
+      this.tokenTimestamps.push({ ts: now, tokens: tokensUsed });
+    }
+  }
+
+  /** Entries in the TPM window (tests). */
+  tokenWindowSize(): number {
+    return this.tokenTimestamps.length;
   }
 
   /** Report a failed request */
@@ -460,6 +480,15 @@ export class RateLimitError extends Error {
 
 // ── Centralized rate limit manager ──
 
+/** A held rate-limit slot: release it once, and report how the request went. */
+export interface RateLimitToken {
+  release: () => void;
+  reportSuccess: (latencyMs: number, tokensUsed?: number) => void;
+  reportError: (isRateLimit: boolean) => void;
+  /** Tokens used by a request that neither succeeded nor failed (a stream its reader dropped). */
+  reportTokens: (tokensUsed: number) => void;
+}
+
 export class RateLimitManager {
   private limiters = new Map<string, ProviderRateLimiter>();
 
@@ -489,7 +518,7 @@ export class RateLimitManager {
   async acquire(
     provider: string,
     priority: RequestPriority = 'interactive',
-  ): Promise<{ release: () => void; reportSuccess: (latencyMs: number, tokensUsed?: number) => void; reportError: (isRateLimit: boolean) => void }> {
+  ): Promise<RateLimitToken> {
     // Check global concurrency
     if (this.globalConcurrency >= this.globalMax) {
       throw new RateLimitError(
@@ -519,7 +548,15 @@ export class RateLimitManager {
       reportError: (isRateLimit: boolean) => {
         limiter.reportError(isRateLimit);
       },
+      reportTokens: (tokensUsed: number) => {
+        limiter.reportTokens(tokensUsed);
+      },
     };
+  }
+
+  /** Entries held in a provider's TPM window (tests: it must stay bounded). */
+  tokenWindowSize(provider: string): number {
+    return this.getLimiter(provider).tokenWindowSize();
   }
 
   /** Check if a provider has TPM budget for a request */
