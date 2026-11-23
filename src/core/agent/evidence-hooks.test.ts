@@ -5,7 +5,6 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evidenceAfterStage } from './pipeline-manager';
-import { changesSince, evidenceBaseline } from './evidence-hooks';
 import { describeRun, evidenceGroundTruth, evidenceRepairFeedback, EVIDENCE_REPAIR_LIMIT, hookOutputBlock, pinEvidenceRoots, placeEvidenceHooks, runEvidenceHook } from './evidence-hooks';
 
 describe('evidenceHooksSchema', () => {
@@ -43,17 +42,16 @@ describe('placeEvidenceHooks', () => {
   ]);
   const names = (list: Array<{ hook: { name: string } }>) => list.map((x) => x.hook.name);
 
-  test('without a change set, applies every hook rooted at the stage folder or inside it, each run in its own root', () => {
+  test('applies every hook rooted at the stage folder or inside it, each run in its own root', () => {
     const placed = placeEvidenceHooks(hooks, app);
     expect(names(placed.apply)).toEqual(['test', 'web']);
     expect(placed.apply.map((p) => p.runIn)).toEqual([app, web]);
     expect(placed.refused).toEqual([]);
   });
 
-  test('with a change set, only the hooks whose root holds a changed file', () => {
-    const placed = placeEvidenceHooks(hooks, app, { changed: new Set([join(app, 'README.md')]) });
-    expect(names(placed.apply)).toEqual(['test']);
-    expect(placed.unchanged.map((h) => h.name)).toEqual(['web']);
+  test('a hook for a sibling project under the same stage folder runs too', () => {
+    const placed = placeEvidenceHooks([...hooks, ...evidenceHooksSchema.parse([{ name: 'sib', command: 'npm test', root: other }])], base);
+    expect(names(placed.apply)).toEqual(['test', 'web', 'lint', 'sib']);
   });
 
   test('a hook rooted above the stage folder is refused, not run there', () => {
@@ -64,8 +62,8 @@ describe('placeEvidenceHooks', () => {
   });
 
   test('never a sibling that merely shares a prefix, nor an unknown folder', () => {
-    expect(placeEvidenceHooks(hooks, `${app}2`)).toEqual({ apply: [], refused: [], unchanged: [], narrowed: false });
-    expect(placeEvidenceHooks(hooks, null)).toEqual({ apply: [], refused: [], unchanged: [], narrowed: false });
+    expect(placeEvidenceHooks(hooks, `${app}2`)).toEqual({ apply: [], refused: [] });
+    expect(placeEvidenceHooks(hooks, null)).toEqual({ apply: [], refused: [] });
   });
 
   test('matches a root the operator gave through a symlink', () => {
@@ -82,7 +80,7 @@ describe('placeEvidenceHooks', () => {
     const pins = pinEvidenceRoots(swapped);
     renameSync(sub, `${sub}-real`);
     symlinkSync(other, sub);
-    const placed = placeEvidenceHooks(swapped, app, { pins, changed: new Set() });
+    const placed = placeEvidenceHooks(swapped, app, { pins });
     expect(placed.apply).toEqual([]);
     expect(placed.refused[0].reason).toContain('when the run started');
   });
@@ -151,47 +149,6 @@ describe('evidenceAfterStage', () => {
 
   test('a writing stage makes it stale', () => {
     expect(evidenceAfterStage('passed', false, true)).toBe('stale');
-  });
-});
-
-describe('narrowing on the change set', () => {
-  const base = mkdtempSync(join(tmpdir(), 'evidence-narrow-'));
-  const app = join(base, 'app');
-  const lib = join(base, 'lib');
-  const deps = join(base, 'node_modules', 'pkg');
-  for (const dir of [app, lib, deps]) mkdirSync(dir, { recursive: true });
-  const appHook = evidenceHooksSchema.parse([{ name: 'app', command: 'npm test', root: app }]);
-
-  test('a change outside every hook root runs every hook', () => {
-    const placed = placeEvidenceHooks(appHook, base, { changed: new Set([join(lib, 'shared.js')]) });
-    expect(placed.apply.map((p) => p.hook.name)).toEqual(['app']);
-    expect(placed.narrowed).toBe(false);
-  });
-
-  test('a hook rooted inside a pruned directory makes the change set unknown', () => {
-    const hooks = evidenceHooksSchema.parse([{ name: 'app', command: 'npm test', root: app }, { name: 'dep', command: 'npm test', root: deps }]);
-    const placed = placeEvidenceHooks(hooks, base, { changed: new Set([join(app, 'a.js')]) });
-    expect(placed.apply.map((p) => p.hook.name)).toEqual(['app', 'dep']);
-    expect(placed.unknown).toContain('does not enter');
-  });
-
-  test('the content baseline sees a same-size rewrite whose mtime was put back', async () => {
-    const file = join(app, 'code.txt');
-    writeFileSync(file, 'a');
-    const baseline = await evidenceBaseline(base);
-    execFileSync('cp', ['-p', file, `${file}.ref`]);
-    writeFileSync(file, 'b');
-    execFileSync('touch', ['-r', `${file}.ref`, file]);
-    rmSync(`${file}.ref`);
-    expect([...((await changesSince(baseline, base)) ?? [])]).toEqual([file]);
-  });
-
-  test('a symlink in the tree makes the baseline unknown', async () => {
-    const tree = mkdtempSync(join(tmpdir(), 'evidence-link-tree-'));
-    writeFileSync(join(tree, 'a.txt'), 'a');
-    symlinkSync(tree, join(tree, 'loop'));
-    expect(await evidenceBaseline(tree)).toBeNull();
-    expect(await changesSince(null, tree)).toBeNull();
   });
 });
 

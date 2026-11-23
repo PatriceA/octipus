@@ -52,6 +52,8 @@ export const evidenceHooksSchema = z.array(evidenceHookSchema).max(50).superRefi
 export interface EvidenceHookResult {
   name: string;
   command: string;
+  /** The hook's configured root: the folder it ran in, and why it applied to this run. */
+  root?: string;
   /** Exit 0 within its time limit. */
   passed: boolean;
   /** Null when the process was killed or never started. */

@@ -254,26 +254,16 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   else the session workspace) or a folder inside it. It runs in its `root`,
   in the stage's own execution environment (only the working directory
   moves).
-  - **Narrowed to what the run changed, only when that is certain.** When a
-    walk starts, the pipeline hashes the CONTENT of every file in the stage
-    folder. When the hooks are due it hashes again and compares, so a
-    same-size rewrite with its timestamp put back still counts. The change
-    set may only narrow which hooks run, and only when it is trustworthy:
-    it is not empty, every changed file lies under the root of some
-    belonging hook (a change to a shared `lib/` beside `app/` runs `app`'s
-    hooks), and no belonging root lies inside a directory the snapshot does
-    not enter. Then a hook whose root holds no changed file is skipped, so a
-    hook for another project in the same workspace does not judge this run.
-    In every other case every belonging hook runs, and the run summary says
-    when the change set was unknown. It is unknown on any resume or rewind
-    (the baseline belongs to the walk that took it), when the tree holds a
-    symlink, more than 20,000 files or more than 256 MB, and on a remote
-    environment.
-  - **What the change snapshot cannot see.** It skips `node_modules`,
-    `.git`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
-    `.tox`, `.venv`, `venv`, `.gradle`, `.next` and `.turbo`, and compiled
-    files (`.pyc`, `.pyo`, `.class`, `.o`). A change only there is not seen,
-    so it does not by itself run a hook another change would not.
+  - **Every hook under the working folder runs.** A hook applies to every
+    run whose working folder contains its root, whatever the run changed.
+    In a broad folder (a session outside dev mode works in the whole
+    workspace, or a broad `projectPath`) the hooks of every project under it
+    run, and a failing hook for another project blocks the run. The failure
+    names the hook and its root and says why it applied; the implementer is
+    told not to edit a project its task did not touch and to say so instead.
+    Run project work in a session scoped to that project to limit which
+    hooks apply. (Narrowing to the projects a run changed was tried and
+    removed: every version of it could be steered past a failing hook.)
   - **Symlinks.** Each root is resolved once when the walk starts, before any
     stage ran. A root given through a symlink by the operator matches by what
     it resolved to then. A root that resolves anywhere else later (a stage

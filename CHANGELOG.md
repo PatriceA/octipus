@@ -10,12 +10,12 @@ labels reflect blast radius, not contract guarantees.
 - **Project evidence hooks for pipelines** ([docs](docs/AGENT-ARCHITECTURE.md#qa-retry-loop)).
   New setting `agent.evidenceHooks` (default `[]`, nothing changes until set):
   `[{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]`.
-  A hook applies when `root` is the folder the pipeline's stages run commands
-  in or a folder inside it, and runs in `root`. Hooks for other projects in
-  the same folder are skipped only when the run's changed files (content
-  hashes against the start of the walk) all lie under other hook roots; on a
-  resume every hook runs. All hooks' timeouts together may not exceed 30
-  minutes. Not supported yet on remote (SSH) execution environments. The pipeline runs the hooks
+  A hook applies to every run whose working folder (where the pipeline's
+  stages run commands) is `root` or contains it, and runs in `root`. In a
+  broad working folder, such as a whole workspace, every project's hooks run
+  and any of them can block the run; a failure names the hook and its root.
+  Run project work in a session scoped to the project. All hooks' timeouts
+  together may not exceed 30 minutes. Not supported yet on remote (SSH) execution environments. The pipeline runs the hooks
   before its QA stage is asked (on the last plan item in a loop), and again
   before it reports `completed` whenever the work changed since, the QA stage
   was skipped, or there is none. When hooks are configured but none applies,

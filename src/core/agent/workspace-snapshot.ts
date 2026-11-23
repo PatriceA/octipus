@@ -1,7 +1,6 @@
 import type { AgentContext } from '@/core/types';
 import { executionEnvironmentFor } from '@/security/execution-environments';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { SPILL_DIR } from '@/core/tool-output-spill';
 import { coreLogger } from '@/utils/logger';
@@ -72,11 +71,6 @@ const PRUNED_DIRS = new Set([
   '.next',
   '.turbo',
 ]);
-
-/** Whether a path relative to a snapshot root lies inside a directory the walk never enters. */
-export function inPrunedDir(relPath: string): boolean {
-  return relPath.split(/[\\/]/).some((part) => PRUNED_DIRS.has(part));
-}
 
 /**
  * Compiled/bytecode output, wherever it lands. `__pycache__` covers the usual
@@ -198,15 +192,6 @@ export interface SnapshotOptions {
   context?: AgentContext;
   /** Cap before the walk gives up and reports `truncated`. */
   maxFiles?: number;
-  /**
-   * Stamp each file with a hash of its CONTENT instead of its mtime and size,
-   * reading at most `maxBytes` in all. A same-size rewrite with its mtime put
-   * back is invisible to the default stamp and not to this one. Any symlink
-   * in the tree, or more bytes than the budget, makes the snapshot
-   * `truncated` (unknown): a caller that narrows on it must not guess. Not
-   * available on a remote environment (returns null).
-   */
-  contentHash?: { maxBytes: number };
 }
 
 /**
@@ -222,9 +207,6 @@ export async function snapshotWorkspace(
   opts: SnapshotOptions = {},
 ): Promise<WorkspaceSnapshot | null> {
   const { maxFiles = SNAPSHOT_MAX_FILES } = opts;
-  const hashing = opts.contentHash;
-  let bytes = 0;
-  if (hashing && opts.context && executionEnvironmentFor(opts.context)?.backend === 'ssh') return null;
   if (opts.context && executionEnvironmentFor(opts.context)?.backend === 'ssh') {
     const { remoteFilesystemOperation } = await import('@/tools/filesystem/environment-operations');
     const snapshot = await remoteFilesystemOperation('snapshot', { path: root, config: workspaceSnapshotConfig(maxFiles) }, opts.context) as { files: Array<[string, string]>; truncated: boolean };
@@ -253,10 +235,6 @@ export async function snapshotWorkspace(
 
     for (const entry of entries) {
       if (truncated) return;
-      if (hashing && entry.isSymbolicLink()) {
-        truncated = true;
-        return;
-      }
       if (entry.isDirectory()) {
         if (PRUNED_DIRS.has(entry.name)) continue;
         const dirRel = relative(root, join(dir, entry.name)).split(sep).join('/');
@@ -279,16 +257,7 @@ export async function snapshotWorkspace(
       const full = join(dir, entry.name);
       try {
         const s = await stat(full);
-        if (hashing) {
-          bytes += s.size;
-          if (bytes > hashing.maxBytes) {
-            truncated = true;
-            return;
-          }
-          files.set(relative(root, full), `sha256:${createHash('sha256').update(await readFile(full)).digest('hex')}`);
-        } else {
-          files.set(relative(root, full), `${s.mtimeMs}:${s.size}`);
-        }
+        files.set(relative(root, full), `${s.mtimeMs}:${s.size}`);
       } catch {
         // Vanished between listing and stat — a change in its own right, and
         // the other side of the diff will show it.
@@ -337,19 +306,5 @@ export function countChangedFiles(
   for (const path of before.files.keys()) {
     if (!after.files.has(path)) changed++;
   }
-  return changed;
-}
-
-/**
- * Which files differ between two snapshots (relative paths: created, rewritten
- * or deleted), or `null` when the comparison cannot be trusted, under the same
- * rule as `countChangedFiles`. Packages count like any other file: this says
- * WHERE the work happened, not whether it was the stage's deliverable.
- */
-export function changedFilePaths(before: WorkspaceSnapshot | null, after: WorkspaceSnapshot | null): string[] | null {
-  if (!before || !after || before.truncated || after.truncated) return null;
-  const changed: string[] = [];
-  for (const [path, stamp] of after.files) if (before.files.get(path) !== stamp) changed.push(path);
-  for (const path of before.files.keys()) if (!after.files.has(path)) changed.push(path);
   return changed;
 }

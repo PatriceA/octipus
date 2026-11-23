@@ -78,7 +78,7 @@ import {
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
-import { changesSince, configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, evidenceBaseline, pinEvidenceRoots, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
+import { configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, HOOK_SCOPE_NOTE, pinEvidenceRoots, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -1311,7 +1311,6 @@ export class PipelineManager {
     // nothing for them to judge, and an auditor stage is where a deliverable
     // is accepted (`runStageEvidence`).
     const graphProduces = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].producesArtifacts === true);
-    const changeSetNote = 'Which files this run changed could not be measured, so every evidence hook rooted in its folder ran.';
     /**
      * Whether the work as it stands now has passing evidence. `passed` holds
      * only while no stage that may have changed files has run since the hooks
@@ -1335,23 +1334,6 @@ export class PipelineManager {
         coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id }, 'Could not read agent.evidenceHooks to pin hook roots');
       }
     }
-    /**
-     * The stage folder's content, hashed when this walk started, so the hooks
-     * that run can be narrowed to the projects the run actually changed
-     * (`placeEvidenceHooks`). Only a FRESH walk has one: a resume or a rewind
-     * cannot know what changed before it, so its change set is unknown and
-     * every hook under the folder runs.
-     */
-    let evidenceStart: { root: string; baseline: WorkspaceSnapshot | null } | null = null;
-    if (evidencePins && !args.resumeState) {
-      try {
-        const scope = await stageCommandScope({ userId: context.userId, sessionId, workspaceId: context.workspaceId, space: context.space, role: ROOT_ROLE });
-        if (scope.root && !scope.remote && !scope.refused) evidenceStart = { root: scope.root, baseline: await evidenceBaseline(scope.root) };
-      } catch (err) {
-        coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id }, 'Could not take the evidence-hook baseline; every hook will run');
-      }
-    }
-    const changedSinceStart = async () => (evidenceStart ? changesSince(evidenceStart.baseline, evidenceStart.root) : null);
     /** The last node the walk visited, for the end-of-run evidence check. */
     let lastNode: PipelineNodeRow | undefined;
 
@@ -1834,13 +1816,12 @@ export class PipelineManager {
         if (isQa && evidenceState === 'stale' && hooksDeclared && graphProduces && lastItem) {
           const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: b.role, hostServices: b.hostServices,
             checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
-            repair: evidenceRepairs.get(evidenceKey) ?? 0, pins: evidencePins, changed: await changedSinceStart() });
+            repair: evidenceRepairs.get(evidenceKey) ?? 0, pins: evidencePins });
           if (evidence.stopped) return evidence.stopped;
           if (evidence.blocked) return this.pauseForEnvironment(pipeline, node, evidence.blocked, attemptId, currentItem?.id ?? null);
           // Nothing ran: the evidence stays stale and the end-of-run check
-          // decides again with whatever the run has changed by then.
+          // decides again.
           if (evidence.unmatched) evidenceNote = evidence.unmatched;
-          if (evidence.changeSetUnknown) evidenceNote = changeSetNote;
           if (evidence.failed) {
             // The deliverable is not accepted, whatever an auditor would say
             // about it: the auditor is not asked. The failure goes back to
@@ -2214,7 +2195,7 @@ export class PipelineManager {
       const persisted = await this.getPipeline(pipeline.id);
       const evidence = await this.runStageEvidence({ pipeline, node: lastNode, sessionId, context, role: stage?.role ?? lastNode.role,
         hostServices: stage ? stageHostServices(stage, persisted ?? pipeline) : false, checkScope: 'run:final', repair: 0,
-        pins: evidencePins, changed: await changedSinceStart() });
+        pins: evidencePins });
       if (evidence.stopped) return evidence.stopped;
       if (evidence.blocked) {
         // Checkpoint a position AFTER the walk, so a resume runs this check
@@ -2227,7 +2208,6 @@ export class PipelineManager {
         return this.pauseForEnvironment(pipeline, lastNode, `End-of-run evidence check: ${evidence.blocked}`, randomUUID(), null);
       }
       if (evidence.unmatched) evidenceNote = evidence.unmatched;
-      else if (evidence.changeSetUnknown) evidenceNote = changeSetNote;
       if (evidence.failed) stoppedShort = { node: lastNode.name, outcome: 'evidence_failed', detail: evidenceSummary(evidence.results) };
     } else if (!stoppedShort && !graphProduces && (getConfig().agent.evidenceHooks?.length ?? 0) > 0) {
       evidenceNote = 'Evidence hooks are configured, but this run declares no artifact-producing stage, so none ran.';
@@ -3081,8 +3061,7 @@ export class PipelineManager {
     checkScope: string;
     repair: number;
     pins?: ReadonlyMap<string, string | null>;
-    changed?: ReadonlySet<string> | null;
-  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; unmatched?: string; changeSetUnknown?: boolean; stopped?: { pipelineId: string; result: string } }> {
+  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; unmatched?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node } = args;
     let hooks: ReturnType<typeof configuredEvidenceHooks>;
     try {
@@ -3095,11 +3074,10 @@ export class PipelineManager {
     const signal = this.signals.get(pipeline.id);
     let results: EvidenceHookResult[];
     let unmatched: string | undefined;
-    let changeSetUnknown: boolean | undefined;
     try {
-      ({ results, unmatched, changeSetUnknown } = await runEvidenceHooks(
+      ({ results, unmatched } = await runEvidenceHooks(
         { userId: args.context.userId, sessionId: args.sessionId, workspaceId: args.context.workspaceId, space: args.context.space, role: args.role, hostServices: args.hostServices },
-        { hooks, signal, pins: args.pins, changed: args.changed ?? null },
+        { hooks, signal, pins: args.pins },
       ));
     } catch (err) {
       return { results: [], failed: false, blocked: `Evidence hooks could not be resolved: ${(err as Error).message}` };
@@ -3137,8 +3115,8 @@ export class PipelineManager {
       }
     }
     const refused = results.find((result) => result.refused);
-    if (refused) return { results, failed: false, blocked: `Evidence hook "${refused.name}" (\`${refused.command}\`) could not run: ${refused.reason ?? 'unknown reason'}` };
-    return { results, failed: results.some((result) => !result.passed), changeSetUnknown };
+    if (refused) return { results, failed: false, blocked: `Evidence hook "${refused.name}" (\`${refused.command}\`${refused.root ? `, root ${refused.root}` : ''}) could not run: ${refused.reason ?? 'unknown reason'} ${HOOK_SCOPE_NOTE}` };
+    return { results, failed: results.some((result) => !result.passed) };
   }
 
   private async recordQaEvidence(

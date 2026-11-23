@@ -244,7 +244,7 @@ describe('failing evidence', () => {
     // The auditor was not asked about the failing attempt.
     expect(stageCalls('QA')).toHaveLength(1);
     const retry = stageCalls('Implement')[1].input;
-    expect(retry).toContain('Evidence hook "test" (`ls built.txt`) failed');
+    expect(retry).toContain(`Evidence hook "test" (\`ls built.txt\`, run in ${root}) failed`);
     expect(retry).toContain('built.txt');
     expect(retry).toContain('you cannot change or skip them');
     // The output is framed as data, not as instructions.
@@ -266,7 +266,8 @@ describe('failing evidence', () => {
     expect(row.status).toBe('failed');
     expect(row.completed_at).toBeNull();
     expect(String(row.summary)).toContain('evidence hooks');
-    expect(String(row.summary)).toContain('FAIL test (`ls never.txt`)');
+    expect(String(row.summary)).toContain(`FAIL test (\`ls never.txt\`, root ${root})`);
+    expect(String(row.summary)).toContain('applies to every run whose working folder contains its root');
     // The first attempt plus every repair, and no more.
     expect(stageCalls('Implement')).toHaveLength(1 + EVIDENCE_REPAIR_LIMIT);
     const rows = await evidenceRows(pipelineId);
@@ -515,7 +516,7 @@ describe('second review', () => {
     expect(String(row.summary)).toContain('when the run started');
   });
 
-  test('a hook for another project in the same workspace does not judge this run', async () => {
+  test('a hook for another project under the working folder runs too, and says why it applied', async () => {
     const mine = sub('mine');
     const other = sub('unrelated');
     refreshConfigKey('agent.evidenceHooks', [
@@ -524,9 +525,13 @@ describe('second review', () => {
     ]);
     implementWrites = [[`${mine.slice(root.length + 1)}/built.txt`]];
     const { pipelineId } = await run();
-    expect((await pipelineRow(pipelineId)).status).toBe('completed');
-    expect(stageCalls('Implement')).toHaveLength(1);
-    expect((await evidenceRows(pipelineId)).map((r) => r.detail.hook)).toEqual(['mine-tests']);
+    const row = await pipelineRow(pipelineId);
+    // Every hook under the folder runs: skipping one needs evidence the run cannot give.
+    expect(row.status).toBe('failed');
+    expect((await evidenceRows(pipelineId)).slice(0, 2).map((r) => r.detail.hook)).toEqual(['mine-tests', 'other-tests']);
+    expect(String(row.summary)).toContain(`FAIL other-tests (\`ls never.txt\`, root ${other})`);
+    expect(String(row.summary)).toContain('run the work in a session scoped to its project');
+    expect(stageCalls('Implement')[1].input).toContain('do not edit that project');
   });
 
   test('a hook that never ran is a block, not failed work', async () => {
@@ -567,7 +572,7 @@ describe('second review', () => {
   });
 });
 
-describe('third review: the change set may only narrow when it is trustworthy', () => {
+describe('regressions from the change-set rounds: every belonging hook runs', () => {
   test('a rewind to an earlier checkpoint runs every hook, whatever that checkpoint knew', async () => {
     const app = sub('app');
     const other = sub('other');
@@ -592,6 +597,7 @@ describe('third review: the change set may only narrow when it is trustworthy', 
     await resumeApproved(pipelineId, { fromSeq: Number(checkpoints[0].seq) });
     expect((await pipelineRow(pipelineId)).status).not.toBe('completed');
     expect((await evidenceRows(pipelineId)).length).toBeGreaterThan(rowsBefore);
+    expect(new Set((await evidenceRows(pipelineId)).slice(rowsBefore).map((r) => r.detail.hook))).toEqual(new Set(['test', 'other']));
   }, 120_000);
 
   test('a change only in a sibling folder runs the hooks of the project beside it', async () => {
@@ -629,6 +635,7 @@ describe('third review: the change set may only narrow when it is trustworthy', 
     const { pipelineId } = await run();
     expect((await pipelineRow(pipelineId)).status).toBe('failed');
     expect((await evidenceRows(pipelineId)).length).toBeGreaterThan(0);
+    expect(new Set((await evidenceRows(pipelineId)).map((r) => r.detail.hook))).toEqual(new Set(['app-test', 'other-test']));
   });
 
   test('a stage on a remote execution environment is refused with the reason, not "does not exist"', async () => {
@@ -646,5 +653,27 @@ describe('third review: the change set may only narrow when it is trustworthy', 
     } finally {
       refreshConfigKey('security.executionEnvironments', []);
     }
+  });
+});
+
+describe('a fresh run over a failed one', () => {
+  test('still runs the hook the failed run left broken', async () => {
+    const a = sub('a');
+    const b = sub('b');
+    writeFileSync(join(a, 'built.txt'), 'x');
+    refreshConfigKey('agent.evidenceHooks', [
+      { name: 'a-test', command: 'ls built.txt', root: a },
+      { name: 'b-test', command: 'ls built.txt', root: b },
+    ]);
+    implementWrites = [[]];
+    onStage = { Implement: () => { writeFileSync(join(a, `a-${rand(2)}.txt`), 'x'); writeFileSync(join(b, 'broken.txt'), rand(2)); } };
+    const first = await run();
+    expect((await pipelineRow(first.pipelineId)).status).toBe('failed');
+    // The second run only touches A; B is still broken on disk.
+    onStage = { Implement: () => writeFileSync(join(a, `a-${rand(2)}.txt`), 'x') };
+    const second = await run();
+    expect((await pipelineRow(second.pipelineId)).status).toBe('failed');
+    const hooksRun = new Set((await evidenceRows(second.pipelineId)).map((r) => r.detail.hook));
+    expect([...hooksRun].sort()).toEqual(['a-test', 'b-test']);
   });
 });
