@@ -180,6 +180,11 @@ test.describe('to-dos', () => {
 
     await detail.getByRole('button', { name: 'Medium' }).click();
     await expect.poll(() => server.patches().at(-1)?.body).toEqual({ priority: 2 });
+    // A title cannot be emptied: clicking away puts the saved one back, and nothing is sent.
+    await detail.getByLabel('Title').fill('');
+    await detail.getByLabel('Notes').focus();
+    await expect(detail.getByLabel('Title')).toHaveValue('Water the plants');
+    expect(server.patches().some((p) => 'title' in p.body)).toBe(false);
     await page.getByRole('button', { name: 'Mark as important' }).first().click();
     await expect.poll(() => server.patches().at(-1)?.body).toEqual({ important: true });
   });
