@@ -527,6 +527,8 @@ export function toResponse(value: unknown, set: Ctx['set'], fallbackStatus: numb
     // An async generator is a server-sent event stream: that is the only thing
     // this application returns one for (`/v1/chat/completions` with
     // `stream: true`), and the frames it yields are already SSE-framed.
+    // Pulled one frame at a time, so a slow reader holds the generator back;
+    // a reader that goes away returns it, so its `finally` releases what it holds.
     const encoder = new TextEncoder();
     const iterator = value[Symbol.asyncIterator]();
     const body = new ReadableStream<Uint8Array>({
@@ -534,6 +536,9 @@ export function toResponse(value: unknown, set: Ctx['set'], fallbackStatus: numb
         const { value: frame, done } = await iterator.next();
         if (done) controller.close();
         else controller.enqueue(encoder.encode(typeof frame === 'string' ? frame : JSON.stringify(frame)));
+      },
+      async cancel() {
+        await iterator.return?.();
       },
     });
     return new Response(body, {

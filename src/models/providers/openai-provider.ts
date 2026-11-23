@@ -109,6 +109,8 @@ async function createWithRetentionFallback<T>(params: Record<string, unknown>, s
 export class OpenAIProvider implements ModelProvider {
   readonly name = 'openai';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();

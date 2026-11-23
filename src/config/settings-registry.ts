@@ -376,7 +376,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'boolean',
     defaultValue: true,
     description:
-      'Stream the root agent\'s reply text to the web chat and TUI as it is produced. Turn off if a provider misbehaves on streamed tool calls; replies then arrive whole.',
+      'Stream the root agent\'s reply text to the web chat and TUI, and `/v1/chat/completions` passthrough replies to API clients, as they are produced. Turn off if a provider misbehaves on streamed calls; replies then arrive whole.',
     isSecret: false,
   },
   {
@@ -1005,6 +1005,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Per-user API-call ceiling per window (default maxApiCallsPerMinute). Counts all /api/* calls incl. dashboard polling; ~10 req/s. Lower per-user via /admin/quotas for multi-tenant.',
     isSecret: false,
     envVar: 'RATE_LIMIT_MAX',
+  },
+  {
+    key: 'api.streamStallTimeoutMs',
+    category: 'api',
+    valueType: 'number',
+    defaultValue: 60_000,
+    description: 'How long (ms) a streamed /v1/chat/completions reply waits for its client to read the next chunk before the provider call is dropped and its rate-limit slot freed. Min 1000.',
+    isSecret: false,
   },
 
   // ── Security (runtime-changeable subset) ──

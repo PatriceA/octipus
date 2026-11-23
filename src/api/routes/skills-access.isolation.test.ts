@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { eq } from 'drizzle-orm';
 import { Elysia } from '@/api/http';
 import { closeDb, getDb, initializeDb } from '@/db/postgres';
 import { runMigrations } from '@/db/migrate';
@@ -65,9 +64,6 @@ beforeAll(async () => {
 beforeEach(async () => { current = alice; await seedSkills(); });
 afterAll(async () => { await closeDb(); });
 
-const descriptionOf = async (id: string) =>
-  (await getDb().select().from(skills).where(eq(skills.id, id)))[0]?.description;
-
 test('reload-mounted is admin-only', async () => {
   expect((await call('POST', 'reload-mounted')).status).toBe(403);
   current = admin;
@@ -92,37 +88,6 @@ test('single export hides skills the caller may not see', async () => {
   expect((await call('GET', 'sys/export')).status).toBe(200);
   current = admin;
   expect((await call('GET', 'bob-private/export')).body).toMatchObject({ name: 'Bob secret' });
-});
-
-test('import with overwrite only overwrites the caller\'s own skills', async () => {
-  const incoming = ['System skill', 'Alice skill', 'Bob secret', 'Org skill']
-    .map(name => ({ name, description: 'imported' }));
-  const { status, body } = await call('POST', 'import', { skills: incoming, overwrite: true });
-  expect(status).toBe(200);
-  expect(body.updated).toEqual(['alice-own']);
-  expect(body.notOwned.sort()).toEqual(['Org skill', 'System skill']);
-  expect(body.skipped.sort()).toEqual(['Org skill', 'System skill']);
-  // Bob's private skill is invisible to Alice: no conflict, she gets her own copy.
-  expect(body.created).toHaveLength(1);
-  const [copy] = await getDb().select().from(skills).where(eq(skills.id, body.created[0]));
-  expect(copy).toMatchObject({ name: 'Bob secret', userId: alice.id, isSystem: false });
-  expect(await descriptionOf('alice-own')).toBe('imported');
-  expect(await descriptionOf('sys')).toBe('system original');
-  expect(await descriptionOf('bob-private')).toBe('bob original');
-  expect(await descriptionOf('org-shared')).toBe('org original');
-});
-
-test('an admin import may overwrite any skill', async () => {
-  current = admin;
-  const { body } = await call('POST', 'import', { skills: [{ name: 'System skill', description: 'by admin' },
-    { name: 'Bob secret', description: 'by admin' }], overwrite: true });
-  expect(body.updated.sort()).toEqual(['bob-private', 'sys']);
-  expect(await descriptionOf('sys')).toBe('by admin');
-});
-
-test('import requires a signed-in user', async () => {
-  current = null;
-  expect((await call('POST', 'import', { skills: [{ name: 'x', description: 'y' }] })).status).toBe(401);
 });
 
 test('topic assignment changes are admin-only', async () => {

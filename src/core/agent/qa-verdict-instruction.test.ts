@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { thinVerdictFailure } from './audit-coverage';
 import {
   aliasVerdict,
+  isVerdictRepair,
   PipelineManager,
   qaVerdictCorrectionInput,
   QA_VERDICT_JSON_INSTRUCTION,
@@ -266,5 +267,62 @@ describe('parseQAResult tier 1b — LAST fenced block wins', () => {
       '```',
     ].join('\n');
     expect(parse(out)?.passed).toBe(false);
+  });
+});
+
+// Harmless variation in HOW the block is written must not cost a verdict
+// repair; a block missing what the contract asks for must still be refused.
+describe('parseQAResult — tolerant of the wrapper, strict about the fields', () => {
+  const VERDICT = '{"passed": false, "confidence": "high", "issues": ["no test for 0"], "feedback": "Implementation: fails on 0.", "whatIDidNotCheck": ["perf"]}';
+  const parse = (out: string) => parseQA(out) as { passed: boolean; source?: string; issues: string[] } | null;
+
+  test.each(['JSON', 'jsonc', 'json5', 'js', ''])('a fence tagged %j is still the json tier', (tag) => {
+    const r = parse(`Report.\n\n\`\`\`${tag}\n${VERDICT}\n\`\`\``);
+    expect(r).toMatchObject({ passed: false, source: 'json', issues: ['no test for 0'] });
+  });
+
+  test('a one-line fence with the tag and the object together parses', () => {
+    expect(parse(`Report.\n\`\`\`json ${VERDICT}\`\`\``)?.source).toBe('json');
+  });
+
+  test('prose after the fenced block does not hide it', () => {
+    expect(parse(`Report.\n\`\`\`json\n${VERDICT}\n\`\`\`\n\nLet me know if you want more detail.`)?.source).toBe('json');
+  });
+
+  // An unfenced object inside prose is NOT a verdict: a report quotes payloads
+  // from the work it audits, and the alias tier runs before the prose tier.
+  test.each([
+    '{"status": "approved", "confidence": "high", "label": "spam"}',
+    '{"verdict":"approve","blockers":[]}',
+  ])('a quoted unfenced payload %s cannot turn a prose FAIL into a pass', (payload) => {
+    const r = parse(`The moderation endpoint returned:\n${payload}\nbut the label is wrong.\n\nOverall status: FAIL`);
+    expect(r).toMatchObject({ passed: false, source: 'prose' });
+  });
+
+  test('a block under another tag is not read as the verdict', () => {
+    expect(parse(`\`\`\`handoff\n${VERDICT}\n\`\`\``)?.source).not.toBe('json');
+    expect(parse(`\`\`\`python\n${VERDICT}\n\`\`\``)?.source).not.toBe('json');
+  });
+
+  test('missing fields are not filled in — a pass without them stays thin', () => {
+    const r = parseQA('```JSON\n{"passed": true, "issues": [], "feedback": "Implementation: ok."}\n```') as never;
+    expect(thinVerdictFailure(r)).not.toBeNull();
+  });
+
+  test('the contract stays inert when echoed with trailing prose', () => {
+    expect(parseQA(`${QA_VERDICT_JSON_INSTRUCTION}\n\nTrailing prose.`)).toBeNull();
+  });
+
+  test('the up-front contract no longer promises a re-run it does not do', () => {
+    expect(QA_VERDICT_JSON_LEAD).not.toMatch(/re-run/);
+  });
+});
+
+describe('isVerdictRepair', () => {
+  test('a missing or incomplete block is a repair; a coverage fault and a real failure are not', () => {
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'unparseable' })).toBe(true);
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'report' })).toBe(true);
+    expect(isVerdictRepair({ auditGateFailed: true, auditGateReason: 'coverage' })).toBe(false);
+    expect(isVerdictRepair({})).toBe(false);
   });
 });

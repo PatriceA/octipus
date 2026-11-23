@@ -76,6 +76,16 @@ a `costSource` (`src/db/cost-source.ts`):
 - `unknown`: CLI and subscription providers that report no cost. These calls
   are logged at $0.
 
+A provider stream cut off after it started answering but before its usage
+chunk (its reader went away, it failed midway) has no reported usage. Its row
+holds an estimate instead, marked `usageEstimated: true` in the metadata (and
+`incomplete: true`): the prompt and the output received so far at chars/4,
+priced from model pricing. The estimate is rough in known ways: it prices the
+whole prompt as uncached input (no cache discount), it does not see hidden
+reasoning tokens the provider billed but never streamed, and a stream cut off
+before its first chunk (for example while a model reasons without streaming
+anything) records unknown usage, not an estimate.
+
 The budget views report the estimated part of the spend and the number of
 unmeasured calls. When there are unmeasured calls this period, the meter says
 they "count as $0 — real spend may be higher". A budget does not block on

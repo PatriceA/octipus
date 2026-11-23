@@ -55,9 +55,20 @@ describe('provider accounting boundary', () => {
     expect(mocks.log).toHaveBeenCalledOnce();
     expect(mocks.log.mock.calls[0].slice(2, 4)).toEqual([10, 2]);
   });
-  test('cancelled stream without final usage records unknown usage', async () => {
-    for await (const _ of instrumentProvider(provider()).stream(options)) break;
+  test('a stream cancelled before its final usage records an estimate: the provider was billed', async () => {
+    const prompt = 'x'.repeat(400);
+    for await (const _ of instrumentProvider(provider()).stream({ ...options, messages: [{ role: 'user', content: prompt, timestamp: new Date() }] })) break;
     expect(mocks.log).toHaveBeenCalledOnce();
+    // 400 prompt chars ≈ 100 tokens; the 2 chars of `ok` ≈ 1.
+    expect(mocks.log.mock.calls[0].slice(2, 4)).toEqual([100, 1]);
+    expect(mocks.log.mock.calls[0][4]).toMatchObject({ usageAvailable: true, metadata: { incomplete: true, usageEstimated: true } });
+  });
+  test('a stream that fails before any chunk records unknown usage: nothing was answered', async () => {
+    const p = provider();
+    p.stream = async function* () { throw new Error('refused'); };
+    await expect((async () => { for await (const _ of instrumentProvider(p).stream(options)) { /* drain */ } })()).rejects.toThrow('refused');
+    expect(mocks.log).toHaveBeenCalledOnce();
+    expect(mocks.log.mock.calls[0].slice(2, 4)).toEqual([0, 0]);
     expect(mocks.log.mock.calls[0][4]).toMatchObject({ usageAvailable: false, metadata: { incomplete: true } });
   });
   test('invalid user IDs are explicitly unattributed', async () => {
