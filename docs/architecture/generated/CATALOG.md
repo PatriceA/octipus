@@ -6,17 +6,15 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-773 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
 | GET | `/__artifacts__/a/:slug` | `src/api/routes/artifact-pages.ts` |
-| GET | `/__artifacts__/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug` | `src/api/routes/artifact-pages.ts` |
-| GET | `/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
@@ -810,7 +808,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 258 |
+| `api` | `core` | 260 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -822,7 +820,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 31 |
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 78 |
+| `api` | `utils` | 79 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
