@@ -1224,7 +1224,17 @@ export interface TaskListFilter {
   assigneeKind?: string;
   assigneeRef?: string;
   limit?: number;
+  /** Rows to skip, for paging through one status set (e.g. the finished ones). */
+  offset?: number;
 }
+
+/**
+ * The status rank of `listOwn`: work still to do (in progress, then open)
+ * before finished work (done, then archived), whatever the spelling sorts
+ * to. Ordering by the status text put `archived` and `done` first, so a list
+ * cut at its limit dropped open tasks once enough had been finished.
+ */
+const TASK_STATUS_RANK = sql`CASE ${tasks.status} WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 WHEN 'done' THEN 2 WHEN 'archived' THEN 3 ELSE 4 END`;
 
 /**
  * Outcome of a board checkout. `conflict` carries the current holder (null
@@ -1326,8 +1336,8 @@ export class TaskRepo {
     return row[0] ?? null;
   }
 
-  /** List the scope's tasks (the principal's own, or the space's), newest-first, optionally filtered. */
-  async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
+  /** The conditions of a `listOwn` / `countOwn` filter, inside the scope. */
+  private listFilters(filter: TaskListFilter): SQL[] {
     const filters: SQL[] = [...this.rows(tasks)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
@@ -1339,12 +1349,36 @@ export class TaskRepo {
     }
     if (filter.assigneeKind) filters.push(eq(tasks.assigneeKind, filter.assigneeKind));
     if (filter.assigneeRef) filters.push(eq(tasks.assigneeRef, filter.assigneeRef));
+    return filters;
+  }
+
+  /**
+   * List the scope's tasks (the principal's own, or the space's), optionally
+   * filtered: active before finished (`TASK_STATUS_RANK`); active ones by
+   * priority, then due date, then newest; finished ones most recently
+   * finished first, so a page of them is the latest.
+   */
+  async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
+    const finished = notInArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
     return this.db
       .select()
       .from(tasks)
-      .where(and(...filters))
-      .orderBy(asc(tasks.status), desc(tasks.priority), asc(tasks.dueAt), desc(tasks.createdAt))
-      .limit(filter.limit ?? 200);
+      .where(and(...this.listFilters(filter)))
+      .orderBy(
+        TASK_STATUS_RANK,
+        sql`CASE WHEN ${finished} THEN coalesce(${tasks.completedAt}, ${tasks.updatedAt}) END DESC NULLS LAST`,
+        desc(tasks.priority),
+        asc(tasks.dueAt),
+        desc(tasks.createdAt),
+      )
+      .limit(filter.limit ?? 200)
+      .offset(filter.offset ?? 0);
+  }
+
+  /** How many of the scope's tasks `listOwn` would match without a limit. */
+  async countOwn(filter: Omit<TaskListFilter, 'limit' | 'offset'> = {}): Promise<number> {
+    const [row] = await this.db.select({ n: count() }).from(tasks).where(and(...this.listFilters(filter)));
+    return Number(row?.n ?? 0);
   }
 
   /**

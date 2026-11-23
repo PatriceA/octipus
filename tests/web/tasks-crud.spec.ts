@@ -109,3 +109,53 @@ test('task editor keeps failed drafts, cancels without writes, and saves edited 
   expect(patches.at(-1)).toEqual({ priority: 1 });
   expect(task.notes).toBe('Fresh worker notes');
 });
+
+test('deleting a todo archives it with undo, and done todos come a page at a time', async ({ authenticatedPage: page }) => {
+  const task = (id: string, title: string, status: string) => ({ id, title, status, priority: 0, source: 'user', blockedBy: [], parentId: null, createdAt: '2026-11-01T00:00:00Z' });
+  const open = [task('t-open', 'Water the plants', 'open')];
+  const done = Array.from({ length: 70 }, (_, i) => task(`t-done-${i}`, `Finished chore ${i}`, 'done'));
+  const archived = new Set<string>();
+  const patches: { id: string; body: Record<string, unknown> }[] = [];
+  const lists: string[] = [];
+  let deletes = 0;
+  await page.route('**/api/tasks**', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'DELETE') { deletes++; return json(route, 200, { deleted: true }); }
+    if (request.method() === 'PATCH') {
+      const id = url.pathname.split('/').pop()!;
+      const body = request.postDataJSON();
+      patches.push({ id, body });
+      if (body.status === 'archived') archived.add(id); else archived.delete(id);
+      const t = open.find(x => x.id === id)!;
+      t.status = body.status;
+      return json(route, 200, t);
+    }
+    if (url.searchParams.get('view') === 'next') return json(route, 200, { tasks: open.filter(t => !archived.has(t.id)) });
+    if (/\/api\/tasks\/?$/.test(url.pathname)) lists.push(url.search);
+    // Mirrors GET /tasks without a status: every active task, then a page of done ones.
+    const limit = Number(url.searchParams.get('doneLimit') ?? 50);
+    const active = open.filter(t => !archived.has(t.id) && t.status === 'open');
+    return json(route, 200, { tasks: [...active, ...done.slice(0, limit)], done: { total: done.length, offset: 0, limit, hasMore: limit < done.length } });
+  });
+  await page.goto('/tasks');
+  await expect(page.getByText('Done (70)')).toBeVisible();
+  await expect(page.getByText('Finished chore 49', { exact: true })).toBeVisible();
+  await expect(page.getByText('Finished chore 50', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show more done (20 more)' }).click();
+  await expect(page.getByText('Finished chore 69', { exact: true })).toBeVisible();
+  expect(lists.at(-1)).toContain('doneLimit=100');
+  await expect(page.getByRole('button', { name: /Show more done/ })).toHaveCount(0);
+
+  // No confirm dialog: the todo is archived at once, and Undo puts it back.
+  page.on('dialog', d => { throw new Error(`unexpected dialog: ${d.message()}`); });
+  const row = page.getByText('Water the plants', { exact: true });
+  await page.getByRole('button', { name: 'Delete task' }).first().click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId('undo-toast')).toContainText('Deleted “Water the plants”');
+  expect(patches).toEqual([{ id: 't-open', body: { status: 'archived' } }]);
+  await page.getByTestId('undo-toast').getByRole('button', { name: 'Undo' }).click();
+  await expect(row).toBeVisible();
+  expect(patches.at(-1)).toEqual({ id: 't-open', body: { status: 'open' } });
+  expect(deletes).toBe(0);
+});

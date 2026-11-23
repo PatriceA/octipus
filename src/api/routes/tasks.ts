@@ -8,7 +8,7 @@ import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { listRoleAgents, roleAgentToggleError, setRolePipelineTemplate } from '@/core/tasks/role-agents';
 import { resolveRoleTemplate } from '@/core/tasks/role-pipelines';
-import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
+import { ACTIVE_TASK_STATUSES, assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
@@ -88,6 +88,22 @@ async function withLeases<T extends { id: string; checkedOutAt: Date | null }>(
   };
 }
 
+/** Done tasks in one page of the unfiltered list, by default and at most. */
+const DONE_PAGE = 50;
+const DONE_PAGE_MAX = 500;
+/**
+ * The active tasks of the unfiltered list are not paged: the list exists to
+ * show them all. This only bounds a runaway (the tasks tool reads as many).
+ */
+const ACTIVE_LIST_MAX = 5000;
+
+/** A non-negative integer query value, clamped to [min, max]; absent → `fallback`. */
+function boundedInt(value: string | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
 /** De-duplicate an id list from the body; strings only. */
 function idList(values: string[]): string[] {
   return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
@@ -108,10 +124,14 @@ function normalizeCategory(value: string | null | undefined): string | null {
 export const taskRoutes = new Elysia({ prefix: '/tasks' })
   .use(apiContext)
 
-  // List the caller's tasks. ?status= filters; ?due=today returns tasks due by
-  // end of today; ?view=next returns open tasks in next-action order, each
-  // with a `bucket` and a one-line `reason` (see core/tasks/rank.ts). `?tz=`
-  // is the browser's IANA zone — "today" is the user's day, not the server's.
+  // List the caller's tasks. ?status= filters (up to 200, finished ones most
+  // recent first); without it the list is every active task followed by one
+  // page of done ones (`?doneLimit=`, default 50, and `?doneOffset=`), with a
+  // `done` summary saying how many there are; archived ones only come with
+  // ?status=archived. ?due=today returns tasks due by end of today;
+  // ?view=next returns open tasks in next-action order, each with a `bucket`
+  // and a one-line `reason` (see core/tasks/rank.ts). `?tz=` is the browser's
+  // IANA zone — "today" is the user's day, not the server's.
   .get(
     '/',
     async ({ user, principal, query, set }) => {
@@ -129,14 +149,28 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         dueBefore = new Date();
         dueBefore.setHours(23, 59, 59, 999);
       }
-      const tasks = await contentRepos(principal).tasks.listOwn({
-        status: query?.status,
+      const repo = contentRepos(principal).tasks;
+      const filter = {
         dueBefore,
         category: query?.category,
         assigneeKind: query?.assigneeKind,
         assigneeRef: query?.assigneeRef,
-      });
-      return withLeases(tasks);
+      };
+      if (query?.status) return withLeases(await repo.listOwn({ ...filter, status: query.status }));
+      // No status: every active task, then one page of the done ones (most
+      // recently finished first). A shared cap over both let finished tasks
+      // push open ones out of the list.
+      const doneLimit = boundedInt(query?.doneLimit, DONE_PAGE, 0, DONE_PAGE_MAX);
+      const doneOffset = boundedInt(query?.doneOffset, 0, 0, Number.MAX_SAFE_INTEGER);
+      const [active, done, doneTotal] = await Promise.all([
+        repo.listOwn({ ...filter, statuses: [...ACTIVE_TASK_STATUSES], limit: ACTIVE_LIST_MAX }),
+        doneLimit > 0 ? repo.listOwn({ ...filter, status: 'done', limit: doneLimit, offset: doneOffset }) : Promise.resolve([]),
+        repo.countOwn({ ...filter, status: 'done' }),
+      ]);
+      return {
+        ...(await withLeases([...active, ...done])),
+        done: { total: doneTotal, offset: doneOffset, limit: doneLimit, hasMore: doneOffset + done.length < doneTotal },
+      };
     },
     {
       query: t.Object({
@@ -148,6 +182,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         view: t.Optional(t.Literal('next')),
         limit: t.Optional(t.String()),
         tz: t.Optional(t.String({ maxLength: 64 })),
+        doneLimit: t.Optional(t.String({ pattern: '^[0-9]+$' })),
+        doneOffset: t.Optional(t.String({ pattern: '^[0-9]+$' })),
       }),
       detail: { tags: ['tasks'] },
     }

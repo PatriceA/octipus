@@ -17,6 +17,7 @@ import {
   RoleAgentsPanel,
 } from '@/components/tasks/work-board';
 import { PageHeader } from '@/components/ui/page-header';
+import { useUndoToast } from '@/components/ui/undo-toast';
 import { api } from '@/lib/api';
 import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
 import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
@@ -51,6 +52,8 @@ const BOARD_COLUMNS: readonly TaskStatus[] = ['open', 'in_progress', 'done'];
 const VIEW_KEY = 'octipus.tasks.view';
 /** How often the list re-reads while the page is visible, so agent progress shows up. */
 const REFRESH_MS = 30_000;
+/** Done tasks per page of the list: the server's default for GET /tasks; "Show more" asks for another (`doneLimit`). */
+const DONE_PAGE = 50;
 /** A burst of `task.changed` events re-reads the board once, this long after the last. */
 const TASK_CHANGED_DEBOUNCE_MS = 400;
 
@@ -203,6 +206,11 @@ function LocalTasksPage() {
   // see the board without create, edit or drag; commenters still comment.
   const { canWrite, canComment } = useWorkspaceAccess();
   const [tasks, setTasks] = useState<Task[]>([]);
+  // The done tasks come a page at a time (GET /tasks `doneLimit`); `doneTotal`
+  // is how many there are, so the list can offer the rest.
+  const [doneLimit, setDoneLimit] = useState(DONE_PAGE);
+  const [doneTotal, setDoneTotal] = useState<number | null>(null);
+  const { show: showUndo, toast: undoToast } = useUndoToast();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -247,7 +255,7 @@ function LocalTasksPage() {
       try {
         const tz = browserTimezone();
         const [data, next] = await Promise.all([
-          api.get<{ tasks: Task[]; serverNow?: string }>('/tasks'),
+          api.get<{ tasks: Task[]; serverNow?: string; done?: { total: number } }>(doneLimit === DONE_PAGE ? '/tasks' : `/tasks?doneLimit=${doneLimit}`),
           groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
         ]);
         if (seq !== fetchSeq.current) return;
@@ -273,6 +281,7 @@ function LocalTasksPage() {
             .sort((a, b) => (ranked.get(a.id)?.rank ?? Infinity) - (ranked.get(b.id)?.rank ?? Infinity));
         }
         setTasks(all);
+        setDoneTotal(data.done?.total ?? null);
         setError('');
       } catch (err) {
         if (seq === fetchSeq.current) setError((err as Error).message);
@@ -283,7 +292,7 @@ function LocalTasksPage() {
     return load();
     // A workspace switch re-creates the loader: the list is another workspace's.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- not read inside; its change re-creates the loader
-  }, [groupBy, workspaceId]);
+  }, [groupBy, workspaceId, doneLimit]);
 
   useEffect(() => {
     // Load once on mount (and when the grouping changes the query).
@@ -436,9 +445,18 @@ function LocalTasksPage() {
   // agent holds (or left behind), and the task goes back to open.
   const releaseClaim = (task: Task) => write(null, () => api.post(`/tasks/${task.id}/release`, { force: true }));
 
+  // Deleting archives the task (out of every list, still in the database)
+  // and offers Undo, which puts the status it had back.
   const deleteTask = async (id: string) => {
-    if (!confirm('Delete this task?')) return;
-    await write(null, () => api.delete(`/tasks/${id}`));
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    const previous = task.status;
+    const withStatus = (status: TaskStatus) => () => setTasks((xs) => xs.map((t) => (t.id === id ? { ...t, status } : t)));
+    const archived = await write(withStatus('archived'), () => api.patch(`/tasks/${id}`, { status: 'archived' }));
+    if (!archived) return;
+    showUndo(`Deleted “${task.title}”`, () => {
+      void write(withStatus(previous), () => api.patch(`/tasks/${id}`, { status: previous }));
+    });
   };
 
   if (loading) {
@@ -652,8 +670,18 @@ function LocalTasksPage() {
           onSave={(patch) => updateFields(editingTask, patch, true)} />
       )}
       {view === 'list' && done.length > 0 && (
-        <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} roles={pickableRoles} actions={actions} />
+        <TaskGroup title={`Done (${doneTotal !== null && assigneeFilter === 'all' ? doneTotal : done.length})`} tasks={done} lookup={lookup} roles={pickableRoles} actions={actions} />
       )}
+      {view === 'list' && doneTotal !== null && doneTotal > doneLimit && (
+        <button
+          type="button"
+          onClick={() => setDoneLimit((n) => n + DONE_PAGE)}
+          className="mt-2 text-xs text-on-surface-variant hover:text-primary underline underline-offset-4"
+        >
+          Show more done ({doneTotal - doneLimit} more)
+        </button>
+      )}
+      {undoToast}
     </div>
   );
 }
