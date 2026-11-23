@@ -65,3 +65,15 @@ test('backfill hides actual internal records while preserving owner quotes and n
  expect((await scopedAgents.findBySession(session.id)).map(row=>row.id)).toEqual([visibleActor]);
  expect((await messageRepository.findBySession(session.id)).map(row=>row.content).sort()).toEqual(['Companion supervision update. owner quotation','A normal owner update'].sort());
 });
+
+test('the newest window and the history page agree on rows with the same time: none is dropped at the boundary',async()=>{
+ const principal=await resolvedPrincipal(userId,null);
+ const session=await sessionRepository.create({userId,workspaceId:principal.workspaceId,channelType:'tui',channelId:randomUUID()});
+ const at=new Date(5000);
+ const all=Array.from({length:40},(_,n)=>`m${n}`);
+ for(const content of all)await messageRepository.create({sessionId:session.id,role:'user',content,createdAt:at});
+ const newest=await messageRepository.findRecentBySession(session.id,20,['user','assistant']);
+ const older=await scopedRepos(principal).messages.findHistoryPage([session.id],100,['user','assistant'],newest[0]!.id);
+ // Every row once: the page before the window's oldest row is exactly the rest.
+ expect([...older,...newest].map(row=>row.content).sort()).toEqual([...all].sort());
+});

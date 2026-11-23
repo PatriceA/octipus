@@ -203,6 +203,26 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   }
 
   registry.register({
+    name: 'model', aliases: [],
+    description: 'Show, set or clear this session\'s root agent model: /model [<name>|clear|list]',
+    handler: async ctx => {
+      if (!ctx.sessionId) return { text: 'No active session.' };
+      // As /history: the session's owner only. A session the server has not
+      // seen yet (the terminal picks its id before the first message) is the
+      // caller's own; the override is keyed by the caller as well.
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const session = await sessionRepository.findById(ctx.sessionId);
+      if (session && !(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
+      const { modelOptions, runModelCommand } = await import('@/core/commands/model');
+      const args = ctx.rawArgs.trim();
+      const { response } = await runModelCommand({ sessionId: ctx.sessionId, userId: ctx.userId, args });
+      // Alone or `list`: also the models to choose from, for a picker.
+      if (!args || args.toLowerCase() === 'list') return { text: response, data: await modelOptions(ctx.sessionId, ctx.userId) };
+      return { text: response };
+    },
+  });
+
+  registry.register({
     name: 'help',
     aliases: ['h', '?'],
     description: 'List available commands',
@@ -360,10 +380,13 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       const session = await sessionRepository.findById(ctx.sessionId);
       if (!(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
       const { messageRepository } = await import('@/db/repositories/message-repository');
-      const rows = (await messageRepository.getLastMessages(ctx.sessionId, 50)).reverse();
+      // The conversation as the web shows it: user and assistant rows, never
+      // a row marked internal (a companion's private check-in).
+      const rows = await messageRepository.findRecentBySession(ctx.sessionId, 50, ['user', 'assistant']);
       const data = rows
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
-        .map((m) => ({ role: m.role, content: m.content, at: m.createdAt.toISOString() }));
+        // `id` is the cursor for older turns (`GET /sessions/:id/messages?page=true&before=`).
+        .map((m) => ({ id: m.id, role: m.role, content: m.content, at: m.createdAt.toISOString() }));
       if (data.length === 0) return { text: 'No messages in this session yet.', data };
       return { text: data.map((m) => `${m.role === 'user' ? '❯' : ' '} ${m.content}`).join('\n\n'), data };
     },

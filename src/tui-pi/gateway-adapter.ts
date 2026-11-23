@@ -225,6 +225,11 @@ export class GatewayAdapter {
     return this.client.uploadAttachments(sessionId, attachments, title);
   }
 
+  /** Read a REST resource as the signed-in user (`GatewayClient.getJson`). */
+  getJson<T>(path: string): Promise<T> {
+    return this.client.getJson<T>(path);
+  }
+
   sendCommand(name: string, args?: Record<string, string>): boolean {
     return this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
   }

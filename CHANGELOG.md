@@ -8,6 +8,18 @@ labels reflect blast radius, not contract guarantees.
 ## Unreleased
 
 - **Email channel.** Talk to Octipus by mail: mail to a dedicated IMAP mailbox (an admin's personal one) from an allow-listed, linked sender becomes a conversation, answered by a threaded reply (`Re:`, `In-Reply-To`/`References`) that is saved as a **draft for a person to send** by default (`emailChannel.replyMode: draft`) or sent at once with `Auto-Submitted: auto-replied` (`send`); replying continues the session. A mail counts only when the topmost `Authentication-Results` under an operator-trusted authserv-id reports `dmarc=pass` for the From domain (no DKIM/SPF fallback; the receiving server must strip forged headers carrying its id — see the hard requirements in the docs). Anything else, auto replies, lists, bounces, repeats, late mail and senders over the hourly limit are dropped and recorded, never answered. Email turns are restricted: web search and the bundled help only, no stored grants, no commands or plan `go`, no memory, context hooks or plugin context, attachments not read (never filed into documents or the knowledge index), unattended (approvals refused), and no egress once the session holds private data. The mailbox owner can read every email-channel conversation; their agent cannot, and automatic triage skips the mailbox. Off by default (`emailChannel.*` under Settings → Channels). New table `email_channel_messages` (migration `0206_email_channel`). See docs/CHANNELS.md#email.
+- **Terminal chat: older turns, a model picker and `@` mentions**
+  ([guide](docs/guides/tui.md#reading-a-conversation)). Scrolling up past
+  the 50 messages a resumed session replays now loads earlier ones from the
+  server, 100 at a time, with a notice while there are more, while loading
+  or when a load failed. `/model` alone opens a picker of the models you
+  may use and sets this session's root agent model (`/model <name>` and
+  `/model clear` work as text; the gateway gained a `/model` command).
+  `@` completes agents, skills and recent sessions above project files, as
+  text tokens the agent reads. Fixed: on the alternate screen, scrolling
+  up in an idle session stopped under "N earlier messages above"; `/history`
+  replayed a companion's internal check-ins; the editor's Up/Down skipped
+  the rows of a soft-wrapped line.
 - **Browse skill registries**
   ([docs](docs/SKILL-EXCHANGE.md#registries)). Skills → Import → **Browse
   registries** lists and searches the skills of static JSON indexes an
