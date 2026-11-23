@@ -39,7 +39,7 @@ import type { AgentRefreshView } from '@/shared/artifacts';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { buildAndStoreBundle } from './bundler';
-import { parseRefreshDeliverable, type RefreshDeliverable, type RefreshRunner, runRefreshAgent } from './agent-refresh-runner';
+import { findExternalReference, parseRefreshDeliverable, type RefreshDeliverable, type RefreshRunner, runRefreshAgent } from './agent-refresh-runner';
 import { extractInteractiveScript } from './render';
 import { resolveArtifactRetention } from './settings';
 import { announceVersion } from './version-writer';
@@ -288,6 +288,25 @@ async function runClaimed(
 
   const parsed = parseRefreshDeliverable(output);
   if (!parsed.ok) return finish({ outcome: 'failed', error: parsed.error });
+  if (row.knowledgeAccess) {
+    // Served with a policy that loads nothing (the version's `network`), so
+    // a page that needs the network would only render broken: say so.
+    // No script either: a sandboxed frame may still navigate itself
+    // (`location = 'https://…?d=…'`), which no CSP directive stops.
+    if (extractInteractiveScript(parsed.page.template).source.trim()) {
+      return finish({
+        outcome: 'failed',
+        error: 'A refresh with knowledge access must produce a page without JavaScript (<script> or on…= handlers): a script could send what the page shows to another site. The current version was kept.',
+      });
+    }
+    const ref = findExternalReference(parsed.page.template, parsed.page.css);
+    if (ref) {
+      return finish({
+        outcome: 'failed',
+        error: `A refresh with knowledge access must produce a self-contained page, and this one loads or links to an external address (${ref}). Its version may load nothing from the network; the current version was kept.`,
+      });
+    }
+  }
 
   const landed = await landVersion(row, artifact, parsed.page);
   if (!landed.ok) return finish({ outcome: 'failed', error: landed.error });
@@ -296,8 +315,8 @@ async function runClaimed(
   return finish({ outcome: 'success', error: null, versionId: landed.versionId }, { pageHash: landed.pageHash, versionId: landed.versionId });
 }
 
-function pageHash(template: string, css: string, script: string): string {
-  return createHash('sha256').update(template).update('\0').update(css).update('\0').update(script).digest('hex');
+function pageHash(template: string, css: string, script: string, network: 'default' | 'none'): string {
+  return createHash('sha256').update(network).update('\0').update(template).update('\0').update(css).update('\0').update(script).digest('hex');
 }
 
 /**
@@ -313,7 +332,10 @@ async function landVersion(
   page: RefreshDeliverable,
 ): Promise<{ ok: true; versionId: string; pageHash: string; unchanged: boolean } | { ok: false; error: string }> {
   const extracted = extractInteractiveScript(page.template);
-  const hash = pageHash(extracted.template, page.css, extracted.source);
+  // A page from the owner's knowledge base is closed on its version: served
+  // with no network at all, whatever the artifact's setting later becomes.
+  const network = row.knowledgeAccess ? 'none' as const : 'default' as const;
+  const hash = pageHash(extracted.template, page.css, extracted.source, network);
   if (artifact.currentVersionId && row.lastVersionId === artifact.currentVersionId && row.lastPageHash === hash) {
     return { ok: true, versionId: artifact.currentVersionId, pageHash: hash, unchanged: true };
   }
@@ -328,7 +350,8 @@ async function landVersion(
     htmlTemplate: extracted.template,
     css: page.css,
     schemaJson: REFRESH_VERSION_MARKER,
-    changeSummary: 'agent refresh',
+    network,
+    changeSummary: network === 'none' ? 'agent refresh (knowledge, offline)' : 'agent refresh',
     createdByUserId: row.ownerUserId,
   });
   const discard = async (error: string) => {

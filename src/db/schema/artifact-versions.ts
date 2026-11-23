@@ -20,6 +20,14 @@ export const artifactVersions = pgTable(
     css: text('css').notNull().default(''),
     schemaJson: text('schema_json').notNull().default('{}'),
     changeSummary: text('change_summary').notNull().default(''),
+    /**
+     * `none`: this version reaches nothing — served with the closed embed
+     * policy (no fetch, socket or external image, style, font or frame),
+     * whatever the artifact's own `network`. Set on a page an agent refresh
+     * wrote from the owner's knowledge base (docs/ARTIFACTS.md#agent-refresh),
+     * and carried by a restore; a hand edit or a web refresh writes `default`.
+     */
+    network: text('network').$type<'default' | 'none'>().notNull().default('default'),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },

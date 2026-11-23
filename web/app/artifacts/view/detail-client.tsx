@@ -321,6 +321,7 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
           Use my knowledge base instead of the web.
           <span className="block text-warning">
             Anything the agent reads there can end up on the page, visible to everyone who can view this artifact.
+            The page must be self-contained (no scripts, nothing from other sites) and is served with no network access.
           </span>
         </span>
       </label>

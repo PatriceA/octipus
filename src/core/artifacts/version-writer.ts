@@ -100,6 +100,8 @@ export async function restoreVersion(opts: {
     css: opts.target.css,
     jsBundleSha256: opts.target.jsBundleSha256,
     schemaJson: opts.target.schemaJson,
+    // A closed page stays closed when restored: its content was made for it.
+    network: opts.target.network,
     changeSummary: `restore from ${opts.target.id}`,
     createdByUserId: opts.userId,
   });

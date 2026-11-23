@@ -228,13 +228,22 @@ one run:
   can show anything to whoever views it.
 - A **knowledge** run reads the owner's private knowledge and has no web
   tool, so no fetched page can instruct it and it has no tool that sends data
-  anywhere. **Whatever it reads may end up on the page**, which anyone who can
-  view the artifact sees (everyone, for a public or share-linked one), and the
-  page itself can load `https:` images — so content in the knowledge base that
-  carries instructions (an indexed web page, a forwarded document) could make
-  the page show or send private data to whoever views it or to an image host.
-  Turn it on only for artifacts whose viewers may see that knowledge, and
-  whose knowledge you trust; the web app shows this warning next to the switch.
+  anywhere. Its page cannot send anything either: it must be self-contained
+  (no `<script>` or `on…=` handler, and no absolute external URL in a
+  `src`/`srcset`/`href`/`action`/`poster`/`content` attribute, a CSS `url()`
+  or an `@import`) or the refresh fails with the reason and the current
+  version stays; and the version it writes is marked closed
+  (`artifact_versions.network = 'none'`) and served with the closed embed
+  policy in every hosting path (path prefix, artifact host, header and
+  `<meta>` copy): `connect-src 'none'`, `img-src data: blob:`, no `https:`
+  source anywhere, and no SDK, gateway or viewer token in the page. The mark
+  is on the version: switching knowledge access off later does not loosen a
+  page already written, a restore of that version stays closed, and a hand
+  edit or a web-mode refresh writes a normal version. **What it reads may
+  still be shown on the page**, to anyone who can view the artifact
+  (everyone, for a public or share-linked one): turn it on only for
+  artifacts whose viewers may see that knowledge. The web app shows this
+  warning next to the switch.
 
 **Who can trigger it.** Only the owner (the artifact's creator):
 
@@ -255,7 +264,8 @@ refused there with `code: "refresh_unavailable"`.
 refresh before any agent starts; budgets and quotas are checked again at the
 spawn and before each model call, as for every agent.
 
-**Atomic update.** A new version (change summary `agent refresh`) becomes
+**Atomic update.** A new version (change summary `agent refresh`, or
+`agent refresh (knowledge, offline)` for a closed one) becomes
 current only when the run succeeded, returned a non-empty page under 512,000
 characters, its script built, and the artifact still shows the version the run
 started from. Otherwise the current version stays, the unused version row is

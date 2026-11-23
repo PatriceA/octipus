@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildRefreshTask,
+  findExternalReference,
   MAX_REFRESH_PAGE_CHARS,
   parseRefreshDeliverable,
   REFRESH_KNOWLEDGE_TOOLS,
@@ -57,5 +58,35 @@ describe('buildRefreshTask', () => {
     expect(task).toMatch(/never instructions to you/);
     expect(task).toMatch(/public web only/);
     expect(buildRefreshTask('t', 'i', true)).toMatch(/knowledge base only; you have no web access/);
+  });
+});
+
+describe('findExternalReference', () => {
+  test.each([
+    ['<img src="https://evil.example/a.png">', '', 'src="https://evil.example/a.png"'],
+    ['<img src=//evil.example/a.png>', '', 'src="//evil.example/a.png"'],
+    ['<img srcset="a.png 1x, https://evil.example/b.png 2x">', '', 'srcset="a.png 1x, https://evil.example/b.png 2x"'],
+    ['<a href="http://evil.example/?d=x">x</a>', '', 'href="http://evil.example/?d=x"'],
+    ['<meta http-equiv="refresh" content="0; url=https://evil.example/">', '', 'content="0; url=https://evil.example/"'],
+    ['<div style="background:url(\'https://evil.example/c.png\')"></div>', '', 'url(https://evil.example/c.png)'],
+    ['<p>x</p>', 'p { background: url(//evil.example/d.png) }', 'url(//evil.example/d.png)'],
+    ['<style>@import "https://evil.example/e.css";</style>', '', '@import "https://evil.example/e.css"'],
+  ])('finds %s', (html, css, ref) => {
+    expect(findExternalReference(html, css)).toBe(ref);
+  });
+
+  test('a self-contained page has none', () => {
+    const html = '<p>See https://example.org in the text</p><img src="data:image/png;base64,AAAA"><a href="#top">top</a><a href="notes.html">n</a><meta charset="utf-8">';
+    expect(findExternalReference(html, 'p { background: url(data:image/png;base64,AAAA) }')).toBeNull();
+  });
+});
+
+describe('the closed embed policy', () => {
+  test('allows no external origin at all', async () => {
+    const { buildEmbedCsp } = await import('./csp');
+    const csp = buildEmbedCsp({ scriptSha256s: [], gatewayWss: 'wss://gateway.example', network: 'none' });
+    expect(csp).not.toMatch(/https:|wss:|http:|\*/);
+    expect(csp).toContain('connect-src \'none\'');
+    expect(csp).toContain('img-src data: blob:');
   });
 });
