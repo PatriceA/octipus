@@ -49,7 +49,7 @@ import { buildCodemodeHandler, compactCodemodeTools, CODEMODE_TOOL_NAME } from '
 import { isReadOnlyTurn } from '@/security/read-only-turn';
 import { recordContextFill } from './agent/prompt-budget';
 import { getMCPBridge } from '@/mcp/bridge';
-import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
+import { ClassifiedError, isFatalConnectionFailure, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
   BudgetExceededError,
@@ -1555,7 +1555,7 @@ export class AgentWorker extends BaseAgentWorker {
         // NXDOMAIN) are not transient — they indicate a dead container or misconfigured
         // endpoint. Surface to the user immediately so they can react (start container,
         // change model) instead of spinning through 14s of retries that all fail the same
-        // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionError —
+        // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionFailure —
         // so it falls through to the transient-retry path below.
         // Confidential content and no local model: stop and say so (never retried).
         // A fail-closed `context` hook threw: nothing was sent, and retrying
@@ -1564,7 +1564,7 @@ export class AgentWorker extends BaseAgentWorker {
           this.emit('error', { error: errMsg, recoverable: false });
           throw err;
         }
-        if (isFatalConnectionError(errMsg)) {
+        if (isFatalConnectionFailure(err)) {
           this.emit('error', {
             error: `Model "${this.context.model}" unreachable: ${errMsg}`,
             recoverable: false,
