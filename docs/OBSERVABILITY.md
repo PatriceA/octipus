@@ -1,9 +1,8 @@
 # Observability
 
-Octipus exposes Prometheus metrics and correlates every orchestrated turn with
-a run id for log forensics. This page covers what's shipping today (metrics +
-run correlation, WS4 items 1–2). Distributed tracing (OpenTelemetry) is a later
-phase and will be documented here when it lands.
+Octipus exposes Prometheus metrics, correlates every orchestrated turn with a
+run id for log forensics, and can export OpenTelemetry traces over OTLP. All
+three are off or invisible until an operator turns them on.
 
 ## Metrics endpoint
 
@@ -81,6 +80,121 @@ Two consumers read it with no threading:
   ```
 
 Events emitted outside any orchestrated turn have a `NULL` `run_id`.
+
+## Tracing (OpenTelemetry)
+
+Spans for requests, turns, pipeline stages, model calls, tool calls and
+deliveries, exported over OTLP/HTTP to any OpenTelemetry collector (Jaeger,
+Tempo, Honeycomb, Grafana Cloud, …). The code is `src/core/tracing.ts`.
+
+### Turning it on
+
+**Off by default.** Like the metrics endpoint, it is switched on by
+environment variables, here the standard OpenTelemetry ones:
+
+| Variable | Effect |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns tracing on; spans go to `<endpoint>/v1/traces`. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Turns tracing on; the full traces URL, used as is. |
+| `OTEL_TRACES_EXPORTER=otlp` | Turns tracing on with the default endpoint `http://localhost:4318/v1/traces`. |
+| `OTEL_TRACES_EXPORTER=none` / `OTEL_SDK_DISABLED=true` | Off, whatever else is set. |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `_TRACES_HEADERS` | Headers for the collector, e.g. `authorization=Bearer …`. |
+| `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_COMPRESSION` | Exporter timeout and `gzip`. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource; the default `service.name` is `octipus`, `service.version` the running version. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling (default `parentbased_always_on`), e.g. `parentbased_traceidratio` and `0.1`. |
+| `OTEL_BSP_*` | Batch size, queue size and delay of the batch span processor. |
+| `OCTIPUS_TRACE_TRUST_INBOUND=true` | Continue a caller's `traceparent` (see Propagation). Off by default. |
+| `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true` | Send `traceparent` on webhook deliveries. Off by default. |
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+OTEL_SERVICE_NAME=octipus-prod
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.25
+```
+
+Spans are sent as OTLP/HTTP with JSON bodies, which every collector accepts on
+its HTTP port (4318); `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is accepted
+and logged, and the spans still go as JSON. A configuration this build cannot
+honour is logged at `error` and leaves tracing off; the server boots normally:
+`OTEL_TRACES_EXPORTER` without `otlp` (`console`, `zipkin`), or
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. In a list such as `otlp,console` spans go
+to OTLP and the rest is ignored with a warning. Export failures (a collector
+that is down) are logged at `warn`, at most once a minute per message.
+
+At shutdown the pending spans get 1.5 s to reach the collector, after the
+other shutdown work; spans not out by then are dropped, so a collector that
+is down never holds up the process.
+
+While tracing is off, the OpenTelemetry SDK is never loaded: the span helpers
+return before touching it, and only the dependency-free
+`@opentelemetry/api` package is imported.
+
+### Spans
+
+| Span | Kind | Where | Attributes |
+|---|---|---|---|
+| `<METHOD> <route>` | server | every HTTP request (the application layer, `src/api/http/app.ts`) except health checks and metrics scrapes | `http.request.method`, `http.route` (or `url.path` when no route matched), `url.scheme`, `http.response.status_code` |
+| `agent.run` | internal | every orchestrated turn, rooms included (`AgentService`) | `octipus.run_id`, `octipus.session_id`, `octipus.channel`, `octipus.trigger`, `octipus.outcome`, `octipus.topic` |
+| `agent.child` | internal | a child agent spawn (`SwarmSpawner.spawnChild`) | `octipus.agent.parent_id`, `.role`, `.depth`, `.planned`, `.child_status` |
+| `pipeline.run` | internal | a pipeline walk | `octipus.pipeline.id`, `octipus.session_id` |
+| `pipeline.stage` | internal | each node visit: step, loop head, human input | `octipus.pipeline.id`, `.node_key` (`n0`, `loop1`), `.stage_kind`, `.stage_type` |
+| `chat <model>` | client | every model call, streaming or not (the provider accounting boundary) | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `octipus.llm.streaming`, `octipus.llm.request_type` |
+| `execute_tool <name>` | internal | every tool call the agent makes (`ToolExecutor`) | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `octipus.tool.id`, `octipus.agent.id`, `octipus.agent.role` |
+| `channel.deliver` | client | each message sent out on a channel | `octipus.channel`, `octipus.channel.attachments` |
+| `webhook.deliver` | client | a hook's webhook action | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code` |
+
+Parents follow the async call tree (an `AsyncLocalStorage` context manager),
+so a model call made by a child agent inside `spawn_child` nests under that
+tool call, under the turn, under the request. Model calls and tool calls of a
+turn are siblings under `agent.run`, in the order they ran. `octipus.run_id`
+is the same `run_…` id stamped into the logs, so a trace and its log lines
+find each other.
+
+**Propagation.** By default an inbound W3C `traceparent` is not trusted: the
+header is read before authentication, so honouring it would let any caller
+force sampling on, switch it off for their own requests, or splice spans into
+a trace id of their choosing. The request starts a new trace instead, with a
+span link to the caller's context. Set `OCTIPUS_TRACE_TRUST_INBOUND=true` when
+the server sits behind a proxy or gateway you control that sets the header;
+the request then continues that trace.
+
+Outgoing webhook deliveries carry nothing by default, so no trace id leaves
+for a third-party host. With `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true` they carry
+the `traceparent` of their span, unless the hook configures that header
+itself. `tracestate` is never sent: it can hold whatever an inbound caller put
+there.
+
+Turns that arrive over the gateway WebSocket or a polling channel start a
+trace of their own at `agent.run`.
+
+**Not traced.** Database queries (Drizzle's built-in spans would carry the
+query parameters, and are inactive in the installed version), WebSocket
+frames, and requests to model providers below the `chat` span: no
+`traceparent` is sent to a provider.
+
+### What spans never carry
+
+Ids, names, counts, durations, status and the error class only. No prompt,
+completion, message text, tool argument or result, file path, header, secret
+or token. This is enforced in code: span attributes are typed against a closed
+list of keys (`SPAN_ATTRIBUTE_KEYS`), and a test drives a request through a
+turn, model calls and tool calls with marked content and fails if any of it
+reaches a span. Specifically:
+
+- **Errors** set the span status to `ERROR` and record `error.type` as the
+  error's class (`DiaryUnreadable`, `ClassifiedError`, a status code for an
+  HTTP failure), never the message, which can quote user content; no exception
+  events or stack traces are recorded.
+- **URLs.** An inbound request that matched a route records the route
+  template (`/api/devices/push-token/:token`) and not its path, which can hold
+  a token. One that matched none records its path through the log redactor
+  (`redactUrlForLog`: the token segment of a public media, invite or form link
+  is replaced). The query string is not recorded at all.
+  A webhook records only the receiving host: a webhook URL's path is often its
+  secret.
+- **Channels** record the channel type, never the channel id (a phone number on
+  WhatsApp) or the content.
 
 ## Verification evidence
 

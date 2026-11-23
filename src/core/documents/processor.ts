@@ -8,7 +8,7 @@ import { tmpdir } from 'os';
 import { basename, dirname, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
-import { type PdfTextItem, reconstructPageText } from './pdf-layout';
+import { joinPdfPages, type PdfPageText, type PdfTextItem, reconstructPage, type TableShape } from './pdf-layout';
 import type { AgentMessage } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
@@ -505,19 +505,24 @@ export class DocumentProcessor {
       // (no bare path/string). Read the file and hand it the raw bytes.
       const pdfData = new Uint8Array(await readFile(filePath));
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-      const pageTexts: string[] = [];
+      const pages: PdfPageText[] = [];
 
       const maxPages = Math.min(pdf.numPages, PDF_MAX_PAGES);
+      let openTable: TableShape | null = null;
       for (let i = 1; i <= maxPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         // Positions, not just strings: joining `item.str` with spaces threw the
         // page geometry away, interleaving the columns of a two-column paper and
         // flattening a table into one run of cell values. See `pdf-layout.ts`.
-        const text = reconstructPageText(content.items as PdfTextItem[]);
-        if (text.trim()) pageTexts.push(text);
+        // The table the previous page ended with goes along, so its rows
+        // continuing at the head of this page join it.
+        const read = reconstructPage(content.items as PdfTextItem[], openTable);
+        openTable = read.openTable;
+        if (read.text.trim()) pages.push(read);
       }
 
+      const pageTexts = [joinPdfPages(pages)];
       // A truncated document must SAY it was truncated. Silently indexing the
       // first 50 pages of a 400-page manual reads downstream as "the manual
       // says nothing about that".

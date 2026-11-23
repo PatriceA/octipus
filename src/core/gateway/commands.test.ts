@@ -235,7 +235,7 @@ describe('/sessions and /history (TUI resume)', () => {
 
   test('/history refuses another user\'s session and an unknown one alike', async () => {
     const findById = vi.spyOn(sessionRepository, 'findById');
-    const getLast = vi.spyOn(messageRepository, 'getLastMessages');
+    const getLast = vi.spyOn(messageRepository, 'findRecentBySession');
     findById.mockResolvedValue({ id: 'sess-1', userId: '22222222-2222-4333-8444-555555555555' } as never);
     expect((await registry.execute('/history', ctx))!.text).toBe('Session not found.');
     findById.mockResolvedValue(null);
@@ -246,21 +246,85 @@ describe('/sessions and /history (TUI resume)', () => {
   test('/history replays user and assistant turns oldest first, skipping tool rows', async () => {
     const at = (s: number) => new Date(1_700_000_000_000 + s * 1000);
     vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
-    vi.spyOn(messageRepository, 'getLastMessages').mockResolvedValue([
-      { role: 'assistant', content: 'hi back', createdAt: at(2) },
-      { role: 'tool', content: '{"ok":true}', createdAt: at(1) },
-      { role: 'user', content: 'hello', createdAt: at(0) },
+    vi.spyOn(messageRepository, 'findRecentBySession').mockResolvedValue([
+      { id: 'm1', role: 'user', content: 'hello', createdAt: at(0) },
+      { id: 'm2', role: 'tool', content: '{"ok":true}', createdAt: at(1) },
+      { id: 'm3', role: 'assistant', content: 'hi back', createdAt: at(2) },
     ] as never);
     const result = await registry.execute('/history', ctx);
     expect(result!.data).toEqual([
-      { role: 'user', content: 'hello', at: at(0).toISOString() },
-      { role: 'assistant', content: 'hi back', at: at(2).toISOString() },
+      { id: 'm1', role: 'user', content: 'hello', at: at(0).toISOString() },
+      { id: 'm3', role: 'assistant', content: 'hi back', at: at(2).toISOString() },
     ]);
     expect(result!.text).toBe('❯ hello\n\n  hi back');
+  });
+
+  test('/history asks for visible user and assistant rows only: a companion\'s internal check-in is not replayed', async () => {
+    vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
+    // Every row of the session, newest first — what an unfiltered read returns.
+    vi.spyOn(messageRepository, 'getLastMessages').mockResolvedValue([
+      { role: 'assistant', content: 'Internal briefing', createdAt: new Date(2), metadata: { visibility: 'internal' } },
+      { role: 'user', content: 'hello', createdAt: new Date(1) },
+    ] as never);
+    const recent = vi.spyOn(messageRepository, 'findRecentBySession').mockResolvedValue([
+      { role: 'user', content: 'hello', createdAt: new Date(1) },
+    ] as never);
+    const result = await registry.execute('/history', ctx);
+    expect(recent).toHaveBeenCalledWith('sess-1', 50, ['user', 'assistant']);
+    expect(JSON.stringify(result!.data)).not.toContain('Internal briefing');
   });
 
   test('/history without a session says so', async () => {
     const result = await registry.execute('/history', { ...ctx, sessionId: undefined });
     expect(result!.text).toBe('No active session.');
+  });
+});
+
+// `/model <name>` resolves a row id first (database-backed); unresolved, it matches the caller's models by name.
+vi.mock('@/models/resolve-model', () => ({ resolveModel: async () => null }));
+
+describe('/model (the terminal\'s model picker)', () => {
+  const user = '11111111-2222-4333-8444-555555555555';
+  const ctx = { userId: user, sessionId: 'sess-model', clientType: 'tui', trustLevel: 'user' as const };
+  let registry: CommandRegistry;
+  beforeEach(async () => {
+    registry = new CommandRegistry(); registerBuiltinCommands(registry);
+    const { getModelRegistry } = await import('@/models/model-registry');
+    vi.spyOn(getModelRegistry(), 'getModelsForUser').mockResolvedValue([
+      { name: 'fast', modelId: 'small-1', provider: 'ollama', isEnabled: true, isDefault: true },
+      { name: 'off', modelId: 'old-1', provider: 'ollama', isEnabled: false, isDefault: false },
+      { name: 'deep', modelId: 'large-2', provider: 'openrouter', isEnabled: true, isDefault: false },
+    ] as never);
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    (await import('@/core/agent/session-model-override'))._resetSessionModelOverridesForTesting();
+  });
+
+  beforeEach(() => { vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-model', userId: user } as never); });
+
+  test('alone it says what is set and lists the enabled models the caller may use as data', async () => {
+    const result = await registry.execute('/model', ctx);
+    expect(result!.text).toContain('No session override set');
+    expect(result!.data).toEqual({ current: null, models: [
+      { name: 'fast', modelId: 'small-1', provider: 'ollama', isDefault: true },
+      { name: 'deep', modelId: 'large-2', provider: 'openrouter', isDefault: false },
+    ] });
+  });
+
+  test('another user\'s session is refused as /history refuses it; a session not created yet is the caller\'s', async () => {
+    const findById = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-model', userId: '22222222-2222-4333-8444-555555555555' } as never);
+    expect(await registry.execute('/model', ctx)).toEqual({ text: 'Session not found.' });
+    expect((await registry.execute('/model deep', ctx))!.text).toBe('Session not found.');
+    findById.mockResolvedValue(null);
+    expect((await registry.execute('/model', ctx))!.data).toMatchObject({ current: null });
+  });
+
+  test('with a name it sets the caller\'s override for the session, as the chat command does; clear drops it', async () => {
+    const set = await registry.execute('/model deep', ctx);
+    expect(set!.text).toContain('switched to `large-2`');
+    expect(((await registry.execute('/model', ctx))!.data as { current: string }).current).toBe('deep');
+    expect((await registry.execute('/model clear', ctx))!.text).toContain('override cleared');
+    expect(((await registry.execute('/model', ctx))!.data as { current: string | null }).current).toBeNull();
   });
 });

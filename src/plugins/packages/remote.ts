@@ -75,19 +75,25 @@ function requireHttps(url: string): URL {
 /**
  * GET an https URL through the SSRF guard, following at most three
  * redirects (each https and checked again), and read at most `maxBytes`.
+ * `timeoutMs` bounds the whole download: every hop and the body together,
+ * not each hop on its own.
  */
 export async function downloadHttps(url: string, opts: { maxBytes: number; timeoutMs: number; accept?: string; sameOrigin?: boolean }): Promise<Buffer> {
   let current = requireHttps(url).toString();
   const origin = new URL(current).origin;
+  const deadline = AbortSignal.timeout(opts.timeoutMs);
+  const timedOut = () => new RemoteFetchError(`${url} took longer than ${opts.timeoutMs} ms; not read`);
   for (let hop = 0; ; hop++) {
+    if (deadline.aborted) throw timedOut();
     let res: Response;
     try {
       res = await fetchGuarded(current, {
         redirect: 'manual',
-        signal: AbortSignal.timeout(opts.timeoutMs),
+        signal: deadline,
         headers: opts.accept ? { accept: opts.accept } : undefined,
       }, 0);
     } catch (err) {
+      if (deadline.aborted) throw timedOut();
       throw new RemoteFetchError(`Could not fetch ${current}: ${(err as Error).message}`);
     }
     if (res.status >= 300 && res.status < 400) {
@@ -113,15 +119,29 @@ export async function downloadHttps(url: string, opts: { maxBytes: number; timeo
     const chunks: Buffer[] = [];
     let total = 0;
     const reader = res.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > opts.maxBytes) {
-        await reader.cancel().catch(() => {});
-        throw new RemoteFetchError(`${current} is larger than ${opts.maxBytes} bytes`);
+    // A body that stalls past the deadline is cancelled, which ends the pending read.
+    const onAbort = () => { void reader.cancel().catch(() => {}); };
+    deadline.addEventListener('abort', onAbort, { once: true });
+    try {
+      for (;;) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (err) {
+          if (deadline.aborted) throw timedOut();
+          throw new RemoteFetchError(`Could not read ${current}: ${(err as Error).message}`);
+        }
+        if (deadline.aborted) throw timedOut();
+        if (chunk.done) break;
+        total += chunk.value.byteLength;
+        if (total > opts.maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new RemoteFetchError(`${current} is larger than ${opts.maxBytes} bytes`);
+        }
+        chunks.push(Buffer.from(chunk.value));
       }
-      chunks.push(Buffer.from(value));
+    } finally {
+      deadline.removeEventListener('abort', onAbort);
     }
     return Buffer.concat(chunks);
   }

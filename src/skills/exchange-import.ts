@@ -10,7 +10,11 @@
  * skills; a skill is replaced only by its owner or an administrator, and a
  * mounted SKILL.md never. A URL import is for administrators, through the
  * SSRF-guarded download plugin packages use, and needs a valid trusted
- * signature. Every skill written is audited.
+ * signature. An import from a configured skill registry is open to anyone
+ * signed in (an administrator chose the registry): the bundle must hash to the
+ * index digest, match its listing, and carry a valid signature by a key of
+ * one of that registry's publishers (./registries.ts). Every skill written is
+ * audited.
  */
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -27,6 +31,7 @@ import type {
   SkillImportSource,
   SkillImportSourceKind,
 } from '@/shared/skill-exchange';
+import type { SkillRegistryPreviewSource } from '@/shared/skill-registry';
 import { coreLogger } from '@/utils/logger';
 import {
   type BundleTrust,
@@ -58,22 +63,43 @@ export interface ImportActor {
 interface ReadSource {
   kind: SkillImportSourceKind;
   url: string | null;
+  registry: SkillRegistryPreviewSource | null;
+  /** sha256 of the registry's URL (install records are keyed by it). */
+  registryUrlKey: string | null;
   parsed: ParsedImport;
   trust: BundleTrust;
 }
 
 /** Read and check the one source a request names. */
 async function readSource(source: SkillImportSource, actor: ImportActor): Promise<ReadSource> {
-  const given = (['bundle', 'skillMd', 'url'] as const).filter((k) => source[k] !== undefined);
-  if (given.length !== 1) throw new SkillBundleError('Give exactly one of bundle (the JSON text), skillMd (a SKILL.md) or url (an https bundle)');
+  const given = (['bundle', 'skillMd', 'url', 'registry'] as const).filter((k) => source[k] !== undefined);
+  if (given.length !== 1) throw new SkillBundleError('Give exactly one of bundle (the JSON text), skillMd (a SKILL.md), url (an https bundle) or registry (a registry listing)');
   if (source.bundle !== undefined) {
     // A bundle, or the JSON of an export from before bundles (unsigned).
     const { legacy, parsed } = parseImportJson(source.bundle);
-    return { kind: legacy ? 'legacy_export' : 'bundle', url: null, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }) };
+    return { kind: legacy ? 'legacy_export' : 'bundle', url: null, registry: null, registryUrlKey: null, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: false }) };
   }
   if (source.skillMd !== undefined) {
     const parsed = parseSkillMdImport(source.skillMd);
-    return { kind: 'skill_md', url: null, parsed, trust: checkBundleTrust(parsed.contentHash, null, { requireTrusted: false }) };
+    return { kind: 'skill_md', url: null, registry: null, registryUrlKey: null, parsed, trust: checkBundleTrust(parsed.contentHash, null, { requireTrusted: false }) };
+  }
+  if (source.registry !== undefined) {
+    // Fetched by the server like a URL import, so held to the same rule: a
+    // valid signature by a trusted key, here one of the registry's publishers.
+    // The index digest pins the bytes; it never stands in for the signature.
+    const { checkListingMatches, fetchRegistryBundle, installRecord, installWarnings, registryUrlKey, takeRegistryFetch } = await import('./registries');
+    takeRegistryFetch(actor.userId);
+    const { registry, entry, text } = await fetchRegistryBundle(source.registry);
+    const parsed = parseSkillBundle(text);
+    checkListingMatches(registry.name, entry, parsed);
+    const trust = checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: true, publishers: registry.publishers, source: `the registry ${registry.name}` });
+    const record = await installRecord(actor.userId, registry, entry.name);
+    // A signature covers the content, not the listing's name or version: say when the version is not provably newer.
+    parsed.warnings.push(...installWarnings(entry, record));
+    return {
+      kind: 'registry', url: entry.bundleUrl, registryUrlKey: registryUrlKey(registry.url), parsed, trust,
+      registry: { registry: registry.name, name: entry.name, version: entry.version, installed: record ? { version: record.version, contentHash: record.contentHash } : null },
+    };
   }
   const url = source.url as string;
   if (!actor.admin) throw new SkillBundleError('Only an administrator imports skills from a URL; download the bundle and upload it instead', 403);
@@ -87,7 +113,7 @@ async function readSource(source: SkillImportSource, actor: ImportActor): Promis
     throw err;
   }
   const parsed = parseSkillBundle(bytes.toString('utf8'));
-  return { kind: 'url', url, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: true }) };
+  return { kind: 'url', url, registry: null, registryUrlKey: null, parsed, trust: checkBundleTrust(parsed.contentHash, parsed.signature, { requireTrusted: true }) };
 }
 
 /** The skills the caller sees, by lower-case name: what an imported name collides with. Their own copy wins a clash. */
@@ -113,6 +139,7 @@ export async function previewImport(source: SkillImportSource, actor: ImportActo
   return {
     source: read.kind,
     url: read.url,
+    registry: read.registry,
     contentHash: read.parsed.contentHash,
     signature: read.trust.view,
     installable: read.trust.refusal === null,
@@ -250,6 +277,14 @@ export async function installImport(
       }
     }
     await auditImport(tx, read, result, actor);
+    const { detachReplacedSkills, recordRegistryInstall } = await import('./registries');
+    const listing = read.registry && read.registryUrlKey ? { registry: read.registry.registry, urlKey: read.registryUrlKey, name: read.registry.name } : undefined;
+    // A replaced skill no longer counts as installed from the listing it came from.
+    await detachReplacedSkills(tx, actor.userId, result.replaced.map((s) => s.id), listing);
+    const written = [...result.created, ...result.replaced].map((s) => s.id);
+    if (read.registry && listing && written.length > 0) {
+      await recordRegistryInstall(tx, actor.userId, { name: listing.registry, urlKey: listing.urlKey }, read.registry, read.parsed.contentHash, written);
+    }
   });
 
   coreLogger.info({ created: result.created.length, replaced: result.replaced.length, skipped: result.skipped.length, source: read.kind, signature: read.trust.view.status }, 'Skill bundle imported');
@@ -262,6 +297,7 @@ async function auditImport(tx: SkillExec, read: ReadSource, result: SkillImportR
   const common = {
     source: read.kind,
     ...(read.url ? { url: read.url } : {}),
+    ...(read.registry ? { registry: read.registry.registry, listing: read.registry.name, version: read.registry.version } : {}),
     contentHash: read.parsed.contentHash,
     signature: read.trust.view.status,
     publisher: read.trust.view.publisher,

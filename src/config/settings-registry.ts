@@ -995,6 +995,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'SKILLS_EXTERNAL_DIRS',
   },
+  {
+    key: 'skills.registries',
+    category: 'skills',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Skill registries to browse on the Skills page: [{ "name": "...", "url": "https://.../skills/index.json", "publishers": ["<name in plugins.trustedPublishers>"] }]. None by default: no registry is contacted unless listed here. A bundle installs from a registry only after a preview, when its bytes match the index digest and it carries a valid signature by a key of one of that registry\'s publishers (docs/SKILL-EXCHANGE.md#registries).',
+    isSecret: false,
+  },
 
   // ── API (runtime-changeable subset) ──
   {
@@ -1717,6 +1726,72 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
       'Allow group channels in listen or proactive mode to post unprompted (offers, short answers). Off by default; each channel still has its own quiet hours, rate limit and budget.',
     isSecret: false,
     envVar: 'GROUP_CHANNELS_UNPROMPTED_ENABLED',
+  },
+
+  // ── Email channel ──
+  {
+    key: 'emailChannel.enabled',
+    category: 'channels',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Talk to Octipus by mail: mail to the channel mailbox from an allowed, authenticated, linked sender starts or continues a conversation, answered by mail. Off by default.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.replyMode',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: 'draft',
+    description: 'draft (default): each answer is saved as a draft reply in the channel mailbox for a person to review and send. send: answers are sent at once, with no person in between.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.accountId',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Id of the IMAP mail account the channel reads and answers from: a personal mailbox of an admin, used for nothing else, with an outgoing (SMTP) server. Automatic triage and the owner\'s mail tool skip it.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.allowedSenders',
+    category: 'channels',
+    valueType: 'string_array',
+    defaultValue: [],
+    description: 'Sender addresses allowed to use the email channel. Mail from any other address is dropped and recorded, never answered.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.trustedAuthservIds',
+    category: 'channels',
+    valueType: 'string_array',
+    defaultValue: [],
+    description: 'The authserv-id your receiving mail server writes in Authentication-Results (e.g. mx.example.com). Only its DMARC/DKIM/SPF verdict is believed; with none set, no mail is accepted.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.pollSeconds',
+    category: 'channels',
+    valueType: 'number',
+    defaultValue: 60,
+    description: 'How often the channel mailbox is checked for new mail (seconds, 15 to 3600).',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.maxMessageBytes',
+    category: 'channels',
+    valueType: 'number',
+    defaultValue: 10 * 1024 * 1024,
+    description: 'Largest mail (attachments included) the channel runs as a turn; the sender of a larger one is told so.',
+    isSecret: false,
+  },
+  {
+    key: 'emailChannel.maxPerSenderPerHour',
+    category: 'channels',
+    valueType: 'number',
+    defaultValue: 20,
+    description: 'Mails one sender may start turns with per hour; more are dropped and recorded without an answer.',
+    isSecret: false,
   },
 
   // ── Context hooks ──

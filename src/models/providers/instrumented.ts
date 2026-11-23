@@ -6,6 +6,7 @@ import { applyProviderSettings } from '../provider-options';
 import { type Pseudonyms, StreamRestorer } from '@/core/protection/pseudonymize';
 import { getLocalModelGate, localRunnerKey } from '../local-gate';
 import { recordLlmRequest } from '@/core/telemetry';
+import { SpanKind, startSpan, withSpan, type SpanAttributes } from '@/core/tracing';
 import { requestPriority } from '../rate-limiter';
 import { estimateStreamUsage } from './usage';
 
@@ -231,25 +232,55 @@ export function currentUsageSessionId(): string | undefined {
 
 export async function accountCompletion(options: CompletionOptions, provider: string, run: (o: CompletionOptions) => Promise<CompletionResult>): Promise<CompletionResult> {
   if (options.accountingOwner) return run(options);
-  if (provider === 'cli') await assertCliMayRun(options);
-  const prepared = provider === 'cli' ? options : await prepare(options, provider);
-  let observed: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> | undefined;
-  const leave = await enterLocalRunner(prepared, provider);
-  const started = Date.now();
-  try {
-    const result = await run({ ...prepared, accountingOwner: true, accountingResponse: value => { observed = value; } });
-    recordRequestMetrics(provider, result.model || prepared.model, 'success', started, result.usage);
-    await recordProviderUsage(prepared, provider, result);
-    const p = pseudonymized.get(prepared);
-    return p ? restoreResult(result, p) : result;
-  } catch (err) {
-    // Preserve a received/billable response even if decoding tool arguments fails.
-    recordRequestMetrics(provider, prepared.model, 'error', started);
-    if (observed) await recordProviderUsage(prepared, provider, observed, true);
-    throw err;
-  } finally {
-    leave();
-  }
+  return withSpan(`chat ${options.model}`, modelSpanAttributes(provider, options, false), async (span) => {
+    if (provider === 'cli') await assertCliMayRun(options);
+    const prepared = provider === 'cli' ? options : await prepare(options, provider);
+    let observed: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> | undefined;
+    const leave = await enterLocalRunner(prepared, provider);
+    const started = Date.now();
+    try {
+      const result = await run({ ...prepared, accountingOwner: true, accountingResponse: value => { observed = value; } });
+      span.setAttributes(usageSpanAttributes(result.model || prepared.model, result.usage));
+      recordRequestMetrics(provider, result.model || prepared.model, 'success', started, result.usage);
+      await recordProviderUsage(prepared, provider, result);
+      const p = pseudonymized.get(prepared);
+      return p ? restoreResult(result, p) : result;
+    } catch (err) {
+      // Preserve a received/billable response even if decoding tool arguments fails.
+      recordRequestMetrics(provider, prepared.model, 'error', started);
+      if (observed) await recordProviderUsage(prepared, provider, observed, true);
+      throw err;
+    } finally {
+      leave();
+    }
+  }, SpanKind.CLIENT);
+}
+
+/**
+ * The span attributes of a model call: provider, model and request type, and
+ * whether it streams. Never the messages (src/core/tracing.ts).
+ */
+function modelSpanAttributes(provider: string, options: CompletionOptions, streaming: boolean): SpanAttributes {
+  return {
+    'gen_ai.operation.name': 'chat',
+    'gen_ai.provider.name': provider,
+    'gen_ai.request.model': options.model,
+    'octipus.llm.streaming': streaming,
+    'octipus.llm.request_type': options.requestType ?? 'chat',
+  };
+}
+
+/** Token counts and the model that answered, once the provider has. */
+function usageSpanAttributes(model: string | undefined, usage: CompletionResult['usage'] | undefined): SpanAttributes {
+  return {
+    'gen_ai.response.model': model,
+    ...(usage && usage.available !== false ? {
+      'gen_ai.usage.input_tokens': usage.inputTokens,
+      'gen_ai.usage.output_tokens': usage.outputTokens,
+      'gen_ai.usage.cache_read.input_tokens': usage.cacheReadTokens,
+      'octipus.llm.usage_estimated': usage.estimated,
+    } : {}),
+  };
 }
 
 /**
@@ -272,7 +303,23 @@ async function enterLocalRunner(options: CompletionOptions, provider: string): P
 }
 
 export async function* accountStream(options: CompletionOptions, provider: string, run: (o: CompletionOptions) => AsyncGenerator<StreamChunk>): AsyncGenerator<StreamChunk> {
-  const prepared = await prepare(options, provider);
+  // Started by hand rather than with `withSpan`: a generator yields between
+  // chunks, and the consumer's own spans in between are not this call's children.
+  const span = startSpan(`chat ${options.model}`, modelSpanAttributes(provider, options, true), SpanKind.CLIENT);
+  // Everything before the request: a failure here sent nothing and bills
+  // nothing, so it ends the span without the accounting in `finally` below.
+  let prepared: CompletionOptions;
+  let restorer: ReturnType<typeof streamRestorerFor>;
+  let leave: () => void;
+  try {
+    prepared = await prepare(options, provider);
+    restorer = streamRestorerFor(pseudonymized.get(prepared));
+    leave = await enterLocalRunner(prepared, provider);
+  } catch (err) {
+    span.fail(err);
+    span.end();
+    throw err;
+  }
   let usage: CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
   let model = options.model;
   let requestId: string | undefined;
@@ -280,8 +327,6 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   // What the provider generated, for an estimate when it never reports usage.
   let chunks = 0;
   let outputChars = 0;
-  const restorer = streamRestorerFor(pseudonymized.get(prepared));
-  const leave = await enterLocalRunner(prepared, provider);
   const started = Date.now();
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {
@@ -297,6 +342,9 @@ export async function* accountStream(options: CompletionOptions, provider: strin
     }
     if (restorer) yield* restorer.end();
     completed = true;
+  } catch (err) {
+    span.fail(err);
+    throw err;
   } finally {
     leave();
     recordRequestMetrics(provider, model, completed ? 'success' : 'error', started, completed ? usage : undefined);
@@ -305,6 +353,9 @@ export async function* accountStream(options: CompletionOptions, provider: strin
     // in their last chunk: record an estimate rather than nothing. One that
     // produced no chunk was never answered and stays unknown.
     if (!completed && usage.available === false && chunks > 0) usage = estimateStreamUsage(prepared, outputChars);
+    // A reader that stopped early is not a failure of the call: its outcome says so.
+    span.setAttributes({ ...usageSpanAttributes(model, usage), 'octipus.outcome': completed ? 'success' : 'incomplete' });
+    span.end();
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
   }
 }

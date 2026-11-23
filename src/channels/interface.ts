@@ -3,6 +3,7 @@ import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType, UnifiedMessage } from '@/core/types';
 import { generateId } from '@/utils/crypto';
 import { channelLogger } from '@/utils/logger';
+import { SpanKind, withSpan } from '@/core/tracing';
 
 export interface ChannelConfig {
   enabled: boolean;
@@ -24,6 +25,15 @@ export abstract class BaseChannel extends EventEmitter {
   abstract readonly name: string;
 
   protected connected = false;
+
+  /**
+   * A chat a person watches live: it gets progress notes ("Working on it…"),
+   * and a typed yes/no in it may answer a permission or approval prompt.
+   * False for email, where every note is a mail and a sender's
+   * authentication is weaker than a chat app's: only the turn's answer goes
+   * out, and approvals are answered in the web app.
+   */
+  readonly interactive: boolean = true;
 
   constructor() {
     super();
@@ -317,7 +327,12 @@ export class UnifiedMessageInterface extends EventEmitter {
       throw new Error(`Channel not connected: ${channelType}`);
     }
 
-    return channel.send(channelId, response);
+    // The channel type and how many attachments, never the channel id (a
+    // phone number on WhatsApp) or the content (src/core/tracing.ts).
+    return withSpan('channel.deliver', {
+      'octipus.channel': channelType,
+      'octipus.channel.attachments': response.attachments?.length ?? 0,
+    }, () => channel.send(channelId, response), SpanKind.CLIENT);
   }
 
   /**

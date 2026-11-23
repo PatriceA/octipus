@@ -108,6 +108,44 @@ describe('keyboard navigation', () => {
     expect(raw[end]).toContain(CURSOR_MARKER);
     expect(lines[3]).toMatch(/^2 next/);
   });
+
+  test('with soft wrap on, Up and Down move one screen row, keeping the column on screen', () => {
+    // Width 22: gutter 2, 20 cells of text, one kept for the cursor: rows of 19.
+    const { editor, rec } = setup(`${'a'.repeat(19)}${'b'.repeat(19)}${'c'.repeat(5)}\nnext line`);
+    editor.setWrap(true);
+    editor.render(22);
+    rec.buffer.setCursor({ line: 0, col: 7 });
+    editor.handleInput('\x1b[B');
+    expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 19 + 7 }); // the row below, same column on screen
+    editor.handleInput('\x1b[B');
+    expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 38 + 5 }); // the last row is shorter: its end
+    editor.handleInput('\x1b[B');
+    expect(rec.buffer.getCursor()).toEqual({ line: 1, col: 7 }); // the column comes back on the next row long enough
+    editor.handleInput('\x1b[A');
+    editor.handleInput('\x1b[A');
+    expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 19 + 7 });
+    editor.handleInput('\x1b[1;2A'); // Shift+Up extends the selection by a row
+    expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 7 });
+    expect(selected(rec)).toBe('a'.repeat(12) + 'b'.repeat(7));
+  });
+
+  test('a wrapped row never leaves the cursor past its last character: Down from a long row lands inside the next', () => {
+    const { editor, rec } = setup(`${'x'.repeat(19)}${'y'.repeat(19)}${'z'.repeat(19)}`);
+    editor.setWrap(true);
+    editor.render(22);
+    rec.buffer.setCursor({ line: 0, col: 18 });
+    editor.handleInput('\x1b[B');
+    expect(rec.buffer.getCursor()).toEqual({ line: 0, col: 37 });
+    expect(editor.render(22).findIndex((row) => row.includes(CURSOR_MARKER))).toBe(1);
+  });
+
+  test('with soft wrap off, Up and Down still move by buffer line', () => {
+    const { editor, rec } = setup(`${'a'.repeat(60)}\nnext`);
+    editor.render(22);
+    rec.buffer.setCursor({ line: 0, col: 7 });
+    editor.handleInput('\x1b[B');
+    expect(rec.buffer.getCursor()).toEqual({ line: 1, col: 4 });
+  });
 });
 
 describe('the mouse', () => {

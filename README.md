@@ -176,7 +176,7 @@ Highlights from the [roadmap](./ROADMAP.md):
 - **Measured workflow baselines** — run the opt-in live-provider suite and record its configuration and limits.
 - **Trajectory learning consumers** — labeled training pairs from recorded runs.
 - **Dynamic role definition from chat** — "define a role that does X with tools Y" → live role.
-- **Skill marketplace** — discover and install community skills from the web UI (export/import of signed bundles ships: [Skill exchange](docs/SKILL-EXCHANGE.md)).
+- **Skill marketplace** — ratings and a community index (export/import of signed bundles, and browsing operator-configured skill registries, ship: [Skill exchange](docs/SKILL-EXCHANGE.md)).
 - **Pipeline templates from natural language** — describe a workflow, get a runnable pipeline.
 - **First-class human-in-the-loop primitive** — wait-for-input nodes with form schemas.
 - **Mobile clients** — a Flutter client for iOS and Android lives in a separate repository, [PatriceA/mobile-octipus](https://github.com/PatriceA/mobile-octipus) (version 0.1.0, not yet released).

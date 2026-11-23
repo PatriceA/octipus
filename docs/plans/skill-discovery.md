@@ -3,6 +3,12 @@
 > **Historical implementation plan.** It preserves the intended phases and
 > Bun-era verification commands. Current skill behavior is documented in the
 > contributor and architecture documentation; unchecked boxes are not a current backlog.
+>
+> "Discovery" here means choosing which installed skills reach a prompt.
+> Finding skills other people published is a different feature: static,
+> operator-configured skill registries browsed on the Skills page and
+> installed through the exchange's preview and install
+> ([SKILL-EXCHANGE.md#registries](../SKILL-EXCHANGE.md#registries)).
 
 **Goal:** Replace static `buildTopicPromptFragment(topic)` injection with dynamic per-message discovery combining (1) keyword/regex triggers, (2) embedding similarity, (3) always-inject flag for tiny skills.
 

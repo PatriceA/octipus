@@ -17,6 +17,7 @@ export {
   Container,
   CURSOR_MARKER,
   Editor,
+  fuzzyFilter,
   getKeybindings,
   Input,
   isFocusable,
@@ -42,6 +43,9 @@ export {
   wrapTextWithAnsi,
 } from '@earendil-works/pi-tui';
 export type {
+  AutocompleteItem,
+  AutocompleteProvider,
+  AutocompleteSuggestions,
   Component,
   EditorOptions,
   EditorTheme,
