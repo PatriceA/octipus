@@ -13,6 +13,11 @@
  * While the transcript search is open (`showAll`) every item in memory is
  * rendered: the search reads the rendered rows, and a message outside the
  * window was neither found nor counted.
+ *
+ * With the top of everything in memory in view, the pane is told so
+ * (`reachedTop`): it asks the server for older turns when there are any,
+ * and when they arrive the scroll position moves down by the rows they
+ * added (`takeTopShift`), as for the window growing.
  */
 import { type Component, ScrollView, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
@@ -20,6 +25,16 @@ import type { MessagesPane } from './messages-pane';
 export class TranscriptScroll extends ScrollView {
   /** Rows added above the current position since the last layout. */
   pendingShift = 0;
+  /**
+   * Ask for a frame that renders the document again (the app's
+   * `tui.requestRender`). A scroll alone redraws from the last frame's rows
+   * without rendering the document, so the window would not grow until
+   * something else changed.
+   */
+  requestContent: () => void = () => {};
+  /** The reader scrolled up since the last layout (wheel, keys, a drag): not the view moving itself. */
+  private scrolledUp = false;
+  private shifting = false;
 
   constructor(readonly document: TranscriptDocument) {
     super(document, { follow: 'end', primary: true, overscroll: 'chain', scrollbar: 'auto' });
@@ -28,10 +43,30 @@ export class TranscriptScroll extends ScrollView {
 
   override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
     super.updateLayout(contentHeight, viewportHeight, requestRender);
-    if (!this.pendingShift) return;
-    const shift = this.pendingShift;
-    this.pendingShift = 0;
-    this.scrollTo(this.scrollTop + shift);
+    if (this.pendingShift) {
+      const shift = this.pendingShift;
+      this.pendingShift = 0;
+      this.shifting = true;
+      try { this.scrollTo(this.scrollTop + shift); } finally { this.shifting = false; }
+    }
+    const byReader = this.scrolledUp;
+    this.scrolledUp = false;
+    this.document.laidOut(this, contentHeight, byReader);
+  }
+
+  override scrollTo(scrollTop: number, options?: { disableFollow?: boolean }): void {
+    if (!this.shifting && scrollTop < this.scrollTop) this.scrolledUp = true;
+    super.scrollTo(scrollTop, options);
+  }
+
+  override scrollBy(lines: number): number {
+    if (lines < 0) this.scrolledUp = true;
+    return super.scrollBy(lines);
+  }
+
+  override scrollToStart(): void {
+    this.scrolledUp = true;
+    super.scrollToStart();
   }
 }
 
@@ -47,8 +82,24 @@ export class TranscriptDocument implements Component {
     this.pane.readingLatest = () => scroll.isFollowingEnd;
   }
 
+  /**
+   * After every layout, scroll-only frames included: near the top of the
+   * window, render again so older items come in; at the top of everything in
+   * memory (while reading history, within a screen of it; while following the
+   * end, when it all fits), older turns from the server, if any.
+   */
+  laidOut(scroll: TranscriptScroll, contentHeight: number, byReader = false): void {
+    if (scroll.viewportHeight <= 0 || this.showAll()) return;
+    const nearTop = scroll.isFollowingEnd ? contentHeight <= scroll.viewportHeight : scroll.scrollTop < scroll.viewportHeight;
+    if (!nearTop) return;
+    if (this.pane.canGrow()) { if (!scroll.isFollowingEnd) scroll.requestContent(); return; }
+    this.pane.reachedTop(byReader);
+  }
+
   render(width: number): string[] {
     const scroll = this.scroll;
+    const shift = this.pane.takeTopShift(width);
+    if (shift && scroll && !scroll.isFollowingEnd) scroll.pendingShift += shift;
     if (this.showAll()) {
       if (this.pane.canGrow()) {
         const before = this.pane.documentLines(width).length;

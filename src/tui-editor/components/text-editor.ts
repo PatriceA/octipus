@@ -27,7 +27,7 @@ import { decodeKittyPrintable } from '@/tui-kit/editing';
  * The hardware cursor is positioned via pi-tui's CURSOR_MARKER, so IME
  * candidate windows land in the right spot for CJK input methods.
  */
-import type { Position } from '../editor/buffer';
+import { type Position, positionEq } from '../editor/buffer';
 import { matchBracket } from '../editor/brackets';
 import { cellOf, cellWidth, displayText, graphemes, nextBoundary } from '../editor/columns';
 import { highlight, type TokenKind } from '../editor/highlight';
@@ -201,8 +201,8 @@ export class TextEditor implements Component, Focusable {
 
     if (matchesKey(data, 'left') || matchesKey(data, 'shift+left'))      { buf.moveCursor(0, -1, matchesKey(data, 'shift+left')); }
     else if (matchesKey(data, 'right') || matchesKey(data, 'shift+right')) { buf.moveCursor(0, 1, matchesKey(data, 'shift+right')); }
-    else if (matchesKey(data, 'up') || matchesKey(data, 'shift+up'))       { buf.moveCursor(-1, 0, matchesKey(data, 'shift+up')); }
-    else if (matchesKey(data, 'down') || matchesKey(data, 'shift+down'))   { buf.moveCursor(1, 0, matchesKey(data, 'shift+down')); }
+    else if (matchesKey(data, 'up') || matchesKey(data, 'shift+up'))       { this.vertical(active, -1, matchesKey(data, 'shift+up')); }
+    else if (matchesKey(data, 'down') || matchesKey(data, 'shift+down'))   { this.vertical(active, 1, matchesKey(data, 'shift+down')); }
     else if (matchesKey(data, 'ctrl+home') || matchesKey(data, 'ctrl+shift+home')) { buf.moveDocStart(matchesKey(data, 'ctrl+shift+home')); }
     else if (matchesKey(data, 'ctrl+end') || matchesKey(data, 'ctrl+shift+end'))   { buf.moveDocEnd(matchesKey(data, 'ctrl+shift+end')); }
     else if (matchesKey(data, 'home') || matchesKey(data, 'ctrl+a') || matchesKey(data, 'shift+home')) { buf.moveLineStart(matchesKey(data, 'shift+home')); }
@@ -228,6 +228,27 @@ export class TextEditor implements Component, Focusable {
 
     this.scrollIntoView(active);
   }
+
+  /**
+   * Up/Down: a buffer line with soft wrap off; with it on, a screen row, so a
+   * wrapped line is walked row by row. The cell on screen is kept across
+   * rows too short for it (`rowGoal`), as the buffer keeps it across lines.
+   */
+  private vertical(active: BufferRecord, delta: number, extend: boolean): void {
+    const buf = active.buffer;
+    if (!this.wrap) { buf.moveCursor(delta, 0, extend); return; }
+    const cursor = buf.getCursor();
+    const here = this.cursorRow(active);
+    const row = this.segmentsOf(active, cursor.line)[here.sub];
+    const goal = this.rowGoal && positionEq(this.rowGoal.at, cursor) ? this.rowGoal.cell : cellOf(buf.getLine(cursor.line), cursor.col) - row.startCell;
+    const target = stepRows(here, delta, buf.lineCount(), (line) => this.rowsOf(active, line));
+    if (target.line === here.line && target.sub === here.sub) return;
+    const rows = this.segmentsOf(active, target.line);
+    buf.setCursor({ line: target.line, col: colInSegment(buf.getLine(target.line), rows[target.sub], goal, target.sub === rows.length - 1) }, extend);
+    this.rowGoal = { cell: goal, at: buf.getCursor() };
+  }
+  /** The cell within its row that Up/Down keep with soft wrap on, and where the cursor was when it was set. */
+  private rowGoal: { cell: number; at: Position } | null = null;
 
   /** PageUp/PageDown: the cursor and the view move by a page together. */
   private page(active: BufferRecord, delta: number, extend: boolean): void {

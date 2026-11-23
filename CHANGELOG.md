@@ -29,6 +29,18 @@ labels reflect blast radius, not contract guarantees.
   have no route to it. Not available in shared spaces; refreshing from the
   knowledge base is not built. Migration `0207_artifact_agent_refresh` adds
   the `artifact_agent_refresh` table.
+- **Terminal chat: older turns, a model picker and `@` mentions**
+  ([guide](docs/guides/tui.md#reading-a-conversation)). Scrolling up past
+  the 50 messages a resumed session replays now loads earlier ones from the
+  server, 100 at a time, with a notice while there are more, while loading
+  or when a load failed. `/model` alone opens a picker of the models you
+  may use and sets this session's root agent model (`/model <name>` and
+  `/model clear` work as text; the gateway gained a `/model` command).
+  `@` completes agents, skills and recent sessions above project files, as
+  text tokens the agent reads. Fixed: on the alternate screen, scrolling
+  up in an idle session stopped under "N earlier messages above"; `/history`
+  replayed a companion's internal check-ins; the editor's Up/Down skipped
+  the rows of a soft-wrapped line.
 - **Browse skill registries**
   ([docs](docs/SKILL-EXCHANGE.md#registries)). Skills → Import → **Browse
   registries** lists and searches the skills of static JSON indexes an

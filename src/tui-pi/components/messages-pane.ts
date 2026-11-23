@@ -14,9 +14,13 @@
  * the top of what is shown brings older items into the window, and returning
  * to the latest shrinks it again. At most `maxItems` are kept in memory; the
  * oldest are dropped beyond that, with a notice at the top saying so.
+ *
+ * Older turns still on the server (`setOlder`): reaching the top of
+ * everything in memory calls `onReachTop`, and what it loads is put above
+ * with `prependMessages` without moving the rows being read.
  */
 import { sanitizeStreaming, type SettledText } from './live-text';
-import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayText } from '@/tui-kit';
+import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayLine, displayText } from '@/tui-kit';
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 import { wheelDirection } from '../terminal-actions';
@@ -53,6 +57,13 @@ export interface MessagesPaneOptions {
   /** Items rendered at once while reading the latest. Default 200. */
   windowSize?: number;
 }
+
+/**
+ * Whether turns older than the oldest one here are on the server: `more`
+ * (reaching the top asks for them), `loading`, `failed` (said, and asked
+ * again on the next reach), `none`.
+ */
+export type OlderState = { state: 'none' | 'more' | 'loading' } | { state: 'failed'; reason: string };
 
 export const DEFAULT_MAX_ITEMS = 5_000;
 export const DEFAULT_WINDOW = 200;
@@ -132,6 +143,15 @@ export class MessagesPane implements Component {
   private itemRows: Array<{ item: TranscriptItem; start: number; end: number }> = [];
   /** Whether new tool groups and thinking items start expanded (`app.tools.toggle`). */
   private detail = false;
+  private older: OlderState = { state: 'none' };
+  /**
+   * Something above the rows being read changed (older turns came in, the
+   * notice changed): the first item below it and the row it started on, to
+   * move a scroll view by the rows added (`takeTopShift`).
+   */
+  private topAnchor: { item: TranscriptItem; start: number } | null = null;
+  /** The reader is at the top of everything in memory and older turns are on the server: load them. */
+  onReachTop: (() => void) | null = null;
 
   constructor(private readonly options: MessagesPaneOptions = {}) {
     this.height = options.maxVisible ?? 30;
@@ -210,7 +230,67 @@ export class MessagesPane implements Component {
   }
   reset(): void {
     this.history = []; this.live = null; this.liveRaw = null; this.liveSettled = null; this.offset = 0; this.windowStart = 0; this.dropped = 0;
-    this.frozen = null; this.frozenMessages = []; this.newer = 0; this.changed();
+    this.frozen = null; this.frozenMessages = []; this.newer = 0; this.older = { state: 'none' }; this.topAnchor = null; this.changed();
+  }
+  /** Whether older turns are on the server; shown in the notice at the top. */
+  setOlder(older: OlderState): void {
+    this.markTop();
+    this.older = older;
+    if (this.frozen) this.refreeze();
+    this.changed();
+  }
+  getOlder(): OlderState { return this.older; }
+  /**
+   * The reader reached the top of what is in memory. Asks for older turns
+   * when the server has them and nothing was dropped here: after a drop the
+   * oldest turn in memory is no longer the one they would continue from.
+   * After a failed load only a scroll of the reader's own (`byReader`) asks
+   * again, never a redraw.
+   */
+  reachedTop(byReader = false): void {
+    if (this.windowStart > 0 || this.dropped > 0 || this.room() === 0) return;
+    if (this.older.state === 'more' || (this.older.state === 'failed' && byReader)) this.onReachTop?.();
+  }
+  /**
+   * Put older messages above everything in memory, oldest first, keeping
+   * the reading position. Only as many as the memory cap leaves room for
+   * (the newest of them); returns how many went in.
+   */
+  prependMessages(messages: readonly ChatMessage[]): number {
+    const room = Math.max(0, this.maxItems - this.history.length);
+    const taken = messages.slice(Math.max(0, messages.length - room));
+    if (!taken.length) return 0;
+    this.markTop();
+    const shown = taken.map(message => {
+      const item = { ...message, content: displayText(message.content) };
+      this.raw.set(item, message.content);
+      return item;
+    });
+    this.history.unshift(...shown);
+    if (this.windowStart > 0) this.windowStart += shown.length;
+    if (this.frozen) this.refreeze();
+    this.changed();
+    return shown.length;
+  }
+  /** Room left under the memory cap. */
+  room(): number { return Math.max(0, this.maxItems - this.history.length); }
+  /**
+   * Rows added above the first item that was rendered before the last
+   * `setOlder` / `prependMessages`, at `width`; zero when nothing changed
+   * there. A scroll view moves down by it so what is on screen stays put.
+   */
+  takeTopShift(width: number): number {
+    const anchor = this.topAnchor;
+    this.topAnchor = null;
+    if (!anchor) return 0;
+    this.lines(Math.max(1, width));
+    const now = this.itemRows.find(entry => entry.item === anchor.item);
+    return now ? now.start - anchor.start : 0;
+  }
+  private markTop(): void {
+    if (this.topAnchor) return;
+    const first = this.itemRows.find(entry => entry.item.kind !== 'notice');
+    if (first) this.topAnchor = { item: first.item, start: first.start };
   }
   /** Older items in memory that the window does not show yet. */
   canGrow(): boolean { return this.windowStart > 0; }
@@ -246,6 +326,7 @@ export class MessagesPane implements Component {
       lines = this.frozen ?? this.lines(this.width);
       max = Math.max(0, lines.length - Math.max(1, this.height - 1));
     }
+    if (this.offset + by > max) this.reachedTop(true);
     const next = Math.min(max, this.offset + by);
     if (next === this.offset) return false;
     if (!this.frozen) this.freeze(lines);
@@ -339,16 +420,27 @@ export class MessagesPane implements Component {
     return this.live ? { role: 'assistant', content: this.live, timestamp: new Date() } : null;
   }
 
-  /** The notice at the top of the window, when something is above it or was dropped. */
+  /** The notice at the top of the window, when something is above it, was dropped, or is on the server. */
   private prefix(): TranscriptNotice[] {
     const text = this.windowStart > 0
       ? `↑ ${this.windowStart.toLocaleString('en-US')} earlier message${this.windowStart === 1 ? '' : 's'} above — scroll up to show them`
       : this.dropped > 0
         ? `${this.dropped.toLocaleString('en-US')} earlier message${this.dropped === 1 ? ' is' : 's are'} no longer kept here (limit ${this.maxItems.toLocaleString('en-US')}); /history reloads the latest from the server`
-        : null;
+        : this.olderText();
     if (text === null) return [];
     if (this.notice?.text !== text) this.notice = { text, item: { kind: 'notice', text } };
     return [this.notice.item];
+  }
+
+  private olderText(): string | null {
+    switch (this.older.state) {
+      case 'more': return this.room() > 0
+        ? '↑ Older messages are on the server — scroll up to load them'
+        : `Older messages are on the server; this transcript keeps at most ${this.maxItems.toLocaleString('en-US')}`;
+      case 'loading': return 'Loading older messages…';
+      case 'failed': return `Older messages could not be loaded: ${displayLine(this.older.reason)} — scroll up to try again`;
+      default: return null;
+    }
   }
 
   private windowItems(): TranscriptItem[] { return [...this.prefix(), ...this.history.slice(this.windowStart)]; }
@@ -434,6 +526,8 @@ export class MessagesPane implements Component {
       this.frozenHeight = this.height;
     }
     const lines = this.frozen ?? this.lines(width);
+    // Everything fits: the reader sees the top already.
+    if (lines.length <= this.height) this.reachedTop();
     const hint = this.offset > 0 || lines.length > this.height;
     const budget = Math.max(0, this.height - (hint ? 1 : 0));
     const end = Math.max(0, lines.length - this.offset);

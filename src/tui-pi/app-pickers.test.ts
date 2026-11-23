@@ -169,3 +169,48 @@ describe('input history', () => {
     await t.app.stop();
   });
 });
+
+describe('model picker', () => {
+  const MODELS = { current: null, models: [
+    { name: 'fast', modelId: 'small-1', provider: 'ollama', isDefault: true },
+    { name: 'deep', modelId: 'large-2', provider: 'openrouter', isDefault: false },
+  ] };
+
+  test('/model alone lists the models from the gateway; Enter switches this session to the choice', async () => {
+    const t = mount();
+    t.submit('/model');
+    expect(gateway.sendCommand).toHaveBeenCalledWith('model');
+    expect(t.picker()).toContain('Loading models…');
+    gateway.listener({ kind: 'command.result', name: 'model', result: 'No session override set.', data: MODELS });
+    expect(t.picker()).toContain('Model for this session 2/2');
+    expect(t.picker()).toContain('fast  (default)');
+    t.type('deep');
+    expect(t.picker()).toContain('Model: large-2');
+    t.press('\r');
+    expect(t.overlays).toHaveLength(0);
+    expect(gateway.sendCommand).toHaveBeenLastCalledWith('model', { value: 'deep' });
+    await t.app.stop();
+  });
+
+  test('with an override set, the first entry drops it; an answer without a list shows the server\'s text', async () => {
+    const t = mount();
+    t.submit('/model');
+    gateway.listener({ kind: 'command.result', name: 'model', result: 'x', data: { ...MODELS, current: 'deep' } });
+    expect(t.picker()).toContain('deep  (this session)');
+    expect(t.picker()).toContain('Configured default');
+    t.press('\r');
+    expect(gateway.sendCommand).toHaveBeenLastCalledWith('model', { value: 'clear' });
+    t.submit('/model');
+    gateway.listener({ kind: 'command.result', name: 'model', result: 'Unknown command: /model.' });
+    expect(t.picker()).toContain('Unknown command: /model.');
+    await t.app.stop();
+  });
+
+  test('/model with a name goes to the gateway as text, without a picker', async () => {
+    const t = mount();
+    t.submit('/model deep');
+    expect(t.overlays).toHaveLength(0);
+    expect(gateway.sendCommand).toHaveBeenCalledWith('model', { value: 'deep' });
+    await t.app.stop();
+  });
+});

@@ -53,4 +53,20 @@ describe.skipIf(process.platform === 'win32')('pickers in a real terminal', () =
     // The list is longer than the screen: its rows, not its heading, are what shows.
     await tui.waitFor('Show hotkeys');
   });
+
+  test('/model: the session\'s model, chosen from the gateway\'s list', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 100, 28, [], { commandResults: { model: { result: 'No session override set.', data: {
+      current: null,
+      models: [{ name: 'fast', modelId: 'small-1', provider: 'ollama', isDefault: true }, { name: 'deep', modelId: 'large-2', provider: 'openrouter', isDefault: false }],
+    } } } });
+    await tui.waitFor('connected');
+    tui.send('/model\r');
+    await tui.waitFor('Model for this session 2/2');
+    tui.send('deep');
+    await tui.waitFor('Provider: openrouter');
+    await tui.saveScreen('picker-model');
+    tui.send(KEY.Enter);
+    await tui.waitFor('Model for this session', true);
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'command', name: 'model', args: { value: 'deep' } }));
+  });
 });
