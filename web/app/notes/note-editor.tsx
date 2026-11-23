@@ -70,6 +70,8 @@ interface EditorProps {
    * button's place, with Retry after a failed save. `onSave` (⌘S) saves now.
    */
   autosave?: AutosaveStatus;
+  /** The title field gained (true) or lost (false) the focus: a new note is not created mid-title. */
+  onTitleEditing?: (editing: boolean) => void;
   /**
    * Only the text is edited here — a note of a space on another install
    * (federation §8.3): its title, tags, kind, pin and archive are the
@@ -347,6 +349,8 @@ export function NoteEditor(props: EditorProps) {
           value={draftTitle}
           readOnly={textOnly}
           onChange={(e) => setDraftTitle(e.target.value)}
+          onFocus={() => props.onTitleEditing?.(true)}
+          onBlur={() => props.onTitleEditing?.(false)}
           placeholder="Untitled note"
           className="flex-1 min-w-0 text-xl font-semibold bg-transparent outline-none placeholder:text-on-surface-variant/40"
         />

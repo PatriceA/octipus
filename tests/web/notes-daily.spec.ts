@@ -156,3 +156,104 @@ test('a new note never overwrites one at the same slug: the save is refused and 
   expect(posts[0].id).toBeUndefined();
   await expect(page.locator('.cm-content')).toContainText('A different soup');
 });
+
+test('a draft never follows a workspace switch: nothing is posted with the other workspace, and its copy stays in its own', async ({ authenticatedPage: page }) => {
+  const SPACE = '0b9d3c55-5f2c-4c37-9a3e-6d1f00000001';
+  await page.route('**/api/spaces', (route) => json(route, 200, { spaces: [{ id: SPACE, name: 'Launch', slug: 'launch', role: 'editor', memberCount: 2, archivedAt: null, createdBy: 'o', createdAt: '2026-11-01T00:00:00Z', funding: 'own' }] }));
+  await page.route(`**/api/spaces/${SPACE}`, (route) => json(route, 200, { id: SPACE, name: 'Launch', role: 'editor', archivedAt: null }));
+  await stubNotes(page, []);
+  const posts: { workspace: string | undefined; body: Record<string, unknown> }[] = [];
+  await page.route('**/api/notes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    posts.push({ workspace: route.request().headers()['x-octipus-workspace'], body: route.request().postDataJSON() });
+    return json(route, 500, { error: 'Storage unavailable' });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.getByPlaceholder('Untitled note').fill('Private plan');
+  await page.locator('.cm-content').fill('salary negotiation notes');
+  await expect(page.getByTestId('note-save-status')).toContainText('Not saved');
+  expect(posts.every((p) => p.workspace === 'ws-1')).toBe(true);
+  const tried = posts.length;
+
+  await page.getByRole('button', { name: 'Switch workspace' }).click();
+  await page.getByTestId('shared-spaces').getByText('Launch').click();
+  await expect(page.getByRole('button', { name: 'Switch workspace' })).toContainText('Launch');
+  await page.waitForTimeout(1500);
+  expect(posts.filter((p) => p.workspace === SPACE)).toEqual([]);
+  expect(posts.length).toBe(tried);
+  // The copy is kept on this device under the workspace it was typed in.
+  const kept = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('octipus.note-draft.')));
+  expect(kept.length).toBe(1);
+  expect(kept[0]).toContain('.ws-1.new-');
+});
+
+test('a new note whose first save lands after the page was left does not pull the user back', async ({ authenticatedPage: page }) => {
+  await stubNotes(page, []);
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route('**/api/notes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    await held;
+    const input = route.request().postDataJSON();
+    return json(route, 200, { note: { ...input, id: 'late', slug: 'late', bodySha256: 'a'.repeat(64), pinned: false, tags: [], noteKind: 'note', frontmatter: {}, archivedAt: null, updatedAt: '2026-11-20T00:00:00Z' }, created: true });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.getByPlaceholder('Untitled note').fill('Late note');
+  await page.locator('.cm-content').fill('typed quickly');
+  await expect(page.getByTestId('note-save-status')).toHaveText('Saving…');
+  await page.getByRole('link', { name: 'To-dos', exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  release();
+  await page.waitForTimeout(800);
+  await expect(page).toHaveURL(/\/tasks$/);
+});
+
+test('on a phone, Back from a new note saved on the way lands in the list', async ({ authenticatedPage: page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const notes = structuredClone(NOTES);
+  await stubNotes(page, notes);
+  await page.route('**/api/notes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const input = route.request().postDataJSON();
+    const note = { id: 'n-new', title: input.title, slug: 'shopping', body: input.body, archivedAt: null };
+    notes.push(note);
+    return json(route, 200, { note: { ...note, bodySha256: 'b'.repeat(64), tags: [], pinned: false, noteKind: 'note', frontmatter: {}, updatedAt: '2026-11-20T00:00:00Z' }, created: true });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.getByPlaceholder('Untitled note').fill('Shopping');
+  // Straight to Back, the title still focused: Back saves it, then shows the list.
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(page).toHaveURL(/\/notes$/);
+  await expect(page.getByPlaceholder('Untitled note')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Garden plan/ })).toBeVisible();
+  expect(notes.some((n) => n.id === 'n-new')).toBe(true);
+});
+
+test('while a search is being typed the list filters locally, and clearing it shows every note at once', async ({ authenticatedPage: page }) => {
+  await stubNotes(page, structuredClone(NOTES));
+  await page.goto('/notes');
+  await expect(page.getByRole('button', { name: /Reading list/ })).toBeVisible();
+  await page.getByPlaceholder('search notes…').fill('bees');
+  await expect(page.getByTestId('note-snippet')).toContainText('bees');
+  await page.getByPlaceholder('search notes…').fill('');
+  // No stale results in between: both notes are back straight away.
+  await expect(page.getByRole('button', { name: /Garden plan/ })).toBeVisible({ timeout: 200 });
+  await expect(page.getByRole('button', { name: /Reading list/ })).toBeVisible({ timeout: 200 });
+  await expect(page.getByTestId('note-snippet')).toHaveCount(0);
+});
+
+test('signing out removes the note drafts kept in this browser', async ({ authenticatedPage: page }) => {
+  await stubNotes(page, structuredClone(NOTES));
+  await page.goto('/notes');
+  await page.evaluate(() => {
+    localStorage.setItem('octipus.note-draft.ws-1.n-1', JSON.stringify({ title: 't', body: 'secret', tags: [], noteKind: 'note', savedAt: 1 }));
+    localStorage.setItem('octipus.note-draft.ws-1.new-abc', JSON.stringify({ title: 't', body: 'secret', tags: [], noteKind: 'note', savedAt: 1 }));
+  });
+  await page.getByRole('button', { name: /e2etest/ }).first().click();
+  await page.getByRole('button', { name: 'sign out' }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('octipus.note-draft.')))).toEqual([]);
+});

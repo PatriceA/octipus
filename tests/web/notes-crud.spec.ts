@@ -1,6 +1,13 @@
 import { expect, test } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
+/** A stand-in for the server's body sha256: deterministic, 64 hex characters. */
+function sha(text: string): string {
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h.toString(16).padStart(8, '0').repeat(8);
+}
+
 test('a note saves itself, keeps a failed draft, survives a reload at its own address, and archives with undo', async ({ authenticatedPage: page }) => {
   let notes: any[] = [];
   let failSave = false;
@@ -13,9 +20,13 @@ test('a note saves itself, keeps a failed draft, survives a reload at its own ad
       if (failSave) return json(route, 500, { error: 'Storage unavailable' });
       const input = req.postDataJSON();
       posts.push(input);
-      const note = { ...notes.find(n => n.id === input.id), ...input, id: 'crud-note', slug: 'cross-device-note', pinned: false, frontmatter: {}, noteKind: 'note', tags: input.tags || [], archivedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      const existing = notes.find(n => n.id === input.id);
+      // As the server: an edit made from older text is refused.
+      if (existing && input.ifSha256 && input.ifSha256 !== existing.bodySha256) return json(route, 409, { error: 'stale', code: 'stale', currentSha256: existing.bodySha256 });
+      const { ifSha256: _base, createOnly: _create, ...fields } = input;
+      const note = { ...existing, ...fields, id: 'crud-note', slug: 'cross-device-note', pinned: false, frontmatter: {}, noteKind: 'note', tags: input.tags || [], bodySha256: sha(input.body), archivedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       notes = [note];
-      return json(route, 200, { note, created: !input.id, indexed: true });
+      return json(route, 200, { note, created: !input.id, indexed: false, indexQueued: true });
     }
     if (path.endsWith('/restore')) { notes = notes.map(n => ({ ...n, archivedAt: null })); return json(route, 200, { restored: true }); }
     if (path.endsWith('/index')) return json(route, 200, { notes });
@@ -34,16 +45,27 @@ test('a note saves itself, keeps a failed draft, survives a reload at its own ad
   await page.locator('.cm-content').fill('An idea captured on desktop');
   // No title yet: nothing can be saved, and the page says so.
   await expect(page.getByTestId('note-save-status')).toHaveText('Add a title to save');
+  // A title being typed does not create the note (its slug would be fixed
+  // from half a title): nothing goes out while the field has the focus.
+  await page.getByPlaceholder('Untitled note').fill('Cross');
+  await page.waitForTimeout(1500);
+  expect(posts).toHaveLength(0);
   await page.getByPlaceholder('Untitled note').fill('Cross-device note');
-  // No Save button: it saves itself a moment after typing stops, once.
+  // Leaving the title field creates it; there is no Save button.
+  await page.locator('.cm-content').click();
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
   await expect.poll(() => notes[0]?.body).toBe('An idea captured on desktop');
   await expect(page.getByTestId('note-save-status')).toHaveText('Saved');
   expect(posts.filter(p => !p.id)).toHaveLength(1);
-  expect(posts.find(p => !p.id)?.createOnly).toBe(true);
-  expect(posts.filter(p => p.id).every(p => p.createOnly === undefined)).toBe(true);
+  expect(posts[0]).toMatchObject({ title: 'Cross-device note', createOnly: true });
   // The open note is in the address bar.
   await expect(page).toHaveURL(/\/notes\?note=crud-note$/);
+
+  // Edits name the text they were made from.
+  await page.locator('.cm-content').fill('A second thought');
+  await expect.poll(() => notes[0]?.body).toBe('A second thought');
+  expect(posts.at(-1)).toMatchObject({ id: 'crud-note', ifSha256: sha('An idea captured on desktop') });
+  expect(posts.at(-1).createOnly).toBeUndefined();
 
   failSave = true;
   await page.locator('.cm-content').fill('Keep this draft when saving fails');
@@ -65,6 +87,17 @@ test('a note saves itself, keeps a failed draft, survives a reload at its own ad
   await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Cross-device note');
   await expect(page.getByTestId('draft-notice')).toHaveCount(0);
 
+  // Changed elsewhere (another device) since this page read it: the save is
+  // refused, the text stays here, and the user chooses.
+  notes = [{ ...notes[0], body: 'Written on the phone', bodySha256: sha('Written on the phone') }];
+  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  await page.locator('.cm-content').fill('Written on the desktop');
+  await expect(page.getByTestId('draft-notice')).toContainText('changed elsewhere');
+  expect(notes[0].body).toBe('Written on the phone');
+  await expect(page.locator('.cm-content')).toContainText('Written on the desktop');
+  await page.getByRole('button', { name: 'Keep my version' }).click();
+  await expect.poll(() => notes[0]?.body).toBe('Written on the desktop');
+
   // Archive: gone from the list at once, with Undo.
   await page.getByTitle('Archive note', { exact: true }).click();
   await expect.poll(() => notes[0]?.archivedAt).toBeTruthy();
@@ -74,6 +107,32 @@ test('a note saves itself, keeps a failed draft, survives a reload at its own ad
   await expect.poll(() => notes[0]?.archivedAt).toBeNull();
   await expect(page).toHaveURL(/\/notes\?note=crud-note$/);
   await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Cross-device note');
+});
+
+test('a cached copy older than the server is not loaded over newer text', async ({ authenticatedPage: page }) => {
+  let note = { id: 'n-cache', title: 'Groceries', slug: 'groceries', body: 'milk', bodySha256: sha('milk'), noteKind: 'note', tags: [], pinned: false, frontmatter: {}, archivedAt: null, createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z' };
+  const other = { ...note, id: 'n-other', title: 'Other', slug: 'other', body: 'x', bodySha256: sha('x') };
+  const posts: any[] = [];
+  await page.route('**/api/notes**', async route => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname.replace(/\/$/, '');
+    if (req.method() === 'POST') { posts.push(req.postDataJSON()); return json(route, 500, { error: 'should not save' }); }
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path === '/api/notes' || path.endsWith('/index')) return json(route, 200, { notes: [note, other], total: 2 });
+    return json(route, 200, { ...(path.endsWith('n-other') ? other : note), backlinks: [], outgoing: [] });
+  });
+  await page.goto('/notes?note=n-cache');
+  await expect(page.getByText('milk').first()).toBeVisible();
+  await page.getByRole('button', { name: /^Other/ }).click();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Other');
+  // Changed on another device while this page had the old copy cached.
+  note = { ...note, body: 'milk, eggs and bread', bodySha256: sha('milk, eggs and bread'), updatedAt: '2026-11-02T00:00:00Z' };
+  await page.goBack();
+  await expect(page.getByText('milk, eggs and bread').first()).toBeVisible();
+  await expect(page.getByTestId('note-save-status')).toHaveText('Saved');
+  await page.waitForTimeout(1200);
+  expect(posts).toEqual([]);
 });
 
 test('automated session learnings are collapsed below personal notes and remain searchable', async ({ authenticatedPage: page }) => {

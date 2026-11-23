@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useUndoToast } from '@/components/ui/undo-toast';
 import { api, ApiError } from '@/lib/api';
 import { useGatewayMessages } from '@/lib/gateway-context';
-import { draftDiffers, type NoteDraftBackup, noteDraftKey, readNoteDraft, removeNoteDraft, writeNoteDraft } from '@/lib/note-drafts';
+import { draftDiffers, latestNewNoteDraft, newDraftLocal, type NoteDraftBackup, noteDraftKey, readNoteDraft, removeNoteDraft, writeNoteDraft } from '@/lib/note-drafts';
 import { CTX_MAX, CTX_MIN, NAV_MAX, NAV_MIN, useNotesUiStore } from '@/lib/notes-ui-store';
 import { cn } from '@/lib/utils';
 import { KnowledgeGraph } from './knowledge-graph';
@@ -60,19 +60,31 @@ function notesHref(opts: { note?: string | null; graph?: boolean } = {}): string
  * The note a draft belongs to: an existing note's id, or null for a new one
  * until its first save fills it in. One object per opened note, so a save
  * that finishes after the user moved on knows it is no longer the open one.
+ *
+ * It also records where the draft was typed: the workspace and sign-in the
+ * API client had then. A save only goes out while the client still has
+ * them, so a draft never lands in another workspace (a switch changes the
+ * client's header before this page re-renders) or another account; it stays
+ * in its own workspace's copy on this device. `local` names that copy.
  */
-interface DraftTarget { id: string | null }
+interface DraftTarget { id: string | null; workspaceId: string | null; token: string | null; local: string }
+
+function newTarget(id: string | null, local?: string): DraftTarget {
+  return { id, workspaceId: api.getWorkspaceId(), token: api.getToken(), local: id ?? local ?? newDraftLocal() };
+}
 
 interface DraftFields { title: string; body: string; tags: string[]; kind: string; folder: string }
-interface DraftSnapshot extends DraftFields { target: DraftTarget }
-interface SavedFields { title: string; body: string; tags: string[]; kind: string; updatedAt?: string }
+/** `baseSha256`: the server body the draft was made from (absent for a new note). */
+interface DraftSnapshot extends DraftFields { target: DraftTarget; baseSha256?: string }
+interface SavedFields { title: string; body: string; tags: string[]; kind: string; sha256?: string }
 
 type SaveState = { status: 'idle' | 'saving' | 'saved' } | { status: 'error'; error: string };
 
-/** What the open note's draft offers back from this device (see lib/note-drafts.ts). */
+/** What the open note's draft offers back from this device (see lib/note-drafts.ts), or a save refused as stale. */
 type DraftNotice =
   | { kind: 'restored'; at: number }
-  | { kind: 'conflict'; backup: NoteDraftBackup };
+  | { kind: 'conflict'; backup: NoteDraftBackup }
+  | { kind: 'stale'; currentSha256: string };
 
 function differs(draft: DraftFields, saved: SavedFields): boolean {
   return draft.title !== saved.title || draft.body !== saved.body || draft.kind !== saved.kind || !sameTags(draft.tags, saved.tags);
@@ -128,7 +140,22 @@ export function NotesWorkspace() {
   // The id whose body we've loaded into the draft — so a background refetch of
   // the SAME note doesn't clobber in-progress edits.
   const loadedRef = useRef<string | null>(null);
-  const targetRef = useRef<DraftTarget>({ id: selectedId });
+  const [firstTarget] = useState(() => newTarget(selectedId));
+  const targetRef = useRef<DraftTarget>(firstTarget);
+  // When the open note was opened: only detail fetched after it is fresh
+  // enough to load (a cached copy may be older than the server's text).
+  const openedAtRef = useRef(0);
+  // A save that finishes after the page was left must not navigate.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    openedAtRef.current = Date.now();
+    return () => { mountedRef.current = false; };
+  }, []);
+  // A new note's title is being typed: it is not created from half a title
+  // (its slug is fixed at creation). It is created once the title field is
+  // left, or the note is (switching, Ctrl+S, leaving the page).
+  const [titleEditing, setTitleEditing] = useState(false);
   // The latest draft and baseline, for saves started outside a render (the
   // debounce timer, leaving the note, closing the tab).
   const draftRef = useRef<DraftFields>({ title: '', body: '', tags: [], kind: 'note', folder: '' });
@@ -157,6 +184,10 @@ export function NotesWorkspace() {
     queryKey: ['note', selectedId, workspaceId],
     queryFn: () => api.get<NoteDetail>(`/notes/${selectedId}`),
     enabled: !!selectedId,
+    // Always read the note again on opening: the editor loads only text
+    // fetched since (a cached copy may be older than the server's).
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const suggestions = useQuery<{ suggestions: Suggestion[] }>({
     queryKey: ['note-suggestions', selectedId, workspaceId],
@@ -206,7 +237,10 @@ export function NotesWorkspace() {
     return () => text.unobserve(sync);
   }, [liveSession, liveVersion, liveSynced]);
 
-  const searching = filter !== 'archived' && searchQuery !== '';
+  // The server's results are shown once they answer what is typed now: while
+  // the debounce runs (or just after clearing) the local filter shows instead.
+  const serverSearchCurrent = searchQuery !== '' && searchQuery === search.trim();
+  const searching = filter !== 'archived' && serverSearchCurrent;
   const navNotes = filter === 'archived' ? archivedQ.data?.notes ?? [] : searching ? searchQ.data?.notes ?? [] : list.data?.notes ?? [];
   const navLoading = filter === 'archived' ? archivedQ.isLoading : searching ? searchQ.isLoading : list.isLoading;
   const notes = list.data?.notes ?? [];
@@ -240,49 +274,67 @@ export function NotesWorkspace() {
       const current = () => targetRef.current === snap.target;
       if (current() && !differs(snap, savedRef.current)) return true;
       if (!snap.title.trim()) return false;
+      // Typed in another workspace or sign-in than the client has now: it is
+      // not sent anywhere. Its copy on this device stays in its workspace.
+      if (api.getWorkspaceId() !== snap.target.workspaceId || api.getToken() !== snap.target.token) {
+        if (current() && mountedRef.current) setSaveState({ status: 'error', error: 'the workspace changed; this draft is kept on this device' });
+        return false;
+      }
       const creating = !snap.target.id;
       const slug = creating && snap.folder.trim() ? `${snap.folder.trim()}/${snap.title}` : undefined;
       if (current()) setSaveState({ status: 'saving' });
-      let note: NoteRow;
+      let note: NoteRow & { bodySha256: string };
       try {
-        ({ note } = await api.post<{ note: NoteRow }>('/notes', {
+        ({ note } = await api.post<{ note: NoteRow & { bodySha256: string } }>('/notes', {
           id: snap.target.id ?? undefined, title: snap.title, body: snap.body, tags: snap.tags, noteKind: snap.kind, slug,
           // A new note never takes over one already at its slug (an archived one included).
           ...(creating ? { createOnly: true } : {}),
+          // An edit is saved only over the text it was made from.
+          ...(!creating && snap.baseSha256 ? { ifSha256: snap.baseSha256 } : {}),
         }));
       } catch (err) {
-        const exists = err instanceof ApiError && err.body.code === 'exists';
-        const error = exists
+        const code = err instanceof ApiError ? err.body.code : undefined;
+        const error = code === 'exists'
           ? 'a note with this title already exists (perhaps in the archive): change the title'
+          : code === 'stale' ? 'the note was changed elsewhere since you opened it'
           : err instanceof Error ? err.message : 'Could not save the note';
-        if (current()) setSaveState({ status: 'error', error });
+        if (current()) {
+          setSaveState({ status: 'error', error });
+          if (code === 'stale' && err instanceof ApiError && typeof err.body.currentSha256 === 'string') {
+            setDraftNotice({ kind: 'stale', currentSha256: err.body.currentSha256 });
+          }
+        }
         return false;
       }
+      const wasLocal = snap.target.local;
       snap.target.id = note.id;
+      snap.target.local = note.id;
       // The copy on this device is no longer needed, unless typing went on
       // (then it holds the newer text; a new note's moves under its id).
       const latest = draftRef.current;
       const stillTyping = current() && differs(latest, snap);
+      const ws = snap.target.workspaceId;
       if (creating) {
-        removeNoteDraft(noteDraftKey(workspaceId, null));
+        removeNoteDraft(noteDraftKey(ws, wasLocal));
         if (stillTyping) {
-          writeNoteDraft(noteDraftKey(workspaceId, note.id), {
-            title: latest.title, body: latest.body, tags: latest.tags, noteKind: latest.kind, baseUpdatedAt: note.updatedAt, savedAt: Date.now(),
+          writeNoteDraft(noteDraftKey(ws, note.id), {
+            title: latest.title, body: latest.body, tags: latest.tags, noteKind: latest.kind, baseSha256: note.bodySha256, savedAt: Date.now(),
           });
         }
       } else if (!stillTyping) {
-        removeNoteDraft(noteDraftKey(workspaceId, note.id));
+        removeNoteDraft(noteDraftKey(ws, note.id));
       }
       if (current()) {
-        savedRef.current = { title: snap.title, body: snap.body, tags: snap.tags, kind: snap.kind, updatedAt: note.updatedAt };
+        savedRef.current = { title: snap.title, body: snap.body, tags: snap.tags, kind: snap.kind, sha256: note.bodySha256 };
         setSavedTitle(snap.title); setSavedBody(snap.body); setSavedTags(snap.tags); setSavedKind(snap.kind);
         setSaveState({ status: 'saved' });
         if (creating) {
           loadedRef.current = note.id;
           setDraftFolder('');
           setComposing(false);
-          // The new note gets its address; Back does not return to the blank form.
-          router.replace(notesHref({ note: note.id }));
+          // The new note gets its address; Back does not return to the blank
+          // form. Not once the page was left: that would pull the user back.
+          if (mountedRef.current) router.replace(notesHref({ note: note.id }));
         }
       }
       invalidateAll();
@@ -293,9 +345,9 @@ export function NotesWorkspace() {
     const next = chainRef.current.then(run);
     chainRef.current = next.catch((err: unknown) => console.error('Note save chain failed', err));
     return next;
-  }, [invalidateAll, qc, router, workspaceId]);
+  }, [invalidateAll, qc, router]);
 
-  const snapshot = useCallback((): DraftSnapshot => ({ target: targetRef.current, ...draftRef.current }), []);
+  const snapshot = useCallback((): DraftSnapshot => ({ target: targetRef.current, ...draftRef.current, baseSha256: savedRef.current.sha256 }), []);
   // For the page-leave handlers, which outlive a render.
   const persistRef = useRef(persist);
   useEffect(() => {
@@ -325,52 +377,68 @@ export function NotesWorkspace() {
     if (personal && draftRef.current.title.trim() && differs(draftRef.current, savedRef.current)) {
       void persist(snapshot());
     }
-    targetRef.current = { id: selectedId };
+    targetRef.current = newTarget(selectedId);
+    openedAtRef.current = Date.now();
     loadedRef.current = null;
     resetDrafts();
     setMode('preview');
   }, [selectedId, personal, persist, snapshot, resetDrafts]);
 
-  // Load a fetched note into the draft + clean baseline exactly once per note.
+  // Load the open note into the draft + clean baseline, from detail fetched
+  // since it was opened (a cached copy can be older than the server's text).
   // A copy of unsaved changes kept on this device comes back with it: at once
-  // when the note has not changed since, else on the user's word.
+  // when the note's text is the one the copy was made from, else on the
+  // user's word. Newer server text arriving later replaces a clean draft; an
+  // edited one keeps the user's text (its save is refused as stale, and asks).
+  const detailFetching = detail.isFetching;
+  const detailUpdatedAt = detail.dataUpdatedAt;
   useEffect(() => {
     const d = detail.data;
-    if (!d || d.id !== selectedId || loadedRef.current === d.id) return;
+    if (!d || d.id !== selectedId || detailFetching || detailUpdatedAt < openedAtRef.current) return;
+    if (loadedRef.current === d.id) {
+      const clean = !differs(draftRef.current, savedRef.current);
+      if (!personal || !clean || d.bodySha256 === savedRef.current.sha256) return;
+    }
     loadedRef.current = d.id;
-    savedRef.current = { title: d.title, body: d.body, tags: d.tags, kind: d.noteKind, updatedAt: d.updatedAt };
+    savedRef.current = { title: d.title, body: d.body, tags: d.tags, kind: d.noteKind, sha256: d.bodySha256 };
     setSavedTitle(d.title); setSavedBody(d.body); setSavedTags(d.tags); setSavedKind(d.noteKind);
     let draft = { title: d.title, body: d.body, tags: d.tags, noteKind: d.noteKind };
     let notice: DraftNotice | null = null;
     if (personal && !d.archivedAt) {
-      const key = noteDraftKey(workspaceId, d.id);
+      const key = noteDraftKey(targetRef.current.workspaceId, d.id);
       const backup = readNoteDraft(key);
       if (backup && !draftDiffers(backup, d)) removeNoteDraft(key);
-      else if (backup && backup.baseUpdatedAt === d.updatedAt) {
+      else if (backup && backup.baseSha256 === d.bodySha256) {
         draft = backup;
         notice = { kind: 'restored', at: backup.savedAt };
       } else if (backup) notice = { kind: 'conflict', backup };
     }
     setDraftTitle(draft.title); setDraftBody(draft.body); setDraftTags(draft.tags); setDraftKind(draft.noteKind);
     setDraftNotice(notice);
-  }, [detail.data, selectedId, personal, workspaceId]);
+  }, [detail.data, detailFetching, detailUpdatedAt, selectedId, personal]);
 
-  // Every unsaved change of a personal note is copied to this device first.
+  // Every unsaved change of a personal note is copied to this device first,
+  // under the workspace it was typed in.
   useEffect(() => {
     if (!personal || !dirty || openArchived) return;
-    writeNoteDraft(noteDraftKey(workspaceId, targetRef.current.id), {
+    const target = targetRef.current;
+    if (api.getWorkspaceId() !== target.workspaceId) return;
+    writeNoteDraft(noteDraftKey(target.workspaceId, target.local), {
       title: draftTitle, body: draftBody, tags: draftTags, noteKind: draftKind, folder: draftFolder || undefined,
-      baseUpdatedAt: savedRef.current.updatedAt, savedAt: Date.now(),
+      baseSha256: savedRef.current.sha256, savedAt: Date.now(),
     });
-  }, [personal, dirty, openArchived, draftTitle, draftBody, draftTags, draftKind, draftFolder, workspaceId]);
+  }, [personal, dirty, openArchived, draftTitle, draftBody, draftTags, draftKind, draftFolder]);
 
   // Autosave: a moment after the last change. A failed save waits for the
-  // next change or Retry rather than retrying in a loop.
+  // next change or Retry rather than retrying in a loop; a stale one waits
+  // for the user's answer. A new note waits for its title to be finished.
+  const staleNotice = draftNotice?.kind === 'stale';
+  const newTitleTyping = !selectedId && titleEditing;
   useEffect(() => {
-    if (!personal || !canWrite || openArchived || !dirty || !draftTitle.trim()) return;
+    if (!personal || !canWrite || openArchived || !dirty || !draftTitle.trim() || staleNotice || newTitleTyping) return;
     const timer = setTimeout(() => { void persist(snapshot()); }, AUTOSAVE_MS);
     return () => clearTimeout(timer);
-  }, [personal, canWrite, openArchived, dirty, draftTitle, draftBody, draftTags, draftKind, draftFolder, persist, snapshot]);
+  }, [personal, canWrite, openArchived, dirty, draftTitle, draftBody, draftTags, draftKind, draftFolder, staleNotice, newTitleTyping, persist, snapshot]);
 
   // Leaving the page: save what is unsaved. Closing the tab with unsaved
   // changes asks first (the copy on this device is kept either way); hiding
@@ -402,11 +470,11 @@ export function NotesWorkspace() {
       api.post<{ note: NoteRow }>('/notes', payload),
     onSuccess: (res, vars) => {
       if (!selectedId) {
-        targetRef.current = { id: res.note.id };
+        targetRef.current = newTarget(res.note.id);
         loadedRef.current = res.note.id;
-        router.replace(notesHref({ note: res.note.id }));
+        if (mountedRef.current) router.replace(notesHref({ note: res.note.id }));
       }
-      savedRef.current = { title: vars.title, body: vars.body ?? savedRef.current.body, tags: vars.tags, kind: vars.noteKind, updatedAt: res.note.updatedAt };
+      savedRef.current = { title: vars.title, body: vars.body ?? savedRef.current.body, tags: vars.tags, kind: vars.noteKind };
       setSavedTitle(vars.title); if (vars.body !== undefined) setSavedBody(vars.body); setSavedTags(vars.tags); setSavedKind(vars.noteKind);
       setDraftFolder('');
       invalidateAll();
@@ -435,7 +503,7 @@ export function NotesWorkspace() {
     if (!differs(draftRef.current, savedRef.current)) return true;
     if (!draftRef.current.title.trim()) {
       if (!window.confirm('This note has no title, so it was not saved. Discard it?')) return false;
-      removeNoteDraft(noteDraftKey(workspaceId, targetRef.current.id));
+      removeNoteDraft(noteDraftKey(targetRef.current.workspaceId, targetRef.current.local));
       return true;
     }
     if (await flush()) return true;
@@ -459,15 +527,17 @@ export function NotesWorkspace() {
 
   async function openNew(folder?: string) {
     if (!(await leaveCurrent())) return;
-    targetRef.current = { id: null };
+    // A new note's draft kept on this device (its save failed, or the tab
+    // closed first) comes back, under its own key.
+    const kept = personal && !folder ? latestNewNoteDraft(api.getWorkspaceId()) : null;
+    targetRef.current = newTarget(null, kept?.local);
     loadedRef.current = null;
     // Match saved===draft for the initial kind so a brand-new note isn't
     // marked dirty before the user types anything.
     resetDrafts(folder?.split('/')[0] === 'daily' ? 'daily' : 'note');
     setDraftFolder(folder ?? '');
-    // A new note's draft kept on this device (its save failed) comes back.
-    const backup = personal ? readNoteDraft(noteDraftKey(workspaceId, null)) : null;
-    if (backup && !folder) {
+    if (kept) {
+      const backup = kept.draft;
       setDraftTitle(backup.title); setDraftBody(backup.body); setDraftTags(backup.tags); setDraftKind(backup.noteKind);
       setDraftFolder(backup.folder ?? '');
       setDraftNotice({ kind: 'restored', at: backup.savedAt });
@@ -485,9 +555,11 @@ export function NotesWorkspace() {
     if (!(await leaveCurrent())) return;
     setComposing(false);
     setPhoneCtxOpen(false);
-    if (selectedId) router.push(notesHref());
+    // The target, not `selectedId`: a new note saved just now by
+    // `leaveCurrent` has an id, and an address this render has not seen.
+    if (targetRef.current.id) router.push(notesHref());
     else {
-      targetRef.current = { id: null };
+      targetRef.current = newTarget(null);
       resetDrafts();
     }
   }
@@ -532,7 +604,7 @@ export function NotesWorkspace() {
       return;
     }
     invalidateAll();
-    targetRef.current = { id: null };
+    targetRef.current = newTarget(null);
     loadedRef.current = null;
     resetDrafts();
     setComposing(false);
@@ -723,7 +795,7 @@ export function NotesWorkspace() {
                 setActiveTag={setActiveTag}
                 onOpen={(n) => void selectNote(n.id)}
                 onNew={canWrite ? (folder) => void openNew(folder) : undefined}
-                serverSearch
+                serverSearch={filter === 'archived' ? serverSearchCurrent : searching}
                 showArchive
                 onRestore={canWrite ? (n) => void restoreNote(n.id, n.title, false) : undefined}
               />
@@ -756,7 +828,37 @@ export function NotesWorkspace() {
               )}
               {draftNotice && (
                 <div data-testid="draft-notice" role="status" className="mx-5 mt-3 flex flex-wrap items-center gap-2 rounded-xs border border-outline-variant/40 bg-surface-container/60 px-3 py-2 text-[12px] text-on-surface-variant">
-                  {draftNotice.kind === 'restored' ? (
+                  {draftNotice.kind === 'stale' ? (
+                    <>
+                      This note was changed elsewhere since you opened it. Your text is kept here.
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Save over the newer text, knowingly.
+                          savedRef.current = { ...savedRef.current, sha256: draftNotice.currentSha256 };
+                          setDraftNotice(null);
+                          void flush();
+                        }}
+                        className="text-primary underline"
+                      >
+                        Keep my version
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedId) removeNoteDraft(noteDraftKey(targetRef.current.workspaceId, selectedId));
+                          loadedRef.current = null;
+                          openedAtRef.current = Date.now();
+                          setDraftNotice(null);
+                          setSaveState({ status: 'idle' });
+                          void detail.refetch();
+                        }}
+                        className="underline"
+                      >
+                        Load the saved version
+                      </button>
+                    </>
+                  ) : draftNotice.kind === 'restored' ? (
                     <>
                       Restored unsaved changes from this device ({new Date(draftNotice.at).toLocaleString()}).
                       <button type="button" onClick={() => setDraftNotice(null)} className="underline">OK</button>
@@ -778,7 +880,7 @@ export function NotesWorkspace() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (selectedId) removeNoteDraft(noteDraftKey(workspaceId, selectedId));
+                          if (selectedId) removeNoteDraft(noteDraftKey(targetRef.current.workspaceId, selectedId));
                           setDraftNotice(null);
                         }}
                         className="underline"
@@ -820,6 +922,7 @@ export function NotesWorkspace() {
                   live={live}
                   liveLoading={isSpace && !!selectedId && !liveSynced}
                   autosave={autosave}
+                  onTitleEditing={setTitleEditing}
                 />
               </div>
             </main>

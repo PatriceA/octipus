@@ -17,17 +17,50 @@ export interface NoteDraftBackup {
   noteKind: string;
   /** For a note not created yet: the folder it was going into. */
   folder?: string;
-  /** `updatedAt` of the server's note the draft was made from (absent for a new note). */
-  baseUpdatedAt?: string;
+  /** sha256 of the server's body the draft was made from (absent for a new note). */
+  baseSha256?: string;
   /** When the copy was written (ms since epoch). */
   savedAt: number;
 }
 
 const PREFIX = 'octipus.note-draft';
 
-/** The storage key of a note's draft in a workspace; `null` id is the note being created. */
-export function noteDraftKey(workspaceId: string | null | undefined, noteId: string | null): string {
-  return `${PREFIX}.${workspaceId ?? 'personal'}.${noteId ?? 'new'}`;
+/**
+ * The storage key of a draft in a workspace: `local` is the note's id, or
+ * `new-<random>` for a note not created yet (each new note its own key).
+ */
+export function noteDraftKey(workspaceId: string | null | undefined, local: string): string {
+  return `${PREFIX}.${workspaceId ?? 'personal'}.${local}`;
+}
+
+/** A fresh `local` key for a note being created. */
+export function newDraftLocal(): string {
+  return `new-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+function storageKeys(): string[] {
+  try {
+    return Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).filter((k): k is string => !!k && k.startsWith(`${PREFIX}.`));
+  } catch (err) {
+    console.warn('Listing saved note drafts failed', err);
+    return [];
+  }
+}
+
+/** The most recent draft of a note never created, in a workspace (its save failed, or the tab closed first). */
+export function latestNewNoteDraft(workspaceId: string | null | undefined): { local: string; draft: NoteDraftBackup } | null {
+  const prefix = `${PREFIX}.${workspaceId ?? 'personal'}.new-`;
+  let best: { local: string; draft: NoteDraftBackup } | null = null;
+  for (const key of storageKeys().filter((k) => k.startsWith(prefix))) {
+    const draft = readNoteDraft(key);
+    if (draft && (!best || draft.savedAt > best.draft.savedAt)) best = { local: key.slice(prefix.length - 4), draft };
+  }
+  return best;
+}
+
+/** Remove every note draft kept in this browser (signing out: the next person here must not see them). */
+export function clearNoteDrafts(): void {
+  for (const key of storageKeys()) removeNoteDraft(key);
 }
 
 function isBackup(value: unknown): value is NoteDraftBackup {

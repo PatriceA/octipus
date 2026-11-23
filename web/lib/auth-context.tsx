@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { loginPathReturningTo } from '../../src/shared/return-to';
 import { isPublicPath } from './public-routes';
 import { api, ApiError } from './api';
+import { clearNoteDrafts } from './note-drafts';
 
 interface User {
   id: string;
@@ -54,6 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Unsaved note drafts kept in this browser belong to the account leaving.
+    clearNoteDrafts();
     clearSession();
     router.push('/login');
   }, [clearSession, router]);
