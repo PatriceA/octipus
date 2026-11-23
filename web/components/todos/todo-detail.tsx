@@ -21,7 +21,7 @@ const WEEKDAY_NAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'F
  * moment after typing stops (notes). It follows the task while it is not
  * being edited, keeps the draft when a save fails and says so.
  */
-function useSavedText(value: string, save: (next: string) => Promise<unknown>, delayMs: number | null) {
+function useSavedText(value: string, save: (next: string) => Promise<unknown>, delayMs: number | null, required = false) {
   const [draft, setDraft] = useState(value);
   const [editing, setEditing] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -38,11 +38,14 @@ function useSavedText(value: string, save: (next: string) => Promise<unknown>, d
     timer.current = null;
     const { draft: d, value: v, save: s } = latest.current;
     if (d === v) { setFailed(false); return; }
+    // A title cannot be emptied: put the saved one back.
+    if (required && !d.trim()) { setDraft(v); setFailed(false); return; }
     const ok = await s(d);
     setFailed(ok === undefined);
     if (ok !== undefined) setSeeded(d);
   };
   // Leaving the to-do (another one opened, the panel closed) saves what was typed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- on unmount only; flush reads the latest values through a ref
   useEffect(() => () => { void flush(); }, []);
   return {
     draft,
@@ -112,7 +115,7 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
   const [customRepeat, setCustomRepeat] = useState(false);
   const [stepTitle, setStepTitle] = useState('');
   const patch = (p: TodoPatch) => todos.update(task, p);
-  const title = useSavedText(task.title, (next) => (next.trim() ? patch({ title: next.trim() }) : Promise.resolve(null)), null);
+  const title = useSavedText(task.title, (next) => patch({ title: next.trim() }), null, true);
   const notes = useSavedText(task.notes ?? '', (next) => patch({ notes: next || null }), 900);
   const steps = tasks.filter((t) => t.parentId === task.id && t.status !== 'archived').sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
   const today = localToday();
@@ -291,7 +294,7 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
 }
 
 function StepRow({ step, todos, canWrite }: { step: Todo; todos: TodosApi; canWrite: boolean }) {
-  const text = useSavedText(step.title, (next) => (next.trim() ? todos.update(step, { title: next.trim() }) : Promise.resolve(null)), null);
+  const text = useSavedText(step.title, (next) => todos.update(step, { title: next.trim() }), null, true);
   return (
     <li className="group flex items-center gap-1 pl-1 pr-2" data-testid="todo-step">
       <TodoCheck task={step} size="sm" onToggle={() => void todos.setStatus(step, step.status === 'done' ? 'open' : 'done')} disabled={!canWrite} />
