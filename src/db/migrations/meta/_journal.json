@@ -1438,10 +1438,10 @@
       "breakpoints": true
     },
     {
-      "idx": 205,
+      "idx": 206,
       "version": "7",
-      "when": 1795910400000,
-      "tag": "0205_email_channel",
+      "when": 1795996800000,
+      "tag": "0206_email_channel",
       "breakpoints": true
     }
   ]

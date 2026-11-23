@@ -632,6 +632,15 @@ the server, so these are **requirements**, not advice:
 - It **removes** any `Authentication-Results` header carrying its own
   authserv-id that arrives from outside (RFC 8601 §5), or otherwise
   guarantees its own header is the topmost one with that id.
+- It writes the **DMARC result in the same header as its SPF and DKIM
+  results, or in a header above them**. Only the topmost trusted header is
+  read, so a server that stamps SPF/DKIM and DMARC in separate headers must
+  put the DMARC one on top.
+- It **rejects a malformed envelope sender or HELO name** instead of copying
+  it into the header (Postfix: `strict_rfc821_envelopes = yes` and
+  `reject_invalid_helo_hostname`). A server that copies such a value
+  verbatim lets the sender write `;dmarc=pass header.from=…` into the
+  server's own header, and no parser can tell that from a real result.
 
 Ways a server breaks this, each of which lets a forged sender through —
 check yours:
