@@ -190,3 +190,94 @@ describe('under an egress policy', () => {
     expect(existsSync(marker)).toBe(false);
   }, 30_000);
 });
+
+describe('no git run of the tool executes a program the repository names (with or without a policy)', () => {
+  /** An executable that creates `marker` when run. */
+  function script(name: string, marker: string): string {
+    const path = join(dir, `${name}-${Math.random().toString(36).slice(2)}.sh`);
+    writeFileSync(path, `#!/bin/sh\ntouch "${marker}"\nexit 0\n`);
+    chmodSync(path, 0o755);
+    return path;
+  }
+  const HOOKS = ['pre-commit', 'commit-msg', 'post-commit', 'prepare-commit-msg', 'post-checkout', 'post-merge', 'pre-push', 'post-rewrite', 'pre-rebase', 'reference-transaction', 'pre-auto-gc'];
+
+  /** A repo pair where every switch-off-able program setting and every hook would create the marker. */
+  function armed(name: string): { bare: string; work: string; marker: string } {
+    const { bare, work } = repoPair(name);
+    const marker = join(dir, `${name}-marker`);
+    writeFileSync(join(work, 'f.txt'), 'one\n');
+    git(work, 'add', 'f.txt');
+    git(work, 'commit', '-q', '-m', 'f');
+    git(work, 'push', '-q', 'origin', 'HEAD:main');
+    git(work, 'config', 'user.name', 't');
+    git(work, 'config', 'user.email', 't@e');
+    git(work, 'config', 'core.fsmonitor', script('fsmonitor', marker));
+    git(work, 'config', 'diff.external', script('diffext', marker));
+    git(work, 'config', 'core.editor', script('editor', marker));
+    git(work, 'config', 'sequence.editor', script('seqeditor', marker));
+    git(work, 'config', 'core.pager', script('pager', marker));
+    git(work, 'config', 'pager.log', script('pagerlog', marker));
+    for (const hook of HOOKS) {
+      writeFileSync(join(work, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${marker}"\n`);
+      chmodSync(join(work, '.git', 'hooks', hook), 0o755);
+    }
+    // The receiving side of a local push: its hooks run in a git that this one starts.
+    for (const hook of ['pre-receive', 'update', 'post-receive', 'post-update']) {
+      writeFileSync(join(bare, 'hooks', hook), `#!/bin/sh\ntouch "${marker}"\n`);
+      chmodSync(join(bare, 'hooks', hook), 0o755);
+    }
+    writeFileSync(join(work, 'f.txt'), 'two\n');
+    return { bare, work, marker };
+  }
+
+  test.each([
+    ['status', (w: string) => ({ path: w })],
+    ['diff', (w: string) => ({ path: w })],
+    ['log', (w: string) => ({ path: w, count: 2 })],
+    ['add', (w: string) => ({ path: w, files: 'f.txt' })],
+    ['commit', (w: string) => ({ path: w, message: 'change' }), (w: string) => git(w, '-c', 'core.hooksPath=/dev/null', 'add', 'f.txt')],
+    ['checkout', (w: string) => ({ path: w, target: 'side' }), (w: string) => git(w, '-c', 'core.hooksPath=/dev/null', 'branch', 'side')],
+    ['reset', (w: string) => ({ path: w, mode: 'mixed', target: 'HEAD' })],
+    ['stash', (w: string) => ({ path: w, action: 'save', message: 's' })],
+    ['pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' }), (w: string) => git(w, '-c', 'core.hooksPath=/dev/null', 'stash', '-q')],
+    ['push', (w: string) => ({ path: w, remote: 'origin', branch: 'HEAD:refs/heads/pushed' })],
+  ])('%s', async (action, args, prepare?: (w: string) => unknown) => {
+    const { work, marker } = armed(`armed-${action}`);
+    prepare?.(work);
+    rmSync(marker, { force: true });
+    await (await handler(action)).execute(args(work) as Record<string, unknown>, context);
+    expect(existsSync(marker), `${action} ran a program the repository named`).toBe(false);
+  }, 30_000);
+
+  test.each([
+    ['a filter driver', (w: string, m: string) => { git(w, 'config', 'filter.x.clean', script('clean', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=x\n'); }, 'add', (w: string) => ({ path: w, files: 'f.txt' }), /filter\.x\.clean/],
+    ['a textconv driver', (w: string, m: string) => { git(w, 'config', 'diff.x.textconv', script('textconv', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt diff=x\n'); }, 'diff', (w: string) => ({ path: w }), /diff\.x\.textconv/],
+    ['a signing program', (w: string, m: string) => { git(w, 'config', 'commit.gpgsign', 'true'); git(w, 'config', 'gpg.program', script('gpg', m)); }, 'commit', (w: string) => ({ path: w, message: 'signed' }), /gpg\.program/],
+    ['an ssh command', (w: string, m: string) => { git(w, 'config', 'core.sshCommand', script('ssh', m)); }, 'status', (w: string) => ({ path: w }), /core\.sshcommand/],
+    ['a credential helper', (w: string, m: string) => { git(w, 'config', 'credential.helper', `!${script('cred', m)}`); }, 'status', (w: string) => ({ path: w }), /credential\.helper/],
+    ['an interactive pull rebase', (w: string, m: string) => { git(w, 'config', 'pull.rebase', 'interactive'); git(w, 'config', 'sequence.editor', script('seq', m)); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' }), /pull\.rebase/],
+  ])('%s at repository scope refuses the action', async (_what, arm, action, args, message) => {
+    const { work } = repoPair(`refuse-${Math.random().toString(36).slice(2)}`);
+    const marker = join(dir, `refuse-marker-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(join(work, 'f.txt'), 'x\n');
+    git(work, '-c', 'core.hooksPath=/dev/null', 'add', 'f.txt');
+    arm(work, marker);
+    await expect((await handler(action)).execute(args(work) as Record<string, unknown>, context)).rejects.toThrow(message);
+    expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+});
+
+describe('refspecs and hosts', () => {
+  test('well-formed refspecs pass, malformed ones do not', async () => {
+    const { gitRefspec } = await import('./index');
+    for (const ok of ['main', 'HEAD:main', '+feature:feature', 'refs/heads/a:refs/heads/b']) expect(gitRefspec(ok)).toBe(ok);
+    for (const bad of ['a:b:c', ':main', 'main:', '-x:y', 'a..b:c', '+']) expect(() => gitRefspec(bad), bad).toThrow();
+    const { work } = repoPair('refspec');
+    await expect((await handler('push')).execute({ path: work, remote: 'origin', branch: 'HEAD:refs/heads/copy' }, context)).resolves.toMatchObject({ success: true });
+  }, 30_000);
+
+  test('a host starting with "-" is refused', () => {
+    expect(gitRemoteTarget('u@-oProxyCommand=x:r')).toBe('unjudgeable');
+    expect(gitRemoteTarget('ssh://-oProxyCommand=x/r')).toBe('unjudgeable');
+  });
+});

@@ -1,6 +1,12 @@
 import { getExecutionSignal } from '@/core/execution-scope';
-import { enforceGitRemotes } from '@/security/git-egress';
-import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
+import { toolLogger } from '@/utils/logger';
+import { lookup } from 'node:dns/promises';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { enforceGitRemotes, gitRemoteTarget } from '@/security/git-egress';
+import { withHardenedGitEnv } from '@/security/git-hardening';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive, enforceEgress, precheckEgressName } from '@/security/egress-policy';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
@@ -209,7 +215,12 @@ export class GitHubTool extends BaseTool {
       // injection. gh's cobra parser gives `--` a meaning of its own (git
       // flags for repo clone), so the values are checked instead.
       refuseOptionLike(args);
-      return this.caller.run(context, () => execute(args, context));
+      // A `repo` naming a host (a URL, HOST/OWNER/REPO, host:path) makes gh
+      // call that host's API: judged before gh says anything to it.
+      return this.caller.run(context, async () => {
+        if (typeof args.repo === 'string') await judgeGhRepoHost(args.repo);
+        return execute(args, context);
+      });
     }, options);
   }
 
@@ -246,7 +257,7 @@ export class GitHubTool extends BaseTool {
       if (!environment || !context) return runGh(args, opts);
       const home = environmentToolHome(context);
       const credentials = await environmentCredentialOptions(context, { ...environmentShellOptions(context), timeout: opts.timeoutMs ?? 120000, signal: getExecutionSignal(context),
-        env: home?.env, ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...environment.roots, ...(home ? [home.dir] : [])] });
+        env: withHardenedGitEnv(home?.env ?? {}), ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...environment.roots, ...(home ? [home.dir] : [])] });
       try {
         const result = credentials.mask(await shellOperationsFor(context, new LocalShellOperations()).exec(['gh', ...args].map(quoteRuntimeArg).join(' '), environment.roots[0], credentials.options));
         if (result.killed || (result.exitCode !== 0 && !opts.acceptExitCodes?.includes(result.exitCode ?? -1))) throw new Error(result.stderr || 'GitHub CLI did not complete');
@@ -276,6 +287,7 @@ export class GitHubTool extends BaseTool {
       visibility: { type: 'string', description: 'Filter by visibility', enum: ['public', 'private', 'all'], default: 'all' },
     }), async (args) => {
       const ghArgs = ['repo', 'list', '--json', 'name,owner,description,visibility,updatedAt,url', '--limit', String(args.limit || 30)];
+      if (args.visibility !== undefined && !['public', 'private', 'all'].includes(args.visibility as string)) throw new ToolNotExecutedError('github', 'visibility must be public, private or all');
       if (args.visibility && args.visibility !== 'all') ghArgs.push(`--${args.visibility}`);
       return JSON.parse(await this.gh(ghArgs));
     }, { permissionAction: 'read' });
@@ -711,6 +723,48 @@ function splitList(v: unknown): string[] {
 }
 
 export const githubTool = new GitHubTool();
+
+/**
+ * The host a `repo` argument names, or null for `owner/name` (gh's own host):
+ * a URL's host, `HOST/OWNER/REPO`'s first part, an scp-style remote's host.
+ */
+export function ghRepoHost(repo: string): string | null {
+  const value = repo.trim();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^[^/]+:/.test(value)) {
+    const target = gitRemoteTarget(value);
+    if (target === 'unjudgeable' || target === null) throw new ToolNotExecutedError('github', `Not a repository the egress policy can judge: ${value.slice(0, 120)}`);
+    return target.host;
+  }
+  const parts = value.split('/');
+  return parts.length === 3 ? parts[0] : null;
+}
+
+/**
+ * The host gh uses for an `owner/name`: GH_HOST, else the only host gh is
+ * logged in to (its hosts.yml), else github.com — as gh itself picks it.
+ */
+export function defaultGhHost(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.GH_HOST) return env.GH_HOST;
+  const dir = env.GH_CONFIG_DIR || join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'gh');
+  try {
+    const hosts = readFileSync(join(dir, 'hosts.yml'), 'utf8').split('\n').map((line) => /^([^\s#][^:]*):\s*$/.exec(line)?.[1]).filter((h): h is string => !!h);
+    if (hosts.length === 1) return hosts[0];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') toolLogger.debug({ err: (err as Error).message }, 'gh hosts.yml unreadable; assuming github.com');
+  }
+  return 'github.com';
+}
+
+/** Under an active egress policy, the API host a `repo` argument makes gh call, judged by name and then by address, before gh runs. */
+async function judgeGhRepoHost(repo: string): Promise<void> {
+  if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return;
+  const target = { host: ghRepoHost(repo) ?? defaultGhHost(), port: 443, scheme: 'https' as const };
+  precheckEgressName(target, 'github');
+  let addresses: string[] | undefined;
+  try { addresses = (await lookup(target.host, { all: true, verbatim: true })).map((a) => a.address); }
+  catch (err) { toolLogger.debug({ host: target.host, err: (err as Error).message }, 'Egress: a gh host does not resolve; judged by name alone'); }
+  enforceEgress(target, addresses, 'github');
+}
 
 /**
  * Argument keys whose values gh reads as positionals or splices into a flag

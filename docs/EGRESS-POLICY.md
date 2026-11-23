@@ -191,21 +191,46 @@ the proxy, so a policy is applied before git starts:
   `:`, brackets kept whole); a spelling git or ssh could read differently
   from a person (`a:x@b:repo`, a backslash or two `@` in a URL) is refused.
   `git://`, `ext::` and other `<helper>::` transports are refused.
+- **A host the `repo` argument names** — a URL, `HOST/OWNER/REPO`, or
+  `host:path` — is judged (name, then addresses) before any `gh` call, for
+  every github action: gh would call that host's API first. A bare
+  `owner/name` is judged on the host gh will use (`GH_HOST`, else the only
+  host in gh's `hosts.yml`, else github.com).
 - **`gh repo clone`** is judged on what gh will clone: the repository URL on
   its host as `gh repo view` reports it, over the protocol gh is configured
-  to use for that host (`git_protocol`), and the parent of a fork.
+  to use for that host (`git_protocol`), and the parent of a fork. This is
+  check-then-use: `gh repo view` and the clone are two gh runs, and what the
+  first reported is what was judged.
 - **Repository configuration** the model could have written that reroutes
-  the run or runs a command — `http.proxy`, `remote.<name>.proxy`,
+  a network run or runs a command — `http.proxy`, `remote.<name>.proxy`,
   `remote.<name>.uploadpack`/`receivepack`, `core.sshCommand`,
   `core.gitProxy`, `core.fsmonitor`, `core.hooksPath`, credential helpers,
-  `protocol.*`, includes, filter and merge drivers, submodule recursion — is
-  refused at repository scope. The operator's global and system git
+  `protocol.*`, includes, filter and merge drivers, submodule recursion,
+  `http.curloptResolve`, `pull.rebase`, `rebase.*`, `gpg.*`,
+  `push.gpgSign` — is refused at repository scope for pull, push and clone. The operator's global and system git
   configuration is trusted and left alone.
-- **pull, push and clone run with hooks off**, `ext::` disabled and no
-  fsmonitor.
+- **No git run of the git tool executes a program the repository names, with
+  or without a policy.** git runs on the host, outside the shell sandbox,
+  while a sandboxed command (or the model) can write `.git/config` and
+  `.git/hooks`. Every run — status, diff, log, add, commit, checkout, reset,
+  stash, pull, push, clone — gets `--no-pager`, hooks off
+  (`core.hooksPath=/dev/null`), `core.fsmonitor=false`, editors that do
+  nothing, `protocol.ext.allow=never`, and diff gets `--no-ext-diff`; a push
+  to a repository on this machine runs that repository's receive-pack with
+  hooks off too. Repository-scope settings that run a program and cannot be
+  switched off on the command line — `core.sshCommand`, `core.gitProxy`,
+  `core.askPass`, `core.alternateRefsCommand`, credential helpers, `gpg`
+  programs, filter, diff (`command`/`textconv`) and merge drivers,
+  `remote.<name>.uploadpack`/`receivepack`/`vcs`, `submodule.*.update`,
+  `submodule.recurse`, includes, `interactive.diffFilter`,
+  `pull.rebase=interactive` — refuse the action, naming the keys. The git
+  that `gh` starts gets the same settings through `GIT_CONFIG_COUNT`. Global
+  and system configuration stays the operator's and is honoured.
 
 Not judged: what git does after it starts (an HTTP redirect it follows,
-submodules, LFS endpoints), and hooks of local actions such as commit.
+submodules, LFS endpoints); git is not routed through the proxy. gh's own
+git runs in the server's working directory for some actions and only the
+switch-off settings apply there, not the repository-scope refusal.
 Private hosts are not refused for git (an internal server worked before and
 still does when a rule allows it).
 
@@ -214,6 +239,30 @@ URL, path, target, repository — may start with `-`: `pull` with a branch of
 `--upload-pack=<command>` ran that command on the server. git's positionals
 follow `--`; gh's are checked instead, since gh gives `--` a meaning of its
 own.
+
+## Limits
+
+What the policy does not do, in one place:
+
+- **Names are not identities.** A deny by name is bypassed by another name for
+  the same server; use a `cidr` rule for a hard block. A `CONNECT` tunnel's
+  TLS name (SNI) is not seen.
+- **Address allow rules resolve unlisted names.** With an address allow rule
+  in play, a name no rule lists is resolved before it can be refused.
+- **Browser:** its own DNS prefetch is not proxied. WebRTC is limited to
+  proxied UDP and HTTP/3 is off for all agent browsing, policy or not.
+- **git:** redirects, submodules and LFS are not judged, git is not routed
+  through the proxy, and private hosts are allowed for git when a rule allows
+  them. `gh repo view` → `gh repo clone` is check-then-use.
+- **Unjudged tools** (Docker, `test_container`, the browser extension,
+  `mcp_add_server`, CLI-native tools) are refused only under
+  `requireEnforcement`; otherwise they run, and the status route says so.
+- **Shell:** advisory without a sandbox. With one, under a policy a command
+  loses the host's loopback and LAN and every non-HTTP protocol.
+- **firejail** needs `XDG_RUNTIME_DIR` for the proxy socket, and was not run
+  end to end here (bwrap was).
+- **Roles:** a role chain is as strong as the spawn paths that carry it (the
+  swarm spawner and worker-spawner); a scheduled artifact refresh has no role.
 
 ## Refusals
 

@@ -962,11 +962,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 13 |
 | `tools` | `plugins` | 9 |
-| `tools` | `security` | 103 |
+| `tools` | `security` | 105 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 10 |
 | `tools` | `skills` | 7 |
-| `tools` | `utils` | 44 |
+| `tools` | `utils` | 46 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 7 |
 | `tui-editor` | `mcp` | 1 |
@@ -980,7 +980,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
-| `utils` | `security` | 4 |
+| `utils` | `security` | 5 |
 | `visual` | `models` | 1 |
 | `visual` | `security` | 1 |
 | `visual` | `utils` | 2 |

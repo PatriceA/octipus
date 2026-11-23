@@ -276,12 +276,12 @@ const MAX_SOCKET_PATH = 100;
  * hide it, which the warning says.
  */
 function socketDirFor(parent: string | undefined, label: string): string {
-  const fits = (base: string) => join(base, 'egress-XXXXXX', 'proxy.sock').length < MAX_SOCKET_PATH;
+  const fits = (base: string) => join(base, `egress-${process.pid}-XXXXXX`, 'proxy.sock').length < MAX_SOCKET_PATH;
   for (const base of [parent, process.env.XDG_RUNTIME_DIR].filter((b): b is string => !!b)) {
     if (!fits(base)) continue;
     try {
       mkdirSync(base, { recursive: true, mode: 0o700 });
-      return mkdtempSync(join(base, 'egress-'));
+      return mkdtempSync(join(base, `egress-${process.pid}-`));
     } catch { /* try the next */ }
   }
   const tmp = fits(tmpdir()) ? tmpdir() : '/tmp';
@@ -289,7 +289,7 @@ function socketDirFor(parent: string | undefined, label: string): string {
   if (parent !== undefined) {
     coreLogger.warn({ pkg: label, dir: tmp }, 'Egress proxy socket falls back to the temp directory; firejail\'s --private-tmp may hide it from the sandbox');
   }
-  return mkdtempSync(join(tmp, 'octipus-egress-'));
+  return mkdtempSync(join(tmp, `octipus-egress-${process.pid}-`));
 }
 
 /** Start a proxy that lets through only `allowed`. */

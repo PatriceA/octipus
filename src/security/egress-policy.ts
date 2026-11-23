@@ -291,7 +291,7 @@ export class EgressDeniedError extends Error {
 }
 
 /** Where a refusal happened, for the log and the audit row. */
-export type EgressPath = 'fetch' | 'browser' | 'shell-proxy' | 'plugin-proxy' | 'git';
+export type EgressPath = 'fetch' | 'browser' | 'shell-proxy' | 'plugin-proxy' | 'git' | 'github';
 
 /**
  * Log and audit one refusal: host, port, scheme, tool, role and the rule —

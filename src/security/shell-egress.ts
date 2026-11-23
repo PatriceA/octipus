@@ -61,11 +61,14 @@ let advisoryWarned = false;
 let staleCleaned = false;
 
 /**
- * Once per process: remove socket directories a previous run left behind (a
- * crash skips `close`). Only directories older than this process — a
- * concurrent command's live directory is newer.
+ * Once per process: remove socket directories a crashed run left behind
+ * (`close` never ran). A directory is named `egress-<pid>-...` after the
+ * process that made it; it is removed only when that process is gone, so
+ * another live Octipus process of the same user keeps its sockets. A
+ * directory without a pid (an older version) is removed when it is older
+ * than this process.
  */
-export function cleanStaleShellSockets(parent = shellSocketParent(), startedAt = Date.now() - process.uptime() * 1000): void {
+export function cleanStaleShellSockets(parent = shellSocketParent(), startedAt = Date.now() - process.uptime() * 1000, alive: (pid: number) => boolean = processAlive): void {
   if (!parent) return;
   let entries: string[];
   try { entries = readdirSync(parent); } catch (err) {
@@ -75,12 +78,20 @@ export function cleanStaleShellSockets(parent = shellSocketParent(), startedAt =
   for (const name of entries) {
     if (!name.startsWith('egress-')) continue;
     const path = join(parent, name);
+    const pid = /^egress-(\d+)-/.exec(name)?.[1];
     try {
-      if (statSync(path).mtimeMs < startedAt) rmSync(path, { recursive: true, force: true });
+      const stale = pid !== undefined ? Number(pid) !== process.pid && !alive(Number(pid)) : statSync(path).mtimeMs < startedAt;
+      if (stale) rmSync(path, { recursive: true, force: true });
     } catch (err) {
       coreLogger.warn({ path, err: (err as Error).message }, 'Shell egress: a stale proxy socket directory could not be removed');
     }
   }
+}
+
+/** Whether a process with this pid exists (EPERM: it does, as another user's). */
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 /** Inside a network namespace, loopback is the sandbox's own: never proxied. */

@@ -83,7 +83,8 @@ function scpTarget(remote: string): EgressTarget | 'unjudgeable' {
       port = Number(p);
     }
   } else if (hostAndPort.includes(':')) return 'unjudgeable';
-  if (!hostAndPort || /[@[\]/]/.test(hostAndPort)) return 'unjudgeable';
+  // A host starting with `-` would be an option to ssh (`-oProxyCommand=`).
+  if (!hostAndPort || /[@[\]/]/.test(hostAndPort) || hostAndPort.startsWith('-')) return 'unjudgeable';
   return { host: hostAndPort, port, scheme: 'ssh' };
 }
 
@@ -97,7 +98,7 @@ function urlTarget(remote: string, scheme: string): EgressTarget | null | 'unjud
   if ((authority.match(/@/g) ?? []).length > 1 || /[%?#]/.test(authority)) return 'unjudgeable';
   let url: URL;
   try { url = new URL(ssh ? `http://${remote.slice(remote.indexOf('://') + 3)}` : remote); } catch { return 'unjudgeable'; }
-  if (!url.hostname) return 'unjudgeable';
+  if (!url.hostname || url.hostname.startsWith('-')) return 'unjudgeable';
   return { host: url.hostname, port: url.port ? Number(url.port) : ssh ? 22 : scheme === 'https' ? 443 : 80, scheme: ssh ? 'ssh' : scheme as 'http' | 'https' };
 }
 

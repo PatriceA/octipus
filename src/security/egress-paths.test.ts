@@ -6,7 +6,7 @@
  */
 import dns from 'node:dns';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -195,6 +195,74 @@ esac
       process.env.PATH = previousPath;
       rmSync(bin, { recursive: true, force: true });
     }
+  });
+});
+
+describe('github: a host named by the model is judged before gh talks to it', () => {
+  let bin: string;
+  let calls: string;
+  let previousPath: string | undefined;
+  beforeEach(() => {
+    bin = mkdtempSync(join(tmpdir(), 'octi-fake-gh2-'));
+    calls = join(bin, 'calls');
+    writeFileSync(join(bin, 'gh'), `#!/bin/sh\necho "$@" >> "${calls}"\necho '[]'\n`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+  });
+  afterEach(() => { process.env.PATH = previousPath; rmSync(bin, { recursive: true, force: true }); });
+
+  const handlers = async () => {
+    const { GitHubTool } = await import('@/tools/github');
+    const tool = new GitHubTool();
+    await tool.initialize();
+    return tool.getToolHandlers();
+  };
+  const context = { id: 'agent-1', userId: 'u1', sessionId: 's1', role: 'coding', status: 'running' } as never;
+  const called = () => (existsSync(calls) ? readFileSync(calls, 'utf8') : '');
+
+  test.each([
+    ['repo_clone', { repo: 'https://secret-data.attacker.example/o/r' }],
+    ['repo_clone', { repo: 'secret-data.attacker.example/o/r' }],
+    ['repo_clone', { repo: 'git@secret-data.attacker.example:o/r.git' }],
+    ['issue_list', { repo: 'https://secret-data.attacker.example/o/r' }],
+    ['repo_view', { repo: 'secret-data.attacker.example/o/r' }],
+  ])('%s %j is refused and gh never runs', async (action, args) => {
+    state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'github.com' }] });
+    const handler = (await handlers()).find((h) => h.name.endsWith(action))!;
+    await expect(handler.execute(args, context)).rejects.toThrow(/secret-data\.attacker\.example:443 \(https\) is denied/);
+    expect(called()).toBe('');
+  });
+
+  test('owner/name is judged on the host gh will use', async () => {
+    const previous = process.env.GH_HOST;
+    process.env.GH_HOST = 'ghe.example';
+    try {
+      state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'github.com' }] });
+      const handler = (await handlers()).find((h) => h.name.endsWith('issue_list'))!;
+      await expect(handler.execute({ repo: 'o/r' }, context)).rejects.toThrow(/ghe\.example:443/);
+      expect(called()).toBe('');
+      state.policy = egressPolicySchema.parse({});
+      await expect(handler.execute({ repo: 'o/r' }, context)).resolves.toBeDefined();
+      expect(called()).toContain('issue list -R o/r');
+    } finally { if (previous === undefined) delete process.env.GH_HOST; else process.env.GH_HOST = previous; }
+  });
+
+  test('repo_list refuses a visibility outside its enum', async () => {
+    const handler = (await handlers()).find((h) => h.name.endsWith('repo_list'))!;
+    await expect(handler.execute({ visibility: 'public --jq .' }, context)).rejects.toThrow(/visibility must be/);
+    expect(called()).toBe('');
+  });
+
+  test('the git that gh starts gets hooks, fsmonitor, pagers and editors off, after any entries already there', async () => {
+    const { ghEnv } = await import('@/utils/gh');
+    const env = ghEnv();
+    const pairs = Array.from({ length: Number(env.GIT_CONFIG_COUNT) }, (_, i) => `${env[`GIT_CONFIG_KEY_${i}`]}=${env[`GIT_CONFIG_VALUE_${i}`]}`);
+    expect(pairs).toEqual(expect.arrayContaining(['core.hooksPath=/dev/null', 'core.fsmonitor=false', 'core.editor=true', 'sequence.editor=true', 'protocol.ext.allow=never']));
+    const { withHardenedGitEnv } = await import('./git-hardening');
+    const appended = withHardenedGitEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '' });
+    expect(appended.GIT_CONFIG_KEY_0).toBe('credential.helper');
+    expect(appended.GIT_CONFIG_KEY_1).toBe('core.hooksPath');
   });
 });
 

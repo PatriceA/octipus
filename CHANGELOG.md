@@ -40,9 +40,21 @@ labels reflect blast radius, not contract guarantees.
   navigated to any URL. Both now go through the SSRF guard, so a source or
   capture of `localhost` or a LAN address is refused, with or without an
   egress policy.
+- **Breaking — repository hooks, fsmonitor, external diff and filter
+  drivers no longer run when the agent's git tool operates on a repo.** git
+  runs on the host, outside the shell sandbox, and a sandboxed command could
+  write `.git/config` or `.git/hooks` and then have `git.status` run its code
+  with the host's network. Every git run of the tool now has hooks,
+  fsmonitor, pagers, editors and `ext::` off (diff: `--no-ext-diff`), a local
+  push's receiving side runs without hooks, and a repository-scope setting
+  that would run a program (filter/diff/merge drivers, `gpg.program`,
+  `core.sshCommand`, credential helpers, includes, `pull.rebase=interactive`,
+  ...) refuses the action and names the key. The git `gh` starts gets the
+  same settings. The operator's global and system git config is unchanged.
 - **git and github tools refuse option-like values.** A branch, remote,
-  URL, path, target or repository that starts with `-` is refused, and git's
-  positionals follow `--`: `pull` with a branch of
+  URL, path, target or repository that starts with `-` is refused (refspecs
+  such as `HEAD:main` and `+a:b` still work), and git's positionals follow
+  `--`: `pull` with a branch of
   `--upload-pack=<command>` ran that command on the server.
 - **Headless Chromium hardening.** The shared browser and `visual` run with
   WebRTC limited to proxied UDP and QUIC off, with or without a policy.

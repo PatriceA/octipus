@@ -132,21 +132,31 @@ describe('prepareShellEgress', () => {
     } finally { egress?.close(); }
   });
 
-  test('stale socket directories of an earlier run are removed; live ones are kept', async () => {
+  test('stale socket directories are removed only when their process is gone', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'octi-stale-'));
     try {
       const { mkdirSync, utimesSync, existsSync } = await import('node:fs');
-      mkdirSync(join(parent, 'egress-old'));
-      mkdirSync(join(parent, 'egress-new'));
-      mkdirSync(join(parent, 'unrelated'));
       const past = new Date(Date.now() - 3_600_000);
-      utimesSync(join(parent, 'egress-old'), past, past);
-      utimesSync(join(parent, 'unrelated'), past, past);
-      cleanStaleShellSockets(parent, Date.now() - 60_000);
-      expect(existsSync(join(parent, 'egress-old'))).toBe(false);
-      expect(existsSync(join(parent, 'egress-new'))).toBe(true);
+      for (const name of ['egress-111111-aa', 'egress-222222-bb', `egress-${process.pid}-cc`, 'egress-legacy', 'unrelated']) {
+        mkdirSync(join(parent, name));
+        utimesSync(join(parent, name), past, past);
+      }
+      // 222222 is another live Octipus process of this user: its sockets stay.
+      cleanStaleShellSockets(parent, Date.now() - 60_000, (pid) => pid === 222222);
+      expect(existsSync(join(parent, 'egress-111111-aa'))).toBe(false);
+      expect(existsSync(join(parent, 'egress-222222-bb'))).toBe(true);
+      expect(existsSync(join(parent, `egress-${process.pid}-cc`))).toBe(true);
+      expect(existsSync(join(parent, 'egress-legacy'))).toBe(false);
       expect(existsSync(join(parent, 'unrelated'))).toBe(true);
     } finally { rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  test('a proxy socket directory carries its process id', async () => {
+    policy({ default: 'deny' });
+    _forceSandboxRunnerForTests('bwrap', '/usr/bin/bwrap');
+    const egress = await prepareShellEgress(['curl'], { allowNetwork: true, mode: 'required', subject });
+    try { expect(egress?.proxy.socketDir).toMatch(new RegExp(`egress-${process.pid}-[^/]+$`)); }
+    finally { egress?.close(); }
   });
 
   test('the proxy socket is not under the workspace root, which other sandboxed commands mount', async () => {
