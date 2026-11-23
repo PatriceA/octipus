@@ -70,6 +70,9 @@ export function audienceAllowsContextHooks(audience: SessionAudience): boolean {
 export async function contextForAgentStart(input: AgentStartInput): Promise<ContextHooksOutcome> {
   try {
     if (!isRealUserId(input.userId)) return none();
+    // A turn that came in by email (docs/CHANNELS.md#email): its answer goes to a
+    // forgeable channel, so no note or knowledge passage is put in front of it.
+    if (input.channel === 'email') return none();
     const audience = 'audience' in input ? input.audience : await sessionAudience(input.session);
     if (!audienceAllowsContextHooks(audience)) return none();
     const userId = input.userId;

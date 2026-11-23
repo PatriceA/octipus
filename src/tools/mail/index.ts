@@ -6,6 +6,7 @@ import type { MailSummaryRow } from '@/db/repositories/mail';
 import type { MailAccount } from '@/db/schema/mail';
 import { MAIL_STATUSES, type MailStatus } from '@/shared/mail';
 import { readLevel } from '@/core/protection/content-read';
+import { isEmailChannelMailbox } from '@/core/mail/channel-mailbox';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /** Longest body `read_mail` hands the model. */
@@ -51,7 +52,8 @@ export class MailTool extends BaseTool {
       'The mailboxes you can read: personally your own, in a space the space\'s functional mailboxes.',
       createParameterSchema({}),
       async (_args, context) => {
-        const accounts = await reposFor(context).mail.accounts();
+        // The email channel's mailbox holds other people's conversations: never the agent's to read.
+        const accounts = (await reposFor(context).mail.accounts()).filter((a) => !isEmailChannelMailbox(a.id));
         return { accounts: accounts.map(summarizeAccount) };
       },
       { requiresPermission: true, permissionAction: 'read' },
@@ -69,13 +71,14 @@ export class MailTool extends BaseTool {
       }),
       async (args, context) => {
         const status = typeof args.status === 'string' ? args.status : 'received';
-        const rows = await reposFor(context).mail.list({
+        if (typeof args.account_id === 'string' && isEmailChannelMailbox(args.account_id)) return { messages: [] };
+        const rows = (await reposFor(context).mail.list({
           accountId: typeof args.account_id === 'string' ? args.account_id : undefined,
           status: status === 'all' ? undefined : (MAIL_STATUSES as readonly string[]).includes(status) ? (status as MailStatus) : 'received',
           unread: args.unread === true,
           q: typeof args.query === 'string' ? args.query : undefined,
           limit: clampLimit(args.limit, 20),
-        });
+        })).filter((m) => !isEmailChannelMailbox(m.accountId));
         // Reaches the model inside the untrusted envelope (flow guard: mail read is `suspicious`).
         return { messages: rows.map((m) => summarizeMessage(m, context)) };
       },
@@ -88,7 +91,7 @@ export class MailTool extends BaseTool {
       createParameterSchema({ id: { type: 'string', description: 'The message id', required: true } }),
       async (args, context) => {
         const row = await reposFor(context).mail.message(String(args.id));
-        if (!row) throw new Error('Message not found');
+        if (!row || isEmailChannelMailbox(row.accountId)) throw new Error('Message not found');
         const text = row.bodyText.length > READ_MAX ? `${row.bodyText.slice(0, READ_MAX)}\n[… ${row.bodyText.length - READ_MAX} more characters]` : row.bodyText;
         return {
           ...summarizeMessage(row, context),
@@ -119,13 +122,13 @@ export class MailTool extends BaseTool {
         try {
           if (typeof args.reply_to === 'string' && args.reply_to) {
             const original = await repo.message(args.reply_to);
-            if (!original || original.status !== 'received') throw new Error('Message not found');
+            if (!original || original.status !== 'received' || isEmailChannelMailbox(original.accountId)) throw new Error('Message not found');
             const account = await repo.account(original.accountId);
             if (!account) throw new Error('Mail account not found');
             const draft = await repo.createDraft(account, replyDraft(account, original, String(args.body ?? ''), args.reply_all === true), replyProtectionLevel(account, original));
             return { draft: summarizeMessage(draft, context), next: 'The draft is saved, not sent. Send it with send_mail_draft once the owner wants it sent.' };
           }
-          const account = typeof args.account_id === 'string' ? await repo.account(args.account_id) : null;
+          const account = typeof args.account_id === 'string' && !isEmailChannelMailbox(args.account_id) ? await repo.account(args.account_id) : null;
           if (!account) throw new Error('Name the account to send from (account_id, from list_mail_accounts) or a message to reply to (reply_to)');
           const to = parseRecipients(args.to);
           if (to.length === 0) throw new Error('A new message needs at least one recipient');
@@ -152,6 +155,8 @@ export class MailTool extends BaseTool {
       createParameterSchema({ id: { type: 'string', description: 'The draft id', required: true } }),
       async (args, context) => {
         const repo = reposFor(context).mail;
+        const draft = await repo.message(String(args.id));
+        if (draft && isEmailChannelMailbox(draft.accountId)) throw new Error('Not sent: Draft not found');
         try {
           const sent = await sendDraft(repo, String(args.id));
           return { sent: true, id: sent.id };

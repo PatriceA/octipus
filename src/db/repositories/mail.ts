@@ -9,9 +9,10 @@
  * There is no admin by-id read: a personal mailbox is its owner's alone.
  * The sync (core/mail/sync.ts) writes received mail outside any scope.
  */
-import { and, desc, eq, getTableColumns, ilike, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, ilike, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { MailStatus } from '@/shared/mail';
 import { getDb } from '../postgres';
+import { emailChannelMessages } from '../schema/email-channel';
 import { type MailAccount, mailAccounts, type MailMessage, mailMessages, mailRaw, type NewMailAccount, type NewMailMessage } from '../schema/mail';
 import { isUuid, type RepoScope } from './scoped';
 
@@ -166,6 +167,29 @@ export class MailRepo {
     if (!message) return null;
     const [row] = await this.db.select({ raw: mailRaw.raw }).from(mailRaw).where(eq(mailRaw.messageId, message.id)).limit(1);
     return row?.raw ?? null;
+  }
+
+  /**
+   * Received mail of account `accountId` the email channel has not looked at
+   * yet (no `email_channel_messages` row), stored since `since`, oldest first
+   * (src/channels/email/). Read through this scope: the channel reads its
+   * mailbox as the account's owner.
+   */
+  async channelUnseen(accountId: string, since: Date, limit: number): Promise<Array<{ id: string; size: number; date: Date }>> {
+    if (!isUuid(accountId)) return [];
+    return this.db
+      .select({ id: mailMessages.id, size: mailMessages.size, date: mailMessages.date })
+      .from(mailMessages)
+      .leftJoin(emailChannelMessages, eq(emailChannelMessages.mailMessageId, mailMessages.id))
+      .where(and(
+        eq(mailMessages.accountId, accountId),
+        eq(mailMessages.status, 'received'),
+        gte(mailMessages.createdAt, since),
+        isNull(emailChannelMessages.id),
+        ...this.messageRows(),
+      ))
+      .orderBy(mailMessages.createdAt)
+      .limit(limit);
   }
 
   /** Set a message's protection level (null: unclear, 4). `onlyRaise`: see `CaseRepo.setProtectionLevel`. */

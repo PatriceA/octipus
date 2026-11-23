@@ -10,6 +10,7 @@ export { TeamsChannel, teamsChannel } from './teams';
 export { TelegramChannel, telegramChannel } from './telegram';
 export { WebChatChannel, webChatChannel } from './webchat';
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
+export { EmailChannel, emailChannel } from './email';
 
 import { getConfig } from '@/config';
 import { sharedRefusalText } from '@/core/errors/limit-refusal';
@@ -648,7 +649,7 @@ export async function tryResolvePermissionFromChannel(message: UnifiedMessage): 
  * (docs/MODULES.md). The in-app web chat always runs.
  */
 function channelRuns(channel: { type: string; isEnabled: (config: ReturnType<typeof getConfig>) => boolean }, config: ReturnType<typeof getConfig>): boolean {
-  if (MESSAGING_CHANNELS.has(channel.type) && !isModuleOn('channels')) return false;
+  if ((MESSAGING_CHANNELS.has(channel.type) || channel.type === 'email') && !isModuleOn('channels')) return false;
   return channel.isEnabled(config);
 }
 
@@ -661,7 +662,7 @@ let messagingReinit: Promise<void> = Promise.resolve();
  */
 export function reinitializeMessagingChannels(): Promise<void> {
   messagingReinit = messagingReinit.catch(() => undefined).then(async () => {
-    for (const type of MESSAGING_CHANNELS) await reinitializeChannel(type as ChannelType);
+    for (const type of [...MESSAGING_CHANNELS, 'email']) await reinitializeChannel(type as ChannelType);
   });
   return messagingReinit;
 }
@@ -964,8 +965,10 @@ export async function initializeChannels(): Promise<void> {
     let endFeedback: (() => void) | undefined;
     try {
       recordChannelMessage(message.channelType, 'inbound');
+      // A chat a person watches live (not email: BaseChannel.interactive).
+      const interactive = umi.getChannel(message.channelType)?.interactive !== false;
       // A yes/no reply to a permission prompt or an approval posted in this chat
-      if (await tryResolvePromptReply(message)) return;
+      if (interactive && await tryResolvePromptReply(message)) return;
 
       // A channel bound to a space (§9.4): the message is a post in the
       // thread's room and its turn a room turn, run as the member; the reply
@@ -1069,7 +1072,8 @@ export async function initializeChannels(): Promise<void> {
         }, 15_000);
       };
 
-      if (isExternalChannel) {
+      // Progress notes only where someone watches live: on email each would be a mail.
+      if (isExternalChannel && interactive) {
         // Acknowledge receipt with 👀
         react('👀');
 

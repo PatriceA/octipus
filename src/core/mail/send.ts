@@ -18,6 +18,7 @@ import type { MailAddress, MailServer } from '@/shared/mail';
 import { coreLogger } from '@/utils/logger';
 import { MailDeadlineError, withDeadline } from './deadline';
 import { pinMailHost } from './hosts';
+import { isEmailChannelMailbox } from './channel-mailbox';
 import { mailPassword, outgoingPassword } from './secrets';
 
 /** Most recipients (to and cc together) one message may have. */
@@ -45,7 +46,12 @@ function domainOf(address: string): string {
 }
 
 /** Build the message: the same bytes go to SMTP and to the Sent folder. Pure but for the date. */
-export async function composeMessage(account: Pick<MailAccount, 'address' | 'displayName'>, draft: Pick<MailMessage, 'toAddresses' | 'ccAddresses' | 'subject' | 'bodyText' | 'inReplyTo' | 'references'>): Promise<{ raw: Buffer; messageIdHeader: string; envelope: { from: string; to: string[] } }> {
+export async function composeMessage(
+  account: Pick<MailAccount, 'address' | 'displayName'>,
+  draft: Pick<MailMessage, 'toAddresses' | 'ccAddresses' | 'subject' | 'bodyText' | 'inReplyTo' | 'references'>,
+  /** Further headers (the email channel's `Auto-Submitted: auto-replied`). */
+  headers?: Record<string, string>,
+): Promise<{ raw: Buffer; messageIdHeader: string; envelope: { from: string; to: string[] } }> {
   const messageIdHeader = `<${randomUUID()}@${domainOf(account.address)}>`;
   const composer = new MailComposer({
     from: account.displayName ? { name: account.displayName, address: account.address } : account.address,
@@ -57,6 +63,7 @@ export async function composeMessage(account: Pick<MailAccount, 'address' | 'dis
     inReplyTo: draft.inReplyTo ?? undefined,
     references: draft.references ?? undefined,
     date: new Date(),
+    ...(headers ? { headers } : {}),
     disableFileAccess: true,
     disableUrlAccess: true,
   });
@@ -144,7 +151,7 @@ function checkRecipients(draft: Pick<MailMessage, 'toAddresses' | 'ccAddresses'>
  * and Message-ID; throws `MailSendError` (the draft is then `failed`, with
  * why, and can be sent again).
  */
-export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: string): Promise<{ id: string; messageIdHeader: string }> {
+export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: string, options: { headers?: Record<string, string> } = {}): Promise<{ id: string; messageIdHeader: string }> {
   const draft = await repo.message(id);
   if (!draft || (draft.status !== 'draft' && draft.status !== 'failed')) {
     throw new MailSendError('not_found', draft ? 'This message is not a draft' : 'Draft not found');
@@ -169,7 +176,10 @@ export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: s
     const password = await outgoingPassword(account);
     if (!password) throw new Error('No password is stored for the outgoing server');
     const pinned = await pinMailHost(outgoing.host, outgoing.security, account.localNetwork);
-    composed = await composeMessage(account, claimed);
+    // An answer drafted by the email channel (docs/CHANNELS.md#email) and sent by
+    // hand is still marked automatic (RFC 3834), so other robots do not answer it.
+    const channelReply = claimed.inReplyTo && isEmailChannelMailbox(account.id) ? { 'Auto-Submitted': 'auto-replied' } : undefined;
+    composed = await composeMessage(account, claimed, channelReply || options.headers ? { ...channelReply, ...options.headers } : undefined);
     const { raw, envelope } = composed;
     const transport = transportFor(outgoing, pinned.address, pinned.servername, password);
     try {
@@ -193,4 +203,36 @@ export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: s
   coreLogger.info({ accountId: account.id, recipients: composed.envelope.to.length }, 'mail: message sent'); // no address or subject
   void appendToSent(account, composed.raw);
   return { id, messageIdHeader: composed.messageIdHeader };
+}
+
+/**
+ * Send one message from the account without keeping it anywhere: no row, no
+ * copy in the Sent folder. Only for what must not sit in the mailbox, where
+ * its owner (and their agent) could read it: the email channel's link codes
+ * (src/channels/email/). Returns the Message-ID; throws `MailSendError`.
+ */
+export async function sendUnstored(
+  account: MailAccount,
+  message: Pick<MailMessage, 'toAddresses' | 'ccAddresses' | 'subject' | 'bodyText' | 'inReplyTo' | 'references'>,
+  headers?: Record<string, string>,
+): Promise<string> {
+  const outgoing = account.outgoing;
+  if (!outgoing) throw new MailSendError('invalid', 'This mail account has no outgoing server');
+  checkRecipients(message);
+  try {
+    const password = await outgoingPassword(account);
+    if (!password) throw new Error('No password is stored for the outgoing server');
+    const pinned = await pinMailHost(outgoing.host, outgoing.security, account.localNetwork);
+    const composed = await composeMessage(account, message, headers);
+    const transport = transportFor(outgoing, pinned.address, pinned.servername, password);
+    try {
+      await withDeadline(transport.sendMail({ envelope: composed.envelope, raw: composed.raw }), SEND_DEADLINE_MS, 'Sending', () => transport.close());
+    } finally {
+      transport.close();
+    }
+    return composed.messageIdHeader;
+  } catch (err) {
+    const message = (err as { response?: string; message?: string }).response || (err as Error).message || 'The message could not be sent';
+    throw new MailSendError('failed', message.replace(/\s+/g, ' ').trim().slice(0, 300));
+  }
 }

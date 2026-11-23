@@ -1445,6 +1445,13 @@
       "breakpoints": true
     },
     {
+      "idx": 206,
+      "version": "7",
+      "when": 1795996800000,
+      "tag": "0206_email_channel",
+      "breakpoints": true
+    },
+    {
       "idx": 208,
       "version": "7",
       "when": 1796169600000,
