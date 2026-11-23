@@ -7,6 +7,19 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Terminal chat: older turns, a model picker and `@` mentions**
+  ([guide](docs/guides/tui.md#reading-a-conversation)). Scrolling up past
+  the 50 messages a resumed session replays now loads earlier ones from the
+  server, 100 at a time, with a notice while there are more, while loading
+  or when a load failed. `/model` alone opens a picker of the models you
+  may use and sets this session's root agent model (`/model <name>` and
+  `/model clear` work as text; the gateway gained a `/model` command).
+  `@` completes agents, skills and recent sessions above project files, as
+  text tokens the agent reads. Fixed: on the alternate screen, scrolling
+  up in an idle session stopped under "N earlier messages above"; `/history`
+  replayed a companion's internal check-ins; the editor's Up/Down skipped
+  the rows of a soft-wrapped line.
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

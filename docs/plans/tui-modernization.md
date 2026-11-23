@@ -1,7 +1,9 @@
 # Terminal chat and editor: modernization plan
 
-Status: in progress (2026-11-22). Phase 0 shipped with this document;
-Phases 1 and 2 are on the modernization branch (§7).
+Status: in progress (2026-11-23). Phases 0–5 shipped, Phase 6 in part
+(§7). The open items the §5.1 table listed after Phase 3 — the model
+picker, mentions and older turns from the server — and the soft-wrap
+cursor left from Phase 5 were done on 2026-11-23 (§7, "Follow-up").
 
 Scope: `octi tui` (`src/tui-pi/`, 5.4k lines with tests) and `octi edit`
 (`src/tui-editor/`, 6.5k lines with tests), their shared pieces, the
@@ -298,14 +300,14 @@ The "Today" column is the state before Phase 2; "Now" is after Phase 3 (§7).
 | Thinking / reasoning | Pre-tool text becomes an ordinary message | Dim, collapsible block | As expected (3.2) |
 | Selection and copy | Shift+drag; `/copy last` | Drag to select, copy on release; copy a code block with one key | As expected (Phase 2; `Alt+C` / `/copy code` in Phase 3) |
 | Search | None | `/` or Ctrl+F in the transcript; Ctrl+R in input history | As expected (3.4) on the alternate screen: `Ctrl+F`, `Ctrl+Shift+F`, `/search` (a bare `/` is the command prefix); not with `--inline` |
-| Sessions, models, skills | Text lists and `/resume <n>` | Pickers with fuzzy filter and preview | Sessions, skills, commands, themes, input history (3.5). **Models not done**: the gateway's command registry has no model or lane command to list from |
-| Mentions | `@` file completion via `fd` | Also agents, skills, sessions; pasted paths become chips | **Not done**: not among Phase 3's items; needs an autocomplete provider of our own beside pi-tui's file provider |
+| Sessions, models, skills | Text lists and `/resume <n>` | Pickers with fuzzy filter and preview | As expected: sessions, skills, commands, themes, input history (3.5); models since the follow-up (a gateway `/model` command) |
+| Mentions | `@` file completion via `fd` | Also agents, skills, sessions; pasted paths become chips | Agents, skills and sessions complete beside files (follow-up); the tokens are text for the agent, with no server-side meaning. Pasted paths as chips: not done |
 | Images | Attach from clipboard or path | Also show images and diagrams inline where the terminal can (pi-tui has Kitty and iTerm2 support that is unused) | Attached images (3.8): Kitty graphics on the alternate screen, iTerm2 with `--inline` (pi-tui does not draw iTerm2 images on the alternate screen), text elsewhere. Diagrams not done |
 | Links | Printed as text | OSC 8 hyperlinks for URLs and `file:line` | As expected (3.8), where the terminal shows links |
 | Attention | Nothing when the window is in the background | Bell or OSC 9/777 notification when a turn ends or a decision is waiting; title shows state | As expected (3.6) |
 | Theme | One dark palette | Follows terminal background (OSC 11), light and high-contrast variants, `NO_COLOR` | As expected (3.7) |
 | Exit | Frame left in scrollback | Screen restored; a short summary and the resume command printed | As expected (Phase 2) |
-| Long sessions | Unbounded | Virtualised transcript; older turns loaded on demand | Virtualised and capped (Phase 2). **Loading older turns not done**: the gateway's `history` takes no cursor (Phase 2 note) |
+| Long sessions | Unbounded | Virtualised transcript; older turns loaded on demand | As expected: virtualised and capped (Phase 2); older turns paged from the server on scroll (follow-up) |
 
 ### 5.2 Editor (`src/tui-editor/`)
 
@@ -564,11 +566,9 @@ covered by a PTY test.
 | 5. Exit summary, `/export`, `/scrollback` / `Alt+O` | `a23dc70` | `screen.e2e`, `exit-paths.e2e` (crash restores the screen), `transcript-export.test.ts` |
 | 6. Virtualised, capped transcript | `a23dc70` | `transcript-view.test.ts`, `frame-time.e2e` |
 
-Tests: `af190f7`; docs `2f05c4e`; `MouseRegion` in the seam `e28b2db`. Server paging of older turns is **not done**: the
-gateway's `history` command returns the last 50 messages and takes no
-cursor, so it needs a gateway change (a `before` message id or offset on
-`history`) before the transcript can load older turns on scroll. Until then
-the client keeps up to 5,000 messages and says when it dropped older ones.
+Tests: `af190f7`; docs `2f05c4e`; `MouseRegion` in the seam `e28b2db`. Server paging of older turns was left open here and
+done in the follow-up (§7, "Follow-up"): no gateway cursor was needed, the
+chat pages with the web's REST route from the ids `/history` now sends.
 
 API for the next phases:
 
@@ -604,8 +604,9 @@ In the order users will feel them:
 Done when: each row of the table in §5.1 reads "Expected".
 
 **Phase 3 — shipped** on the modernization branch, except where the §5.1
-table's "Now" column says otherwise (models picker, mentions, diagrams,
-older turns from the server).
+table's "Now" column says otherwise (diagrams; pasted paths as chips). The
+models picker, mentions and older turns from the server followed (§7,
+"Follow-up").
 
 | Item | Commit | Verified by |
 | --- | --- | --- |
@@ -726,7 +727,7 @@ The editor is now under an invariant fuzzer (`tests/tui/editor-invariants.e2e.te
 
 Found and fixed on the way (in `8da2b09`): after a review the buffer took whatever was on disk as its saved text, so a file changed by something other than the agent meanwhile was overwritten by the next Ctrl+S without asking; and the diff overlay drew file text raw.
 
-Not done, and why: Up/Down move by buffer lines with soft wrap on (as vim's `j`/`k`), not by screen rows; divider positions are not kept across launches; the watcher polls once a second rather than being pushed changes (an atomic save replaces the file by rename, which `fs.watch` loses). Still open from Phase 4: `gateway-adapter.ts` takes `str_replace_editor`'s `new_str` (a fragment) as the whole new file — outside `src/tui-editor/`, and the hunk review now shows plainly that it would replace the file with the fragment.
+Not done, and why: divider positions are not kept across launches; the watcher polls once a second rather than being pushed changes (an atomic save replaces the file by rename, which `fs.watch` loses). Still open from Phase 4: `gateway-adapter.ts` takes `str_replace_editor`'s `new_str` (a fragment) as the whole new file — outside `src/tui-editor/`, and the hunk review now shows plainly that it would replace the file with the fragment.
 
 ### Phase 6 — Reach (M)
 
@@ -787,6 +788,34 @@ Not done, and untested:
   transcript is scrolled up does not return to the bottom, so its reply (and a
   `/copy` notice) arrive out of view; and while authenticating the plan row
   reads "Unavailable · connection lost".
+
+### Follow-up (2026-11-23) — the open items of Phases 2, 3 and 5
+
+| Item | Commit | Verified by |
+| --- | --- | --- |
+| Editor: with soft wrap on, Up/Down move one screen row, keeping the column on screen (vim's `j`/`k` still move by line). The last editor correctness item left open (Phase 5 "Not done"); every item of §5.2 "Wrong today" was already fixed in Phase 4 | `b5910e6` | `text-editor.view.test.ts` (fails without the change) |
+| Older turns from the server: `/history` rows carry their id; reaching the top of what is in memory pages earlier messages from `GET /api/sessions/:id/messages?page=true&before=<id>` (the web's route) through `GatewayClient.getJson`; a notice at the top says more / loading / failed; stops at the memory cap and after a drop | `4841854` | `older-turns.test.ts` (controller, inline and alternate-screen reading position, cap, stale page), `client.test.ts`, `commands.test.ts`, `older-turns.e2e` (PageUp and Ctrl+Home through two pages, request path and login, failure shown) |
+| Model picker: a gateway `/model` command running the chat command's code (`runModelCommand`), with the caller's enabled models and current choice as data; `/model` alone opens the fuzzy picker, with "Configured default" to clear | `5dc95c1` | `commands.test.ts`, `app-pickers.test.ts`, `pickers.e2e` |
+| Mentions: `@` completes `@agent:<role>`, `@skill:<name>`, `@session:<id8>` above the files, from `/api/roles`, `/api/skills`, `/api/sessions`, cached a minute; a failed list is reported | `004b321` | `mentions.test.ts`, `mentions.e2e` (list, filter, Tab, the token in `chat.send`, a refused list reported) |
+
+Found and fixed on the way, each with a test that fails without it: on
+the alternate screen a scroll alone (PageUp, Ctrl+Home, the wheel)
+redraws from the last frame's rows without rendering the transcript, so
+the rendered window did not grow until something else changed and an idle
+reader stayed under "N earlier messages above" (`b64255c`,
+`transcript-window.e2e`; the frame-time test always rendered content and
+never saw it); and the gateway's `/history` replayed rows marked internal
+(a companion's private check-in), which the web never shows (`3cb9fb0`,
+`commands.test.ts`).
+
+The PTY harness now serves a REST API on the gateway's port (`http` option,
+`requests`), so suites can drive what the chat reads over REST.
+
+Still open: mentions have no server-side meaning (the agent reads them as
+text; nothing runs the agent, turns the skill on or attaches the session);
+pasted paths as chips; diagrams inline; the model choice is the server's
+in-memory per-session override (lost on restart), as for the chat's
+`/model`.
 
 ## 8. Risks
 
