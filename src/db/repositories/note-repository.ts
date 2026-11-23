@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { getDb } from '../postgres';
 import { type NewNote, type Note, notes } from '../schema/notes';
@@ -102,6 +102,36 @@ export function guestNoteIds(workspaceId: string, folders: readonly string[]): S
  */
 const withoutArchiveMarkers = sql`CASE WHEN ${notes.noteKind} = 'lesson' THEN ${notes.frontmatter} - 'archivedBy' - 'mergedInto' ELSE ${notes.frontmatter} END`;
 
+/** What `NoteRepository.list` (and a bound `NoteStore.list`) takes. */
+export interface NoteListOptions {
+  kind?: string;
+  tag?: string;
+  includeArchived?: boolean;
+  /** `'only'`: the archived notes alone (the archive view). */
+  archived?: 'only';
+  /** Words every returned note holds in its title, slug, tags or body. */
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** At most this many words of a search are matched; the rest are ignored. */
+const SEARCH_MAX_WORDS = 8;
+
+/**
+ * A search as `ILIKE` patterns, one per word: each matches the word anywhere,
+ * with the pattern characters (`%`, `_`, `\`) in it taken literally.
+ */
+export function searchWords(search: string | undefined): string[] {
+  if (!search) return [];
+  return search
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, SEARCH_MAX_WORDS)
+    .map((word) => `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+}
+
 /** The personal workspace rule, or no condition when no workspace is given (or in a space). */
 function inWorkspace(scope: NoteScope | string, workspaceId: string | undefined): SQL | undefined {
   if (typeof scope !== 'string' && scope.kind === 'space') return undefined;
@@ -189,21 +219,34 @@ export class NoteRepository {
     return rows[0] ?? null;
   }
 
-  async list(
-    scope: NoteScope | string,
-    opts: { kind?: string; tag?: string; includeArchived?: boolean; limit?: number; offset?: number; workspaceId?: string } = {},
-  ): Promise<Note[]> {
+  /**
+   * The scope's notes, newest first (pinned ones, then the user's own before
+   * lessons). `search` keeps the notes holding every word of it in the title,
+   * slug, tags or body (case-insensitive, anywhere in the text), with title
+   * matches first. `archived: 'only'` lists the archived notes alone, most
+   * recently archived first (the archive view); `includeArchived` adds them
+   * to the active ones.
+   */
+  async list(scope: NoteScope | string, opts: NoteListOptions & { workspaceId?: string } = {}): Promise<Note[]> {
     const conditions = [...owner(scope), inWorkspace(scope, opts.workspaceId)];
     if (opts.kind) conditions.push(eq(notes.noteKind, opts.kind));
     if (opts.tag) conditions.push(sql`${opts.tag} = ANY(${notes.tags})`);
-    if (!opts.includeArchived) conditions.push(isNull(notes.archivedAt));
+    if (opts.archived === 'only') conditions.push(isNotNull(notes.archivedAt));
+    else if (!opts.includeArchived) conditions.push(isNull(notes.archivedAt));
+    const words = searchWords(opts.search);
+    for (const word of words) {
+      conditions.push(sql`(${notes.title} ILIKE ${word} OR ${notes.slug} ILIKE ${word} OR array_to_string(${notes.tags}, ' ') ILIKE ${word} OR ${notes.body} ILIKE ${word})`);
+    }
+    const order: SQL[] = [];
+    if (opts.archived === 'only') order.push(sql`${notes.archivedAt} DESC`);
+    if (words.length > 0) order.push(sql`(${sql.join(words.map((w) => sql`${notes.title} ILIKE ${w}`), sql` AND `)}) DESC`);
     return this.db
       .select()
       .from(notes)
       .where(and(...conditions))
       // Lessons (written by a learning review) after the user's own notes: by
       // kind, or by the tag on a note written before lessons had a kind.
-      .orderBy(desc(notes.pinned), sql`(${notes.noteKind} = 'lesson' OR 'session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
+      .orderBy(...order, desc(notes.pinned), sql`(${notes.noteKind} = 'lesson' OR 'session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
       .limit(opts.limit ?? 50)
       .offset(opts.offset ?? 0);
   }
@@ -337,7 +380,7 @@ export interface NoteStore {
   getById(id: string): Promise<Note | null>;
   getByIds(ids: string[]): Promise<Note[]>;
   getBySlug(slug: string): Promise<Note | null>;
-  list(opts?: { kind?: string; tag?: string; includeArchived?: boolean; limit?: number; offset?: number }): Promise<Note[]>;
+  list(opts?: NoteListOptions): Promise<Note[]>;
   query(opts?: Omit<Parameters<NoteRepository['query']>[1], 'workspaceId'>): Promise<Note[]>;
   listIndex(): Promise<Array<{ id: string; title: string; slug: string; noteKind: string }>>;
   tagCounts(): Promise<Array<{ tag: string; count: number }>>;

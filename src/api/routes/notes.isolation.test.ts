@@ -243,3 +243,90 @@ describe('Notes in workspaces', () => {
     expect(d.body.id).toBe(userLevel.id);
   });
 });
+
+describe('Note search and the archive', () => {
+  test('?q= matches every word in the title, tags or body, title matches first, scoped to the caller', async () => {
+    const inBody = await post(aliceApp, '/api/notes', { title: 'Groceries', body: 'remember the Sourdough starter for saturday' });
+    const inTitle = await post(aliceApp, '/api/notes', { title: 'Sourdough starter log', body: 'feeding notes' });
+    await post(aliceApp, '/api/notes', { title: 'Saturday plans', body: 'hiking' });
+    await post(bobApp, '/api/notes', { title: 'Bob sourdough', body: 'sourdough starter' });
+
+    const r = await get(aliceApp, `/api/notes?q=${encodeURIComponent('sourdough  STARTER')}`);
+    expect(r.status).toBe(200);
+    expect(r.body.notes.map((n: any) => n.id)).toEqual([inTitle.body.note.id, inBody.body.note.id]);
+
+    // Every word must match: "saturday" alone finds two, with "hiking" one.
+    const one = await get(aliceApp, `/api/notes?q=${encodeURIComponent('saturday hiking')}`);
+    expect(one.body.notes.map((n: any) => n.title)).toEqual(['Saturday plans']);
+
+    // Tags are searched too.
+    const tagged = await get(aliceApp, '/api/notes?q=alpha');
+    expect(tagged.body.notes.map((n: any) => n.title)).toContain('Tagged one');
+  });
+
+  test('?q= takes LIKE wildcards literally and leaves archived notes out', async () => {
+    await post(aliceApp, '/api/notes', { title: 'Progress', body: 'at 100% now' });
+    await post(aliceApp, '/api/notes', { title: 'Other', body: 'at 1000 now' });
+    const pct = await get(aliceApp, `/api/notes?q=${encodeURIComponent('100%')}`);
+    expect(pct.body.notes.map((n: any) => n.title)).toEqual(['Progress']);
+    const underscore = await get(aliceApp, `/api/notes?q=${encodeURIComponent('_')}`);
+    expect(underscore.body.notes).toEqual([]);
+
+    const gone = await post(aliceApp, '/api/notes', { title: 'Archived pineapple', body: 'x' });
+    await del(aliceApp, `/api/notes/${gone.body.note.id}`);
+    const archived = await get(aliceApp, '/api/notes?q=pineapple');
+    expect(archived.body.notes).toEqual([]);
+  });
+
+  test('?archived=only lists the archived notes alone; restore brings one back; cross-tenant restore is 404', async () => {
+    const a = await post(aliceApp, '/api/notes', { title: 'Old idea one', body: 'first' });
+    const b = await post(aliceApp, '/api/notes', { title: 'Old idea two', body: 'second' });
+    await del(aliceApp, `/api/notes/${a.body.note.id}`);
+    await del(aliceApp, `/api/notes/${b.body.note.id}`);
+
+    const archive = await get(aliceApp, '/api/notes?archived=only');
+    const ids = archive.body.notes.map((n: any) => n.id);
+    expect(ids).toContain(a.body.note.id);
+    expect(ids).toContain(b.body.note.id);
+    expect(archive.body.notes.every((n: any) => n.archivedAt)).toBe(true);
+    expect(ids.indexOf(b.body.note.id)).toBeLessThan(ids.indexOf(a.body.note.id));
+    const bobsArchive = await get(bobApp, '/api/notes?archived=only');
+    expect(bobsArchive.body.notes.find((n: any) => n.id === a.body.note.id)).toBeUndefined();
+
+    const cross = await post(bobApp, `/api/notes/${a.body.note.id}/restore`, {});
+    expect(cross.status).toBe(404);
+    expect(cross.body).toEqual({ error: 'Note not found' });
+
+    const restored = await post(aliceApp, `/api/notes/${a.body.note.id}/restore`, {});
+    expect(restored).toEqual({ status: 200, body: { restored: true } });
+    const list = await get(aliceApp, '/api/notes');
+    expect(list.body.notes.find((n: any) => n.id === a.body.note.id)?.archivedAt).toBeNull();
+    const after = await get(aliceApp, '/api/notes?archived=only');
+    expect(after.body.notes.find((n: any) => n.id === a.body.note.id)).toBeUndefined();
+    expect(after.body.notes.find((n: any) => n.id === b.body.note.id)).toBeDefined();
+    const found = await get(aliceApp, '/api/notes?q=first');
+    expect(found.body.notes.map((n: any) => n.id)).toContain(a.body.note.id);
+  });
+});
+
+describe('POST /notes createOnly', () => {
+  test('a create-only save never overwrites a note at the same slug, archived or not', async () => {
+    const first = await post(aliceApp, '/api/notes', { title: 'Weekly plan', body: 'original' });
+    expect(first.status).toBe(200);
+    // Without the flag, a save with no id updates the note at that slug.
+    const clash = await post(aliceApp, '/api/notes', { title: 'Weekly plan', body: 'replacement', createOnly: true });
+    expect(clash.status).toBe(409);
+    expect(clash.body).toMatchObject({ code: 'exists', id: first.body.note.id, slug: first.body.note.slug });
+    expect((await get(aliceApp, `/api/notes/${first.body.note.id}`)).body.body).toBe('original');
+
+    await del(aliceApp, `/api/notes/${first.body.note.id}`);
+    const overArchived = await post(aliceApp, '/api/notes', { title: 'Weekly plan', body: 'replacement', createOnly: true });
+    expect(overArchived.status).toBe(409);
+    const archived = await get(aliceApp, '/api/notes?archived=only&q=weekly');
+    expect(archived.body.notes.map((n: any) => n.body)).toEqual(['original']);
+
+    const fresh = await post(aliceApp, '/api/notes', { title: 'Weekly plan 2', body: 'new', createOnly: true });
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.created).toBe(true);
+  });
+});

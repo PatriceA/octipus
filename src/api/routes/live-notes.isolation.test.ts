@@ -199,3 +199,23 @@ describe('file leases', () => {
     expect(taken.status).toBe(200);
   });
 });
+
+describe('archive, restore and search in a space', () => {
+  test('members see the archive; an editor restores a note, a viewer may not; another space gets 404', async () => {
+    const note = await createNote('editor', 'Retro outcomes', 'ship the kiwi release\n');
+    expect((await call('editor', 'DELETE', `/api/notes/${note.id}`)).status).toBe(200);
+
+    const archive = await (await call('viewer', 'GET', '/api/notes?archived=only')).json() as { notes: Array<{ id: string }> };
+    expect(archive.notes.map((n) => n.id)).toContain(note.id);
+    expect((await (await call('viewer', 'GET', '/api/notes?q=kiwi')).json()).notes).toEqual([]);
+
+    expect((await call('viewer', 'POST', `/api/notes/${note.id}/restore`)).status).toBe(403);
+    expect((await call('stranger', 'POST', `/api/notes/${note.id}/restore`, { space: otherSpaceId })).status).toBe(404);
+    const restored = await call('editor', 'POST', `/api/notes/${note.id}/restore`);
+    expect(restored.status).toBe(200);
+
+    // The body is searched in the space too, live text included once saved.
+    const found = await (await call('viewer', 'GET', '/api/notes?q=kiwi')).json() as { notes: Array<{ id: string }> };
+    expect(found.notes.map((n) => n.id)).toEqual([note.id]);
+  });
+});

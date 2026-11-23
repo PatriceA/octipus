@@ -3,7 +3,7 @@ import { apiContext } from '@/api/context';
 import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
 import { getConfig } from '@/config';
 import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
-import { getNoteService } from '@/core/knowledge/notes';
+import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import { getRevision, listRevisions } from '@/db/repositories/live-documents';
@@ -92,6 +92,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         kind: query.kind,
         tag: query.tag,
         includeArchived: query.includeArchived === 'true',
+        archived: query.archived,
+        search: query.q,
         limit: Math.min(500, Math.max(1, parseInt(query.limit ?? '100', 10))),
       });
       return { notes, total: notes.length };
@@ -101,6 +103,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         kind: t.Optional(t.String()),
         tag: t.Optional(t.String()),
         includeArchived: t.Optional(t.String()),
+        /** `only`: the archived notes alone, most recently archived first. */
+        archived: t.Optional(t.Literal('only')),
+        /** Server-side search: every word in the title, slug, tags or body. */
+        q: t.Optional(t.String({ maxLength: 200 })),
         limit: t.Optional(t.String()),
       }),
       detail: { tags: ['notes'] },
@@ -123,10 +129,16 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           tags: body.tags,
           frontmatter: body.frontmatter,
           baseSha256: body.baseSha256,
+          createOnly: body.createOnly,
         });
         return result;
       } catch (err) {
         if (err instanceof SpaceError) throw err;
+        // A create-only save found a note (active or archived) at its slug: nothing written.
+        if (err instanceof NoteExistsError) {
+          set.status = 409;
+          return { error: `A note already exists at ${err.slug}`, code: 'exists', id: err.noteId, slug: err.slug };
+        }
         const refused = liveWriteError(err, set);
         if (refused) return refused;
         // Update of a non-existent / non-owned note → 404 (no enumeration).
@@ -147,6 +159,11 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
         /** Space notes: the sha of the body this edit was made from. */
         baseSha256: t.Optional(t.String({ pattern: '^[0-9a-f]{64}$' })),
+        /**
+         * Without an `id`, a save whose slug names an existing note (archived
+         * ones included) updates that note. `true` refuses that: 409 `exists`.
+         */
+        createOnly: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['notes'] },
     },
@@ -447,6 +464,20 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
         throw err;
       }
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  // Undo an archive: the note is back in lists, search and recall. 404 when
+  // the scope does not reach it; a note that is not archived is left as is.
+  .post(
+    '/:id/restore',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const ok = await getNoteService().restore(noteRepos(principal).noteScope, params.id);
+      if (!ok) { set.status = 404; return { error: 'Note not found' }; }
+      logger.info({ noteId: params.id, userId: user.id }, 'note restored via API');
+      return { restored: true };
     },
     { detail: { tags: ['notes'] } },
   )

@@ -338,7 +338,7 @@ Exposed through the notes tool's `sync_vault` action.
 
 | Route | What |
 |---|---|
-| `GET /api/notes` | List (filter by `kind`, `tag`, `includeArchived`; max 500) |
+| `GET /api/notes` | List (filter by `kind`, `tag`, `includeArchived`; max 500). `q` searches title, slug, tags and body on the server (every word must match); `archived=only` lists the archived notes |
 | `POST /api/notes` | Create/update via the save pipeline |
 | `POST /api/notes/query` | Bases-style property query (kind, tag, frontmatter, sort) |
 | `GET /api/notes/index` | Lightweight `{id,title,slug,kind}` — the source for `[[` autocomplete |
@@ -348,6 +348,7 @@ Exposed through the notes tool's `sync_vault` action.
 | `GET /api/notes/:id/suggestions` | Computed link suggestions |
 | `PATCH /api/notes/:id/pin` | Pin/unpin |
 | `DELETE /api/notes/:id` | Archive; `?hard=true` removes the note, its chunks, and its edges |
+| `POST /api/notes/:id/restore` | Undo an archive: the note and its chunks are searchable again |
 | `GET /api/graph` | Global mode: active notes + resolved edges (capped 2000 nodes / 5000 edges). With `entryType`+`entryId`: local neighbourhood via traversal, `hops` clamped 1–5 |
 | `GET /api/graph/canvas` | JSON Canvas of a neighbourhood, `hops` clamped 1–5 |
 

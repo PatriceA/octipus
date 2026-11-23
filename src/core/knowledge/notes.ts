@@ -619,6 +619,18 @@ export class NoteService {
   }
 
   /**
+   * Undo `archive`: the note is active again, and its chunks (kept while it
+   * was archived, only hidden from search) are found again. False when the
+   * scope does not reach the note.
+   */
+  async restore(scope: NoteScope, id: string): Promise<boolean> {
+    assertNoteAccess(scope, 'write');
+    const store = this.store(scope);
+    if (!(await store.getById(id))) return false;
+    return store.unarchive(id);
+  }
+
+  /**
    * Soft delete. An open space note's pending edits are saved first (under
    * its mutex) and its editors are told it was archived: an archive never
    * drops what someone typed. With `baseSha256` (an accepted archive
