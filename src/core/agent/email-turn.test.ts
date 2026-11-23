@@ -12,8 +12,10 @@ const fx = vi.hoisted(() => ({
   root: vi.fn(),
   command: vi.fn(),
   retrieve: vi.fn(async () => []),
+  plugins: vi.fn(async () => ({ text: 'PLUGIN CONTEXT', labelledBlocks: [] })),
   context: {} as Record<string, unknown>,
 }));
+vi.mock('@/plugins/packages/contributions/context', () => ({ runPluginContexts: fx.plugins }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
@@ -34,7 +36,7 @@ vi.mock('@/core/cli-session-store', () => ({ acknowledgeProviderTurn: async () =
 vi.mock('./session-compaction', () => ({ maybeCompactSession: async () => {} }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ getBySession: () => [] }) }));
 vi.mock('./root-runner', () => ({ runRootAgent: (...args: unknown[]) => fx.root(...args) }));
-import { getFlowLabel, isEmailSession, resetFlowLabels } from '@/security/flow-guard';
+import { getFlowLabel, resetFlowLabels } from '@/security/flow-guard';
 import type { ApprovalManager } from './approval-manager';
 import { AgentService } from './service';
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   fx.root.mockReset().mockResolvedValue({ response: 'Done.', agentId: 'agent', sources: [], outcome: 'success' });
   fx.command.mockReset().mockResolvedValue('COMMAND RAN');
   fx.retrieve.mockClear();
+  fx.plugins.mockClear();
   fx.context = {};
 });
 
@@ -84,12 +87,17 @@ describe('a turn by email', () => {
     expect(result.response).toBe('Done.');
   });
 
-  test('no personal memory; the email notice rides along; the session is suspicious and an email session', async () => {
+  test('no personal memory and no plugin context; the email notice rides along; the session is suspicious', async () => {
     await new AgentService().handleMessage('mail-session', 'user', 'summarise my week', 'email');
     expect(fx.retrieve).not.toHaveBeenCalled();
+    expect(fx.plugins).not.toHaveBeenCalled();
     expect(turnContextArg()).toContain('EMAIL CHANNEL');
+    expect(turnContextArg()).not.toContain('PLUGIN CONTEXT');
     expect(getFlowLabel('mail-session').suspicious).toBe(true);
-    expect(isEmailSession('mail-session')).toBe(true);
-    expect(isEmailSession('chat-session')).toBe(false);
+    // The same turn from a chat gets the plugins' context.
+    fx.root.mockClear();
+    fx.command.mockResolvedValue(null);
+    await new AgentService().handleMessage('chat-session', 'user', 'summarise my week', 'slack');
+    expect(fx.plugins).toHaveBeenCalled();
   });
 });

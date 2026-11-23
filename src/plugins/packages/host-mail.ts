@@ -23,6 +23,7 @@
  *   sends (`MAX_RECIPIENTS`).
  */
 import type { ContentRepos } from '@/db/repositories/content';
+import { isEmailChannelMailbox } from '@/core/mail/channel-mailbox';
 import type { MailAccount, MailMessage } from '@/db/schema/mail';
 import type { Principal } from '@/security/principal';
 import { effectiveProtectionLevel, UNCLEAR_PROTECTION_LEVEL } from '@/shared/protection';
@@ -109,7 +110,9 @@ export async function listMailSources(grant: HostTokenGrant, principal: Principa
   accounts: Array<{ id: string; label: string; address: string; canSend: boolean }>;
   inbox: { provider: InboxProvider; protectionLevel: number } | null;
 }>> {
+  // The email channel's mailbox holds other people's conversations: never a package's (docs/CHANNELS.md#email).
   const accounts = (await mailModuleRefusal(grant, 'read')) ? [] : (await repos.mail.accounts())
+    .filter((a) => !isEmailChannelMailbox(a.id))
     .map((a) => ({ id: a.id, label: a.label, address: a.address, canSend: a.outgoing !== null }));
   const inbox = await inboxProvider(grant, principal, 'read', deps);
   return { ok: true, value: { accounts, inbox: 'provider' in inbox ? { provider: inbox.provider, protectionLevel: INBOX_PROTECTION_LEVEL } : null } };
@@ -159,13 +162,16 @@ export async function listMail(grant: HostTokenGrant, principal: Principal, repo
     if (!id || Number.isNaN(date.getTime())) return invalid('cursor is the "next" of an earlier list');
     before = { date, id };
   }
-  const rows = await repos.mail.list({
+  if (isEmailChannelMailbox(query.accountId)) return { ok: true, value: { messages: [], next: null } };
+  const page = await repos.mail.list({
     accountId: query.accountId, status: query.status ?? 'received', unread: query.unread, q: query.q?.slice(0, 200), before, limit,
     maxLevel: grant.maxProtection,
   });
+  // Paged on what was read (the cursor stays right); the channel mailbox's rows are left out.
+  const rows = page.filter((m) => !isEmailChannelMailbox(m.accountId));
   await noteRead(grant, Math.max(1, ...rows.map((m) => effectiveProtectionLevel(m.protectionLevel))));
-  const last = rows.at(-1);
-  return { ok: true, value: { messages: rows.map(summaryOf), next: rows.length === limit && last ? `${last.date.toISOString()}|${last.id}` : null } };
+  const last = page.at(-1);
+  return { ok: true, value: { messages: rows.map(summaryOf), next: page.length === limit && last ? `${last.date.toISOString()}|${last.id}` : null } };
 }
 
 /** One message with its plain text (capped). */
@@ -192,7 +198,7 @@ export async function readMail(grant: HostTokenGrant, principal: Principal, repo
   const m = await repos.mail.message(id);
   const level = effectiveProtectionLevel(m?.protectionLevel);
   // Above maxProtection a message is not there for the package, as in a list: its level is not said either.
-  if (!m || level > grant.maxProtection) return notFound();
+  if (!m || level > grant.maxProtection || isEmailChannelMailbox(m.accountId)) return notFound();
   await noteRead(grant, level);
   return {
     ok: true,
@@ -247,7 +253,7 @@ async function composeMailDraft(grant: HostTokenGrant, principal: Principal, rep
       const readRefused = await replyReadRefusal(grant, principal, 'mail', {});
       if (readRefused) return { error: readRefused.error, refusal: readRefused };
       const original = await repos.mail.message(req.replyTo);
-      if (!original || original.status !== 'received') return null;
+      if (!original || original.status !== 'received' || isEmailChannelMailbox(original.accountId)) return null;
       const originalLevel = effectiveProtectionLevel(original.protectionLevel);
       // Above maxProtection the original is not there for the package.
       if (originalLevel > grant.maxProtection) return null;
@@ -263,7 +269,7 @@ async function composeMailDraft(grant: HostTokenGrant, principal: Principal, rep
       };
     }
     if (req.replyAll) return { error: 'replyAll goes with replyTo' };
-    const account = req.accountId ? await repos.mail.account(req.accountId) : null;
+    const account = req.accountId && !isEmailChannelMailbox(req.accountId) ? await repos.mail.account(req.accountId) : null;
     if (!account) return { error: 'Name the account to send from (accountId, from GET /mail/accounts) or a message to reply to (replyTo)' };
     const to = parseRecipients(req.to);
     if (to.length === 0) return { error: 'A new message needs at least one recipient' };

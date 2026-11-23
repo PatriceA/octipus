@@ -165,6 +165,23 @@ describe('the email channel on the mail stack', () => {
     expect(rows.map((r) => [r.status, r.reason, r.subject])).toEqual([['dropped', 'unauthenticated', null]]);
   });
 
+  test('a draft answer sent by hand still says it is an automatic reply', async () => {
+    const { getConfig, refreshConfigKey } = await import('@/config');
+    getConfig();
+    refreshConfigKey('emailChannel.accountId', account.id);
+    const { adminMailbox } = await import('./index');
+    const box = await adminMailbox(account.id);
+    const draftId = await box!.draft({ id: 'r', address: 'ann@example.com', userId: ann, messageIdHeader: '<q9@example.com>', threadKey: 't', subject: 'Q4', references: null }, 'Drafted answer.');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { sendDraft } = await import('@/core/mail/send');
+    const before = wire.length;
+    await sendDraft(contentRepos(await resolvedPrincipal(admin, null, { isAdmin: true })).mail, draftId);
+    expect(wire).toHaveLength(before + 1);
+    expect(header(wire[before].data, 'Auto-Submitted')).toBe('auto-replied');
+    expect(header(wire[before].data, 'In-Reply-To')).toBe('<q9@example.com>');
+  });
+
   test('only an admin\'s personal mailbox can serve the channel', async () => {
     const { adminMailbox } = await import('./index');
     expect((await adminMailbox(account.id))?.account.id).toBe(account.id);

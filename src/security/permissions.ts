@@ -1,7 +1,6 @@
 import { hasAccountAuthority } from './execution-environments';
 import { acknowledgeRecoveryApproval } from '@/db/repositories/recovery-consent';
-import { getFlowLabel, isEmailSession } from './flow-guard';
-import { getRunContext } from '@/core/run-context';
+import { getFlowLabel, isEmailRun } from './flow-guard';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { CLI_QUESTION_TOOL, parseCliAnswers } from '@/shared/cli-questions';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
@@ -174,7 +173,7 @@ export class PermissionManager {
     // defaults: the user's stored grants and allow rules ("always allow
     // shell") were given for chats they sit at, not for a forgeable mail.
     // Stored DENY still applies (below).
-    const emailTurn = getRunContext()?.channel === 'email' || isEmailSession(scope?.sessionId);
+    const emailTurn = isEmailRun();
     const storedPolicy = policies.find(p => p.toolId === toolId)
       ?? policies.find(p => p.toolId === legacyToolId);
     const policy = emailTurn && storedPolicy?.level !== 'DENY' ? undefined : storedPolicy;

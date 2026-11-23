@@ -122,8 +122,12 @@ export function plainFromAddress(lines: readonly HeaderLine[], parsed: readonly 
 
 // ── Authentication-Results (RFC 8601) ──────────────────────────────
 
-/** Longest `Authentication-Results` value read; a longer one is not trusted. */
-export const MAX_AUTH_RESULTS_CHARS = 8192;
+/**
+ * Longest `Authentication-Results` value parsed. A topmost trusted header
+ * longer than this fails the check (unreadable); it is never skipped. Large,
+ * since one DKIM result per signature makes real headers long.
+ */
+export const MAX_AUTH_RESULTS_CHARS = 64 * 1024;
 
 export interface AuthResult {
   method: string;
@@ -193,9 +197,13 @@ const METHOD = /^[a-z0-9][a-z0-9_-]*(\/[0-9]+)?$/i;
 const RESULT = /^[a-z0-9_-]+$/i;
 const PROPERTY = /^[a-z0-9_-]+\.[a-z0-9_.-]+$/i;
 
-/** The id a header was written under, or null. Reads only up to the first `;`. */
+/**
+ * The id a header was written under, or null. Reads only up to the first
+ * `;`, whatever the header's length: an over-long header under a trusted id
+ * must still be recognised as the topmost one (and then rejected), never
+ * passed over for a forged header below it.
+ */
 export function authservIdOf(value: string): string | null {
-  if (value.length > MAX_AUTH_RESULTS_CHARS) return null;
   const semi = value.indexOf(';');
   const head = tokenize(semi >= 0 ? value.slice(0, semi) : value);
   const first = head?.[0];

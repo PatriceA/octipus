@@ -16,6 +16,8 @@ export interface TestMail {
   extra?: string[];
   /** Header lines written below `Authentication-Results` (as a sender could). */
   below?: string[];
+  /** A text file attached to the plain body. */
+  attachment?: { filename: string; text: string };
 }
 
 export const TRUSTED_ID = 'mx.octipus.test';
@@ -37,7 +39,14 @@ export function rawMail(m: TestMail = {}): Buffer {
     `Date: ${new Date().toUTCString()}`,
     'MIME-Version: 1.0',
   ];
-  if (m.html !== undefined) {
+  if (m.attachment) {
+    lines.push(
+      'Content-Type: multipart/mixed; boundary="b1"', '',
+      '--b1', 'Content-Type: text/plain; charset=utf-8', '', m.body ?? 'What were the main numbers?',
+      '--b1', `Content-Type: text/plain; name="${m.attachment.filename}"`, `Content-Disposition: attachment; filename="${m.attachment.filename}"`, '', m.attachment.text,
+      '--b1--',
+    );
+  } else if (m.html !== undefined) {
     lines.push('Content-Type: text/html; charset=utf-8', '', m.html);
   } else {
     lines.push('Content-Type: text/plain; charset=utf-8', '', m.body ?? 'What were the main numbers?');

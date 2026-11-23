@@ -12,7 +12,7 @@ import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { type ContextTurnHandle, contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
 import { runPluginContexts } from '@/plugins/packages/contributions/context';
-import { clearFlowLabel, getFlowLabel, markEmailSession, markFlowTaint, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
+import { clearFlowLabel, getFlowLabel, markFlowTaint, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { EMAIL_CHANNEL, emailTurnContext } from '@/core/channels/email-context';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
@@ -778,10 +778,9 @@ export class AgentService {
           ? (groupTurn ? groupTurnContext({ requester: groupTurn.requester, context: groupTurn.context, take: groupTurn.take }) : '') + takenTasks.block
           // A mail's text may carry others' words (quoted, forwarded): framed, and the session starts suspicious.
           : emailTurnContext(channel);
-      if (channel === EMAIL_CHANNEL) {
-        markFlowTaint(resolvedSessionId, 'suspicious', 'email-channel:inbound_mail');
-        markEmailSession(resolvedSessionId);
-      }
+      // The cap itself keys on the run's channel (flow-guard `isEmailRun`); the
+      // session's mail stays marked suspicious (persisted) for later turns.
+      if (channel === EMAIL_CHANNEL) markFlowTaint(resolvedSessionId, 'suspicious', 'email-channel:inbound_mail');
       // Auto-title sessions with generic names (never a room: its title is the room's).
       if (!isRoom) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
@@ -1082,7 +1081,8 @@ export class AgentService {
       });
       // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
       // same audience rule, never in a space; it never throws either.
-      const pluginContextRun = sharedAudience || audience.contentStorageOff
+      // Not in an email turn either: nothing of the user's notes, knowledge or plugins reaches a forgeable channel.
+      const pluginContextRun = sharedAudience || audience.contentStorageOff || channel === EMAIL_CHANNEL
         ? Promise.resolve({ text: '', labelledBlocks: [] })
         : runPluginContexts({ userId, sessionId: resolvedSessionId, role: 'general', query: message, scope });
 

@@ -25,7 +25,7 @@ import type { MailAccount } from '@/db/schema/mail';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 import { replyReferences, replySubject } from './content';
-import { handleInbound, type InboundOutcome, type InboxDeps, type InboxSettings, type NoticeKind } from './inbox';
+import { attachmentsNotRead, handleInbound, type InboundOutcome, type InboxDeps, type InboxSettings, type NoticeKind } from './inbox';
 import { dbEmailChannelStore, type EmailChannelStore, type InboundRecord } from './store';
 
 /** Mail that arrived longer ago than this when the channel reaches it is recorded and not answered. */
@@ -143,6 +143,8 @@ export class EmailChannel extends BaseChannel {
   private running: Promise<void> | null = null;
   private mailbox: ChannelMailbox | null = null;
   private settings: EmailChannelConfig | null = null;
+  /** Files a mail had that were not read, by the channel's record of it: named in its answer. */
+  private readonly ignoredAttachments = new Map<string, string[]>();
 
   constructor(private readonly deps: EmailChannelDeps = defaultDeps) {
     super();
@@ -253,10 +255,13 @@ export class EmailChannel extends BaseChannel {
         if (outcome.kind === 'dropped') channelLogger.info({ mailMessageId: mail.id, reason: outcome.reason }, 'Email channel dropped a mail');
         if (outcome.kind !== 'turn') continue;
         const { turn } = outcome;
+        if (turn.ignoredAttachments.length) {
+          this.ignoredAttachments.set(turn.recordId, turn.ignoredAttachments);
+          if (this.ignoredAttachments.size > 1000) this.ignoredAttachments.delete(this.ignoredAttachments.keys().next().value as string);
+        }
         this.emitMessage(this.createUnifiedMessage(turn.threadKey, turn.userId, turn.content, {
           userName: turn.address,
           threadId: turn.threadKey,
-          attachments: turn.attachments.length ? turn.attachments : undefined,
           metadata: { messageId: turn.recordId },
         }));
       }
@@ -314,6 +319,11 @@ export class EmailChannel extends BaseChannel {
     const linked = await this.deps.linkedUser(target.address);
     if (!target.userId || linked?.id !== target.userId) throw new Error('Email channel: the address of this conversation is no longer linked to its user');
     let text = response.content;
+    const ignored = this.ignoredAttachments.get(target.id);
+    if (ignored) {
+      this.ignoredAttachments.delete(target.id);
+      text += `\n\n${attachmentsNotRead(ignored)}`;
+    }
     if (response.attachments?.length) {
       for (const a of response.attachments) (response.undelivered ??= []).push({ filename: a.filename, type: a.type, error: 'files are not sent by mail' });
       text += `\n\n(${response.attachments.length} file(s) from this answer are in the Octipus web app.)`;

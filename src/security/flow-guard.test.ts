@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyFlowGuard, isOwnerOnlyDelivery, isVaultAuthenticated, classifyFlow, clearFlowLabel, getFlowLabel, observeFlow, resetFlowLabels, type FlowCall } from './flow-guard';
 import type { PermissionCheckResult } from './permissions';
+import { runWithContext } from '@/core/run-context';
 
 const allow: PermissionCheckResult = { allowed: true, level: 'ALLOW', requiresApproval: false };
 const S = 'session-1';
@@ -161,21 +162,21 @@ describe('isOwnerOnlyDelivery', () => {
   });
 });
 
-describe('email sessions (docs/CHANNELS.md#email)', () => {
-  it('a web search is held back once the session holds private data, whatever the mode', async () => {
-    const { markEmailSession } = await import('./flow-guard');
+describe('email runs (docs/CHANNELS.md#email)', () => {
+  const inEmail = <T>(fn: () => T) => runWithContext({ runId: 'run_email', channel: 'email' } as never, fn);
+
+  it('a web search is held back once the session holds private data, whatever the mode', () => {
     const search = { toolId: 'websearch', action: 'search' };
     observeFlow(S, { toolId: 'data', action: 'query' });
-    // An ordinary session: a query is read egress, allowed after a private read.
+    // An ordinary run: a query is read egress, allowed after a private read.
     expect(guard(search).level).toBe('ALLOW');
-    markEmailSession(S);
-    expect(guard(search)).toMatchObject({ level: 'ASK', source: 'flow-guard' });
-    expect(guard(search, allow, 'off')).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+    expect(inEmail(() => guard(search))).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+    expect(inEmail(() => guard(search, allow, 'off'))).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+    // The cap is the run's, not the session's: a later web-app turn in the same session is ordinary.
+    expect(runWithContext({ runId: 'run_web', channel: 'webchat' } as never, () => guard(search)).level).toBe('ALLOW');
   });
 
-  it('a clean email session may still search', async () => {
-    const { markEmailSession } = await import('./flow-guard');
-    markEmailSession('email-clean');
-    expect(applyFlowGuard('ask', 'email-clean', { toolId: 'websearch', action: 'search' }, allow).level).toBe('ALLOW');
+  it('a clean email run may still search', () => {
+    expect(inEmail(() => applyFlowGuard('ask', 'email-clean', { toolId: 'websearch', action: 'search' }, allow)).level).toBe('ALLOW');
   });
 });

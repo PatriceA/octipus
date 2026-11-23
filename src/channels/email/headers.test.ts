@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { rawMail, TRUSTED_ID } from './fixtures';
-import { authenticationVerdict, headerLines, loopReason, MalformedHeaders, parseAuthenticationResults, plainFromAddress } from './headers';
+import { authenticationVerdict, headerLines, loopReason, MAX_AUTH_RESULTS_CHARS, MalformedHeaders, parseAuthenticationResults, plainFromAddress } from './headers';
 
 const T = [TRUSTED_ID];
 const verdictOf = (headers: string[], domain = 'victim.com', ids = T) =>
@@ -64,12 +64,24 @@ describe('authentication: DMARC pass for the From domain, under the trusted id, 
     expect(parseAuthenticationResults(`${TRUSTED_ID}; none`)).toEqual({ authservId: TRUSTED_ID, results: [] });
   });
 
-  test('deeply nested comments cost linear time; an over-long header is not trusted', () => {
-    const deep = `x; ${'('.repeat(40_000)}${')'.repeat(40_000)}`;
+  test('deeply nested comments cost linear time', () => {
+    const deep = `${TRUSTED_ID}; ${'('.repeat(40_000)}${')'.repeat(40_000)} dmarc=pass header.from=victim.com`;
     const started = Date.now();
     expect(verdictOf([ar(deep)])).toMatchObject({ ok: false });
     expect(Date.now() - started).toBeLessThan(500);
-    expect(verdictOf([ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com ${'(c)'.repeat(4000)}`)])).toEqual({ ok: false, why: 'no_trusted_results' });
+  });
+
+  test('the server\'s header inflated past the size limit is rejected, never skipped for a forged pass below it', () => {
+    const results = Array.from({ length: 1200 }, (_, i) => `dkim=neutral (bad) header.d=attacker.com header.s=${'s'.repeat(60)}${i}`).join('; ');
+    const real = ar(`${TRUSTED_ID}; ${results}; dmarc=fail header.from=victim.com`);
+    expect(real.length).toBeGreaterThan(MAX_AUTH_RESULTS_CHARS);
+    expect(verdictOf([real, ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com`)])).toEqual({ ok: false, why: 'unreadable' });
+  });
+
+  test('a long but legitimate header (many DKIM results) still passes', () => {
+    const results = Array.from({ length: 40 }, (_, i) => `dkim=pass header.d=victim.com header.s=${'s'.repeat(60)}${i}`).join('; ');
+    expect(results.length).toBeGreaterThan(3000);
+    expect(verdictOf([ar(`${TRUSTED_ID}; ${results}; dmarc=pass header.from=victim.com`)])).toMatchObject({ ok: true });
   });
 });
 

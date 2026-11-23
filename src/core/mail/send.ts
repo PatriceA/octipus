@@ -18,6 +18,7 @@ import type { MailAddress, MailServer } from '@/shared/mail';
 import { coreLogger } from '@/utils/logger';
 import { MailDeadlineError, withDeadline } from './deadline';
 import { pinMailHost } from './hosts';
+import { isEmailChannelMailbox } from './channel-mailbox';
 import { mailPassword, outgoingPassword } from './secrets';
 
 /** Most recipients (to and cc together) one message may have. */
@@ -175,7 +176,10 @@ export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: s
     const password = await outgoingPassword(account);
     if (!password) throw new Error('No password is stored for the outgoing server');
     const pinned = await pinMailHost(outgoing.host, outgoing.security, account.localNetwork);
-    composed = await composeMessage(account, claimed, options.headers);
+    // An answer drafted by the email channel (docs/CHANNELS.md#email) and sent by
+    // hand is still marked automatic (RFC 3834), so other robots do not answer it.
+    const channelReply = claimed.inReplyTo && isEmailChannelMailbox(account.id) ? { 'Auto-Submitted': 'auto-replied' } : undefined;
+    composed = await composeMessage(account, claimed, channelReply || options.headers ? { ...channelReply, ...options.headers } : undefined);
     const { raw, envelope } = composed;
     const transport = transportFor(outgoing, pinned.address, pinned.servername, password);
     try {

@@ -22,8 +22,10 @@
  *     every channel). If not, the sender — authenticated and allow-listed by
  *     now — gets a link code (subject `link`) or how to get one.
  * 10. Size: larger than allowed, the sender is told so.
- * 11. The new text and the attachments become the turn, in the thread the
- *     mail replies to (a reply to one of our replies continues its session).
+ * 11. The new text becomes the turn, in the thread the mail replies to (a
+ *     reply to one of our replies continues its session). Attached files are
+ *     not read: their names ride along so the answer can say so, and a mail
+ *     with nothing but files gets that notice instead of a turn.
  *
  * A failure part way records the mail as dropped (`error`) rather than
  * leaving it claimed and unexplained.
@@ -31,7 +33,6 @@
 import { createHash } from 'node:crypto';
 import { simpleParser } from 'mailparser';
 import { addressesOf } from '@/core/mail/parse';
-import type { Attachment } from '@/core/types';
 import { FORWARD_SUBJECT, MAX_REFERENCES, mailContent } from './content';
 import { authenticationVerdict, domainOf, headerBlock, type HeaderLine, headerLines, type LoopReason, loopReason, MalformedHeaders, messageIds, plainFromAddress } from './headers';
 import type { EmailChannelStore, InboundRecord } from './store';
@@ -48,7 +49,7 @@ export interface InboxSettings {
   lookbackMs: number;
 }
 
-export type NoticeKind = 'link_code' | 'not_linked' | 'too_large';
+export type NoticeKind = 'link_code' | 'not_linked' | 'too_large' | 'attachments_only';
 
 export interface InboxDeps {
   store: EmailChannelStore;
@@ -74,7 +75,8 @@ export interface InboundTurn {
   userId: string;
   address: string;
   content: string;
-  attachments: Attachment[];
+  /** Files the mail had, which were not read (named in the answer). */
+  ignoredAttachments: string[];
 }
 
 export type InboundOutcome =
@@ -186,10 +188,20 @@ async function decide(recordId: string, mail: { id: string; size: number; date: 
   let text = content.text;
   // A new mail's subject is often the request itself; a reply's ("Re: …") or a forward's is not.
   if (subject && !/^(re|aw|sv|antw)\s*:/i.test(subject) && !FORWARD_SUBJECT.test(subject)) text = text ? `${subject}\n\n${text}` : subject;
-  if (content.omitted.length) text += `\n\n[${content.omitted.length} more attachment(s) were not passed on: at most ${content.attachments.length} are taken from one mail.]`;
-  if (!text.trim() && content.attachments.length === 0) return drop('empty', address, messageId);
+  if (!text.trim()) {
+    if (content.attachmentCount === 0) return drop('empty', address, messageId);
+    return answer('attachments_only', attachmentsNotRead(content.attachmentNames, content.attachmentCount), user.id);
+  }
+  // The turn is told, so it does not answer as if it had read them; the answer's note says so for certain.
+  if (content.attachmentCount > 0) text += `\n\n[The mail had ${content.attachmentCount} attached file(s), which were not read: files are not processed by email.]`;
 
   const threadKey = await store.threadOf(settings.accountId, user.id, refs) ?? threadKeyFor(user.id, messageId);
   await store.finish(recordId, { status: 'accepted', reason: null, address, userId: user.id, messageIdHeader: messageId, threadKey, subject, references });
-  return { kind: 'turn', turn: { recordId, threadKey, userId: user.id, address, content: text, attachments: content.attachments } };
+  return { kind: 'turn', turn: { recordId, threadKey, userId: user.id, address, content: text, ignoredAttachments: content.attachmentCount > 0 ? content.attachmentNames : [] } };
+}
+
+/** The note that a mail's files were not read. Pure. */
+export function attachmentsNotRead(names: readonly string[], count = names.length): string {
+  const listed = names.length ? `: ${names.join(', ')}${count > names.length ? ` and ${count - names.length} more` : ''}` : '';
+  return `Attachments are not read by email${listed}. To have Octipus work with a file, upload it in the Octipus web app.`;
 }

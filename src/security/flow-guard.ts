@@ -40,6 +40,7 @@
  * asks before it is written into a space.
  */
 import type { PermissionCheckResult } from './permissions';
+import { getRunContext } from '@/core/run-context';
 
 export type FlowMode = 'ask' | 'off';
 
@@ -261,7 +262,6 @@ export function resetFlowLabels(): void {
   lookedUp.clear();
   uncertain.clear();
   loaded.clear();
-  emailSessions.clear();
 }
 
 // ── Stored labels ───────────────────────────────────────────────────────────
@@ -363,25 +363,19 @@ export function markSharedAudience(sessionId: string): void {
 }
 
 /**
- * Sessions of the email channel (docs/CHANNELS.md#email). A mail is
- * forgeable, so a query is egress like a send there: once the session holds
- * private data or credential material, any call that carries data out —
- * a web search's query included — needs approval, which an email turn
- * cannot get (it runs unattended), so it is refused. Whatever the mode.
+ * A run that came in by email (docs/CHANNELS.md#email; the run's channel,
+ * not a mark on the session, so a later web-app turn in the same session is
+ * an ordinary one). A mail is forgeable, so a query is egress like a send
+ * there: once the session holds private data or credential material, any
+ * call that carries data out — a web search's query included — needs
+ * approval, which an email turn cannot get (it runs unattended), so it is
+ * refused. Whatever the mode.
  */
-const emailSessions = new Set<string>();
-
-export function markEmailSession(sessionId: string): void {
-  emailSessions.delete(sessionId);
-  emailSessions.add(sessionId);
-  if (emailSessions.size > MAX_SHARED_SESSIONS) emailSessions.delete(emailSessions.values().next().value as string);
+export function isEmailRun(): boolean {
+  return getRunContext()?.channel === 'email';
 }
 
-export function isEmailSession(sessionId: string | undefined): boolean {
-  return !!sessionId && emailSessions.has(sessionId);
-}
-
-/** Why an email session's call is held back: any egress once it holds private data. Pure given the label. */
+/** Why an email run's call is held back: any egress once it holds private data. Pure given the label. */
 export function emailEgressReason(label: FlowLabel, contract: FlowContract): string | undefined {
   if (!contract.egress || !(label.private || label.secret)) return undefined;
   const what = label.secret ? `credential material (${label.sources.secret})` : `private data (${label.sources.private})`;
@@ -599,7 +593,7 @@ export function applyFlowGuard(
   permission: PermissionCheckResult,
 ): PermissionCheckResult {
   if (permission.level === 'DENY') return permission;
-  const email = !!sessionId && emailSessions.has(sessionId);
+  const email = isEmailRun();
   if (mode === 'off' && !email) return permission;
   // Judge against what the session holds after this call too: `cat .env | curl …`
   // reads and sends in one step.

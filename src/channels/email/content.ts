@@ -1,7 +1,9 @@
 /**
  * What of a mail reaches the turn (docs/CHANNELS.md#email): the new text the
- * sender wrote, a forwarded mail below it, the attachments within limits, and
- * the reply's subject and threading headers.
+ * sender wrote, a forwarded mail below it, and the reply's subject and
+ * threading headers. Attachments are only named: a mail's files never reach
+ * the turn, the document pipeline or the knowledge index, where content a
+ * mail planted would later be read by full-privilege turns.
  *
  * The text/plain part is preferred; HTML-only mail is turned into text by the
  * mail stack's own converter (scripts and styles dropped, no markup kept).
@@ -10,14 +12,13 @@
  */
 import { simpleParser } from 'mailparser';
 import { htmlToText } from '@/core/mail/parse';
-import type { Attachment } from '@/core/types';
 import { wrapUntrusted } from '@/security/untrusted-envelope';
 import { messageIds } from './headers';
 
 /** Longest text passed to a turn; the rest is cut with a note. */
 export const MAX_TEXT_CHARS = 20_000;
-/** Most attachments passed on from one mail; the rest are named in a note. */
-export const MAX_ATTACHMENTS = 10;
+/** Most attachment names listed in the answer's note. */
+const MAX_NAMED = 10;
 /** Most Message-IDs kept in a reply's `References`, and read from a mail's. */
 export const MAX_REFERENCES = 20;
 
@@ -108,40 +109,31 @@ export function stripQuoted(text: string, opts: { forward?: boolean } = {}): str
 
 export interface MailContent {
   text: string;
-  attachments: Attachment[];
-  /** Attachments left out (over the count limit), by name. */
-  omitted: string[];
+  /** The names of the mail's attached files (not read), at most `MAX_NAMED`. */
+  attachmentNames: string[];
+  /** How many files the mail had. */
+  attachmentCount: number;
 }
 
-function attachmentType(mime: string): Attachment['type'] {
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime.startsWith('video/')) return 'video';
-  return 'file';
-}
-
-/** The new text and the attachments of a raw mail. Never throws on malformed mail: what cannot be read stays empty. */
+/** The new text and the attached files' names of a raw mail. Never throws on malformed mail: what cannot be read stays empty. */
 export async function mailContent(raw: Buffer): Promise<MailContent> {
   let mail: Awaited<ReturnType<typeof simpleParser>>;
   try {
     mail = await simpleParser(raw, { skipHtmlToText: true, skipImageLinks: true, skipTextToHtml: true, skipTextLinks: true });
   } catch {
-    return { text: '', attachments: [], omitted: [] };
+    return { text: '', attachmentNames: [], attachmentCount: 0 };
   }
   const plain = mail.text?.trim() ? mail.text : htmlToText(typeof mail.html === 'string' ? mail.html : '');
   const { own, forwarded } = splitMail(plain, { forward: FORWARD_SUBJECT.test((mail.subject ?? '').trim()) });
   // A forwarded mail is someone else's text: fenced as untrusted, below what the sender wrote.
   let text = forwarded ? `${own}\n\n${wrapUntrusted('forwarded mail', forwarded)}`.trim() : own;
   if (text.length > MAX_TEXT_CHARS) text = `${text.slice(0, MAX_TEXT_CHARS)}\n\n[The rest of this mail was cut: it is longer than ${MAX_TEXT_CHARS} characters.]`;
-  const files = mail.attachments.filter((a) => !a.related && a.content?.length);
-  const attachments = files.slice(0, MAX_ATTACHMENTS).map((a): Attachment => ({
-    type: attachmentType(a.contentType),
-    mimeType: a.contentType,
-    data: a.content,
-    filename: (a.filename ?? 'attachment').slice(0, 255),
-    size: a.size,
-  }));
-  return { text, attachments, omitted: files.slice(MAX_ATTACHMENTS).map((a) => a.filename ?? 'attachment') };
+  const files = mail.attachments.filter((a) => !a.related);
+  return {
+    text,
+    attachmentNames: files.slice(0, MAX_NAMED).map((a) => (a.filename ?? 'attachment').replace(/[\r\n]+/g, ' ').slice(0, 100)),
+    attachmentCount: files.length,
+  };
 }
 
 /** The reply's subject: `Re: ` once, whatever the client wrote before. Pure. */

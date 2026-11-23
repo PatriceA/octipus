@@ -574,15 +574,17 @@ nothing else (see [What an email turn can do](#what-an-email-turn-can-do)).
 
 - **`draft`** (default): the answer is saved as a **draft reply** in the
   channel mailbox — to the sender, `Re: <subject>`, threaded — and a person
-  reviews and sends it from **Mail**. Nothing leaves without a person.
+  reviews and sends it from **Mail**. Nothing leaves without a person. A
+  channel draft sent by hand still carries `Auto-Submitted: auto-replied`.
 - **`send`**: the answer is sent at once, with `Auto-Submitted: auto-replied`.
   The explicit opt-in for automatic replies.
 
 Notices (a link code, "not linked yet", "too large") follow the same mode. In
 send mode a link code is sent **without a copy** — no Sent-folder copy, no
 row in the mailbox — so it never sits where the mailbox owner could read it.
-In draft mode the code is in a draft that the mailbox owner sees and sends;
-redeeming it themselves would only link that address to *their own* account.
+In draft mode the code **sits in the admin's mailbox**, in a draft that the
+mailbox owner sees and sends; redeeming it themselves would only link that
+address to *their own* account.
 
 ### Setup
 
@@ -676,7 +678,7 @@ address it forged (no backscatter):
    `header.from` equal to the From domain (compared in punycode). Nothing
    else counts: not DKIM or SPF on their own, not `header.i`, not a header
    further down or under another id. `dmarc=none`, no DMARC result, a header
-   that does not parse, or one over 8 KB: dropped (fail closed).
+   that does not parse, or one over 64 KB: dropped (fail closed). The topmost trusted header decides even when it is rejected: a header below it is never used instead.
 6. **Allow-listed:** the address is in `emailChannel.allowedSenders`.
 7. **Within the hourly limit** for that sender.
 8. **Linked** to an active Octipus account (the link codes every channel
@@ -707,12 +709,16 @@ The logs carry the reason, never an address or subject.
   ever mailed, and a mailed "yes"/"no" answers nothing.
 - **No commands:** a mail's text is content. `/model`, `/skills …`, `/stop`
   and other commands are not run, and `go` does not execute a stored plan.
-- **No personal memory:** the user's long-term memories are not loaded into
-  an email turn.
+- **Nothing of the user's put in front of it:** no long-term memories, no
+  [context hooks](CONTEXT-HOOKS.md) (knowledge base and notes passages) and no
+  plugin turn context are loaded into an email turn.
 - **No egress after private data:** the session is marked `suspicious` in the
-  [flow guard](FLOW-GUARD.md) and as an email session: once it holds private
-  data or credential material, any call that carries data out — a web
-  search's query included — is refused, whatever the flow-guard mode.
+  [flow guard](FLOW-GUARD.md) (persisted), and in an email run, once the
+  session holds private data or credential material, any call that carries
+  data out — a web search's query included — is refused, whatever the
+  flow-guard mode.
+- **The run, not the session:** these limits key on the turn's channel. A
+  later turn in the same session from the web app is an ordinary turn.
 - **Untrusted content:** the turn gets an email notice beside the message;
   forwarded mail is passed on fenced as untrusted text.
 
@@ -729,10 +735,13 @@ For anything more, the turn says to continue in the web app.
   `Fwd:`/`FW:` mail after Outlook's separator) is passed on fenced as
   untrusted. A new mail's subject comes first (it is often the request); a
   reply's or a forward's does not. At most 20,000 characters.
-- **Attachments:** at most 10 per mail, within `maxMessageBytes`, through the
-  same document and image pipeline as every channel. Larger mail is not read;
-  the sender is told the limit. (Documents sent with a mail are summarised as
-  on every channel, one answer per document.)
+- **Attachments are not read.** A mail's files never reach the turn, the
+  document pipeline, OCR or the knowledge index — content a mail could plant
+  there would later be read by full-privilege turns. The turn is told the
+  mail had files, and the answer ends with a note naming them ("Attachments
+  are not read by email: …; upload it in the web app"). A mail with nothing
+  but files gets that note as a notice, without a turn. Mail larger than
+  `maxMessageBytes` is not read at all; the sender is told the limit.
 
 ### The answer
 
@@ -757,7 +766,8 @@ and anyone with access to the server — can read every email-channel
 conversation** in the Mail page. Tell your users. What Octipus does keep out:
 
 - The owner's **agent** never sees the mailbox: the `mail` tool does not
-  list, read, answer from or send from it.
+  list, read, answer from or send from it, and neither does a plugin package
+  with mail access (`mail:read`, `mail:draft`).
 - **Automatic triage skips it**, so a mail the channel handles is never also
   triaged, labelled or archived. Keep triage on your own mailbox.
 - In send mode, **link codes** are never stored in it (above).
