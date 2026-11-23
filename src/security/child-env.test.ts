@@ -68,6 +68,11 @@ describe('buildChildEnv', () => {
     expect(Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG'))).toEqual([]);
   });
 
+  test('GIT_CONFIG_PARAMETERS, which can carry an http.extraHeader token, is dropped too', () => {
+    const env = withEnv({ GIT_CONFIG_PARAMETERS: "'http.extraheader'='Authorization: Bearer x'" }, () => buildChildEnv());
+    expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+  });
+
   test('an explicit value wins over the filter', () => {
     const env = withEnv({ MASTER_KEY: 'inherited' }, () =>
       buildChildEnv({ MASTER_KEY: 'passed-on-purpose' }),

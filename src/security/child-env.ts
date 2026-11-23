@@ -60,9 +60,11 @@ export function isSensitiveEnvName(name: string): boolean {
  * alone used to be dropped: every git command in a child then died with
  * "missing config key GIT_CONFIG_KEY_0", and the VALUEs — which can be an
  * `http.extraHeader` carrying a token — went through without their keys.
+ * `GIT_CONFIG_PARAMETERS` (what `git -c` hands its children) can carry the
+ * same token and goes with them.
  */
 function isGitConfigEnvName(name: string): boolean {
-  return name === 'GIT_CONFIG_COUNT' || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name);
+  return name === 'GIT_CONFIG_COUNT' || name === 'GIT_CONFIG_PARAMETERS' || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name);
 }
 
 /** Build the environment for a spawned child. */
