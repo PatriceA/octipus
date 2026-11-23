@@ -7,6 +7,7 @@ import {
   isRateLimitError,
   isTransientError,
   isFatalConnectionError,
+  isFatalConnectionFailure,
   isTransientDnsError,
 } from './classification';
 
@@ -39,6 +40,58 @@ describe('classifyError — rate limit variants', () => {
       headers: { 'retry-after': '12' },
     });
     expect(err.retryAfterMs).toBe(12000);
+  });
+
+  test('a 429 carrying insufficient_quota is a billing stop, not a rate limit', () => {
+    const err = classifyError({ status: 429, message: 'You exceeded your current quota', error: { code: 'insufficient_quota' } });
+    expect(err.reason).toBe(FailoverReason.QUOTA_EXHAUSTED);
+    expect(err.recovery).toBe(RecoveryAction.FALLBACK_PROVIDER);
+  });
+
+  test('extracts retry-after from a fetch Headers object, as current SDK errors carry it', () => {
+    const err = classifyError({ status: 429, message: 'rate limited', headers: new Headers({ 'Retry-After': '9' }) });
+    expect(err.retryAfterMs).toBe(9000);
+  });
+});
+
+describe('classifyError — wrapped transport failures', () => {
+  test('reads the socket code from the cause chain of an SDK connection error', () => {
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(err.recovery).toBe(RecoveryAction.RETRY_BACKOFF);
+    expect(err.metadata?.code).toBe('UND_ERR_SOCKET');
+  });
+
+  test.each([
+    ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:11434', 'connection refused'],
+    ['ENOTFOUND', 'getaddrinfo ENOTFOUND gateway.example.invalid', 'host not found'],
+  ])('%s under an SDK connection error fails fast as an unreachable endpoint', (code, text, what) => {
+    const socket = Object.assign(new Error(text), { code });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+    expect(err.isRetryable).toBe(false);
+    expect(err.message).toContain(`Model endpoint unreachable (${what}, ${code})`);
+    expect(err.message).toContain('endpoint URL');
+    expect(isFatalConnectionFailure(err)).toBe(true);
+  });
+
+  test('the EAI_AGAIN DNS blip stays transient', () => {
+    const socket = Object.assign(new Error('getaddrinfo EAI_AGAIN api.example.com'), { code: 'EAI_AGAIN' });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(err.isRetryable).toBe(true);
+    expect(isFatalConnectionFailure(err)).toBe(false);
+  });
+
+  test('a refused connection named only in the text is unreachable too', () => {
+    expect(classifyError(new Error('connect ECONNREFUSED 127.0.0.1:11434')).reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+    expect(isFatalConnectionFailure(new Error('Connection error.', { cause: { code: 'ECONNREFUSED' } }))).toBe(true);
+  });
+
+  test('an own code wins over one in the cause', () => {
+    const err = classifyError(Object.assign(new Error('bad key'), { code: 'invalid_api_key', cause: { code: 'ECONNRESET' } }));
+    expect(err.reason).toBe(FailoverReason.AUTH_FAILED);
   });
 });
 
