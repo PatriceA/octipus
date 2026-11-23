@@ -14,8 +14,9 @@
  * provider fails on is logged and counted as `failed`, and the rest go on.
  * Database errors throw.
  *
- * Called before every dedup comparison (limit 20), by the daily
- * consolidation, and by scripts/backfill-skill-embeddings.ts (no limit).
+ * Called before every dedup comparison (limit 20), after an approval writes a
+ * skill (that skill only), by the daily consolidation, and by
+ * scripts/backfill-skill-embeddings.ts (no limit).
  */
 import { createHash } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
@@ -41,6 +42,8 @@ export interface EmbeddingBackfillResult {
 export interface EmbeddingBackfillOptions {
   /** Most rows embedded in this call. Omitted: all of them. */
   limit?: number;
+  /** Only these skills (`ensureSkillEmbeddings`): an approval embeds the skill it wrote. */
+  ids?: string[];
   /** Progress after each batch (the backfill script logs it). */
   onBatch?: (progress: { batch: number; of: number; embedded: number; failed: number }) => void;
 }
@@ -117,6 +120,7 @@ async function embedRows(
 /** DB skills (system and every user's) whose embedding is missing or stale. */
 export async function ensureSkillEmbeddings(opts: EmbeddingBackfillOptions = {}): Promise<EmbeddingBackfillResult> {
   if (!(await capabilityConfigured('embedding'))) return { stale: 0, embedded: 0, failed: 0, noModel: true };
+  if (opts.ids?.length === 0) return { stale: 0, embedded: 0, failed: 0, noModel: false };
   const db = getDb();
   // The vector itself is not read: whether it is there is enough. The hash
   // check is in TS (sha256 in SQL differs across Postgres and PGlite builds).
@@ -126,7 +130,7 @@ export async function ensureSkillEmbeddings(opts: EmbeddingBackfillOptions = {})
     description: skills.description,
     descriptionHash: skills.descriptionHash,
     missing: sql<boolean>`${skills.descriptionEmbedding} is null`,
-  }).from(skills);
+  }).from(skills).where(opts.ids ? inArray(skills.id, opts.ids) : undefined);
   const stale = all.filter((row) => !row.id.startsWith('external:')
     && (row.missing || row.descriptionHash !== skillDescriptionHash(row.name, row.description)));
   const rows = opts.limit === undefined ? stale : stale.slice(0, opts.limit);

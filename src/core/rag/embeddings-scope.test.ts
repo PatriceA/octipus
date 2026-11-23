@@ -182,3 +182,34 @@ describe('EmbeddingService repository visibility', () => {
     expect(await sources()).toEqual(['allowed', 'hidden', 'ordinary']);
   });
 });
+
+describe('re-indexing identical content', () => {
+  test('re-verifies the row but does not count as a read (last_accessed_at stays unset)', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    await executeRaw('TRUNCATE TABLE embeddings');
+    const owner = { ownerUserId: randomUUID(), workspaceId: null };
+    const source = `note:${randomUUID()}`;
+    const id = await svc.store(owner, 'lesson', source, 'kiln cools overnight', vec);
+    await executeRaw(`UPDATE embeddings SET last_verified_at = now() - interval '30 days' WHERE id = '${id}'`);
+    // The same owner, source and text again: the conflict path.
+    expect(await svc.store(owner, 'lesson', source, 'kiln cools overnight', vec)).toBe(id);
+    const { rows } = await queryRaw('SELECT last_accessed_at, access_count, last_verified_at > now() - interval \'1 minute\' AS verified FROM embeddings WHERE id = $1', [id]);
+    expect(rows[0]).toMatchObject({ last_accessed_at: null, access_count: 0, verified: true });
+  });
+});
+
+describe('search and access counting', () => {
+  test('search counts what it returns as read, unless skipAccess', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw('TRUNCATE TABLE embeddings');
+    const userId = randomUUID();
+    await svc.store({ ownerUserId: userId, workspaceId: null }, 'note', `note:${randomUUID()}`, 'kiln cools overnight', vec);
+    vi.spyOn(svc, 'generateEmbedding').mockResolvedValue(vec);
+    const recorded = vi.spyOn(svc, 'recordAccess').mockImplementation(() => {});
+    const knowledge = { kind: 'personal' as const, userId, workspaceId: null };
+    expect(await svc.search(knowledge, 'kiln', 5, 'note', 0, { skipAccess: true })).toHaveLength(1);
+    expect(recorded).not.toHaveBeenCalled();
+    expect(await svc.search(knowledge, 'kiln', 5, 'note', 0)).toHaveLength(1);
+    expect(recorded).toHaveBeenCalledTimes(1);
+  });
+});

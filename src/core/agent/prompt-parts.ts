@@ -56,6 +56,7 @@ export const BUILDER_LABELS: Record<string, { category: PromptPart['category']; 
   'space-notice': { category: 'workspace', label: 'Shared space notice' },
   'inline-ui': { category: 'role', label: 'Interactive answers' },
   'dropped-tool-groups': { category: 'tools', label: 'Tool groups left out this turn' },
+  'learned-skills': { category: 'skills', label: 'Learned skills' },
   // Each per-turn part, categorised by the runner's tagger.
   'turn-context': { category: 'turn', label: 'Turn context' },
 };

@@ -7,6 +7,70 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Approved skills now reach your agents, and learning notes became lessons
+  that merge and expire** ([plan](docs/plans/learning-notes-and-skill-discovery.md),
+  [reference](docs/SESSION-LEARNING.md#where-a-lesson-goes)). A skill you
+  approve from a proposal is found for every role and for the root turn, with
+  no assignment. A learning review writes at most two lesson notes, each a
+  decision, constraint or fact, merged into the one that already says it; the
+  Notes page shows how often a review saw it (`×N`), recall labels it
+  `Lesson`, and the notes index no longer lists it.
+
+  **Behaviour changes:**
+  - **Lessons replace learning notes.** A note a learning review writes has
+    `note_kind = 'lesson'`, is indexed under the purpose `lesson` and keeps its
+    evidence in the frontmatter, not the body. The review is told to put a
+    lesson in exactly one of memory, lesson note, skill or patch, and is shown
+    up to 5 nearby lesson notes (`existing.notes`) to extend. A lesson that
+    matches one is merged into it (`extends`, the same text, or by meaning at
+    `learning.duplicateSimilarity` as a note; in the related band only if the
+    background model agrees). A match the user archived drops the lesson; one
+    expiry archived is revived; one consolidation merged away counts on the
+    note it went into.
+  - **Lessons are consolidated and expire.** The daily consolidation and
+    **Consolidate now** merge near-duplicate lesson notes (a pinned one is
+    never absorbed; at most 20 merge-model calls per run for lessons, and 20
+    for proposals) and archive lessons that are not pinned and were neither
+    updated nor shown to an agent for `learning.lessonTtlDays` (90). The first
+    daily run after upgrading can archive old learning notes this way.
+  - **Archived notes are no longer recalled or found by search.** Every
+    knowledge search (`search_notes`, `search_knowledge`, the knowledge
+    search API, link suggestions, recall) and the Recall page's has-rows check
+    leave out an archived note's chunks; unarchiving needs no re-index.
+    Browsing the knowledge base and reading an entry by id still show them.
+  - **What counts as a read.** Re-indexing identical content no longer stamps
+    `last_accessed_at`; the semantic-only search honours `skipAccess`; link
+    suggestions and ghost-link resolution no longer count their candidates
+    as read.
+  - **Learned skills reach agents, including the root.** A user's own,
+    non-system, non-archived skill with no `skill_topic_assignments` row is a
+    candidate for every role of that user's specialists and swarm children:
+    by trigger, or among the 5 nearest by meaning (cosine 0.35 or more),
+    shared with assigned skills; never always-injected; not in a shared space.
+    Without a query embedding the 10 most recently used are listed. The root
+    turn gets a `# Learned Skills` index by the same rule. Approval embeds the
+    skill at once. The query embedding is waited for at most 4.5 s.
+  - **Discovery fixes for assigned skills.** Archived skills are no longer
+    discovered; an assignment stored under a lane name (`build`) now matches
+    by trigger, meaning and always-inject too; the result is ranked best
+    first (triggers, then similarity), which changes the 8 candidates the
+    decision model judges.
+  - **Recall:** `lesson` is a recall purpose with a **lessons** checkbox on the
+    Recall page, in the default. The notes index lists and counts only your
+    own notes.
+  - **Migrations.** `0200_lesson_notes` turns the notes learning reviews wrote
+    (tag, `learning-` slug and `learningJobId`, personal or user level) into
+    lessons and moves their embedding rows to `lesson`; bodies are not
+    rewritten. `0201_archived_note_sources` adds a partial index over archived
+    notes for the search filter. `0202_recall_lesson_purpose` adds `lesson` to
+    every stored recall-hook `purposes` list that has `note`.
+
+  **New settings:** `learning.lessonTtlDays` (90; 0 never archives) and
+  `learning.maxLessonsPerReview` (2; 0 to 2). **API:**
+  `POST /api/skills/proposals/consolidate` returns `notesMerged` and
+  `notesArchived` as well; a learning receipt's `knowledge` output can have
+  the status `merged`. The thresholds are not calibrated against real data,
+  and the learning evals, which need a live model, were not run.
 - **Provider failures are classified by what the provider said.**
   - A 429's `Retry-After` now reaches the retry backoff for providers on the
     OpenAI SDK (the proxy, custom OpenAI-compatible endpoints and others); it

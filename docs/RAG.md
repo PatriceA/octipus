@@ -20,8 +20,8 @@ runtime behaviour lives in `src/core/memory/`, `src/core/knowledge/`, and
 The graph is the *authored* counterpart to this doc's *ingested* content:
 the knowledge base stores what was uploaded or written to disk, the graph
 stores what someone deliberately wrote down and connected. Notes are
-indexed into `embeddings` (`purpose='note'`) so both are reachable from
-one hybrid search.
+indexed into `embeddings` (`purpose='note'`, or `'lesson'` for a lesson note
+a learning review wrote) so both are reachable from one hybrid search.
 
 - **Embedding model:** anything mapped to topic `embedding` in the
   model registry. **Optional:** without one the knowledge base is off, not
@@ -73,6 +73,7 @@ PR #28 / migration 0056). Valid values:
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
 | `message` | Conversation chunks indexed for recall (not currently auto-written; compaction handles long-term recall via `compaction_entries`) | 90 days |
 | `note` | Note bodies chunked by `NoteService.save` (`source_id='note:<id>'`), including meeting notes written by `write_meeting_note` / `import_calendar_meetings` — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | **No policy row**: never age-reaped. Chunks are replaced on every save and deleted with the note |
+| `lesson` | The body of a lesson note (`notes.note_kind = 'lesson'`), written by a learning review ([SESSION-LEARNING.md](SESSION-LEARNING.md#lesson-notes)); `NoteService` picks `lesson` or `note` from the note's kind. Same `source_id='note:<id>'` | **No policy row**, as for `note`. A lesson note expires by being archived, not by retention |
 | `ephemeral` | Health probes, transient observations | 7 days |
 
 `agent_output` is no longer a value. Memory-redesign Phase B moved
@@ -189,7 +190,9 @@ parameter:
 | `keyword` | BM25 only via `plainto_tsquery` + `ts_rank_cd`. Fast for exact-term queries. |
 
 The `purpose` filter is optional — omit to search the whole base, or
-pass a value (e.g. `'document'`) to narrow the result space.
+pass a value (e.g. `'document'`) to narrow the result space. `'note'` now
+means the user's own notes only; lesson notes are `'lesson'`. `search_notes`
+searches both.
 
 `min_similarity` filters by raw cosine similarity. Defaults: 0.35
 for `semantic`, 0.3 for `hybrid`, 0 for `keyword`. The hybrid mode
@@ -229,6 +232,54 @@ years old" instead of quoting it as current fact. `verify_knowledge(ids)` is
 how a fact that is still true gets its standing back — call it only for
 entries actually checked against a current source, since verifying something
 unchecked makes stale knowledge look fresh, which is worse than leaving it old.
+
+### Archived notes
+
+An archived note or lesson note is left out of every knowledge search:
+`search`, `ftsSearch`, `hybridSearch` and `hybridSearchAnyTerm` (so
+`search_knowledge`, `search_notes`, the knowledge API, link suggestions and
+recall), and the Recall page's check for whether the user has any row of a
+purpose (`hasReadableRows`). Each search drops, in SQL and in each leg before
+its limit, a chunk whose `source_id` is `'note:' || id` of a note with
+`archived_at` set. Before this, archiving kept a note's chunks and no search
+looked at `notes.archived_at`, so an archived note kept being found and
+recalled.
+
+Archiving does not delete the chunks. Unarchiving, by any path, makes the
+note findable again at once with no re-index, and the lesson filer still sees
+an archived lesson so it can tell a duplicate of it
+([SESSION-LEARNING.md](SESSION-LEARNING.md#lesson-notes)). Migration 0201 adds
+a partial expression index over archived notes only
+(`notes_archived_source_idx`), so the anti-join reads that set instead of
+scanning `notes`. Rows whose source is not a note are not affected. Browsing
+the knowledge base (`GET /api/knowledge`) leaves them out as well. Reading
+one entry by id (`read_knowledge`, `GET /api/knowledge/:id`) still returns an
+archived note's chunk to a caller that already holds its id.
+
+### What counts as a read
+
+`last_accessed_at` and `access_count` on a chunk say when, and how often, a
+search returned it to someone. They are stamped by:
+
+- `search_knowledge`, `search_notes` and the knowledge API: every row they
+  return;
+- recall: only the passages it shows, once the block is committed
+  ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md#side-effects-only-for-what-is-shown)).
+
+They are not stamped by:
+
+- indexing. Re-indexing byte-identical content (a re-crawl, a repeated chunk)
+  refreshes `last_verified_at`, `repo_id` and `metadata` only; before this it
+  also stamped `last_accessed_at`;
+- a caller that passes `skipAccess` (it records what it used itself). The
+  semantic-only search now honours it, as the keyword and hybrid searches
+  already did;
+- link suggestions and ghost-link resolution in the notes editor, which fetch
+  four times their limit as candidates and are not an agent reading them.
+
+This matters for the LFU retention axis and for lesson-note expiry, which
+treats a lesson whose chunks were not returned within `learning.lessonTtlDays`
+as not shown.
 
 `read_knowledge(id)` returns the full L2 content + metadata for a
 specific entry.

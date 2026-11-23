@@ -73,7 +73,7 @@ afterEach(async () => {
 const accessSettled = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** A knowledge-base chunk embedded by the stand-in. A `doc:` source has no document row: its level reads as unclear. */
-async function chunk(title: string, content: string, opts: { source?: string; purpose?: 'note' | 'document' } = {}) {
+async function chunk(title: string, content: string, opts: { source?: string; purpose?: 'note' | 'lesson' | 'document' } = {}) {
   const id = randomUUID();
   await queryRaw(
     `INSERT INTO embeddings (id, source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, metadata)
@@ -284,6 +284,29 @@ describe('what the search window holds', () => {
     expect(without.candidates.map((c) => c.metadata.title)).toEqual(['Our rates']);
     const withDocs = await getEmbeddingService().hybridSearchAnyTerm(scope, 'website pricing', 5);
     expect(withDocs.candidates.some((c) => c.metadata.source === 'octipus-docs')).toBe(true);
+  });
+});
+
+describe('lesson notes', () => {
+  const LESSON = 'Website pricing is quoted per page: a fixed price per page was chosen over hourly billing.';
+
+  test('the default hook recalls a lesson and labels it as one', async () => {
+    await chunk('Quote websites per page', LESSON, { purpose: 'lesson' });
+    const { text } = await run('How is website pricing quoted?');
+    expect(text).toContain('Lesson "Quote websites per page"');
+    expect(text).not.toContain('Note "Quote websites per page"');
+    expect((await lastRecord()).items.map((i) => i.title)).toEqual(['Quote websites per page']);
+  });
+
+  test('a hook whose stored purposes predate lessons does not recall one; the user\'s note it still does', async () => {
+    const { updateContextHook } = await import('@/core/context-hooks');
+    await updateContextHook(userId, 'builtin:knowledge-recall', { config: { purposes: ['note', 'document', 'knowledge_artifact', 'image_description'] } });
+    await chunk('Quote websites per page', LESSON, { purpose: 'lesson' });
+    expect((await run('How is website pricing quoted?')).text).toBe('');
+    await chunk('Our rates', 'Our website pricing: we charge a fixed rate per page, agreed before the work starts.');
+    const { text } = await run('How is website pricing quoted?');
+    expect(text).toContain('Note "Our rates"');
+    expect(text).not.toContain('Lesson "');
   });
 });
 

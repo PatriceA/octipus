@@ -82,6 +82,17 @@ function buildTagTree(tags: TagCount[]): Map<string, TagNode> {
   return root;
 }
 
+/** A note a learning review wrote: its kind, or the tag such notes carried before they had one. */
+function isLesson(n: NoteRow): boolean {
+  return n.noteKind === 'lesson' || n.tags.includes('session-learning');
+}
+
+/** How often a learning review saw a lesson, when more than once. */
+function sightings(n: NoteRow): number | null {
+  const seen = n.frontmatter?.sightings;
+  return typeof seen === 'number' && Number.isFinite(seen) && seen > 1 ? Math.floor(seen) : null;
+}
+
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
@@ -116,6 +127,7 @@ interface TagCtx {
 function NoteRowButton({ note, depth, ctx }: { note: NoteRow; depth: number; ctx: RowCtx }) {
   const active = note.id === ctx.selectedId;
   const label = note.noteKind === 'daily' ? note.slug.split('/').pop() ?? note.title : note.title;
+  const seen = isLesson(note) ? sightings(note) : null;
   return (
     <button
       type="button"
@@ -128,7 +140,10 @@ function NoteRowButton({ note, depth, ctx }: { note: NoteRow; depth: number; ctx
       )}
     >
       <FileText size={13} className={cn('shrink-0', active ? 'text-primary' : 'text-outline')} />
-      <span className="truncate text-[13px] flex-1">{label}</span>
+      <span className="truncate text-[13px] flex-1">
+        {label}
+        {seen !== null && <span className="text-[11px] text-on-surface-variant/70 tabular-nums" title={`seen in ${seen} learning reviews`}>{` ×${seen}`}</span>}
+      </span>
       {note.pinned && <Star size={11} className="shrink-0 text-warning fill-warning/40" />}
       <span className="shrink-0 text-[10px] text-on-surface-variant/50 tabular-nums group-hover/row:text-on-surface-variant">
         {relativeTime(note.updatedAt)}
@@ -231,10 +246,10 @@ export function NotesNavigator({
   // A user pin is an explicit choice and keeps that note in the ordinary list.
   const groupLearnings = filter === 'all' && !activeTag && !search.trim();
   const learnings = useMemo(() => groupLearnings
-    ? visible.filter(n => !n.pinned && n.tags.includes('session-learning'))
+    ? visible.filter(n => !n.pinned && isLesson(n))
     : [], [visible, groupLearnings]);
   const tree = useMemo(() => buildFolderTree(groupLearnings
-    ? visible.filter(n => n.pinned || !n.tags.includes('session-learning'))
+    ? visible.filter(n => n.pinned || !isLesson(n))
     : visible), [visible, groupLearnings]);
   const tagTree = useMemo(() => buildTagTree(tags), [tags]);
 

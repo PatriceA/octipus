@@ -110,7 +110,77 @@ to decide.
 
 ## Skills
 
-Skills are domain knowledge documents (markdown with principles, best practices, anti-patterns, frameworks). They are injected into the agent's system prompt as an INDEX — name plus a one-line description — and the body is pulled on demand with `get_skill`. They are tied to a ROLE, not to a lane or a model.
+Skills are domain knowledge documents (markdown with principles, best practices, anti-patterns, frameworks). They are injected into the agent's system prompt as an INDEX — name plus a one-line description — and the body is pulled on demand with `get_skill`. Assigned skills are tied to a ROLE, not to a lane or a model; a user's learned skills (below) are candidates for every role.
+
+### Skill discovery
+
+`discoverSkillIds` (`src/skills/discovery.ts`) picks the skills listed in a
+specialist's (`spawnWorker`) or swarm child's index from the task text. Two
+kinds of skill are candidates; an archived skill (`archived_at` set) is
+neither:
+
+- **Assigned**: an active `skill_topic_assignments` row for the agent's role,
+  or for the lane that role resolves to. The assignment UI lists lanes, so an
+  assignment is often stored under a lane name such as `build`; it now reaches
+  every role of that lane in all of discovery. Before, only the plain list
+  of assignments (`topic_only` mode, and mounted `SKILL.md` skills) matched the
+  lane name; an always-inject, trigger or vector match needed the role name,
+  so a database skill assigned to `build` never reached a coding worker.
+- **Learned**: a skill of the turn's user, not a system skill, with **no row
+  at all** in `skill_topic_assignments`, active or inactive. Whoever wrote it
+  does not matter: an approved proposal and a skill you wrote and never
+  assigned both count. A skill that has ever been assigned follows its
+  assignments only, so an inactive row (you switched it off for a role)
+  keeps it off rather than bringing it back for every role. Learned skills are
+  never candidates in a shared space, and never another user's.
+
+The candidate sets, unioned:
+
+1. **Always-inject**: assigned skills with `always_inject` only. A learned
+   skill is never always-injected.
+2. **Triggers**: a case-insensitive substring match of a skill's triggers
+   against the task text, both kinds.
+3. **Vector**: one top-k over both kinds together, by cosine similarity of the
+   task's query embedding to the skill's `description_embedding`: at most 5
+   (`maxByVector`), each at or above 0.35 (`minSimilarity`). Learned skills
+   compete with assigned ones for the same 5 places.
+4. **Not yet embedded**: every assigned skill with no embedding, and the 3
+   most recently updated learned skills with none.
+5. **Without a query embedding** (no embedding model, the embedding failed,
+   or, for a specialist or swarm child, it was not ready in time): the 10 most recently used learned skills
+   (never used: most recently created) stand in for the vector set.
+
+The result is a ranking, best first: trigger hits, then vector hits by
+similarity, then always-inject skills and mounted assigned skills, then the
+not-yet-embedded ones, then the recent learned ones. Before this, it was
+sorted by name, while the worker spawner already took its order as the
+ranking when the decision model judges the first 8 candidates
+([skill-selection.md](skill-selection.md#skills-for-pipeline-steps)): a strong
+vector hit could lose its place to any skill whose name sorted earlier. The
+index text built from the ids is ordered by id on its own, so the ranking does
+not change a cached prompt prefix.
+
+The query embedding is waited for at most 4.5 seconds (`START_DEADLINE_MS`,
+the context hooks' start deadline). Past that the vector set is empty and a
+warning is logged; triggers, always-inject, assignments and the fallbacks
+still apply. Before this, a stalled embedding provider held every spawn until
+the provider client timed out (minutes).
+
+The thresholds (5, 0.35) are the defaults assigned skills already had; they
+have not been calibrated for learned skills.
+
+**The root turn.** The root agent runs no role discovery. Its per-turn
+context gets a `# Learned Skills` block instead: the user's learned skills
+that fit the message, by the same rule with no assigned skills, as an index
+headed "Skills you learned in earlier sessions that may fit this request
+(load one with `get_skill` before following it)". It is left out in a shared
+space, for a room on another install, and for supervisor and briefing turns.
+A user with no learned skill costs one existence query and no embedding call.
+The whole block is bounded by the same 4.5 seconds: past that the turn runs
+without it, logged. The context inspector labels it **Learned skills**.
+
+`SKILL_DISCOVERY_MODE=topic_only` keeps the legacy behaviour: all active
+assignments for the role, no learned skills, and no root block.
 
 ### Skill → Role Mapping
 
@@ -167,7 +237,13 @@ covers it ([the life of a skill proposal](SESSION-LEARNING.md#the-life-of-a-skil
 proposal. It branches on `kind`:
 
 - `kind = 'skill'` → inserts a row into the `skills` table (a distilled
-  procedure).
+  procedure), or merges into the same-named skill. The skill has no topic
+  assignment, so it is a learned skill ([Skill discovery](#skill-discovery)):
+  a candidate for every role of the approving user and for their root turn,
+  with no further step. Its description embedding is computed right after the
+  approval commits, so it can be found by meaning on the next agent start; if
+  that fails it is logged, the approval stands, and the skill stays a bounded
+  not-yet-embedded candidate until a later refill embeds it.
 - `kind` records what the distiller thought it was proposing; every proposal promotes to a SKILL.
 - `kind = 'patch'` → replaces exactly one passage of an existing learned skill,
   after checking the skill's content is unchanged since the patch was made and
@@ -178,7 +254,8 @@ status update fails). Rejecting a proposal suppresses re-proposal for 90 days.
 
 **Prune (curation).** `runSkillCurator` runs once a day with the daily
 learning maintenance. It flags skills unused for 30 days (in the log only) and
-auto-archives those unused for 90, least recently used first; a never-used
+auto-archives those unused for 90, least recently used first (an archived
+skill is left out of discovery); a never-used
 skill is measured from its creation date; it skips system skills and skills the owner has
 edited (`owner_edited_at`). "Used" means the body was loaded, not that the
 skill was listed in an index. See
@@ -249,8 +326,10 @@ Run manually:
 
 The server now does the same work itself (`ensureSkillEmbeddings` in
 `src/skills/embedding-backfill.ts`): up to 20 skills before every skill
-proposal comparison, and all of them in the daily learning maintenance, so a
+proposal comparison, the approved skill after each approval, and all of
+them in the daily learning maintenance, so a
 cron is no longer needed; the script is for filling everything at once. Skill
 description edits invalidate the embedding immediately at write time. With no
 embedding model configured, the script exits cleanly — discovery still
-works via triggers + always_inject + stale-fallback.
+works via triggers + always_inject + stale-fallback, and lists the 10 most
+recently used learned skills.

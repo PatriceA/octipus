@@ -1826,6 +1826,22 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Days after which a candidate skill proposal never seen in a second session is deleted by the daily consolidation (at least 1).',
     isSecret: false,
   },
+  {
+    key: 'learning.lessonTtlDays',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 90,
+    description: 'Days after which a lesson note from a learning review that is not pinned and was neither updated (edited, merged, seen again) nor shown to an agent in that time is archived by the daily consolidation (0: never).',
+    isSecret: false,
+  },
+  {
+    key: 'learning.maxLessonsPerReview',
+    category: 'learning',
+    valueType: 'number',
+    defaultValue: 2,
+    description: 'Lesson notes one learning review may write or merge into (0 to 2; 0: no lesson notes).',
+    isSecret: false,
+  },
 
   // ── Heartbeat (WS2) ──
   {

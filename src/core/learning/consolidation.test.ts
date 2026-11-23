@@ -23,6 +23,13 @@ const VECTORS = {
   deploy: [0, 1, 0, 0],
 };
 function vectorFor(text: string): number[] {
+  // "ruleset<n>": each pair related (cosine 0.75), none a duplicate.
+  const rule = /ruleset(\d)/i.exec(text);
+  if (rule) {
+    const v = [Math.sqrt(3), 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    v[Number(rule[1])] = 1;
+    return v;
+  }
   if (/keyring/i.test(text)) return VECTORS.keyring;
   if (/deploy/i.test(text)) return VECTORS.deploy;
   return /rotat|credential|token/i.test(text) ? VECTORS.rotation : VECTORS.backups;
@@ -183,6 +190,14 @@ describe('consolidateProposals', () => {
     expect(complete).toHaveBeenCalledTimes(2);
     const related = complete.mock.calls.map(call => JSON.parse(call[0].messages[1].content)).find(input => /keyring/i.test(JSON.stringify(input)));
     expect(related.allowDistinct).toBe(true);
+  });
+
+  test('a run makes at most MAX_PROPOSAL_MERGE_CALLS merge-model calls, distinct verdicts included', async () => {
+    // Seven related proposals: 21 pairs, every one judged distinct.
+    for (let n = 1; n <= 7; n++) await seed({ name: `ruleset${n}`, description: `Ruleset${n} handling` });
+    complete.mockResolvedValue(reply('distinct'));
+    expect((await consolidation.consolidateProposals(userId)).merged).toBe(0);
+    expect(complete).toHaveBeenCalledTimes(consolidation.MAX_PROPOSAL_MERGE_CALLS);
   });
 
   test('a related pair the merge model cannot judge stays apart for this run and is asked again next run', async () => {

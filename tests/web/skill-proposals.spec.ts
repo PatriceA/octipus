@@ -158,6 +158,23 @@ test.describe('skill proposals page', () => {
     await expect(page.getByRole('status')).toHaveText('Nothing to consolidate.');
   });
 
+  test('the consolidate sentence reports lesson notes merged and archived, and nothing when every count is zero', async ({ authenticatedPage: page }) => {
+    let report: Record<string, number> = { merged: 2, expired: 0, promoted: 0, embedded: 0, degraded: 0, notesMerged: 3, notesArchived: 1 };
+    await page.route('**/api/skills/proposals/consolidate', (route) => json(route, 200, report));
+    await page.goto('/skills/proposals');
+    const button = page.getByRole('button', { name: 'Consolidate now' });
+    await button.click();
+    await expect(page.getByRole('status')).toHaveText('Merged 2 proposals, merged 3 duplicate lesson notes and archived 1 unused lesson note.');
+
+    report = { merged: 0, expired: 0, promoted: 0, embedded: 0, degraded: 0, notesMerged: 1, notesArchived: 0 };
+    await button.click();
+    await expect(page.getByRole('status')).toHaveText('Merged 1 duplicate lesson note.');
+
+    report = { merged: 0, expired: 0, promoted: 0, embedded: 0, degraded: 0, notesMerged: 0, notesArchived: 0 };
+    await button.click();
+    await expect(page.getByRole('status')).toHaveText('Nothing to consolidate.');
+  });
+
   test('the candidates section loads on open and show now surfaces one', async ({ authenticatedPage: page }) => {
     const listUrls: string[] = [];
     page.on('request', (req) => { if (isProposalsList(new URL(req.url()))) listUrls.push(req.url()); });

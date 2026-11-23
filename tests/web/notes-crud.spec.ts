@@ -73,3 +73,33 @@ test('automated session learnings are collapsed below personal notes and remain 
   await page.getByRole('button', { name: 'session-learning 101', exact: true }).click();
   await expect(page.getByRole('button', { name: /Automated finding 0/ })).toBeVisible();
 });
+
+test('lesson notes are grouped by their kind or the tag, and a lesson seen more than once shows how often', async ({ authenticatedPage: page }) => {
+  const row = (id: string, title: string, opts: { noteKind?: string; tags?: string[]; frontmatter?: Record<string, unknown> } = {}) => ({
+    id, title, slug: id, tags: opts.tags ?? [], pinned: false, body: 'Saved note', noteKind: opts.noteKind ?? 'note', frontmatter: opts.frontmatter ?? {},
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  const notes = [
+    row('mine', 'My own sightings list', { frontmatter: { sightings: 4 } }),
+    row('lesson-kind', 'Deploy only on weekdays', { noteKind: 'lesson', frontmatter: { sightings: 3 } }),
+    row('lesson-tagged', 'Quote websites per page', { tags: ['session-learning'], frontmatter: { sightings: 1 } }),
+  ];
+  await page.route('**/api/notes**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [{ tag: 'session-learning', count: 1 }] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path === '/api/notes' || path.endsWith('/index')) return json(route, 200, { notes, total: notes.length });
+    return json(route, 200, { ...notes[0], backlinks: [], outgoing: [] });
+  });
+  await page.goto('/notes');
+  const group = page.getByRole('button', { name: 'Session learnings (2)', exact: true });
+  await expect(group).toBeVisible();
+  // The user's own note stays in the list, with no count even if its properties hold one.
+  await expect(page.getByRole('button', { name: /^My own sightings list/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /My own sightings list ×/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Deploy only on weekdays/ })).toHaveCount(0);
+  await group.click();
+  await expect(page.getByRole('button', { name: /^Deploy only on weekdays ×3/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Quote websites per page/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Quote websites per page ×/ })).toHaveCount(0);
+});
