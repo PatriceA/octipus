@@ -32,6 +32,21 @@ describe.skipIf(process.platform === 'win32')('mentions in a real terminal', () 
     expect(tui.requests.map(r => r.path).sort()).toEqual(['/api/roles', '/api/sessions?limit=30', '/api/skills']);
   });
 
+  test('escape sequences in a shared skill\'s name or a session title never reach the terminal', async () => {
+    const evil = '\x1b]52;c;cHduZWQ=\x07\x1b]0;pwned-title\x07\x1b[2J';
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 100, 28, [], { http: path => ({
+      '/roles': { body: { roles: [{ role: 'coding', description: `Writes code${evil}` }] } },
+      '/skills': { body: { skills: [{ id: 's1', name: `Evil${evil}`, description: evil }] } },
+      '/sessions?limit=30': { body: { sessions: [{ id: '12345678-0000-4000-8000-000000000000', title: `Fix${evil}` }] } },
+    } as Record<string, { body: unknown }>)[path] });
+    await tui.waitFor('connected');
+    tui.send('@');
+    await tui.waitFor('@skill:Evil');
+    expect(tui.clipboardRequests).toEqual([]);
+    expect(tui.rawOutput()).not.toContain('pwned-title');
+    expect(tui.rawOutput()).not.toContain('cHduZWQ=');
+  });
+
   test('a list the server refuses is said once, and the others still complete', async () => {
     tui = await TuiHarness.start('src/tui-pi/index.ts', 100, 28, [], { http: path => (path === '/roles' ? { body: ROUTES['/roles'] } : { status: 503, body: { error: 'Database unavailable' } }) });
     await tui.waitFor('connected');

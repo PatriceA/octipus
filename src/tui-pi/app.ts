@@ -226,7 +226,8 @@ export class OctipusTuiApp {
     this.settingsPath = options.settingsPath ?? DEFAULT_SETTINGS_PATH;
     if (this.themeSetting !== 'auto') setPalette(this.themeSetting);
     this.sessionUsed = options.sessionId !== undefined;
-    const mentions = new MentionSource(path => this.adapter.getJson(path), () => this.sessionId, text => this.pushMessage('system', `Error: ${text}`));
+    const mentions = new MentionSource(path => this.adapter.getJson(path), () => this.sessionId, text => this.pushMessage('system', `Error: ${text}`),
+      () => `${this.adapter.getWorkspace() ?? ''}\u0000${this.adapter.getIdentity()?.userId ?? ''}`);
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd(), mentions: () => mentions.list() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);

@@ -808,6 +808,17 @@ never saw it); and the gateway's `/history` replayed rows marked internal
 (a companion's private check-in), which the web never shows (`3cb9fb0`,
 `commands.test.ts`).
 
+Review fixes (same day): server text in the mention lists and in the
+failed-load notice goes through `displayLine` (a skill named with an
+OSC 52 sequence could set the clipboard of anyone typing `@`), and a token
+holding a control character is never inserted; `getJson` gives up after
+10 s and refuses answers over 5 MB; file completion waits at most 1.5 s
+for the mention lists; the lists are fetched again for another workspace,
+account or session; a failed older-turns load is retried only on the
+reader's own scroll, with a doubling wait; `findRecentBySession` breaks
+time ties by id as the page cursor does; the gateway's `/model` checks
+the session's owner itself.
+
 The PTY harness now serves a REST API on the gateway's port (`http` option,
 `requests`), so suites can drive what the chat reads over REST.
 
