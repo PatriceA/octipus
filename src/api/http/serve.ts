@@ -10,6 +10,7 @@
 import { serve } from '@hono/node-server';
 import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket as NodeWebSocket } from 'ws';
+import { isArtifactHostRequest } from '@/core/artifacts/host';
 import { moduleOffResponse } from '../module-guard';
 import type { App, WebSocketHandlers } from './app';
 
@@ -61,6 +62,13 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       socket.destroy();
       return;
     }
+    // The artifact host serves artifact pages only: of the sockets, only the
+    // gateway, where it admits artifact viewer tokens and nothing else
+    // (gateway-ws.ts). Voice, the browser bridge and federation are the app's.
+    if (url.pathname !== ARTIFACT_HOST_SOCKET && isArtifactHostRequest(upgradeRequest(url, req.headers.host))) {
+      socket.destroy();
+      return;
+    }
     serverFor(route.handlers.maxPayload).handleUpgrade(req, socket, head, (raw) => {
       attach(raw, route.handlers, url, req.headers, req.socket.remoteAddress);
     });
@@ -79,6 +87,14 @@ export function listen(app: App, options: ListenOptions): RunningServer {
       nodeServer.close();
     },
   };
+}
+
+/** The one socket the artifact host accepts. */
+const ARTIFACT_HOST_SOCKET = '/gateway';
+
+/** Enough of the upgrade request to classify its host. */
+function upgradeRequest(url: URL, host: string | undefined): Request {
+  return new Request(url, host ? { headers: { host } } : {});
 }
 
 function attach(

@@ -370,8 +370,10 @@ On the artifact host the backend serves the hosted pages (`/a/<slug>`,
 `HEAD` only. Everything else answers 404 there: `/api/*`, `/v1/*`, sign-in,
 CORS preflights and the `/__artifacts__` fallback mount. A session cookie or
 token sent to the artifact host is ignored (only public artifacts and
-share links open there), no response from it sets a cookie, and a gateway
-socket opened on it accepts artifact viewer tokens only. In this mode the
+share links open there), no response from it sets a cookie, and of the
+WebSocket endpoints only the gateway (`/gateway`) upgrades there, admitting
+artifact viewer tokens only; `/voice`, `/ws/browser-bridge` and
+`/federation` are refused. In this mode the
 root `/a/<slug>` pages are not served on the app's host; the web app's own
 frame keeps using `/__artifacts__/a/<slug>/embed` on the app host, sandboxed
 as below.

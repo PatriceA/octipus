@@ -12,8 +12,9 @@ labels reflect blast radius, not contract guarantees.
   - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages
     and the SDK (`GET`/`HEAD`): `/api`, `/v1`, sign-in and the
     `/__artifacts__` mount answer 404 there, credentials sent to it are
-    ignored, no response from it sets a cookie, and its gateway socket admits
-    artifact viewer tokens only. The root `/a/<slug>` pages are no longer
+    ignored, no response from it sets a cookie, and of its WebSocket
+    endpoints only the gateway upgrades, admitting artifact viewer tokens
+    only (voice, browser-bridge and federation sockets are refused there). The root `/a/<slug>` pages are no longer
     served on the app's own host in that mode. **Operators:** the reverse
     proxy must pass the original `Host` header (matched exactly), and
     `ARTIFACTS_HOST` is honoured only with `PUBLIC_URL` set to a different
