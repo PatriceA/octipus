@@ -128,6 +128,7 @@ describe('GET /api/tasks?status=', () => {
     expect(done.body.tasks[0].title).toBe(`done-${DONE}`);
     expect(done.body.tasks).toHaveLength(200);
     expect(done.body.done).toBeUndefined();
+    expect(done.body.page).toEqual({ total: DONE, offset: 0, limit: 200, hasMore: true });
     const archived = await get('/api/tasks?status=archived');
     expect(archived.body.tasks).toHaveLength(ARCHIVED);
   });
@@ -142,5 +143,21 @@ describe('TaskRepo.listOwn', () => {
     expect(rows.map((r) => r.title)).toEqual(['working', 'open-high', 'open-low', `done-${DONE}`, `done-${DONE - 1}`]);
     expect(await repo.countOwn({ status: 'done' })).toBe(DONE);
     expect(await repo.countOwn()).toBe(3 + DONE + ARCHIVED);
+  });
+});
+
+describe('GET /api/tasks?status= paging', () => {
+  test('limit and offset page through one status (the archived view)', async () => {
+    const first = await get('/api/tasks?status=archived&limit=15');
+    expect(first.body.tasks).toHaveLength(15);
+    expect(first.body.page).toEqual({ total: ARCHIVED, offset: 0, limit: 15, hasMore: true });
+    const rest = await get('/api/tasks?status=archived&limit=15&offset=15');
+    expect(rest.body.tasks).toHaveLength(ARCHIVED - 15);
+    expect(rest.body.page.hasMore).toBe(false);
+    const ids = new Set([...first.body.tasks, ...rest.body.tasks].map((t: any) => t.id));
+    expect(ids.size).toBe(ARCHIVED);
+    const done = await get('/api/tasks?status=done&limit=100000&offset=200');
+    expect(done.body.page).toMatchObject({ limit: 500, offset: 200, hasMore: false });
+    expect(done.body.tasks).toHaveLength(DONE - 200);
   });
 });

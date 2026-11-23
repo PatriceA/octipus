@@ -91,6 +91,8 @@ async function withLeases<T extends { id: string; checkedOutAt: Date | null }>(
 /** Done tasks in one page of the unfiltered list, by default and at most. */
 const DONE_PAGE = 50;
 const DONE_PAGE_MAX = 500;
+/** A `?status=` list's page by default (its cap before paging existed). */
+const STATUS_PAGE = 200;
 /**
  * The active tasks of the unfiltered list are not paged: the list exists to
  * show them all. This only bounds a runaway (the tasks tool reads as many).
@@ -124,8 +126,9 @@ function normalizeCategory(value: string | null | undefined): string | null {
 export const taskRoutes = new Elysia({ prefix: '/tasks' })
   .use(apiContext)
 
-  // List the caller's tasks. ?status= filters (up to 200, finished ones most
-  // recent first); without it the list is every active task followed by one
+  // List the caller's tasks. ?status= filters, a page at a time (`limit`,
+  // default 200, at most 500; `offset`; a `page` summary), finished ones most
+  // recent first; without it the list is every active task followed by one
   // page of done ones (`?doneLimit=`, default 50, and `?doneOffset=`), with a
   // `done` summary saying how many there are; archived ones only come with
   // ?status=archived. ?due=today returns tasks due by end of today;
@@ -156,7 +159,16 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         assigneeKind: query?.assigneeKind,
         assigneeRef: query?.assigneeRef,
       };
-      if (query?.status) return withLeases(await repo.listOwn({ ...filter, status: query.status }));
+      if (query?.status) {
+        // One status, a page at a time (an archived or completed view).
+        const limit = boundedInt(query.limit, STATUS_PAGE, 1, DONE_PAGE_MAX);
+        const offset = boundedInt(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+        const [rows, total] = await Promise.all([
+          repo.listOwn({ ...filter, status: query.status, limit, offset }),
+          repo.countOwn({ ...filter, status: query.status }),
+        ]);
+        return { ...(await withLeases(rows)), page: { total, offset, limit, hasMore: offset + rows.length < total } };
+      }
       // No status: every active task, then one page of the done ones (most
       // recently finished first). A shared cap over both let finished tasks
       // push open ones out of the list.
@@ -184,6 +196,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         tz: t.Optional(t.String({ maxLength: 64 })),
         doneLimit: t.Optional(t.String({ pattern: '^[0-9]+$' })),
         doneOffset: t.Optional(t.String({ pattern: '^[0-9]+$' })),
+        /** With `status`: rows to skip (and `limit` the page size, default 200, at most 500). */
+        offset: t.Optional(t.String({ pattern: '^[0-9]+$' })),
       }),
       detail: { tags: ['tasks'] },
     }
