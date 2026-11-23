@@ -19,6 +19,9 @@ describe('parseRefreshDeliverable', () => {
   test('three backticks inside a line are page content, not a closing fence', () => {
     const page = '<p>Run <code>```js</code> blocks</p>\n<script>const fence = "```"; document.title = fence;</script>';
     expect(parseRefreshDeliverable(`\`\`\`html\n${page}\n\`\`\``)).toEqual({ ok: true, page: { template: page, css: '' } });
+    // Even at the end of a line: only a line that is nothing but the fence closes the block.
+    const trailing = '<p>Markdown fences look like ```\n</p>';
+    expect(parseRefreshDeliverable(`\`\`\`html\n${trailing}\n\`\`\``)).toEqual({ ok: true, page: { template: trailing, css: '' } });
   });
 
   test.each([
