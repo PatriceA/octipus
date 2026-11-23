@@ -198,7 +198,7 @@ Obsidian vault.
 | `body_sha256` | Change detection — an unchanged save is a no-op. |
 | `frontmatter` | Obsidian-style properties (jsonb). |
 | `tags` | Denormalised from `#tags` for cheap filtering (GIN index). |
-| `note_kind` | `note` \| `daily` \| `moc` \| `literature` \| `meeting` (free text). |
+| `note_kind` | `note` \| `daily` \| `moc` \| `literature` \| `meeting` \| `lesson` (free text). `lesson` is a note a learning review wrote ([SESSION-LEARNING.md](SESSION-LEARNING.md#lesson-notes)). |
 | `note_date` | The calendar day a daily note covers. |
 | `pinned`, `archived_at` | Archive is a soft delete; notes don't hard-delete by default. |
 | `created_by_agent_id` | NULL = user-authored. |
@@ -252,9 +252,11 @@ review — goes through it, so links and search stay consistent by construction.
 2. **Re-link** — parse `[[wikilinks]]`/`#tags`, sync `knowledge_links` (a
    diff: edges the body no longer contains are removed), run the three
    resolution passes.
-3. **Re-index** — chunk the body into `embeddings` with `purpose='note'` and
-   `source_id='note:<id>'`, so notes are first-class hybrid-search hits with
-   no new retrieval code.
+3. **Re-index** — chunk the body into `embeddings` with `purpose='note'`
+   (`'lesson'` for a lesson note) and `source_id='note:<id>'`, so notes are
+   first-class hybrid-search hits with no new retrieval code. A save that
+   changes a note's kind between `lesson` and any other kind re-indexes it
+   under the new purpose; the old purpose's chunks are removed.
 
 **Degradation contract:** indexing needs an embedding model; the note and its
 links do not. With no model configured, the note still saves and the result
@@ -279,6 +281,9 @@ every channel because commands go through the gateway.
 complementary: embeddings stop pretending to *be* the graph and instead
 *propose* edges. For a note, it hybrid-searches that user's notes, excludes
 self and already-linked targets, and returns candidates with similarity.
+Fetching the candidates is not counted as reading them (`skipAccess`): it
+does not stamp `last_accessed_at` or `access_count`. Ghost-link resolution
+fetches its candidates the same way.
 
 It **computes only — it never persists.** Accepting a suggestion is what
 writes a real edge (with `origin='user'`). Reachable via
@@ -377,12 +382,12 @@ redirects to `/notes?view=graph` so old links keep working.
 | Event | What happens |
 |---|---|
 | Note body changes | Chunks are deleted by source and re-indexed; edges are diffed (added/removed) |
-| Note archived | Soft delete — row, chunks, and edges all stay |
+| Note archived | Soft delete — row, chunks, and edges all stay, but every knowledge search and recall leaves its chunks out ([RAG.md](RAG.md#archived-notes)). Unarchiving makes them findable again without a re-index |
 | Note hard-removed | Chunks deleted by source, then `deleteForEntity`: outbound edges **dropped**, inbound edges **reverted to ghost** (`to_id`/`to_type` cleared) so the authored backlink isn't silently lost and re-resolves if the note is recreated |
 | Cleanup sweep | See below |
 
 Retention for `embeddings` is per-purpose and driven by `retention_policies`.
-**There is no policy row for `note`**, so note chunks are never age-reaped —
+**There is no policy row for `note` or `lesson`**, so note chunks are never age-reaped —
 they are replaced on save and deleted with the note.
 
 Two caveats worth knowing:

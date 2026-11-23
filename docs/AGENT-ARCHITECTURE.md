@@ -219,8 +219,9 @@ The full handoff chain is accumulated across all stages, so later stages have vi
 
 When the root agent (or an Agent) calls `spawn_child`, the named role supplies
 the system prompt, critical rules, tool allowlist and default lane. Skills are
-discovered from the role/topic assignment and injected as an index that the
-child can load on demand. There is no runtime database expert lookup or expert
+discovered from the role/topic assignment, plus the user's learned skills
+(never assigned to any topic) that fit the task, and injected as an index that
+the child can load on demand ([skill discovery](LANE-ROLE-SKILL-ROUTING.md#skill-discovery)). There is no runtime database expert lookup or expert
 model preference in this path; a caller may name a model lane explicitly with
 `topic`, while the lane binding supplies the model.
 

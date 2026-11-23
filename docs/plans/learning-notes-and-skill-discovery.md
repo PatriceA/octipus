@@ -1,6 +1,7 @@
 # Learning notes and learned-skill discovery
 
-Status: in implementation. Follows `self-learning-consolidation.md` and
+Status: implemented. "As built" notes below say where the code differs from
+this plan; the code and docs/SESSION-LEARNING.md are the reference. Follows `self-learning-consolidation.md` and
 `recall-hardening.md`.
 
 ## Problem
@@ -51,6 +52,15 @@ Migration `0200_lesson_notes.sql` (pure SQL, idempotent):
 (`source_id = 'note:' || id`), skipping rows that would collide with the
 unique dedup index. Bodies are not rewritten by the migration.
 
+> As built: 0200 converts only notes a learning review wrote: the tag, a
+> `learning-%` slug and a `learningJobId` key, in a personal workspace or at
+> user level (never a space's note, never one the user tagged by hand). A
+> leftover `note` row whose `lesson` twin exists is deleted. Migration 0201
+> adds `notes_archived_source_idx` (archived notes only) for the archived-note
+> filter in every knowledge search, and 0202 adds `lesson` to stored recall
+> purposes (see Recall). The frontmatter also carries `mergedInto`,
+> `archivedBy: 'expiry'` and `distinctFrom`.
+
 ### Review (`src/core/learning/review.ts`, `processor.ts`, `evidence.ts`)
 
 - `knowledge` items become: `{title, content, kind, extends?, sources}`, at
@@ -93,6 +103,22 @@ the status `merged`.
 
 Without an embedding model: step 1 and exact-slug dedup only.
 
+> As built:
+> - The order is `extends`, then the same slug (counted without a model
+>   call), then by meaning, then new.
+> - A duplicate is judged as a note, not by its best chunk pair: every chunk
+>   of the shorter note must have a match at `duplicateSimilarity`
+>   (`noteLevelDuplicate`). A pair that shares only some passages is treated
+>   as related (`allowDistinct`). Consolidation uses the same rule.
+> - An archived match is not always dropped. Archived by consolidation
+>   (`mergedInto`): counted on the live note it leads to (at most 5 hops).
+>   Archived by expiry (`archivedBy: 'expiry'`): revived and counted.
+>   Archived by the user (no mark; archiving through the notes API, UI or tool
+>   clears the marks): dropped as `duplicate`.
+> - The related band is checked against the nearest live note only.
+> - The frontmatter is merged by compare-and-set, retried once
+>   (`NoteService.save` no longer writes back the frontmatter it read).
+
 ### Consolidation and expiry (`src/core/learning/consolidation.ts`)
 
 `consolidateProposals` keeps its name and gains two steps for lesson notes of
@@ -109,6 +135,27 @@ the user (all workspaces the user owns personally, never a shared space):
 
 The report gains `notesMerged` and `notesArchived`.
 
+> As built:
+> - Expiry measures from the later of `updated_at` and the chunks' latest
+>   `last_accessed_at`, not from creation, so a lesson a review saw again is
+>   kept. `updated_at` moves on every save and on pin or unpin.
+>   `last_accessed_at` is no longer stamped by re-indexing, by link
+>   suggestions or ghost-link resolution, or by a semantic search with
+>   `skipAccess`. Expired notes are marked `archivedBy: 'expiry'`.
+> - Besides `maxMerges`, a run makes at most 20 merge-model calls for lesson
+>   pairs (`MAX_LESSON_MERGE_CALLS`) and 20 for proposal pairs
+>   (`MAX_PROPOSAL_MERGE_CALLS`), distinct verdicts included. A pair judged
+>   distinct is recorded on both notes (`distinctFrom`).
+> - A pinned note is never absorbed; two pinned near-duplicates are skipped.
+> - No count-only merge of different texts: when the model cannot judge, or
+>   the target changed during the call, nothing is written (deferred). The
+>   target is written before the absorbed note is archived; a crash between
+>   the two overcounts `sightings` on the next run.
+> - Archived notes are left out of every knowledge search (not in the plan),
+>   so an archived or merged-away lesson is no longer recalled.
+> - The daily maintenance also runs for users with live lesson notes and no
+>   open proposals.
+
 New settings (registered like the other `learning.*` keys):
 `learning.lessonTtlDays` (90), `learning.maxLessonsPerReview` (2).
 
@@ -118,6 +165,11 @@ New settings (registered like the other `learning.*` keys):
   line; "Lessons" checkbox on the Recall page. A hook whose stored `purposes`
   predates this keeps its stored list, so lessons are off for it until ticked;
   the built-in default includes them.
+
+  > As built: migration 0202 adds `lesson` to every stored list that has
+  > `note` (once), so a hook that recalled learning notes as notes keeps
+  > recalling them; a list without `note` is left alone. Passage labels are
+  > `Note`, `Lesson` and `Document`.
 - Notes index: counts and lists only notes whose `note_kind` is not `lesson`.
 
 ### Skill discovery (`src/skills/discovery.ts`)
@@ -131,6 +183,22 @@ triggers. `always_inject` never applies to it. Without an embedding model the
 assigned to a topic follows the assignment rules only. Every caller passes the
 turn's user. Approval computes the new skill's embedding right away
 (`ensureSkillEmbeddings`), so it is discoverable on the next agent start.
+
+> As built:
+> - A learned skill has **no row at all** in `skill_topic_assignments`, active
+>   or inactive: an inactive row means the user switched it off for a role.
+>   Who wrote it does not matter. Not a candidate in a shared space.
+> - With a query embedding, up to 3 learned skills not yet embedded stay
+>   candidates (most recently updated first).
+> - The root turn, which runs no role discovery, gets a `# Learned Skills`
+>   index by the same rule (`learnedSkillsBlock`), bounded by
+>   `START_DEADLINE_MS` (4.5 s), and only after a one-query check that the user
+>   has a learned skill. Worker and swarm discovery wait for the query
+>   embedding at most `START_DEADLINE_MS`.
+> - Three fixes to existing discovery: archived skills are left out, lane-name
+>   assignments match in every hybrid set, and the result is ranked best first
+>   (triggers, vector by similarity, standing, stale, recent) instead of by
+>   name.
 
 ### Web
 
@@ -162,3 +230,5 @@ with `sightings = 2`; the notes index omits lessons; recall labels a lesson
 and a hook without the purpose does not return it; expiry archives only
 unpinned, unaccessed, old lessons. The review prompt changes, so the
 `npm run eval` suites apply; they need a live model.
+
+> As built: the `npm run eval` suites were not run (they need a live model).

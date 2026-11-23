@@ -193,7 +193,7 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 
 ## Learning Config
 
-Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARNING.md)). An admin sets them under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` (body `{"value": …}`). They apply to the whole install and take effect without a restart; a value outside the bounds below is refused. There is no environment variable for them. The thresholds are defaults chosen when the feature was written, not calibrated against real proposals.
+Session learning checks, skill proposals and lesson notes ([SESSION-LEARNING.md](SESSION-LEARNING.md)). An admin sets them under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` (body `{"value": …}`). They apply to the whole install and take effect without a restart; a value outside the bounds below is refused. There is no environment variable for them. The thresholds are defaults chosen when the feature was written, not calibrated against real proposals or lesson notes.
 
 | Key | Default | Purpose |
 |---|---|---|
@@ -203,9 +203,11 @@ Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARN
 | `learning.recurrenceSessions` | 2 | Sessions a learned skill proposal must be seen in before it is shown; until then it waits as a candidate. A user correction, `distill_skill` and patches are shown at once. 1 turns the gate off. |
 | `learning.maxSkillProposalsPerDay` | 2 | Learned skill proposals that become pending per user per rolling 24 hours; the rest wait as candidates. 0: none appear on their own. |
 | `learning.maxPendingSkillProposals` | 10 | At this many pending non-patch proposals of a user, learned ones wait as candidates. |
-| `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. |
-| `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals are one skill; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
+| `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. For lesson notes, compared chunk by chunk: two lessons are the same lesson when every chunk of the shorter has a chunk of the other at or above it. |
+| `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals (or two lesson notes) are one; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
 | `learning.candidateTtlDays` | 30 | A candidate not seen again for this many days, and never seen in `recurrenceSessions` sessions or backed by a correction, is deleted by consolidation. One that qualified and only waits for room under a cap is kept. Min 1. |
+| `learning.lessonTtlDays` | 90 | A lesson note that is not pinned and was neither updated (edited, pinned or unpinned, merged into, seen again by a review) nor shown to an agent (a search or recall returned one of its chunks) for this many days is archived by the daily consolidation. A later review that sees the lesson again revives it. Min 0; 0 never archives one. |
+| `learning.maxLessonsPerReview` | 2 | Lesson notes one learning review may write or merge into. 0 to 2; 0 writes none (the review is told to return none), 1 tells the review to return at most one. |
 
 ## Gateway Config
 
