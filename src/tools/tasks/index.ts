@@ -67,9 +67,11 @@ export class TasksTool extends BaseTool {
         const principal = agentPrincipal(context);
         if (args.view === 'next') {
           const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 10)));
-          const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit });
+          // An agent is offered only what it may work now: no future occurrence of a series.
+          const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit, workableOnly: true });
           observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,ranked.map(row=>row.task)));
-          return { timezone, tasks: ranked.map((r) => ({ ...summarize(r.task), bucket: r.bucket, reason: r.reason })) };
+          const viewed = await contentRepos(principal).tasks.withState(ranked.map((r) => r.task));
+          return { timezone, tasks: ranked.map((r, i) => ({ ...summarize(viewed[i]), bucket: r.bucket, reason: r.reason })) };
         }
         let dueBefore: Date | undefined;
         if (args.dueToday) {
@@ -91,7 +93,7 @@ export class TasksTool extends BaseTool {
         ]);
         observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,[...tasks,...active]));
         const lookup = toLookup(active);
-        return { tasks: nestTasks(tasks).map((t) => summarizeTree(t, lookup)) };
+        return { tasks: nestTasks(await repo.withState(tasks)).map((t) => summarizeTree(t, lookup)) };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -129,16 +131,20 @@ export class TasksTool extends BaseTool {
             estimate: normalizeEstimate(args.estimate),
             parentId: idOrNull(args.parentId),
             blockedBy: idList(args.blockedBy),
-            important: args.important === true,
             repeat: normalizeRepeat(repeatArg(args.repeat)),
-            myDayOn: args.myDay === true ? (await myDayDate(principal.userId)).date : null,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
           };
-          const task = await contentRepos(principal).tasks.create(values);
+          const repo = contentRepos(principal).tasks;
+          const task = await repo.create(values);
           await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
-          return { created: true, task: summarize(task) };
+          // Star and My Day are the user's own layer (their zone's today, as stored).
+          const view = await repo.setPersonal(task.id, {
+            important: args.important === true ? true : undefined,
+            myDayOn: args.myDay === true ? (await myDayDate(principal.userId)).date : undefined,
+          });
+          return { created: true, task: summarize(view ?? task) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -221,9 +227,7 @@ export class TasksTool extends BaseTool {
             estimate: args.estimate !== undefined ? normalizeEstimate(args.estimate) : undefined,
             parentId: args.parentId !== undefined ? idOrNull(args.parentId) : undefined,
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
-            important: typeof args.important === 'boolean' ? args.important : undefined,
             repeat: args.repeat !== undefined ? normalizeRepeat(repeatArg(args.repeat)) : undefined,
-            myDayOn: typeof args.myDay === 'boolean' ? (args.myDay ? (await myDayDate(principal.userId)).date : null) : undefined,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
           };
@@ -234,7 +238,14 @@ export class TasksTool extends BaseTool {
             const op = status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
             await auditAgentTaskMutation(context, task.id, op, change);
           }
-          return { updated: true, task: summarize(task) };
+          const personal = {
+            important: typeof args.important === 'boolean' ? args.important : undefined,
+            myDayOn: typeof args.myDay === 'boolean' ? (args.myDay ? (await myDayDate(principal.userId)).date : null) : undefined,
+          };
+          const view = personal.important !== undefined || personal.myDayOn !== undefined
+            ? await repo.setPersonal(task.id, personal)
+            : (await repo.withState([task]))[0];
+          return { updated: true, task: summarize(view ?? task) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -287,6 +298,7 @@ export class TasksTool extends BaseTool {
         if (result.ok) return { checkedOut: true, task: summarize(result.task) };
         if (result.reason === 'not_found') return { error: 'Task not found' };
         if (result.reason === 'blocked') return { error: `Task is blocked: ${waitingReason(result.waiting)}`, blocked: true };
+        if (result.reason === 'not_due') return { error: `This occurrence of a repeating task is not due until ${result.dueAt.toISOString()}; leave it until then`, notDue: true };
         return {
           error: result.holder ? `Task is checked out by ${result.holder}` : `Task is ${result.status}`,
           holder: result.holder,

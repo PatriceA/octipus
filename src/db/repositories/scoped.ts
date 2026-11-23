@@ -32,17 +32,17 @@ import { visibleMessages } from './message-visibility';
  *      can't bypass it by accident.
  */
 
-import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, isNull, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
+import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
 import { publishPersonalTaskChanged } from '@/core/tasks/live';
-import { nextOccurrence, normalizeRepeat, type TaskRepeat } from '@/core/tasks/repeat';
-import { resolveUserTimezone } from '@/core/tasks/timezone';
+import { occurrenceStarted, stampSeries } from '@/core/tasks/repeat';
+import { resolveSeriesTimezone } from '@/core/tasks/timezone';
+import { retractNextOccurrence, spawnNextOccurrence } from './task-series';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { type GuestScope, type SpaceAction, SpaceError } from '@/security/space-access';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
-import { randomUUID } from 'node:crypto';
 import { dbLogger } from '@/utils/logger';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
@@ -66,7 +66,7 @@ import { hookExecutions } from '../schema/hook-executions';
 import { monitors } from '../schema/monitors';
 import { companionActions, companionGoals } from '../schema/companion-supervision';
 import { type TaskComment, taskComments } from '../schema/task-comments';
-import { type NewTask, type Task, tasks } from '../schema/tasks';
+import { type NewTask, type Task, type TaskView, taskLists, tasks, taskUserState } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
 import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
@@ -1228,7 +1228,7 @@ export interface TaskListFilter {
   /** Restrict to an assignee kind ('user' | 'role' | 'node'); with `assigneeRef`, to one assignee. */
   assigneeKind?: string;
   assigneeRef?: string;
-  /** Only tasks put in My Day on this calendar day (`YYYY-MM-DD`, the user's zone). */
+  /** Only tasks the caller put in My Day on this calendar day (`YYYY-MM-DD`, the user's zone). */
   myDayOn?: string;
   limit?: number;
   /** Rows to skip, for paging through one status set (e.g. the finished ones). */
@@ -1252,7 +1252,9 @@ export type TaskCheckoutResult =
   | { ok: true; task: Task }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'conflict'; holder: string | null; status: string }
-  | { ok: false; reason: 'blocked'; waiting: WaitingOn };
+  | { ok: false; reason: 'blocked'; waiting: WaitingOn }
+  /** A future occurrence of a repeating to-do: workable from the start of its due day. */
+  | { ok: false; reason: 'not_due'; dueAt: Date };
 
 export type TaskReleaseResult =
   | { ok: true; task: Task }
@@ -1282,6 +1284,18 @@ export function taskLeaseFree(actor?: string): SQL {
   const lease = sql.raw(`interval '${Math.floor(TASK_CHECKOUT_TTL_MS / 1000)} seconds'`);
   const holder = actor === undefined ? sql`` : sql` OR ${tasks.checkedOutBy} = ${actor}`;
   return sql`(${tasks.checkedOutBy} IS NULL${holder} OR ${tasks.checkedOutAt} < now() - ${lease})`;
+}
+
+/**
+ * `occurrenceStarted` (core/tasks/repeat.ts) as a condition on `tasks`: no
+ * repeat rule, no due date, or its due day (in the series' zone) has begun.
+ * Every agent pickup path applies it — the role heartbeat's probe and
+ * implicit dispatch (core/heartbeat.ts) and the checkout — so an agent
+ * assigned a repeating to-do never works its future occurrences early.
+ */
+export function taskOccurrenceStarted(t: { repeat: AnyPgColumn; dueAt: AnyPgColumn } = tasks): SQL {
+  const zone = sql`coalesce(${t.repeat}->>'tz', 'UTC')`;
+  return sql`(${t.repeat} IS NULL OR ${t.dueAt} IS NULL OR (${t.dueAt} AT TIME ZONE ${zone})::date <= (now() AT TIME ZONE ${zone})::date)`;
 }
 
 /**
@@ -1349,7 +1363,10 @@ export class TaskRepo {
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
-    if (filter.myDayOn) filters.push(eq(tasks.myDayOn, filter.myDayOn));
+    if (filter.myDayOn) {
+      // The caller's own My Day (task_user_state), never another member's.
+      filters.push(sql`EXISTS (SELECT 1 FROM ${taskUserState} s WHERE s.task_id = ${tasks.id} AND s.user_id = ${this.viewerId} AND s.my_day_on = ${filter.myDayOn})`);
+    }
     if (filter.category !== undefined) {
       const c = filter.category.trim();
       // '' / 'none' selects the uncategorized bucket; otherwise exact match.
@@ -1387,19 +1404,6 @@ export class TaskRepo {
   async countOwn(filter: Omit<TaskListFilter, 'limit' | 'offset'> = {}): Promise<number> {
     const [row] = await this.db.select({ n: count() }).from(tasks).where(and(...this.listFilters(filter)));
     return Number(row?.n ?? 0);
-  }
-
-  /**
-   * The user's lists: every distinct category on the scope's tasks that are
-   * not archived, alphabetical. What `#list` in a quick capture is matched to.
-   */
-  async categories(): Promise<string[]> {
-    const rows = await this.db
-      .selectDistinct({ category: tasks.category })
-      .from(tasks)
-      .where(and(...this.rows(tasks), sql`${tasks.category} IS NOT NULL`, ne(tasks.status, 'archived')))
-      .limit(1000);
-    return rows.map((r) => r.category as string).sort((a, b) => a.localeCompare(b));
   }
 
   /**
@@ -1497,10 +1501,12 @@ export class TaskRepo {
    * Create a task in the scope. Ignores any user_id and workspace_id in
    * `data`: the row is the scope's author's, in the scope's workspace.
    */
-  async create(data: Omit<NewTask, 'userId'>): Promise<Task> {
+  async create(data: Omit<NewTask, 'userId'>, opts: { tz?: string | null } = {}): Promise<Task> {
     this.taskScope.can('write');
     await this.checkStructure(data);
     const stamp = await this.stampRow();
+    // A series runs in the zone it was set up in, from its first due day.
+    if (data.repeat) data = { ...data, repeat: stampSeries(data.repeat, data.dueAt ?? null, await resolveSeriesTimezone(stamp.userId, opts.tz)) };
     await this.checkAssignee(data.assigneeKind, data.assigneeRef, stamp.userId);
     const result = await this.db
       .insert(tasks)
@@ -1581,128 +1587,200 @@ export class TaskRepo {
    * sibling rule in core/tasks/wakeups.ts. The wakeup itself is detached
    * (`scheduleWakeup`): it never adds latency to, or fails, the write.
    */
-  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
+  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string; tz?: string | null } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     this.taskScope.can('write');
     // Going back to an active status may take back a repeat's next occurrence.
     const reopening = patch.status !== undefined && isActiveStatus(patch.status);
-    // In a space the row before the write tells whether the assignee changed.
-    const previous = this.taskScope.kind === 'space' || reopening ? await this.findById(id) : null;
+    // In a space the row before the write tells whether the assignee changed;
+    // a series needs it to stamp its rule.
+    const touchesSeries = patch.repeat !== undefined || patch.dueAt !== undefined;
+    const previous = this.taskScope.kind === 'space' || reopening || touchesSeries ? await this.findById(id) : null;
+    if (previous && touchesSeries) {
+      const rule = patch.repeat !== undefined ? patch.repeat : previous.repeat;
+      if (rule) {
+        const dueAt = patch.dueAt !== undefined ? patch.dueAt : previous.dueAt;
+        patch = { ...patch, repeat: stampSeries(rule, dueAt ?? null, await resolveSeriesTimezone(previous.userId, opts.tz)) };
+      }
+    }
     const result = await this.updateRow(id, patch, opts);
     if (!result) return null;
     let row = result.row;
-    if (result.closedFromActive && row.status === 'done' && row.repeat && !row.repeatNextId) {
-      row = await this.spawnNextOccurrence(row);
-    } else if (reopening && previous && previous.status === 'done' && previous.repeatNextId) {
-      row = await this.retractNextOccurrence(row, previous.repeatNextId);
+    if (result.closedFrom !== null) {
+      // The series moves on before the wakeups read the family, so a parent
+      // never closes for want of the step that just came back.
+      if (row.repeat && !row.repeatNextId) row = await this.nextOfSeries(row, true);
+      this.wakeAfter(row, result.closedFrom, 'closed');
+    } else if (reopening && previous && !isActiveStatus(previous.status) && previous.repeatNextId) {
+      const gone = await retractNextOccurrence(row, previous.repeatNextId);
+      if (gone) {
+        this.changed(gone, true);
+        row = { ...row, repeatNextId: null };
+      }
     }
     this.afterWrite(row, previous);
     return row;
   }
 
   /**
-   * Completing a repeating to-do creates its next occurrence (core/tasks/repeat.ts):
-   * same title, notes, list, priority, star, assignee and rule, its steps
-   * copied open, due one step on (from the due date, in the owner's zone), a
-   * follow-up shifted by the same amount; not in My Day. Exactly once per
-   * completion: `update` calls this only for a real active → done transition,
-   * and the next id is claimed on the completed row (`repeat_next_id IS NULL`)
-   * in the same transaction as the insert, so two racing completions, a retry
-   * or done → done never make a second one. Returns the completed row with
-   * `repeatNextId` set.
+   * The next occurrence of a series whose occurrence just left the active set
+   * (db/repositories/task-series.ts). A failure is logged, never thrown: the
+   * occurrence stays finished and the cron sweep (`healRepeatSeries`) makes
+   * the next one later. Returns the finished row as it now is.
    */
-  private async spawnNextOccurrence(done: Task): Promise<Task> {
-    let rule: TaskRepeat | null;
+  private async nextOfSeries(finished: Task, claim: boolean): Promise<Task> {
     try {
-      rule = normalizeRepeat(done.repeat);
+      const made = await spawnNextOccurrence(finished, { claim, fallbackTz: await resolveSeriesTimezone(finished.userId) });
+      if (!made) return claim ? (await this.findById(finished.id)) ?? finished : finished;
+      this.afterWrite(made.next, null);
+      return made.claimed ?? finished;
     } catch (err) {
-      // Only raw SQL could store a bad rule; the to-do stays done, without a next one.
-      dbLogger.error({ err, taskId: done.id }, 'Repeating to-do has an invalid rule; no next occurrence');
-      return done;
+      dbLogger.error({ err, taskId: finished.id }, 'Repeating to-do: next occurrence not made now; the sweep retries');
+      return finished;
     }
-    if (!rule) return done;
-    const tz = await resolveUserTimezone(done.userId);
-    const now = new Date();
-    const dueAt = nextOccurrence(rule, done.dueAt, now, tz);
-    const remindAt = !done.remindAt
-      ? null
-      : done.dueAt
-        ? new Date(done.remindAt.getTime() + (dueAt.getTime() - done.dueAt.getTime()))
-        : nextOccurrence(rule, done.remindAt, now, tz);
-    const nextId = randomUUID();
-    const created = await this.db.transaction(async (tx) => {
-      const [claimed] = await tx
-        .update(tasks)
-        .set({ repeatNextId: nextId })
-        .where(and(eq(tasks.id, done.id), isNull(tasks.repeatNextId)))
-        .returning();
-      if (!claimed) return null;
-      const [next] = await tx.insert(tasks).values({
-        id: nextId,
-        userId: done.userId,
-        workspaceId: done.workspaceId,
-        title: done.title,
-        notes: done.notes,
-        priority: done.priority,
-        category: done.category,
-        important: done.important,
-        repeat: rule,
-        sortOrder: done.sortOrder,
-        dueAt,
-        remindAt,
-        estimate: done.estimate,
-        parentId: done.parentId,
-        assigneeKind: done.assigneeKind,
-        assigneeRef: done.assigneeRef,
-        source: done.source,
-        sourceRef: done.sourceRef,
-      }).returning();
-      const steps = await tx.select().from(tasks).where(and(eq(tasks.parentId, done.id), ...this.scope()));
-      if (steps.length > 0) {
-        await tx.insert(tasks).values(steps.map((step) => ({
-          userId: step.userId,
-          workspaceId: step.workspaceId,
-          title: step.title,
-          parentId: nextId,
-          sortOrder: step.sortOrder,
-          source: step.source,
-        })));
-      }
-      return { claimed, next };
-    });
-    if (!created) return (await this.findById(done.id)) ?? done;
-    this.afterWrite(created.next, null);
-    return created.claimed;
+  }
+
+  // ── The personal layer (per user: star, My Day, own order) ──────────────
+
+  /** The caller whose personal layer a read shows and a write sets. */
+  private get viewerId(): string {
+    return this.principal.userId;
   }
 
   /**
-   * A completed repeating to-do went back to open (an Undo, a mis-click):
-   * its next occurrence goes away again if nobody has touched it yet (still
-   * open, never edited — `updated_at = created_at`), with its copied steps,
-   * and the link clears so completing it again makes a fresh one. An
-   * occurrence already edited, ticked or moved stays, and so does the link:
-   * completing again then makes no second one.
+   * `rows` as the caller sees them: their star, My Day and own order merged
+   * in (`task_user_state`); no row of theirs means not starred, not in My
+   * Day, the task's default order.
    */
-  private async retractNextOccurrence(row: Task, nextId: string): Promise<Task> {
-    const untouched = sql`${tasks.updatedAt} = ${tasks.createdAt}`;
-    const gone = await this.db.transaction(async (tx) => {
-      const [next] = await tx.select().from(tasks)
-        .where(and(eq(tasks.id, nextId), inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), untouched, ...this.scope()))
-        .for('update');
-      if (!next) return null;
-      const steps = await tx.select({ id: tasks.id, untouched: sql<boolean>`${untouched}` }).from(tasks).where(eq(tasks.parentId, nextId));
-      if (steps.some((step) => !step.untouched)) return null;
-      if (steps.length > 0) await tx.delete(tasks).where(eq(tasks.parentId, nextId));
-      await tx.delete(tasks).where(eq(tasks.id, nextId));
-      await tx.update(tasks).set({ repeatNextId: null }).where(and(eq(tasks.id, row.id), eq(tasks.repeatNextId, nextId)));
-      return next;
+  async withState<T extends Task>(rows: T[]): Promise<(T & { important: boolean; myDayOn: string | null })[]> {
+    const ids = [...new Set(rows.map((r) => r.id))];
+    const states = ids.length === 0 ? [] : await this.db.select().from(taskUserState)
+      .where(and(eq(taskUserState.userId, this.viewerId), inArray(taskUserState.taskId, ids)));
+    const byTask = new Map(states.map((st) => [st.taskId, st]));
+    return rows.map((r) => {
+      const st = byTask.get(r.id);
+      return { ...r, important: st?.important ?? false, myDayOn: st?.myDayOn ?? null, sortOrder: st?.sortOrder ?? r.sortOrder };
     });
-    if (!gone) return row;
-    this.changed(gone, true);
-    return { ...row, repeatNextId: null };
   }
 
-  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<{ row: Task; closedFromActive: boolean } | null> {
+  /**
+   * Set the caller's own star, My Day day or order on a task they can see
+   * (a viewer in a space too: it changes nothing anyone else sees). Only the
+   * fields given change; `sortOrder: null` returns to the default order.
+   * Null when the task is out of reach.
+   */
+  async setPersonal(id: string, change: { important?: boolean; myDayOn?: string | null; sortOrder?: number | null }): Promise<TaskView | null> {
+    const task = await this.findById(id);
+    if (!task) return null;
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (change.important !== undefined) set.important = change.important;
+    if (change.myDayOn !== undefined) set.myDayOn = change.myDayOn;
+    if (change.sortOrder !== undefined) set.sortOrder = change.sortOrder;
+    if (Object.keys(set).length > 1) {
+      await this.db.insert(taskUserState).values({
+        taskId: task.id,
+        userId: this.viewerId,
+        important: change.important ?? false,
+        myDayOn: change.myDayOn ?? null,
+        sortOrder: change.sortOrder ?? null,
+      }).onConflictDoUpdate({ target: [taskUserState.taskId, taskUserState.userId], set });
+      // Only the caller's view changed: only their connections hear of it.
+      publishPersonalTaskChanged(this.viewerId, task.id);
+    }
+    const [view] = await this.withState([task]);
+    return view;
+  }
+
+  // ── Lists (the `category` values, plus lists made empty) ────────────────
+
+  /** `task_lists` rows the scope reaches (a guest's scope reaches none). */
+  private listRows(): SQL[] {
+    return this.taskScope.guest ? [sql`FALSE`] : this.taskScope.shared(taskLists);
+  }
+
+  /**
+   * The scope's lists: every category on a task that is not archived, and
+   * every list made here that has no to-do yet, alphabetical, each with its
+   * count of open top-level to-dos.
+   */
+  async lists(): Promise<{ name: string; open: number }[]> {
+    const [used, made] = await Promise.all([
+      this.db.select({
+        name: tasks.category,
+        open: sql<number>`count(*) FILTER (WHERE ${inArray(tasks.status, [...ACTIVE_TASK_STATUSES])} AND ${tasks.parentId} IS NULL)`,
+      }).from(tasks)
+        .where(and(...this.rows(tasks), sql`${tasks.category} IS NOT NULL`, ne(tasks.status, 'archived')))
+        .groupBy(tasks.category),
+      this.db.select({ name: taskLists.name }).from(taskLists).where(and(...this.listRows())),
+    ]);
+    const out = new Map<string, number>();
+    for (const u of used) out.set(u.name as string, Number(u.open));
+    for (const m of made) if (![...out.keys()].some((k) => k.toLowerCase() === m.name.toLowerCase())) out.set(m.name, 0);
+    return [...out].map(([name, open]) => ({ name, open })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The list names alone (what `#name` in a capture is matched to). */
+  async categories(): Promise<string[]> {
+    return (await this.lists()).map((l) => l.name);
+  }
+
+  /** Make an empty list. Throws when a list of that name (any case) exists. */
+  async createList(name: string): Promise<{ name: string }> {
+    this.taskScope.can('write');
+    const clean = name.trim().slice(0, 100);
+    if (!clean) throw new Error('A list needs a name');
+    if ((await this.lists()).some((l) => l.name.toLowerCase() === clean.toLowerCase())) throw new Error(`A list called "${clean}" already exists`);
+    const stamp = await this.stampRow();
+    await this.db.insert(taskLists).values({ ...stamp, name: clean });
+    return { name: clean };
+  }
+
+  /**
+   * Rename a list: every to-do in it (archived ones too, so a restore lands
+   * in the renamed list) and the stored empty list. Renaming onto an
+   * existing name merges the two. Returns the ids moved.
+   */
+  async renameList(name: string, newName: string): Promise<string[]> {
+    this.taskScope.can('write');
+    const to = newName.trim().slice(0, 100);
+    if (!to) throw new Error('A list needs a name');
+    const moved = await this.db.update(tasks).set({ category: to, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), eq(tasks.category, name))).returning();
+    await this.db.update(taskLists).set({ name: to }).where(and(...this.listRows(), eq(taskLists.name, name)));
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /**
+   * Delete a list: its to-dos stay, in no list (the caller offers Undo with
+   * `moveToList`), and a stored empty list goes. Returns the ids moved.
+   */
+  async deleteList(name: string): Promise<string[]> {
+    this.taskScope.can('write');
+    const moved = await this.db.update(tasks).set({ category: null, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), eq(tasks.category, name))).returning();
+    await this.db.delete(taskLists).where(and(...this.listRows(), eq(taskLists.name, name)));
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /** Put the to-dos of `ids` the scope reaches into list `name` (null: no list). Returns the ids moved. */
+  async moveToList(ids: readonly string[], name: string | null): Promise<string[]> {
+    this.taskScope.can('write');
+    const valid = [...new Set(ids.filter(isUuid))];
+    if (valid.length === 0) return [];
+    const moved = await this.db.update(tasks).set({ category: name?.trim().slice(0, 100) || null, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), inArray(tasks.id, valid))).returning();
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /**
+   * The write itself. `closedFrom` is the active status the task left when
+   * this write closed it (the caller runs the series and the wakeups), else
+   * null.
+   */
+  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<{ row: Task; closedFrom: string | null } | null> {
     // Neither the author nor the workspace changes on an edit.
     const { userId: _drop, workspaceId: _ws, ...safe } = patch;
     void _drop;
@@ -1738,19 +1816,19 @@ export class TaskRepo {
     };
     if (!(isTaskStatus(safe.status) && !isActiveStatus(safe.status))) {
       const result = await this.db.update(tasks).set(values).where(where()).returning();
-      return result[0] ? { row: result[0], closedFromActive: false } : null;
+      return result[0] ? { row: result[0], closedFrom: null } : null;
     }
     const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
     const [won] = await this.db.update(tasks).set(values).where(where(active)).returning(withPrevious);
-    if (won) return { row: this.closedBy(won), closedFromActive: true };
+    if (won) return this.closedBy(won);
     const [stillClosed] = await this.db
       .update(tasks)
       .set(values)
       .where(where(notInArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
       .returning();
-    if (stillClosed) return { row: stillClosed, closedFromActive: false };
+    if (stillClosed) return { row: stillClosed, closedFrom: null };
     const [last] = await this.db.update(tasks).set(values).where(where()).returning(withPrevious);
-    return last ? { row: this.closedBy(last), closedFromActive: isActiveStatus(last.previousStatus) } : null;
+    return last ? this.closedBy(last) : null;
   }
 
   /**
@@ -1814,6 +1892,8 @@ export class TaskRepo {
     if (!existing) return { ok: false, reason: 'not_found' };
     this.taskScope.can('write');
     if (!isActiveStatus(existing.status)) return { ok: false, reason: 'conflict', holder: existing.checkedOutBy, status: existing.status };
+    // A future occurrence of a series is not work yet (core/tasks/repeat.ts `occurrenceStarted`).
+    if (!occurrenceStarted(existing, new Date())) return { ok: false, reason: 'not_due', dueAt: existing.dueAt as Date };
     // The holder renews without the blocked rule (it may have split its own
     // task into sub-tasks); anyone else claims only a free, unblocked task.
     const [claimed] = await this.db
@@ -1822,6 +1902,7 @@ export class TaskRepo {
       .where(this.scopeWhere(
         id,
         inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
+        taskOccurrenceStarted(),
         or(eq(tasks.checkedOutBy, actor), and(this.leaseFree(actor), ...this.notWaiting())) as SQL,
       ))
       .returning();
@@ -1903,11 +1984,10 @@ export class TaskRepo {
     return { comments: newest.slice(0, limit).reverse(), truncated: newest.length > limit };
   }
 
-  /** Strip the RETURNING extra and wake when the row was active before the write. */
-  private closedBy(row: Task & { previousStatus: string }): Task {
+  /** Strip the RETURNING extra; say which active status the write closed the task from, if any. */
+  private closedBy(row: Task & { previousStatus: string }): { row: Task; closedFrom: string | null } {
     const { previousStatus, ...closed } = row;
-    this.wakeAfter(closed, previousStatus, 'closed');
-    return closed;
+    return { row: closed, closedFrom: isActiveStatus(previousStatus) ? previousStatus : null };
   }
 
   /** Run the close listeners and the wakeups for a task that just left the active set, detached. */
@@ -1989,6 +2069,8 @@ export class TaskRepo {
     const gone = result[0];
     // A delete ranks at the moment it happened in the sibling order.
     if (gone) {
+      // Deleting an occurrence of a series skips it: the series goes on.
+      if (isActiveStatus(gone.status) && gone.repeat) await this.nextOfSeries(gone, false);
       this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
       // The row is gone: guests are matched on the deleted row's source.
       this.changed(gone, true);

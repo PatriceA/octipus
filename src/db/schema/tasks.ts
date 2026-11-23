@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import type { TaskRepeat } from '@/core/tasks/repeat';
 import { users } from './users';
 import { workspaces } from './organizations';
@@ -69,19 +69,17 @@ export const tasks = pgTable('tasks', {
   remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /**
-   * The personal layer (to-do redesign, migration 0205). `important` is the
-   * star. `sortOrder` is the manual order within a list, ascending; a new row
-   * gets minus its creation time in ms, so the newest comes first until the
-   * user drags, and a drag writes a value between its neighbours. `myDayOn`
-   * is the calendar day (in the user's zone) the to-do was put in My Day; it
-   * is in My Day only while that day is today, so the list empties itself at
-   * midnight without a job. `repeat` is the rule of core/tasks/repeat.ts;
-   * completing a repeating to-do creates the next occurrence and records it
-   * in `repeatNextId`, which is what makes that happen once (TaskRepo.update).
+   * The series and order fields (to-do redesign, migrations 0205/0206).
+   * `sortOrder` is the task's default position, ascending: minus its creation
+   * time in ms, so the newest comes first; each user's own order, star and
+   * My Day live in `task_user_state` (per user, so space members do not share
+   * them). `repeat` is the rule of core/tasks/repeat.ts, with the zone and
+   * anchor day the series is computed in; completing (or skipping) a
+   * repeating to-do creates the next occurrence and records it in
+   * `repeatNextId`, which is what makes that happen once
+   * (db/repositories/task-series.ts).
    */
-  important: boolean('important').default(false).notNull(),
   sortOrder: doublePrecision('sort_order').default(sql`(-(extract(epoch from now()) * 1000))`).notNull(),
-  myDayOn: date('my_day_on', { mode: 'string' }),
   repeat: jsonb('repeat').$type<TaskRepeat>(),
   repeatNextId: uuid('repeat_next_id'),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. 'reader' and 'research' are kept for existing tasks (the core reader and research module are removed; their example plugins write 'agent' or no task). */
@@ -110,5 +108,33 @@ export interface TaskSourceRef {
   label?: string;
 }
 
+/**
+ * One user's personal layer on a task (migration 0206): their star, the day
+ * they put it in My Day, their own position. No row = defaults.
+ */
+export const taskUserState = pgTable('task_user_state', {
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  important: boolean('important').default(false).notNull(),
+  myDayOn: date('my_day_on', { mode: 'string' }),
+  sortOrder: doublePrecision('sort_order'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.taskId, table.userId] }),
+}));
+
+/** A to-do list that holds no to-do yet (a list is otherwise the `category` of its to-dos). Scoped like tasks. */
+export const taskLists = pgTable('task_lists', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export type Task = typeof tasks.$inferSelect;
+/** A task as one user sees it: the row plus their personal layer (`sortOrder` theirs when they set one). */
+export type TaskView = Task & { important: boolean; myDayOn: string | null };
+export type TaskUserState = typeof taskUserState.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;

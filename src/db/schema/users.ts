@@ -73,7 +73,10 @@ export interface UserPreferences {
   language?: string;
   notificationsEnabled?: boolean;
   defaultModel?: string;
+  /** IANA zone of the user's day (tasks, My Day, repeats, `/todo`). */
   timezone?: string;
+  /** Who set `timezone`: a device reported it, or the user chose it in Settings (then devices never overwrite it). */
+  timezoneSource?: 'device' | 'user';
   /** Keep a local index of Gmail / Outlook headers (src/core/email/mail-index.ts). Unset = on; false = off, nothing stored. */
   emailIndex?: boolean;
   /** Email triage categories, name → description (src/core/email/service.ts). Unset = presets. */

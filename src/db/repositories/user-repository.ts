@@ -84,6 +84,15 @@ export class UserRepository {
   }
 
   /** Turn the post-task distil offer on or off for this user (`preferences.distillNudge`). */
+  /** Set the user's zone and who set it (core/tasks/timezone.ts decides when). */
+  async setTimezone(id: string, timezone: string, source: 'device' | 'user'): Promise<User | null> {
+    const [user] = await this.db.update(users).set({
+      preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${JSON.stringify({ timezone, timezoneSource: source })}::jsonb`,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id)).returning();
+    return user ?? null;
+  }
+
   async setDistillNudge(id: string, enabled: boolean): Promise<User | null> {
     const [user] = await this.db.update(users).set({
       preferences: sql`jsonb_set(COALESCE(${users.preferences}, '{}'::jsonb), '{distillNudge}', ${JSON.stringify(enabled)}::jsonb)`,

@@ -426,6 +426,7 @@ function registerOps(): void {
     const result = await contentRepos(await principalIn(member, spaceId)).tasks.checkout(taskId, `user:${member.userId}`, null);
     if (result.ok) return { task: result.task };
     if (result.reason === 'not_found') throw new SpaceError('not_found', 'Task not found');
+    if (result.reason === 'not_due') throw new LinkRequestError('conflict', `Task is not due until ${result.dueAt.toISOString()}`);
     throw new LinkRequestError('conflict', result.reason === 'blocked' ? 'Task is blocked' : `Task is ${result.holder ? `checked out by ${result.holder}` : result.status}`);
   });
 

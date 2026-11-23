@@ -7,6 +7,7 @@ import { contentRepos } from '@/db/repositories/content';
 import type { Task } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 import { type RankedTask, rankTasks } from './rank';
+import { occurrenceStarted } from './repeat';
 import { ACTIVE_TASK_STATUSES } from './status';
 import { resolveUserTimezone } from './timezone';
 
@@ -25,6 +26,12 @@ export interface NextActionsOptions {
   /** Browser-reported IANA zone; wins over the saved preference. */
   tz?: string | null;
   limit: number;
+  /**
+   * Only what an agent may work now: leaves out future occurrences of a
+   * repeating to-do (`occurrenceStarted`, core/tasks/repeat.ts), the same
+   * rule the checkout and the role heartbeat apply.
+   */
+  workableOnly?: boolean;
 }
 
 export async function nextActions(
@@ -35,7 +42,8 @@ export async function nextActions(
     contentRepos(principal).tasks.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: SCAN_LIMIT }),
     resolveUserTimezone(principal.userId, opts.tz),
   ]);
-  const ranked = rankTasks(active, new Date(), { timezone });
+  const now = new Date();
+  const ranked = rankTasks(active, now, { timezone }).filter((r) => !opts.workableOnly || occurrenceStarted(r.task, now, timezone));
   const category = opts.category?.trim();
   const wanted =
     category === undefined

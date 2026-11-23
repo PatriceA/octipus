@@ -14,7 +14,7 @@ ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "important" boolean DEFAULT false N
 -- Existing rows keep their newest-first order; only when the column is new,
 -- so a re-run never resets an order the user dragged into place.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'sort_order') THEN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'tasks' AND column_name = 'sort_order') THEN
     ALTER TABLE "tasks" ADD COLUMN "sort_order" double precision DEFAULT (-(extract(epoch from now()) * 1000)) NOT NULL;
     UPDATE "tasks" SET "sort_order" = -(extract(epoch from "created_at") * 1000);
   END IF;

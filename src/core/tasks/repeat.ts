@@ -12,8 +12,15 @@
  *   { unit: 'year',  interval: 1 }                      every year
  *
  * `weekdays` are 0 = Sunday … 6 = Saturday, only with unit 'week'.
+ *
+ * The server stamps two more fields on a stored rule (`stampSeries`), so a
+ * series is computed the same way for its whole life: `tz`, the IANA zone the
+ * series runs in (its due days and times are wall-clock in that zone, across
+ * DST), and for monthly and yearly rules `anchorDay`, the day of the month it
+ * was set on — a series started on the 31st comes back on the 31st whenever a
+ * month has one, not on the 28th forever after February.
  */
-import { isValidTimezone, localDateTimeIn, localWallClock } from './rank';
+import { isValidTimezone, localDateIn, localDateTimeIn, localWallClock } from './rank';
 
 export const REPEAT_UNITS = ['day', 'week', 'month', 'year'] as const;
 export type RepeatUnit = (typeof REPEAT_UNITS)[number];
@@ -24,6 +31,10 @@ export interface TaskRepeat {
   interval: number;
   /** With unit 'week': the days it falls on (0 = Sunday). Absent = the due date's weekday. */
   weekdays?: number[];
+  /** The zone the series is computed in (stamped by the server). */
+  tz?: string;
+  /** Month and year rules: the day of the month the series keeps (stamped by the server). */
+  anchorDay?: number;
 }
 
 /** The presets the pickers and the capture parser offer. */
@@ -67,7 +78,40 @@ export function normalizeRepeat(value: unknown): TaskRepeat | null {
     const days = [...new Set(raw.weekdays as number[])].sort((a, b) => a - b);
     if (days.length > 0) rule.weekdays = days;
   }
+  // Echoed back by a client that read the row: kept when well-formed.
+  if (typeof raw.tz === 'string' && isValidTimezone(raw.tz)) rule.tz = raw.tz;
+  if ((unit === 'month' || unit === 'year') && typeof raw.anchorDay === 'number' && Number.isInteger(raw.anchorDay) && raw.anchorDay >= 1 && raw.anchorDay <= 31) {
+    rule.anchorDay = raw.anchorDay;
+  }
   return rule;
+}
+
+/**
+ * The rule as stored for a series: its zone (`tz`, kept when the rule already
+ * has one, so a series stays in the zone it was set up in) and, for month and
+ * year rules, the anchor day — the due date's day of the month in that zone,
+ * else today's. Called whenever the rule or the due date is written.
+ */
+export function stampSeries(rule: TaskRepeat, dueAt: Date | null, tz: string, now: Date = new Date()): TaskRepeat {
+  const zone = rule.tz && isValidTimezone(rule.tz) ? rule.tz : isValidTimezone(tz) ? tz : 'UTC';
+  const { anchorDay: _old, ...rest } = rule;
+  void _old;
+  const stamped: TaskRepeat = { ...rest, tz: zone };
+  if (rule.unit === 'month' || rule.unit === 'year') stamped.anchorDay = localWallClock((dueAt ?? now).getTime(), zone).day;
+  return stamped;
+}
+
+/**
+ * Whether an occurrence of a series may be worked yet: from the start of its
+ * due day in the series' zone. A to-do without a rule or a due date always
+ * may. Agents' pickup paths (heartbeat, checkout, the next-action view the
+ * tasks tool offers) use this rule, so an agent assigned a repeating to-do
+ * works one occurrence a day, not the whole future series back to back.
+ */
+export function occurrenceStarted(task: { repeat?: TaskRepeat | null; dueAt?: Date | string | null }, now: Date, fallbackTz = 'UTC'): boolean {
+  if (!task.repeat || !task.dueAt) return true;
+  const zone = task.repeat.tz && isValidTimezone(task.repeat.tz) ? task.repeat.tz : fallbackTz;
+  return localDateIn(new Date(task.dueAt).getTime(), zone) <= localDateIn(now.getTime(), zone);
 }
 
 /** "Every day", "Weekdays", "Every 2 weeks on Tue, Thu", … */
@@ -105,8 +149,9 @@ function weekIndex(date: CalendarDate): number {
   return Math.floor((daysSinceEpoch + 3) / 7);
 }
 
-/** One step of the rule from `date`. */
+/** One step of the rule from `date`; month and year rules land on their anchor day (clamped to the month). */
 function step(rule: TaskRepeat, date: CalendarDate): CalendarDate {
+  const anchor = rule.anchorDay ?? date.day;
   switch (rule.unit) {
     case 'day':
       return addDays(date, rule.interval);
@@ -126,11 +171,11 @@ function step(rule: TaskRepeat, date: CalendarDate): CalendarDate {
       const months = date.month - 1 + rule.interval;
       const year = date.year + Math.floor(months / 12);
       const month = (months % 12) + 1;
-      return { year, month, day: Math.min(date.day, daysInMonth(year, month)) };
+      return { year, month, day: Math.min(anchor, daysInMonth(year, month)) };
     }
     case 'year': {
       const year = date.year + rule.interval;
-      return { year, month: date.month, day: Math.min(date.day, daysInMonth(year, date.month)) };
+      return { year, month: date.month, day: Math.min(anchor, daysInMonth(year, date.month)) };
     }
   }
 }
@@ -143,10 +188,12 @@ function step(rule: TaskRepeat, date: CalendarDate): CalendarDate {
  * DST change). One step, and more while the result is still before today, so
  * a daily to-do finished three days late comes back today, not three days
  * overdue. A to-do with no due date counts from today (end of day): its next
- * occurrence is due one step after today.
+ * occurrence is due one step after today. `tz` is only the fallback for a
+ * rule without its own zone (`rule.tz`).
  */
 export function nextOccurrence(rule: TaskRepeat, dueAt: Date | null, now: Date, tz: string): Date {
-  const zone = isValidTimezone(tz) ? tz : 'UTC';
+  // The series' own zone wins over the caller's fallback.
+  const zone = rule.tz && isValidTimezone(rule.tz) ? rule.tz : isValidTimezone(tz) ? tz : 'UTC';
   const today = localWallClock(now.getTime(), zone);
   let base: CalendarDate;
   let hour: number;

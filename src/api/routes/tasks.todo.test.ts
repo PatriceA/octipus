@@ -72,6 +72,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await executeRaw(`DELETE FROM tasks`);
+  await executeRaw(`DELETE FROM task_lists`);
+  // Each test starts with no stored zone (tests below set one where it matters).
+  await executeRaw(`UPDATE users SET preferences = '{}'::jsonb`);
   publishEvent.mockClear();
 });
 
@@ -123,9 +126,10 @@ describe('the new fields', () => {
 
   test('a repeat is a preset or a rule; a bad one is a 400 naming the problem', async () => {
     const { body: task } = await req('POST', '/api/tasks', { title: 'Water plants', repeat: 'weekdays' });
-    expect(task.repeat).toEqual({ unit: 'week', interval: 1, weekdays: [1, 2, 3, 4, 5] });
+    // The server stamps the series' zone (and for months its anchor day).
+    expect(task.repeat).toEqual({ unit: 'week', interval: 1, weekdays: [1, 2, 3, 4, 5], tz: expect.any(String) });
     const rule = await req('PATCH', `/api/tasks/${task.id}`, { repeat: { unit: 'month', interval: 2 } });
-    expect(rule.body.repeat).toEqual({ unit: 'month', interval: 2 });
+    expect(rule.body.repeat).toMatchObject({ unit: 'month', interval: 2, anchorDay: expect.any(Number) });
     const bad = await req('PATCH', `/api/tasks/${task.id}`, { repeat: { unit: 'fortnight' } });
     expect(bad).toMatchObject({ status: 400, body: { error: expect.stringContaining('Invalid repeat unit') } });
     const cleared = await req('PATCH', `/api/tasks/${task.id}`, { repeat: null });
@@ -166,7 +170,7 @@ describe('My Day', () => {
     const tz = 'Europe/Berlin';
     const { body: kept } = await req('POST', '/api/tasks', { title: 'Picked today', myDay: true, tz });
     const { body: old } = await req('POST', '/api/tasks', { title: 'Picked yesterday' });
-    await executeRaw(`UPDATE tasks SET my_day_on = '${today(tz, -1)}' WHERE id = '${old.id}'`);
+    await executeRaw(`INSERT INTO task_user_state (task_id, user_id, my_day_on) VALUES ('${old.id}', '${aliceId}', '${today(tz, -1)}')`);
     const { body: overdue } = await req('POST', '/api/tasks', { title: 'Overdue bill', dueAt: '2020-01-01' });
     await req('POST', '/api/tasks', { title: 'Someday maybe' });
     const { body: doneToday } = await req('POST', '/api/tasks', { title: 'Done today', myDay: true, tz });
@@ -203,7 +207,10 @@ describe('repeating to-dos', () => {
     const rows = await rowsOf(aliceId);
     const next = rows.find((r) => r.id === done.body.repeatNextId);
     expect(rows.filter((r) => r.title === 'Weekly review')).toHaveLength(2);
-    expect(next).toMatchObject({ status: 'open', notes: 'Inbox zero', category: 'Work', priority: 2, important: true, my_day_on: null, repeat: { unit: 'week', interval: 1 } });
+    expect(next).toMatchObject({ status: 'open', notes: 'Inbox zero', category: 'Work', priority: 2, repeat: { unit: 'week', interval: 1, tz: 'UTC' } });
+    // The star is copied per user; My Day is not.
+    const [state] = (await queryRaw(`SELECT * FROM task_user_state WHERE task_id = $1`, [next.id])).rows;
+    expect(state).toMatchObject({ user_id: aliceId, important: true, my_day_on: null });
     // Due a whole number of weeks after 2020-01-06 (a Monday), today or later, at the end of that day.
     const due = new Date(next.due_at);
     expect(due.getUTCDay()).toBe(1);
@@ -255,7 +262,8 @@ describe('repeating to-dos', () => {
     const bad = await tool('update_task', { id: created.task.id, repeat: 'hourly' });
     expect(bad.error).toMatch(/Invalid repeat/);
     const stopped = await tool('update_task', { id: created.task.id, repeat: 'none', myDay: true });
-    expect(stopped.task).toMatchObject({ repeat: null, myDayOn: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    // My Day is today in the user's zone (none stored here: UTC).
+    expect(stopped.task).toMatchObject({ repeat: null, myDayOn: today('UTC') });
   });
 });
 
@@ -280,5 +288,156 @@ describe('tasks.changed', () => {
     const events = publishEvent.mock.calls.map(([e]) => e).filter((e) => e.type === 'tasks.changed');
     expect(events).toHaveLength(3);
     for (const e of events) expect(e).toEqual({ type: 'tasks.changed', source: 'tasks', userId: aliceId, payload: { taskId: task.id } });
+  });
+});
+
+describe('review findings', () => {
+  const setZone = (zone: string, source = 'device') =>
+    executeRaw(`UPDATE users SET preferences = '{"timezone":"${zone}","timezoneSource":"${source}"}'::jsonb WHERE id = '${aliceId}'`);
+  const zoneOf = async (id = aliceId) => (await queryRaw(`SELECT preferences FROM users WHERE id = $1`, [id])).rows[0].preferences;
+
+  test('a future occurrence is not work: checkout refuses it, the agent view and the heartbeat probe leave it out', async () => {
+    const { body: task } = await req('POST', '/api/tasks', { title: 'Water plants', repeat: 'daily', dueAt: '2099-01-01', assigneeKind: 'role', assigneeRef: 'general', tz: 'UTC' });
+    const { body: now } = await req('POST', '/api/tasks', { title: 'Today\'s run', repeat: 'daily', dueAt: today('UTC'), assigneeKind: 'role', assigneeRef: 'general', tz: 'UTC' });
+    const refused = await req('POST', `/api/tasks/${task.id}/checkout`, {});
+    expect(refused).toMatchObject({ status: 409, body: { reason: 'not_due', dueAt: expect.stringMatching(/^2099-01-01/) } });
+    expect((await req('POST', `/api/tasks/${now.id}/checkout`, {})).status).toBe(200);
+    await req('POST', `/api/tasks/${now.id}/release`, { force: true });
+    const listed = await tool('list_tasks', { view: 'next' });
+    expect(listed.tasks.map((t: any) => t.title)).toEqual(["Today's run"]);
+    const { probeRoleWork } = await import('@/core/heartbeat');
+    expect((await probeRoleWork(aliceId, 'general')).map((t) => t.title)).toEqual(["Today's run"]);
+    // The tool's checkout says why.
+    expect(await tool('checkout_task', { id: task.id })).toMatchObject({ notDue: true });
+  });
+
+  test('a reported zone is remembered; a fixed offset never replaces a named zone; a chosen zone is kept', async () => {
+    const { rememberDeviceTimezone } = await import('@/core/tasks/timezone');
+    await req('GET', '/api/tasks/my-day?tz=Europe/Berlin');
+    await expect.poll(async () => (await zoneOf()).timezone).toBe('Europe/Berlin');
+    // The phone reports an offset: Berlin stays.
+    expect(await rememberDeviceTimezone(aliceId, 'Etc/GMT-1')).toBe(false);
+    expect(await rememberDeviceTimezone(aliceId, 'UTC')).toBe(false);
+    expect((await zoneOf()).timezone).toBe('Europe/Berlin');
+    // A named zone replaces a fixed one.
+    await setZone('Etc/GMT-1');
+    expect(await rememberDeviceTimezone(aliceId, 'Europe/Lisbon')).toBe(true);
+    expect((await zoneOf()).timezone).toBe('Europe/Lisbon');
+    // A zone chosen in Settings is never overwritten by a device.
+    await setZone('Asia/Tokyo', 'user');
+    expect(await rememberDeviceTimezone(aliceId, 'Europe/Berlin')).toBe(false);
+    expect(await zoneOf()).toMatchObject({ timezone: 'Asia/Tokyo', timezoneSource: 'user' });
+  });
+
+  test('a series runs in the stored named zone even when the request sends a fixed offset', async () => {
+    await setZone('Europe/Berlin');
+    const { body } = await req('POST', '/api/tasks', { title: 'Stretch', repeat: 'daily', dueAt: '2030-03-30', tz: 'Etc/GMT-1' });
+    expect(body.repeat.tz).toBe('Europe/Berlin');
+  });
+
+  test('/todo and the agent\'s My Day use the user\'s stored zone, not UTC', async () => {
+    await setZone('America/New_York');
+    const { getCommand } = await import('@/core/commands/registry');
+    await getCommand('todo')!.execute({ sessionId: 's1', userId: aliceId, args: 'call Ana tomorrow 3pm' });
+    const [row] = await rowsOf(aliceId);
+    expect(new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(row.due_at))).toBe('15:00');
+    await setZone('Pacific/Kiritimati');
+    const made = await tool('create_task', { title: 'Plan', myDay: true });
+    expect(made.task.myDayOn).toBe(today('Pacific/Kiritimati'));
+  });
+
+  test('reopening keeps a next occurrence that has a comment, an added step or a star, or is old', async () => {
+    const complete = async (title: string) => {
+      const { body } = await req('POST', '/api/tasks', { title, repeat: 'daily' });
+      return (await req('PATCH', `/api/tasks/${body.id}`, { status: 'done' })).body as { id: string; repeatNextId: string };
+    };
+    const reopenKeeps = async (done: { id: string; repeatNextId: string }) => {
+      const reopened = await req('PATCH', `/api/tasks/${done.id}`, { status: 'open' });
+      expect(reopened.body.repeatNextId).toBe(done.repeatNextId);
+      expect((await req('GET', `/api/tasks/${done.repeatNextId}`)).status).toBe(200);
+    };
+    const commented = await complete('A');
+    await req('POST', `/api/tasks/${commented.repeatNextId}/comments`, { body: 'started on it' });
+    await reopenKeeps(commented);
+    const stepped = await complete('B');
+    await req('POST', '/api/tasks', { title: 'new step', parentId: stepped.repeatNextId });
+    await reopenKeeps(stepped);
+    const starred = await complete('C');
+    await req('PATCH', `/api/tasks/${starred.repeatNextId}`, { important: true });
+    await reopenKeeps(starred);
+    const old = await complete('D');
+    await executeRaw(`UPDATE tasks SET created_at = now() - interval '11 minutes', updated_at = now() - interval '11 minutes' WHERE id = '${old.repeatNextId}'`);
+    await reopenKeeps(old);
+    // And a completion after a kept occurrence makes no second one.
+    await req('PATCH', `/api/tasks/${old.id}`, { status: 'done' });
+    expect((await rowsOf(aliceId)).filter((r) => r.title === 'D')).toHaveLength(2);
+  });
+
+  test('deleted steps are not copied; copied steps keep their list', async () => {
+    const { body: task } = await req('POST', '/api/tasks', { title: 'Weekly shop', repeat: 'weekly', category: 'Home' });
+    const { body: keep } = await req('POST', '/api/tasks', { title: 'milk', parentId: task.id, category: 'Home' });
+    const { body: gone } = await req('POST', '/api/tasks', { title: 'old step', parentId: task.id });
+    await req('PATCH', `/api/tasks/${gone.id}`, { status: 'archived' });
+    await req('PATCH', `/api/tasks/${keep.id}`, { status: 'done' });
+    const { body: done } = await req('PATCH', `/api/tasks/${task.id}`, { status: 'done' });
+    const steps = (await rowsOf(aliceId)).filter((r) => r.parent_id === done.repeatNextId);
+    expect(steps.map((s) => [s.title, s.status, s.category])).toEqual([['milk', 'open', 'Home']]);
+  });
+
+  test('the spawn claims only a finished row, and the sweep heals a series left without a next occurrence', async () => {
+    const { spawnNextOccurrence, healRepeatSeries } = await import('@/db/repositories/task-series');
+    const { body: open } = await req('POST', '/api/tasks', { title: 'Open one', repeat: 'daily' });
+    const row = (await queryRaw(`SELECT * FROM tasks WHERE id = $1`, [open.id])).rows[0];
+    // An occurrence reopened before the claim: no stray next one.
+    expect(await spawnNextOccurrence({ ...row, repeat: row.repeat, dueAt: null, remindAt: null, userId: row.user_id, workspaceId: row.workspace_id, sortOrder: row.sort_order } as any, { claim: true, fallbackTz: 'UTC' })).toBeNull();
+    expect((await rowsOf(aliceId)).filter((r) => r.title === 'Open one')).toHaveLength(1);
+    // A completion whose spawn never happened (simulated: done, no link, no next one).
+    await executeRaw(`UPDATE tasks SET status = 'done', completed_at = now() WHERE id = '${open.id}'`);
+    expect(await healRepeatSeries(async () => 'UTC')).toBe(1);
+    expect(await healRepeatSeries(async () => 'UTC')).toBe(0);
+    expect((await rowsOf(aliceId)).filter((r) => r.title === 'Open one')).toHaveLength(2);
+  });
+
+  test('deleting or archiving an occurrence skips it: the series goes on', async () => {
+    const { body: a } = await req('POST', '/api/tasks', { title: 'Skip me', repeat: 'daily', dueAt: '2099-01-01', tz: 'UTC' });
+    await req('PATCH', `/api/tasks/${a.id}`, { status: 'archived' });
+    let rows = (await rowsOf(aliceId)).filter((r) => r.title === 'Skip me' && r.status === 'open');
+    expect(rows).toHaveLength(1);
+    expect(new Date(rows[0].due_at).toISOString().slice(0, 10)).toBe('2099-01-02');
+    await req('DELETE', `/api/tasks/${rows[0].id}`);
+    rows = (await rowsOf(aliceId)).filter((r) => r.title === 'Skip me' && r.status === 'open');
+    expect(rows.map((r) => new Date(r.due_at).toISOString().slice(0, 10))).toEqual(['2099-01-03']);
+    // Restoring the archived one takes back the untouched occurrence it made.
+    const restored = await req('PATCH', `/api/tasks/${a.id}`, { status: 'open' });
+    expect(restored.status).toBe(200);
+  });
+
+  test('a repeating step comes back before the wakeups run, so its parent stays open', async () => {
+    const { body: parent } = await req('POST', '/api/tasks', { title: 'Morning routine' });
+    const { body: step } = await req('POST', '/api/tasks', { title: 'Stretch', parentId: parent.id, repeat: 'daily' });
+    await req('PATCH', `/api/tasks/${step.id}`, { status: 'done' });
+    await (await import('@/core/tasks/wakeups')).flushWakeups();
+    expect((await req('GET', `/api/tasks/${parent.id}`)).body.status).toBe('open');
+    const children = (await rowsOf(aliceId)).filter((r) => r.parent_id === parent.id);
+    expect(children.map((c) => c.status).sort()).toEqual(['done', 'open']);
+  });
+
+  test('lists: an empty list persists, renames move every to-do, deleting leaves the to-dos with an undo', async () => {
+    expect((await req('POST', '/api/tasks/lists', { name: 'Garden' })).body).toEqual({ name: 'Garden' });
+    expect((await req('POST', '/api/tasks/lists', { name: 'garden' })).status).toBe(409);
+    await req('POST', '/api/tasks', { title: 'Mow', category: 'Home' });
+    await req('POST', '/api/tasks', { title: 'Paint', category: 'Home' });
+    expect((await req('GET', '/api/tasks/lists')).body.lists).toEqual([{ name: 'Garden', open: 0 }, { name: 'Home', open: 2 }]);
+    // Bob sees none of them.
+    expect((await req('GET', '/api/tasks/lists', undefined, 'bob')).body.lists).toEqual([]);
+    const renamed = await req('PATCH', '/api/tasks/lists', { name: 'Home', newName: 'House' });
+    expect(renamed.body.taskIds).toHaveLength(2);
+    const deleted = await req('DELETE', '/api/tasks/lists?name=House');
+    expect(deleted.body.taskIds).toHaveLength(2);
+    expect((await rowsOf(aliceId)).map((r) => r.category)).toEqual([null, null]);
+    await req('POST', '/api/tasks/lists/move', { taskIds: deleted.body.taskIds, name: 'House' });
+    expect((await rowsOf(aliceId)).map((r) => r.category)).toEqual(['House', 'House']);
+    await req('DELETE', '/api/tasks/lists?name=Garden');
+    expect((await req('GET', '/api/tasks/lists')).body.lists).toEqual([{ name: 'House', open: 2 }]);
   });
 });

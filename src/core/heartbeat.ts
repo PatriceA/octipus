@@ -19,7 +19,7 @@ import { tasks } from '@/db/schema/tasks';
 import { users } from '@/db/schema/users';
 import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
 import { onTaskWakeup, type TaskWakeupEvent } from '@/core/tasks/wakeups';
-import { notInSharedWorkspace, taskLeaseFree, taskNotWaiting } from '@/db/repositories/scoped';
+import { notInSharedWorkspace, taskLeaseFree, taskNotWaiting, taskOccurrenceStarted } from '@/db/repositories/scoped';
 import { coreLogger } from '@/utils/logger';
 import {
   type CalendarProbeDeps,
@@ -280,8 +280,8 @@ export interface RoleTask { id: string; title: string;sourceRef?:unknown }
 
 /**
  * The owner's tasks assigned to `role` that an agent of it could check out
- * now: active, not waiting on an active blocker or active child, and not held
- * by a live checkout. The last two are the board's own predicates
+ * now: active, not waiting on an active blocker or active child, not held
+ * by a live checkout, and not a future occurrence of a repeating to-do. The last two are the board's own predicates
  * (`taskNotWaiting`, `taskLeaseFree` in db/repositories/scoped.ts), applied in
  * SQL before the LIMIT so a pile of waiting tasks cannot hide a ready one, and
  * judged on the database clock like the checkout. One query. The checkout
@@ -300,6 +300,8 @@ export async function probeRoleWork(userId: string, role: string, includeSource=
       eq(tasks.assigneeRef, role),
       inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
       taskLeaseFree(),
+      // A future occurrence of a repeating to-do is not work before its due day.
+      taskOccurrenceStarted(),
       ...taskNotWaiting((t) => [eq(t.userId, userId), notInSharedWorkspace(t.workspaceId)]),
     ))
     .orderBy(desc(tasks.priority), asc(tasks.createdAt), asc(tasks.id))
@@ -656,7 +658,7 @@ async function implicitTaskDispatch(userId: string): Promise<HeartbeatTaskDispat
   const roles = configured.map((h) => h.role).filter((r): r is string => typeof r === 'string');
   const candidates = await getDb().select({ taskId: tasks.id, role: tasks.assigneeRef }).from(tasks).where(and(
     eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.assigneeKind, 'role'),
-    inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), taskLeaseFree(),
+    inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), taskLeaseFree(), taskOccurrenceStarted(),
     ...taskNotWaiting((t) => [eq(t.userId, userId), notInSharedWorkspace(t.workspaceId)]),
     ...(roles.length ? [notInArray(tasks.assigneeRef, roles)] : []),
   )).orderBy(desc(tasks.priority), asc(tasks.createdAt), asc(tasks.id)).limit(ROLE_PROBE_LIMIT);

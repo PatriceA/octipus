@@ -9,7 +9,7 @@ import { scanDueFolders } from '@/core/scan-folders/sweep';
 import { wakeDueSnoozes } from '@/core/email/snooze';
 import { maybeRunScheduledBackup } from '@/core/backup/service';
 import { isJobOn } from '@/core/modules/registry';
-import { fireDueReminders } from '@/core/tasks/reminders';
+import { fireDueReminders, healSeries } from '@/core/tasks/reminders';
 import { defaultListenDeps, runListenTick } from '@/channels/group-listen';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -626,6 +626,10 @@ async function processCronTick(): Promise<void> {
       fireDueReminders(now)
         .then((sent) => { if (sent > 0) coreLogger.info({ sent }, 'Follow-up reminders handed to notifications'); })
         .catch((err: unknown) => coreLogger.error({ err }, 'Follow-up reminder sweep failed'))
+        // A repeating to-do whose next occurrence could not be made when it was
+        // completed gets it now (db/repositories/task-series.ts).
+        .then(() => healSeries())
+        .catch((err: unknown) => coreLogger.error({ err }, 'Repeating to-do sweep failed'))
         .finally(() => { reminderSweepRunning = false; });
     }
 

@@ -13,7 +13,7 @@ import { listRoleAgents, roleAgentToggleError, setRolePipelineTemplate } from '@
 import { resolveRoleTemplate } from '@/core/tasks/role-pipelines';
 import { ACTIVE_TASK_STATUSES, assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
-import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
+import { parseTaskDate, rememberDeviceTimezone, resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
 import { contentRepos } from '@/db/repositories/content';
 import type { NewTask } from '@/db/schema/tasks';
@@ -129,6 +129,21 @@ const REPEAT = t.Union([
   }),
 ]);
 
+/**
+ * Remember the zone a client reported (web: the browser's IANA zone; mobile:
+ * a fixed offset), by the rules of `rememberDeviceTimezone`. Never while an
+ * admin acts as the user. Detached: the request never waits on or fails by it.
+ */
+function noteZone(principal: Principal, tz: string | undefined): void {
+  if (!tz || principal.actorUserId) return;
+  rememberDeviceTimezone(principal.userId, tz).catch((err: unknown) => apiLogger.error({ err, userId: principal.userId }, 'tasks: could not remember the reported time zone'));
+}
+
+/** True when any of `fields` is given (`undefined` = left alone). */
+function anyGiven(fields: object): boolean {
+  return Object.values(fields).some((v) => v !== undefined);
+}
+
 /** A manual sort position: any finite number. */
 function sortOrderValue(value: number): number {
   if (!Number.isFinite(value)) throw new Error('sortOrder must be a finite number');
@@ -166,17 +181,19 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+      noteZone(principal, query?.tz);
+      const repo = contentRepos(principal).tasks;
       if (query?.view === 'next') {
         const limit = query?.limit ? Math.max(1, Math.min(200, Number.parseInt(query.limit, 10) || 200)) : 200;
         const { timezone, ranked } = await nextActions(principal, { category: query?.category, tz: query?.tz, limit });
-        return { timezone, ...(await withLeases(ranked.map((r) => ({ ...r.task, bucket: r.bucket, reason: r.reason })))) };
+        const viewed = await repo.withState(ranked.map((r) => r.task));
+        return { timezone, ...(await withLeases(viewed.map((task, i) => ({ ...task, bucket: ranked[i].bucket, reason: ranked[i].reason })))) };
       }
       let dueBefore: Date | undefined;
       if (query?.due === 'today') {
         dueBefore = new Date();
         dueBefore.setHours(23, 59, 59, 999);
       }
-      const repo = contentRepos(principal).tasks;
       const filter = {
         dueBefore,
         category: query?.category,
@@ -191,7 +208,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           repo.listOwn({ ...filter, status: query.status, limit, offset }),
           repo.countOwn({ ...filter, status: query.status }),
         ]);
-        return { ...(await withLeases(rows)), page: { total, offset, limit, hasMore: offset + rows.length < total } };
+        return { ...(await withLeases(await repo.withState(rows))), page: { total, offset, limit, hasMore: offset + rows.length < total } };
       }
       // No status: every active task, then one page of the done ones (most
       // recently finished first). A shared cap over both let finished tasks
@@ -204,7 +221,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         repo.countOwn({ ...filter, status: 'done' }),
       ]);
       return {
-        ...(await withLeases([...active, ...done])),
+        ...(await withLeases(await repo.withState([...active, ...done]))),
         done: { total: doneTotal, offset: doneOffset, limit: doneLimit, hasMore: doneOffset + done.length < doneTotal },
       };
     },
@@ -237,6 +254,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+      noteZone(principal, query?.tz);
       const day = await myDay(principal, query?.tz);
       return {
         timezone: day.timezone,
@@ -261,6 +279,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+      noteZone(principal, body.tz);
       const timezone = await resolveUserTimezone(user.id, body.tz);
       const lists = await contentRepos(principal).tasks.categories();
       const parsed = parseQuickAdd(body.text, { timezone, lists });
@@ -271,6 +290,69 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         text: t.String({ minLength: 1, maxLength: 500 }),
         tz: t.Optional(t.String({ maxLength: 64 })),
       }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // Lists (the `category` values, plus lists made empty). All static paths,
+  // declared before `/:id`. In a space the space's lists, written by editors.
+  .get(
+    '/lists',
+    async ({ user, principal, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return { lists: await contentRepos(principal).tasks.lists() };
+    },
+    { detail: { tags: ['tasks'] } }
+  )
+  // Make an empty list (409 when one of that name exists, in any case).
+  .post(
+    '/lists',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        return await contentRepos(principal).tasks.createList(body.name);
+      } catch (err) {
+        if (err instanceof SpaceError) throw err;
+        set.status = /already exists/.test((err as Error).message) ? 409 : 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { body: t.Object({ name: t.String({ minLength: 1, maxLength: 100 }) }), detail: { tags: ['tasks'] } }
+  )
+  // Rename a list: every to-do in it moves (onto an existing name: the lists merge).
+  .patch(
+    '/lists',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        return { name: body.newName.trim(), taskIds: await contentRepos(principal).tasks.renameList(body.name, body.newName) };
+      } catch (err) {
+        if (err instanceof SpaceError) throw err;
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { body: t.Object({ name: t.String({ minLength: 1, maxLength: 100 }), newName: t.String({ minLength: 1, maxLength: 100 }) }), detail: { tags: ['tasks'] } }
+  )
+  // Delete a list: its to-dos stay, in no list; `taskIds` are the ones moved,
+  // for an Undo through POST /lists/move.
+  .delete(
+    '/lists',
+    async ({ user, principal, query, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return { taskIds: await contentRepos(principal).tasks.deleteList(query.name) };
+    },
+    { query: t.Object({ name: t.String({ minLength: 1, maxLength: 100 }) }), detail: { tags: ['tasks'] } }
+  )
+  // Put to-dos into a list (null: no list), e.g. to undo a list's deletion.
+  .post(
+    '/lists/move',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return { taskIds: await contentRepos(principal).tasks.moveToList(body.taskIds, body.name) };
+    },
+    {
+      body: t.Object({ taskIds: t.Array(t.String(), { maxItems: 1000 }), name: t.Union([t.String({ minLength: 1, maxLength: 100 }), t.Null()]) }),
       detail: { tags: ['tasks'] },
     }
   )
@@ -361,12 +443,13 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const task = await contentRepos(principal).tasks.findById(params.id);
+      const repo = contentRepos(principal).tasks;
+      const task = await repo.findById(params.id);
       if (!task) {
         set.status = 404;
         return { error: 'Task not found' };
       }
-      return task;
+      return (await repo.withState([task]))[0];
     },
     {
       params: t.Object({ id: t.String() }),
@@ -382,6 +465,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+      noteZone(principal, body.tz);
       try {
         // `quick`: a capture line read by the shared parser; any field given
         // explicitly wins over what the line said.
@@ -399,10 +483,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           notes: body.notes ?? null,
           priority: body.priority ?? quick?.priority ?? 0,
           category: normalizeCategory(body.category ?? quick?.category),
-          important: body.important ?? quick?.important ?? false,
           repeat: normalizeRepeat(body.repeat !== undefined ? body.repeat : quick?.repeat),
-          ...(body.sortOrder !== undefined ? { sortOrder: sortOrderValue(body.sortOrder) } : {}),
-          myDayOn: body.myDay ? (await myDayDate(user.id, body.tz)).date : null,
           dueAt: dueAt ? await parseDueAt(dueAt, user.id, body.tz) : null,
           remindAt: body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null,
           estimate: normalizeEstimate(body.estimate),
@@ -411,9 +492,19 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           source: 'user',
         };
-        const task = await contentRepos(principal).tasks.create(values);
+        const repo = contentRepos(principal).tasks;
+        // Checked before anything is written: a bad sort order is a 400, not a half-made to-do.
+        const sortOrder = body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined;
+        const task = await repo.create(values, { tz: body.tz });
         await auditUserTaskMutation(principal, task, 'create', changedTaskFields(values));
-        return task;
+        // The creator's own layer: star, My Day, position.
+        const important = body.important ?? quick?.important ?? undefined;
+        const personal = {
+          important: important || undefined,
+          myDayOn: body.myDay ? (await myDayDate(user.id, body.tz)).date : undefined,
+          sortOrder,
+        };
+        return anyGiven(personal) ? await repo.setPersonal(task.id, personal) : (await repo.withState([task]))[0];
       } catch (err) {
         // A role refusal keeps its status (403 / 409) through the error handler.
         if (err instanceof SpaceError) throw err;
@@ -430,11 +521,11 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         notes: t.Optional(t.String({ maxLength: 10_000 })),
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.String({ maxLength: 100 })),
-        /** The star. */
+        /** The caller's star (per user). */
         important: t.Optional(t.Boolean()),
-        /** Manual position, ascending; default minus the creation time in ms (newest first). */
+        /** The caller's position, ascending (per user); default the task's: minus its creation time in ms. */
         sortOrder: t.Optional(t.Number()),
-        /** Put it in today's My Day (today in `tz`). */
+        /** Put it in the caller's My Day for today (today in `tz`). */
         myDay: t.Optional(t.Boolean()),
         repeat: t.Optional(REPEAT),
         dueAt: t.Optional(t.String()),
@@ -479,16 +570,21 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 400;
         return { error: `Invalid status "${body.status}"` };
       }
+      noteZone(principal, body.tz);
       try {
+        // The caller's own layer (star, My Day, position) is theirs alone, so
+        // any reader may set it; the task's fields need write access.
+        const personal = {
+          important: body.important,
+          sortOrder: body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined,
+          myDayOn: body.myDay !== undefined ? (body.myDay ? (await myDayDate(user.id, body.tz)).date : null) : undefined,
+        };
         const patch: Partial<NewTask> = {
           title: body.title,
           notes: body.notes,
           status: body.status,
           priority: body.priority,
           category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
-          important: body.important,
-          sortOrder: body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined,
-          myDayOn: body.myDay !== undefined ? (body.myDay ? (await myDayDate(user.id, body.tz)).date : null) : undefined,
           repeat: body.repeat !== undefined ? normalizeRepeat(body.repeat) : undefined,
           dueAt: body.dueAt !== undefined ? (body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null) : undefined,
           remindAt: body.remindAt !== undefined ? (body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null) : undefined,
@@ -498,17 +594,22 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           ...completionPatch(body.status, Boolean(existing.completedAt)),
         };
-        const updated = await repo.update(params.id, patch);
+        const fieldsGiven = anyGiven(patch) || !anyGiven(personal);
+        const updated = fieldsGiven ? await repo.update(params.id, patch, { tz: body.tz }) : existing;
         if (!updated) {
           set.status = 404;
           return { error: 'Task not found' };
         }
-        const change = changedTaskFields(patch, existing);
+        const change = fieldsGiven ? changedTaskFields(patch, existing) : [];
         if (change.length > 0) {
           const op = body.status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
           await auditUserTaskMutation(principal, updated, op, change);
         }
-        return updated;
+        if (anyGiven(personal)) {
+          const viewed = await repo.setPersonal(params.id, personal);
+          return viewed ? { ...viewed, ...updated, important: viewed.important, myDayOn: viewed.myDayOn, sortOrder: viewed.sortOrder } : updated;
+        }
+        return (await repo.withState([updated]))[0];
       } catch (err) {
         // A role refusal keeps its status (403 / 409) through the error handler.
         if (err instanceof SpaceError) throw err;
@@ -564,6 +665,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
       }
       set.status = 409;
       if (result.reason === 'blocked') return { error: 'Task is blocked', reason: 'blocked', waiting: result.waiting };
+      // A future occurrence of a repeating to-do: not work before its due day.
+      if (result.reason === 'not_due') return { error: 'This occurrence is not due yet', reason: 'not_due', dueAt: result.dueAt.toISOString() };
       return {
         error: result.holder ? `Task is checked out by ${result.holder}` : `Task is ${result.status}`,
         reason: 'conflict',
