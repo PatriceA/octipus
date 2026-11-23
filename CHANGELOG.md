@@ -43,6 +43,41 @@ labels reflect blast radius, not contract guarantees.
     mammoth's Markdown output has no tables, so they arrive one paragraph per
     cell. Documents indexed before this keep their old text and chunks until
     they are uploaded again.
+- **Skill export and import as signed JSON bundles** ([reference](docs/SKILL-EXCHANGE.md)).
+  - Skills → **Export** downloads the chosen skills as one versioned bundle
+    (`GET /api/skills/exchange/export`): content and metadata, a content hash,
+    and no ids, owners, flags, triggers or usage data. A server export is
+    unsigned and says so; `octi plugin sign-skill-bundle <file> --key <key>`
+    signs it offline with a plugin publisher key.
+  - Skills → **Import** takes an uploaded or pasted bundle, an agentskills.io
+    `SKILL.md`, or (administrators) an https URL through the SSRF-guarded
+    plugin download. `POST /api/skills/exchange/preview` shows every skill in
+    full, the signature and each name collision and writes nothing;
+    `POST /api/skills/exchange/install` writes only the previewed content
+    hash, with an explicit skip, rename or replace for each collision, in one
+    transaction, audited per skill.
+  - Imports follow the plugin package trust settings: a revoked key or an
+    invalid signature is always refused; with `plugins.requireSignature`, an
+    unsigned bundle (or SKILL.md) or an unknown key is refused; a URL import
+    needs a trusted signature. A bundle naming a privileged field
+    (`isSystem`, `userId`, `alwaysInject`, `triggers`, …) is refused.
+  - **Breaking — removed `POST /api/skills/import`.** It wrote unsigned skills
+    without a preview, a trust check or an audit row, and overwrote by name on
+    `overwrite: true`. Replaced by `POST /api/skills/exchange/preview` and
+    `/install`, which also read what the unchanged `GET /api/skills/export` and
+    `GET /api/skills/:id/export` write: their JSON (as `bundle`; unsigned,
+    fields other than a skill's content dropped and named) and their
+    multi-skill markdown (as `skillMd`). What changed: a name collision needs
+    an explicit skip, rename or replace instead of `overwrite`; collisions
+    follow the caller's own visibility, so an administrator can no longer
+    overwrite another user's private skill by name; with
+    `plugins.requireSignature` these unsigned files are refused.
+  - Text fields refuse control characters other than tab and line breaks
+    (NUL used to pass and fail at the database). Frontmatter values that are
+    lists or mappings are no longer turned into strings when a SKILL.md is
+    mounted or imported (nested YAML aliases made that exponential).
+  - Not built: a hosted registry, browsing community skills, ratings,
+    automatic updates.
 - **Pipelines: a missing QA verdict block is repaired, and the repair no longer
   spends a retry** ([reference](docs/AGENT-ARCHITECTURE.md#qa-retry-loop),
   [status](docs/plans/quality-loop-status.md)).

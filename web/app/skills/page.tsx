@@ -1,12 +1,14 @@
 'use client';
 
 import { SkillUsage } from '@/components/skills/skill-usage';
+import { ExportSkillsDialog, ImportSkillsDialog } from '@/components/skills/skill-exchange';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Download,
   FileText,
   List,
   Loader2,
@@ -16,6 +18,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -1006,6 +1009,7 @@ export default function SkillsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<Skill | null>(null);
+  const [exchange, setExchange] = useState<'export' | 'import' | null>(null);
 
   // Pending distilled proposals — surfaced as a count on the Proposals link so
   // the queue is visible from the page people actually open.
@@ -1109,6 +1113,18 @@ export default function SkillsPage() {
             <Sparkles className="w-4 h-4" />
             Proposals{pendingProposals > 0 ? ` (${pendingProposals})` : ''}
           </Link>
+          <button type="button" onClick={() => setExchange('import')}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xs border border-outline-variant/30 cursor-pointer"
+            title="Import a skill bundle (JSON) or a SKILL.md, previewed before anything is written">
+            <Upload className="w-4 h-4" />
+            Import
+          </button>
+          <button type="button" onClick={() => setExchange('export')}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xs border border-outline-variant/30 cursor-pointer"
+            title="Export skills as one JSON bundle">
+            <Download className="w-4 h-4" />
+            Export
+          </button>
           <button
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
@@ -1208,6 +1224,8 @@ export default function SkillsPage() {
       {showCreate && <CreateSkillDialog onClose={() => setShowCreate(false)} />}
       {editingSkill && <EditSkillDialog skill={editingSkill} onClose={() => setEditingSkill(null)} />}
       {deletingSkill && <DeleteSkillDialog skill={deletingSkill} onClose={() => setDeletingSkill(null)} />}
+      {exchange === 'export' && <ExportSkillsDialog skills={filtered} onClose={() => setExchange(null)} />}
+      {exchange === 'import' && <ImportSkillsDialog isAdmin={isAdmin} onClose={() => setExchange(null)} />}
     </div>
   );
 }

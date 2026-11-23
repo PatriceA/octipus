@@ -40,6 +40,8 @@ const MESSAGE_PREFIX = 'octipus-plugin-signature/v1\n';
 const REGISTRY_INDEX_PREFIX = 'octipus-registry-index/v1\n';
 /** The domain prefix of a marketplace keys file signature (`keys.json`, signed by a root key): never a package or index message. */
 const MARKETPLACE_KEYS_PREFIX = 'octipus-marketplace-keys/v1\n';
+/** The domain prefix of a skill exchange bundle signature (src/skills/exchange.ts): never a package, index or keys message. */
+const SKILL_BUNDLE_PREFIX = 'octipus-skill-bundle-signature/v1\n';
 /** Where a registry index's detached signature is published: beside the index, `<index url>.sig`. */
 export const REGISTRY_INDEX_SIGNATURE_SUFFIX = '.sig';
 /** A signature file larger than this is not one (the canonical form is about 200 bytes). */
@@ -205,6 +207,21 @@ export function signContentHash(contentHash: string, privateKey: SigningKey): Si
  */
 export function signRegistryIndex(indexBytes: Uint8Array, privateKey: SigningKey): SignatureFile {
   return signMessage(registryIndexMessage(indexBytes), privateKey);
+}
+
+/**
+ * Sign the content hash of a skill exchange bundle (src/skills/exchange.ts)
+ * with a publisher key: the bundle's detached `signature`. Its own domain
+ * prefix, so a package signature over the same hash string cannot pass for
+ * one and back.
+ */
+export function signSkillBundle(contentHash: string, privateKey: SigningKey): SignatureFile {
+  return signMessage(Buffer.from(`${SKILL_BUNDLE_PREFIX}${contentHash}`, 'utf8'), privateKey);
+}
+
+/** Check a skill bundle's signature (null: unsigned) against its content hash and the known keys, as `verifySignature` does for a package. */
+export function verifySkillBundle(contentHash: string, sig: SignatureFile | null, trusted: KeyRing): SignatureCheck {
+  return verifyMessage(Buffer.from(`${SKILL_BUNDLE_PREFIX}${contentHash}`, 'utf8'), sig, trusted, 'the skill bundle');
 }
 
 /** Sign a marketplace keys file (its exact bytes) with a ROOT key: the contents of `keys.json.sig`. */
