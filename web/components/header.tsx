@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BookOpen, Brain, Cpu, KeyRound, Loader2, LogOut, MessageSquare, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
+import { Bell, BookOpen, Brain, Cpu, KeyRound, ListTodo, Loader2, LogOut, MessageSquare, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -14,6 +14,8 @@ import { WorkspacePicker } from './workspace-picker';
 import { useTheme } from '@/lib/theme';
 import { Moon, Sun } from 'lucide-react';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { usePageOn } from '@/lib/modules';
+import { openQuickAddTodo } from './todos/quick-add-dialog';
 
 interface SearchResult {
   id: string;
@@ -53,6 +55,9 @@ export function Header() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
+  // The menu's actions (add a to-do) are offered as soon as anything is typed.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const todosOn = usePageOn()('/tasks');
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,6 +102,7 @@ export function Header() {
       }
       if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
         setShowResults(false);
+        setActionsOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -144,6 +150,7 @@ export function Header() {
       }
       if (e.key === 'Escape') {
         setShowResults(false);
+        setActionsOpen(false);
         searchInputRef.current?.blur();
       }
     }
@@ -200,18 +207,36 @@ export function Header() {
             ref={searchInputRef}
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
-            placeholder="search sessions, hooks, models…    (ctrl+k)"
+            onChange={(e) => { setSearchQuery(e.target.value); setActionsOpen(e.target.value.trim().length > 0); }}
+            onFocus={() => { if (searchResults.length > 0) setShowResults(true); if (trimmedQuery) setActionsOpen(true); }}
+            placeholder="search, or type a to-do to add…    (ctrl+k)"
             className="w-full h-8 pl-7 pr-9 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary focus:ring-0 transition-colors"
           />
           {isSearching ? (
             <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-variant animate-spin" />
           ) : null}
 
-          {showResults && (
+          {(showResults || (actionsOpen && trimmedQuery && todosOn)) && (
             <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-lg shadow-xl z-50 animate-enter">
-              {searchResults.length === 0 && !isSearching ? (
+              {todosOn && trimmedQuery && (
+                <button
+                  type="button"
+                  data-testid="search-add-todo"
+                  onClick={() => {
+                    openQuickAddTodo(trimmedQuery);
+                    setSearchQuery('');
+                    setDebouncedQuery('');
+                    setShowResults(false);
+                    setActionsOpen(false);
+                  }}
+                  className="w-full px-3 py-2 hover:bg-surface-container-high cursor-pointer flex items-center gap-2.5 text-left border-b border-outline-variant/30"
+                >
+                  <ListTodo className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-on-surface">Add to-do “{trimmedQuery}”</span>
+                  <span className="text-[11px] text-on-surface-variant">to-dos</span>
+                </button>
+              )}
+              {!showResults ? null : searchResults.length === 0 && !isSearching ? (
                 <div className="px-3 py-6 text-center text-[12px] text-on-surface-variant">
                   -- no matches --
                 </div>

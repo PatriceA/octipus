@@ -11,29 +11,39 @@ role.
 
 ## Where it lives
 
-The board is part of the tasks page (`/tasks`, `web/app/tasks/page.tsx`).
+The board is part of the To-dos page (`/tasks`, `web/app/tasks/page.tsx`).
 The toolbar switches between two views, remembered per browser:
 
-- **list** — tasks grouped by next action, priority, due date, category or
-  none; sub-tasks nest under their parent.
-- **board** — one column per status (`open`, `in_progress`, `done`; archived
-  stays out of the way), with lanes by category inside each column. Cards
-  drag between columns, or move with their arrow buttons.
+- **List** — the personal layer after Microsoft To Do: a rail of lists (My
+  Day, Important, Planned, All, Completed, Archived and the user's lists,
+  which are the `category` values), quiet rows (checkbox, title, one line of
+  metadata, star) and a detail panel per to-do. Sub-tasks are the to-do's
+  *steps* in the panel, with "1 of 3" on the row. The agent machinery stays
+  off the rows: an agent assignee shows as a small chip, everything else is
+  in the panel's **Board & agents** section.
+- **Board** — one column per status (`open`, `in_progress`, `done`; archived
+  stays out of the way), with lanes by list inside each column. Cards
+  drag between columns, or move with their arrow buttons; **Open** shows the
+  same detail panel.
 
-Board-specific pieces (`web/components/tasks/work-board.tsx`):
+Board-specific pieces (`web/components/tasks/work-board.tsx`,
+`web/components/tasks/task-board.tsx`):
 
-- an assignee chip on each row and card, and an inline assignee editor;
-- an **Assignee** filter in the toolbar: all, unassigned, assigned to agents
+- an assignee chip on each card and agent-assigned row, and the assignee
+  editor in the detail panel;
+- an **Assignee** filter on the board: all, unassigned, assigned to agents
   (role or node), or one role;
-- a role picker on quick add ("Assign to role");
-- a lease badge on a checked-out task: `<holder> · working · <age>` while the
-  claim is live, `claim lapsed` once it has run out, and a **Release claim**
-  button (with a confirm);
-- a comment thread per task, loaded when opened;
-- a collapsible **Role agents** panel (see below).
+- a lease badge on a checked-out task (card, and the panel, which opens its
+  board section by itself while an agent holds the to-do):
+  `<holder> · working · <age>` while the claim is live, `claim lapsed` once it
+  has run out, and a **Release claim** button (with a confirm);
+- a comment thread per task in the panel, loaded when opened;
+- a collapsible **Role agents** panel above the board (see below).
 
-The page re-reads the list every 30 seconds while it is visible, so agent
-progress shows up without a reload.
+The list is live: a personal to-do's every write sends `tasks.changed` to its
+owner's connections and a space task's sends `task.changed` to the space, and
+the page re-reads on either. While the live connection is down it re-reads
+every 30 seconds instead.
 
 ## Task fields
 
@@ -198,7 +208,7 @@ those tasks and a fixed protocol: check out first and skip any task that is
 refused, renew on long work, comment as it goes, then `complete_task`, or
 comment and release if it cannot finish.
 
-**Turning one on.** Open the **Role agents** panel on the tasks page. It lists
+**Turning one on.** Open the **Role agents** panel on the To-dos page's board. It lists
 every role that has active tasks assigned (or whose agent is already on),
 with a switch per role. The panel is per user across all workspaces: a role
 agent works every task assigned to its role, whichever workspace it is in. An

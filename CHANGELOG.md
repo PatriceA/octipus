@@ -19,6 +19,22 @@ labels reflect blast radius, not contract guarantees.
   function: `POST /api/tasks` with `quick`, `POST /api/tasks/parse` for a
   preview, and the new `/todo <text>` chat command. Personal to-do writes now
   send `tasks.changed` to the owner's connections, so lists update at once.
+- **The web To-dos page, redesigned after Microsoft To Do.** A rail of lists
+  (My Day, Important, Planned, All, Completed, Archived and your own lists,
+  with counts) replaces the "Group by" chips; rows are a round checkbox, the
+  title, one quiet line of metadata and a star; a detail panel holds steps,
+  My Day, reminder, due date and time with quick picks, repeat, list,
+  priority and notes, plus the board and agent fields (status, assignee,
+  estimate, claim, comments) that used to crowd the row. One capture line
+  shows what it understood as chips before you press Enter. Search,
+  Completed collapsed, Undo for completing, moving and deleting, a short
+  completion animation, keyboard (arrows, Space, Enter, Delete, Esc, N, /),
+  drag to reorder and drag onto a list. At phone width the rail is a drawer
+  and the panel a full screen. The board view keeps the role agents, the
+  assignee filter and the cards. **Q** (or "Add to-do" in the Ctrl+K search)
+  adds a to-do from any page, and the calendar shows the to-dos due in the
+  range on screen. The page, its sidebar entry and its tab are all called
+  "To-dos".
 - **Open to-dos no longer disappear behind finished ones**
   ([API](docs/API.md#tasks)). `GET /api/tasks` sorted by the status text
   (`archived`, `done`, `in_progress`, `open`) and stopped at 200 rows, so after

@@ -55,8 +55,9 @@ each with a `bucket` and a one-line `reason`. "Today" is the user's calendar
 day: the page passes the browser's zone as `?tz=`, the tool uses the user's
 saved timezone preference, and both fall back to UTC — never the server's
 zone. The ranking is one pure function (`src/core/tasks/rank.ts`) shared by
-the tool, the API and the tasks page's *what next* grouping (the default); the
-Daily Briefing asks the tool for this view rather than re-sorting.
+the tool, the API and the To-dos page's My Day suggestions
+(`GET /api/tasks/my-day`); the Daily Briefing asks the tool for this view
+rather than re-sorting.
 
 **Provenance.** Every task carries `source` (`user | agent | email | channel`,
 and `reader` or `research` on tasks made by the removed core reader and

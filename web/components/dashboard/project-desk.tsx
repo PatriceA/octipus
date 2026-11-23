@@ -65,7 +65,7 @@ function Desk({ personal, workspaceName }: { personal: boolean; workspaceName: s
     if (!gateway.send({ type: 'chat.send', sessionId: companionId, content: draft.trim(), workspaceId: activeWorkspace?.id, renders: ['inline_ui'] })) { setError('Not connected. Your message is still here.'); return; }
     setDraft(''); router.push(chat(companionId));
   }
-  if (!personal) return <div className="project-desk"><PageHeader title={workspaceName} description="Your shared work stays in this workspace." /><section className="desk-context"><h2>Work together</h2><p>Open a shared room or review this workspace’s next steps.</p><div className="flex gap-3 mt-4"><Link className="desk-primary" href="/rooms">Open rooms <ArrowRight size={16} /></Link><Link className="desk-secondary" href="/tasks">Next steps</Link></div></section></div>;
+  if (!personal) return <div className="project-desk"><PageHeader title={workspaceName} description="Your shared work stays in this workspace." /><section className="desk-context"><h2>Work together</h2><p>Open a shared room or review this workspace’s to-dos.</p><div className="flex gap-3 mt-4"><Link className="desk-primary" href="/rooms">Open rooms <ArrowRight size={16} /></Link><Link className="desk-secondary" href="/tasks">To-dos</Link></div></section></div>;
   return <div className="project-desk">
     <PageHeader title="Workspace" badge={<span className="desk-workspace-name">{workspaceName}</span>} actions={<Link className="desk-primary" href="/chat?new=1"><Plus size={16} aria-hidden />New session</Link>} />
     <OnboardingGuide variant="home" />

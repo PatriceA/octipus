@@ -284,8 +284,18 @@ test.describe('role-aware pages', () => {
     await page.goto('/tasks');
     await expect(page.getByTestId('task-row')).toContainText('Ship it');
     await expect(page.getByTestId('task-quick-add')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Delete task' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Mark done' })).toHaveCount(0);
+    await expect(page.getByRole('checkbox', { name: 'Mark done' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Mark as important' })).toBeDisabled();
+    // A space has no My Day (it is a personal pick list).
+    await expect(page.getByTestId('todo-list-my-day')).toHaveCount(0);
+    // The detail panel reads, without delete or field pickers.
+    await page.getByTestId('task-row').click();
+    const detail = page.getByTestId('todo-detail');
+    await expect(detail.getByLabel('Title')).toHaveValue('Ship it');
+    await expect(detail.getByRole('button', { name: 'Delete task' })).toHaveCount(0);
+    await expect(detail.getByTestId('todo-due')).toHaveCount(0);
+    await expect(detail.getByLabel('Comment')).toHaveCount(0);
+    await detail.getByRole('button', { name: 'Close details' }).click();
     await page.getByTestId('tasks-view-board').click();
     const card = page.getByTestId('board-card');
     await expect(card).toHaveAttribute('draggable', 'false');
@@ -306,8 +316,9 @@ test.describe('role-aware pages', () => {
     await page.route('**/api/tasks/t1/comments', (route) => json(route, 200, { comments: [], truncated: false }));
     await page.goto('/tasks');
     await expect(page.getByTestId('task-quick-add')).toHaveCount(0);
-    await page.getByTestId('task-row').getByRole('button', { name: 'comments' }).click();
-    await expect(page.getByLabel('Comment')).toBeVisible();
+    // In a space the detail panel opens with its board fields and the comment thread.
+    await page.getByTestId('task-row').click();
+    await expect(page.getByTestId('todo-detail').getByLabel('Comment')).toBeVisible();
   });
 
   test('an editor edits as in a personal workspace', async ({ authenticatedPage: page }) => {

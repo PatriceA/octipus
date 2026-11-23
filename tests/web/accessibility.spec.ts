@@ -27,6 +27,23 @@ test.describe('accessibility', () => {
     expect(serious, serious.map((v) => `${v.id}: ${v.help}`).join('\n')).toEqual([]);
   });
 
+  test('to-dos list and detail panel have no serious or critical axe violations', async ({ authenticatedPage: page }) => {
+    const task = (id: string, title: string, over: Record<string, unknown> = {}) => ({
+      id, title, status: 'open', priority: 0, source: 'user', blockedBy: [], parentId: null, category: 'Home', important: false,
+      myDayOn: null, repeat: null, sortOrder: 0, dueAt: null, createdAt: '2026-11-01T00:00:00Z', ...over,
+    });
+    await page.route('**/api/tasks**', (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/comments')) return route.fulfill({ json: { comments: [], truncated: false } });
+      return route.fulfill({ json: { tasks: [task('a', 'Water the plants', { important: true, repeat: { unit: 'day', interval: 1 } }), task('b', 'Step one', { parentId: 'a' }), task('c', 'Done thing', { status: 'done' })] } });
+    });
+    await page.goto('/tasks?list=all&task=a');
+    await expect(page.getByTestId('todo-detail')).toBeVisible();
+    const results = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
+    const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    expect(serious, serious.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target.join(' ')).join(', ')})`).join('\n')).toEqual([]);
+  });
+
   test('keyboard-only nav reaches interactive elements', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     // Wait for the shell to hydrate before tabbing. Pressing Tab against a

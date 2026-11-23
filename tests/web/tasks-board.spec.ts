@@ -45,25 +45,43 @@ test.describe('tasks — structure, list and board', () => {
     });
   });
 
-  test('the list nests sub-tasks under their phase and says what is waiting on what', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
-    // "What next" grouping, straight from the ranked response: doing first, waiting last.
-    await expect(page.locator('h2.section-label')).toHaveText(['In progress (1)', 'Backlog (1)', 'Waiting on other tasks (2)', 'Done (1)']);
-    await expect(page.getByText('blocked by "Login form"').first()).toBeVisible();
-    await expect(page.getByText('2 sub-tasks open').first()).toBeVisible();
-    await expect(page.getByText('0/2 sub-tasks')).toBeVisible();
+  test('the list folds sub-tasks into their phase as steps; lists in the rail count open to-dos', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks?list=all');
+    // Rows are the top-level to-dos; the phase shows its steps' progress.
+    const rows = page.getByTestId('todo-list').getByTestId('task-row');
+    await expect(rows).toHaveCount(2);
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Phase 1: auth' })).toContainText('0 of 2');
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Login form' })).toHaveCount(0);
+    // The done one is in the collapsed Completed section.
+    await expect(page.getByTestId('todo-completed-toggle')).toContainText('Completed 1');
+    await expect(page.getByText('Renew passport')).toHaveCount(0);
+    // User lists come from the categories, with their open count.
+    await expect(page.getByTestId('todo-list-list:Auth')).toContainText('1');
+    await page.getByTestId('todo-list-list:Auth').click();
+    await expect(page).toHaveURL(/list=list%3AAuth/);
+    await expect(rows).toHaveCount(1);
 
-    // Grouped by category the phase and its children share one group, children indented.
-    await page.getByRole('button', { name: 'category' }).click();
-    const auth = page.locator('div.space-y-2', { has: page.locator('h2', { hasText: 'Auth (3)' }) });
-    const rows = auth.getByTestId('task-row');
-    await expect(rows).toHaveCount(3);
-    await expect(rows.nth(0)).toHaveAttribute('data-depth', '0');
-    await expect(rows.nth(0)).toContainText('Phase 1: auth');
-    await expect(rows.nth(1)).toHaveAttribute('data-depth', '1');
-    await expect(rows.nth(2)).toHaveAttribute('data-depth', '1');
-    // The estimate rides along on the row.
-    await expect(rows.nth(0)).toContainText('L');
+    // The phase's detail panel lists its steps; the step that waits says so on its board fields.
+    await page.getByTestId('task-row').filter({ hasText: 'Phase 1: auth' }).click();
+    const detail = page.getByTestId('todo-detail');
+    await expect(detail.getByTestId('todo-step')).toHaveCount(2);
+    await expect(detail.getByTestId('todo-step').nth(0).getByLabel('Step', { exact: true })).toHaveValue('Login form');
+    await detail.getByRole('button', { name: /Board & agents/ }).click();
+    await expect(detail.getByLabel('Estimate')).toHaveValue('L');
+    // Ticking a step completes that sub-task.
+    await detail.getByTestId('todo-step').nth(1).getByRole('checkbox', { name: 'Mark done' }).click();
+    await expect.poll(() => patches).toEqual([{ id: 'cookie', body: { status: 'done' } }]);
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Phase 1: auth' })).toContainText('1 of 2');
+  });
+
+  test('a to-do blocked by another says so on its row', async ({ authenticatedPage: page }) => {
+    await page.route('**/api/tasks', (route) => json(route, 200, { tasks: [
+      { id: 'a', title: 'Pour the foundation', status: 'open', priority: 0, parentId: null, blockedBy: [], source: 'user', createdAt: created },
+      { id: 'b', title: 'Build the walls', status: 'open', priority: 0, parentId: null, blockedBy: ['a'], source: 'user', createdAt: created },
+    ] }));
+    await page.goto('/tasks?list=all');
+    await expect(page.getByRole('listitem', { name: 'Build the walls', exact: true })).toContainText('blocked by "Pour the foundation"');
+    await expect(page.getByRole('listitem', { name: 'Pour the foundation', exact: true })).not.toContainText('blocked');
   });
 
   test('the board has a column per status with category lanes, and moves cards between columns', async ({ authenticatedPage: page }) => {
@@ -211,71 +229,73 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     });
   });
 
-  test('rows and cards show the assignee; the toolbar filter narrows by assignee', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
+  test('rows show an agent assignee quietly; the board\'s filter narrows by assignee', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks?list=all');
     const rowOf = (title: string) => page.getByTestId('task-row').filter({ hasText: title });
     await expect(rowOf('Write the spec').getByTestId('task-assignee')).toHaveText('pm role');
     await expect(rowOf('Write the spec').getByTestId('task-assignee')).toHaveAttribute('data-kind', 'role');
     await expect(rowOf('Deploy it').getByTestId('task-assignee')).toHaveText('node-7');
     await expect(rowOf('Deploy it').getByTestId('task-assignee')).toHaveAttribute('data-kind', 'node');
-    await expect(rowOf('Buy milk').getByTestId('task-assignee')).toHaveCount(0);
+    // The personal list hides the agent machinery: no claim badge, no filter, no role agents panel.
+    await expect(rowOf('Write the spec').getByTestId('task-lease')).toHaveCount(0);
+    await expect(page.getByTestId('assignee-filter')).toHaveCount(0);
+    await expect(page.getByTestId('role-agents')).toHaveCount(0);
 
-    const filter = page.getByTestId('assignee-filter');
-    await filter.selectOption('role:pm');
-    await expect(page.getByTestId('task-row')).toHaveCount(1);
-    await expect(page.getByTestId('task-row')).toContainText('Write the spec');
-    await filter.selectOption('unassigned');
-    await expect(page.getByTestId('task-row')).toHaveCount(1);
-    await expect(page.getByTestId('task-row')).toContainText('Buy milk');
-    await filter.selectOption('agents');
-    await expect(page.getByTestId('task-row')).toHaveCount(3);
-    await filter.selectOption('all');
-    await expect(page.getByTestId('task-row')).toHaveCount(4);
-
-    // The board carries the same chip and honours the same filter.
     await page.getByTestId('tasks-view-board').click();
-    const card = page.getByTestId('board-card').filter({ hasText: 'Write the tests' });
+    const filter = page.getByTestId('assignee-filter');
+    const cards = page.getByTestId('board-card');
+    await filter.selectOption('role:pm');
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText('Write the spec');
+    await filter.selectOption('unassigned');
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText('Buy milk');
+    await filter.selectOption('agents');
+    await expect(cards).toHaveCount(3);
+    await filter.selectOption('all');
+    await expect(cards).toHaveCount(4);
+    const card = cards.filter({ hasText: 'Write the tests' });
     await expect(card.getByTestId('task-assignee')).toHaveText('qa role');
     await filter.selectOption('role:qa');
-    await expect(page.getByTestId('board-card')).toHaveCount(1);
+    await expect(cards).toHaveCount(1);
   });
 
-  test('the inline editor sets, changes and clears the assignee; create can assign a role', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
-    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await milk.getByRole('button', { name: 'fields', exact: true }).click();
+  test('the detail panel sets, changes and clears the assignee', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks?list=all');
+    await page.getByTestId('tasks-view-board').click();
+    await page.getByTestId('board-card').filter({ hasText: 'Buy milk' }).getByRole('button', { name: 'Open details' }).click();
+    const milk = page.getByTestId('todo-detail');
+    await milk.getByRole('button', { name: /Board & agents/ }).click();
     await milk.getByLabel('Assignee kind').selectOption('role');
     await expect.poll(() => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ assigneeKind: 'role', assigneeRef: 'pm' }]);
     await milk.getByLabel('Assignee role').selectOption('research');
-    await expect(milk.getByTestId('task-assignee')).toHaveText('research role');
+    const card = page.getByTestId('board-card').filter({ hasText: 'Buy milk' });
+    await expect(card.getByTestId('task-assignee')).toHaveText('research role');
     await milk.getByLabel('Assignee kind').selectOption('');
     await expect.poll(() => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
       { assigneeKind: 'role', assigneeRef: 'pm' },
       { assigneeKind: 'role', assigneeRef: 'research' },
       { assigneeKind: null, assigneeRef: null },
     ]);
-    await expect(milk.getByTestId('task-assignee')).toHaveCount(0);
+    await expect(card.getByTestId('task-assignee')).toHaveCount(0);
 
     // A person is free text, saved on Enter.
     await milk.getByLabel('Assignee kind').selectOption('user');
     await milk.getByLabel('Person').fill('sam');
     await milk.getByLabel('Person').press('Enter');
-    await expect(milk.getByTestId('task-assignee')).toHaveText('sam');
-
-    await page.getByPlaceholder('Add a task…').fill('Review the plan');
-    await page.getByLabel('Assign to role').selectOption('qa');
-    await page.getByRole('button', { name: 'Add', exact: true }).first().click();
-    await expect.poll(() => calls.find((c) => c.method === 'POST' && c.path === '/')?.body).toMatchObject({ title: 'Review the plan', assigneeKind: 'role', assigneeRef: 'qa' });
+    await expect(card.getByTestId('task-assignee')).toHaveText('sam');
   });
 
   test('a live claim shows who is working it; a stale one says it lapsed; release frees it after a confirm', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
-    const spec = page.getByTestId('task-row').filter({ hasText: 'Write the spec' });
+    await page.goto('/tasks?list=all&task=tests');
+    // The detail panel opens its board fields by itself while an agent holds the to-do.
+    await expect(page.getByTestId('todo-detail').getByTestId('task-lease')).toHaveText('claim lapsed');
+    await page.getByTestId('task-row').filter({ hasText: 'Deploy it' }).click();
+    await expect(page.getByTestId('todo-detail').getByTestId('task-lease')).toHaveCount(0);
+    await page.getByTestId('task-row').filter({ hasText: 'Write the spec' }).click();
+    const spec = page.getByTestId('todo-detail');
     await expect(spec.getByTestId('task-lease')).toHaveText('pm agent · working · 5m ago');
     await expect(spec.getByTestId('task-lease')).toHaveAttribute('data-live', 'true');
-    const tests = page.getByTestId('task-row').filter({ hasText: 'Write the tests' });
-    await expect(tests.getByTestId('task-lease')).toHaveText('claim lapsed');
-    await expect(page.getByTestId('task-row').filter({ hasText: 'Buy milk' }).getByTestId('task-lease')).toHaveCount(0);
 
     // Dismissing the confirm sends nothing.
     page.once('dialog', (d) => d.dismiss());
@@ -301,13 +321,12 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   });
 
   test('comments load when opened, say older ones are hidden, and post as you', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
-    const spec = page.getByTestId('task-row').filter({ hasText: 'Write the spec' });
-    await expect(spec).toBeVisible();
+    await page.goto('/tasks?list=all');
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Write the spec' })).toBeVisible();
     expect(calls.some((c) => c.path.endsWith('/comments'))).toBe(false);
 
-    await spec.getByRole('button', { name: 'comments' }).click();
-    const thread = spec.getByTestId('task-comments');
+    await page.getByTestId('task-row').filter({ hasText: 'Write the spec' }).click();
+    const thread = page.getByTestId('todo-detail').getByTestId('task-comments');
     await expect(thread.getByTestId('task-comment')).toHaveCount(2);
     await expect(thread).toContainText('older comments are hidden');
     const first = thread.getByTestId('task-comment').first();
@@ -325,9 +344,9 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await expect(thread.getByLabel('Comment')).toHaveValue('');
 
     // A task with no comments says so.
-    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await milk.getByRole('button', { name: 'comments' }).click();
-    await expect(milk.getByTestId('task-comments')).toContainText('no comments yet');
+    await page.getByTestId('task-row').filter({ hasText: 'Deploy it' }).click();
+    await page.getByTestId('todo-detail').getByRole('button', { name: /Board & agents/ }).click();
+    await expect(page.getByTestId('todo-detail').getByTestId('task-comments')).toContainText('no comments yet');
   });
 
   test('heartbeat Settings toggles a role agent and flags the missing board permission', async ({ authenticatedPage: page }) => {
@@ -387,6 +406,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
 
   test('the task board reports role heartbeats and links to Settings without configuration controls', async ({ authenticatedPage: page }) => {
     await page.goto('/tasks');
+    await page.getByTestId('tasks-view-board').click();
     const panel = page.getByTestId('role-agents');
     await panel.getByRole('button', { name: /Role agents/ }).click();
     await expect(panel.getByRole('switch')).toHaveCount(0);
@@ -397,6 +417,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   test('the panel says it spans workspaces, and says so when the server heartbeat is off', async ({ authenticatedPage: page }) => {
     roleAgents.heartbeatEnabled = false;
     await page.goto('/tasks');
+    await page.getByTestId('tasks-view-board').click();
     const panel = page.getByTestId('role-agents');
     await expect(panel).toContainText('across all workspaces');
     await expect(panel).toContainText('heartbeat off on this server');
@@ -414,9 +435,10 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     rows[0].checkedOutAt = serverMinutesAgo(5);
     rows[1].checkedOutAt = serverMinutesAgo(45);
     await page.goto('/tasks');
-    const spec = page.getByTestId('task-row').filter({ hasText: 'Write the spec' });
+    await page.getByTestId('tasks-view-board').click();
+    const spec = page.getByTestId('board-card').filter({ hasText: 'Write the spec' });
     await expect(spec.getByTestId('task-lease')).toHaveText('pm agent · working · 5m ago');
-    await expect(page.getByTestId('task-row').filter({ hasText: 'Write the tests' }).getByTestId('task-lease')).toHaveText('claim lapsed');
+    await expect(page.getByTestId('board-card').filter({ hasText: 'Write the tests' }).getByTestId('task-lease')).toHaveText('claim lapsed');
   });
 
   test('the board counts sub-task progress over every task, not just the filtered ones', async ({ authenticatedPage: page }) => {
@@ -430,57 +452,58 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
 
   test('a role filter whose last task moves away stays visible, marked "(no tasks)"', async ({ authenticatedPage: page }) => {
     await page.goto('/tasks');
+    await page.getByTestId('tasks-view-board').click();
     const filter = page.getByTestId('assignee-filter');
     await filter.selectOption('role:qa');
-    const row = page.getByTestId('task-row').filter({ hasText: 'Write the tests' });
-    await row.getByRole('button', { name: 'fields', exact: true }).click();
-    await row.getByLabel('Assignee role').selectOption('research');
-    await expect(page.getByTestId('task-row')).toHaveCount(0);
+    await page.getByTestId('board-card').filter({ hasText: 'Write the tests' }).getByRole('button', { name: 'Open details' }).click();
+    await page.getByTestId('todo-detail').getByLabel('Assignee role').selectOption('research');
+    await expect(page.getByTestId('board-card')).toHaveCount(0);
     await expect(filter).toHaveValue('role:qa');
     await expect(filter.locator('option:checked')).toHaveText('qa role (no tasks)');
-    await expect(page.getByText('no open tasks match this assignee filter')).toBeVisible();
+    await expect(page.getByText('No to-dos match this assignee filter.')).toBeVisible();
     await filter.selectOption('all');
     await expect(filter.locator('option', { hasText: 'qa role' })).toHaveCount(0);
   });
 
   test('a poll that lands while an edit is in flight does not undo it', async ({ authenticatedPage: page }) => {
     await page.clock.install();
-    await page.goto('/tasks');
-    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await expect(milk).toBeVisible();
+    await page.goto('/tasks?list=all&task=deploy');
+    const detail = page.getByTestId('todo-detail');
+    await expect(detail.getByLabel('Title')).toHaveValue('Deploy it');
 
     let open!: () => void;
     patchGate = new Promise<void>((resolve) => { open = resolve; });
-    await milk.getByRole('button', { name: 'Mark done' }).click();
-    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+    // The to-do's own checkbox (its step "Buy milk" has one too).
+    await detail.getByRole('checkbox', { name: 'Mark done' }).first().click();
+    await page.clock.runFor(1_000);
+    await expect(detail.getByRole('checkbox', { name: 'Mark open' })).toBeVisible();
     // The 30s poll fires while the PATCH is held: the stub still says "open".
     const before = calls.filter((c) => c.method === 'GET' && c.path === '/').length;
     await page.clock.runFor(31_000);
     await expect.poll(() => calls.filter((c) => c.method === 'GET' && c.path === '/').length).toBeGreaterThan(before);
-    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+    await expect(detail.getByRole('checkbox', { name: 'Mark open' })).toBeVisible();
 
     open();
-    await expect.poll(() => rows.find((t) => t.id === 'milk')!.status).toBe('done');
-    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+    await expect.poll(() => rows.find((t) => t.id === 'deploy')!.status).toBe('done');
+    await expect(detail.getByRole('checkbox', { name: 'Mark open' })).toBeVisible();
   });
 
   test('a notes save that overlaps an add\'s re-read still ends with the new task on the page', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
-    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await expect(milk).toBeVisible();
+    await page.goto('/tasks?list=all&task=deploy');
+    const detail = page.getByTestId('todo-detail');
+    await expect(detail.getByLabel('Title')).toHaveValue('Deploy it');
 
     // Hold the list read that follows the add.
     let release!: () => void;
     listGate = new Promise<void>((resolve) => { release = resolve; });
     const readsBefore = calls.filter((c) => c.method === 'GET' && c.path === '/').length;
-    await page.getByPlaceholder('Add a task…').fill('Book the venue');
-    await page.getByRole('button', { name: 'Add', exact: true }).first().click();
+    await page.getByRole('textbox', { name: 'Add a to-do' }).fill('Book the venue');
+    await page.getByRole('textbox', { name: 'Add a to-do' }).press('Enter');
     await expect.poll(() => calls.filter((c) => c.method === 'GET' && c.path === '/').length).toBeGreaterThan(readsBefore);
 
-    // Save notes while that read is out; the save itself does not re-read.
-    await milk.getByRole('button', { name: 'add notes' }).click();
-    await milk.getByPlaceholder('Add details, links, context…').fill('2 litres');
-    await milk.getByRole('button', { name: 'Save' }).click();
+    // Save notes while that read is out.
+    await detail.getByLabel('Notes').fill('2 litres');
+    await detail.getByLabel('Title').focus();
     await expect.poll(() => calls.some((c) => c.method === 'PATCH' && c.body?.notes === '2 litres')).toBe(true);
 
     // The held read comes back stale (a write happened meanwhile) and is
@@ -488,14 +511,15 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     listGate = null;
     release();
     await expect(page.getByTestId('task-row').filter({ hasText: 'Book the venue' })).toBeVisible({ timeout: 5_000 });
-    await expect(milk).toContainText('2 litres');
+    await expect(detail.getByLabel('Notes')).toHaveValue('2 litres');
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Deploy it' }).getByLabel('Has notes')).toBeVisible();
   });
 
   test('the assignee editor follows outside changes, and focuses the name field for a person', async ({ authenticatedPage: page }) => {
     await page.clock.install();
-    await page.goto('/tasks');
-    const deploy = page.getByTestId('task-row').filter({ hasText: 'Deploy it' });
-    await deploy.getByRole('button', { name: 'fields', exact: true }).click();
+    await page.goto('/tasks?list=all&task=deploy');
+    const deploy = page.getByTestId('todo-detail');
+    await deploy.getByRole('button', { name: /Board & agents/ }).click();
     await expect(deploy.getByLabel('Agent node')).toHaveValue('node-7');
 
     // An agent reassigns it; the next poll brings the change into the open editor.

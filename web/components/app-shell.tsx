@@ -15,6 +15,7 @@ import { ModuleGate } from './module-gate';
 import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
 import { WorkspaceBanner } from './workspace-banner';
+import { QuickAddTodo } from './todos/quick-add-dialog';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -48,8 +49,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Full-bleed pages manage their own layout/scroll edge-to-edge (no page
-  // padding, no entrance wrapper) — chat, rooms, email and the notes workspace.
-  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname.startsWith('/plugins/');
+  // padding, no entrance wrapper) — chat, rooms, email, the notes workspace and the to-dos.
+  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname === '/tasks' || pathname.startsWith('/plugins/');
 
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">
@@ -83,6 +84,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             the floating permission banner would leave a gap, so skip it. */}
         {!fullBleed && <GlobalPermissionBanner />}
       </div>
+      {/* Q or the Ctrl+K menu adds a to-do from any page. */}
+      <QuickAddTodo />
     </div>
   );
 }

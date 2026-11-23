@@ -18,6 +18,7 @@ import { api, ApiError } from '@/lib/api';
 import { useWorkspace, useWorkspaceId } from '@/lib/workspace-context';
 import { calendarKey, type CalendarEvent, type CalendarInfo, type CalendarResponse, type RecurrenceScope } from '../../../src/shared/calendar';
 import { addDays } from '../../../src/shared/calendar-layout';
+import { DueTodos } from '@/components/todos/due-todos';
 
 export default function CalendarPage() {
   const { activeWorkspace, isLoading } = useWorkspace();
@@ -323,6 +324,8 @@ function PersonalCalendar() {
         </p>
       )}
       {events.data?.truncated && <p role="status" className="mb-3 rounded-xs border border-outline-variant/60 px-3 py-2 text-sm text-on-surface-variant">This range holds more events than could be loaded. Choose a shorter view to see them all.</p>}
+      {/* To-dos due in the range shown sit above the grid; ticking one off completes it. */}
+      <DueTodos days={view === 'month' ? days.filter((d) => d.slice(0, 7) === anchor.slice(0, 7)) : days} />
 
       <div ref={body} className="flex flex-col md:flex-row gap-4" style={phone ? undefined : { height }}>
         <div className={`${calendarsOpen ? 'block' : 'hidden'} md:block md:h-full`}>

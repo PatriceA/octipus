@@ -54,8 +54,9 @@ By hand:
    refused.
 7. **Choose who works your ideas**: put an idea on the to-do list and assign
    it to a role (for example `research` for "find three bookkeeping tools",
-   `coding` for "add a contact form to the website"). In the tasks page's
-   **Role agents** panel, turn that role on. For larger ideas, set *Works each
+   `coding` for "add a contact form to the website"; open the to-do and use
+   **Board & agents** in its panel). On the To-dos page's **Board**, open the
+   **Role agents** panel and turn that role on. For larger ideas, set *Works each
    task* to *through the Full Development Cycle pipeline* (or *Research & Analysis*, or your own template).
 8. **Decide about approvals**: a pipeline step that asks for approval waits
    for you, and the request comes to your chat, where you can reply "yes".

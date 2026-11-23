@@ -17,7 +17,7 @@ export function WorkNavigation() {
     ...(!remote ? [{ href: '/chat', label: 'Conversations' }] : []),
     ...(shared ? [{ href: '/rooms', label: 'Shared rooms' }] : []),
     ...(!remote ? [{ href: '/documents', label: 'Documents' }, { href: '/artifacts', label: 'Prototypes & apps' }] : []),
-    { href: '/tasks', label: 'Next steps' },
+    { href: '/tasks', label: 'To-dos' },
   ].filter((item) => pageOn(item.href));
   if (!['/chat', '/rooms', '/documents', '/artifacts', '/tasks', '/my-work'].some(path => pathname === path || pathname.startsWith(`${path}/`))) return null;
   return (
