@@ -247,14 +247,14 @@ describe('/sessions and /history (TUI resume)', () => {
     const at = (s: number) => new Date(1_700_000_000_000 + s * 1000);
     vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
     vi.spyOn(messageRepository, 'findRecentBySession').mockResolvedValue([
-      { role: 'user', content: 'hello', createdAt: at(0) },
-      { role: 'tool', content: '{"ok":true}', createdAt: at(1) },
-      { role: 'assistant', content: 'hi back', createdAt: at(2) },
+      { id: 'm1', role: 'user', content: 'hello', createdAt: at(0) },
+      { id: 'm2', role: 'tool', content: '{"ok":true}', createdAt: at(1) },
+      { id: 'm3', role: 'assistant', content: 'hi back', createdAt: at(2) },
     ] as never);
     const result = await registry.execute('/history', ctx);
     expect(result!.data).toEqual([
-      { role: 'user', content: 'hello', at: at(0).toISOString() },
-      { role: 'assistant', content: 'hi back', at: at(2).toISOString() },
+      { id: 'm1', role: 'user', content: 'hello', at: at(0).toISOString() },
+      { id: 'm3', role: 'assistant', content: 'hi back', at: at(2).toISOString() },
     ]);
     expect(result!.text).toBe('❯ hello\n\n  hi back');
   });

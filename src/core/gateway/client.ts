@@ -258,6 +258,25 @@ export class GatewayClient {
   }
 
   /**
+   * Read a REST resource as this client's user, in its workspace — the
+   * routes the web reads (`/sessions/:id/messages`, `/roles`, `/skills`).
+   * `path` is under the API base (`/api`). Throws with the server's reason
+   * when the answer is not a success.
+   */
+  async getJson<T>(path: string): Promise<T> {
+    const session = readCliSession();
+    if (!session) throw new Error('Not signed in');
+    const base = apiBaseFromGatewayUrl(this.options.url || DEFAULT_GATEWAY_URL);
+    const workspace = this.options.getWorkspace?.();
+    const response = await fetch(`${base}${path}`, {
+      headers: { Authorization: `Bearer ${session.token}`, ...(workspace ? { 'X-Octipus-Workspace': workspace } : {}) },
+    });
+    const body = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+    if (!response.ok || body === null) throw new Error(body?.error || `HTTP ${response.status}`);
+    return body;
+  }
+
+  /**
    * Send a command.
    */
   sendCommand(name: string, args?: Record<string, string>, sessionId?: string): boolean {

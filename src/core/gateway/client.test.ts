@@ -191,6 +191,31 @@ describe('GatewayClient — attachments go over REST, the turn names them', () =
   });
 });
 
+describe('GatewayClient — REST reads as the signed-in user', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('getJson sends the login and the workspace, and returns the body', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ messages: [], hasMore: false }), { status: 200 });
+    }));
+    const { client } = stubClient();
+    (client as unknown as { options: { url: string; getWorkspace: () => string } }).options = { url: 'ws://host:3005/gateway', getWorkspace: () => 'work' };
+    expect(await client.getJson('/sessions/s/messages?page=true')).toEqual({ messages: [], hasMore: false });
+    expect(calls[0].url).toBe('http://host:3005/api/sessions/s/messages?page=true');
+    expect(calls[0].init.headers).toEqual({ Authorization: 'Bearer cli-token', 'X-Octipus-Workspace': 'work' });
+  });
+
+  test('a refusal throws the server\'s reason; a body that is not JSON throws the status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Session not found' }), { status: 404 })));
+    const { client } = stubClient();
+    await expect(client.getJson('/sessions/x/messages')).rejects.toThrow('Session not found');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>', { status: 502 })));
+    await expect(client.getJson('/roles')).rejects.toThrow('HTTP 502');
+  });
+});
+
 describe('GatewayClient — reconnecting after the server went away', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 

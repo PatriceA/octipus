@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { createServer, type Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import xterm from '@xterm/headless';
 const { Terminal } = xterm;
@@ -21,6 +22,12 @@ export interface HarnessOptions {
   commandResults?: Record<string, { result: unknown; data?: unknown; error?: string }>;
   /** The Python that runs `pty.py`. Default: `TUI_PTY_PYTHON`, else `python3`. */
   python?: string;
+  /**
+   * What the fixture's REST API (`/api/...`, the same port as the gateway)
+   * answers to a GET, by path and query; undefined answers 404. Every
+   * request is recorded in `requests`.
+   */
+  http?: (path: string) => { status?: number; body: unknown } | undefined;
 }
 
 const probed = new Map<string, string | null>();
@@ -66,6 +73,10 @@ export class TuiHarness {
   /** Every byte the program wrote, in order: modes and cursor visibility that the screen model does not expose. */
   readonly output: Buffer[] = [];
   readonly server: WebSocketServer;
+  /** The fixture's HTTP server: the gateway's upgrade and the REST API. */
+  readonly httpServer: Server;
+  /** REST requests the program made: method, path with query, and its Authorization header. */
+  readonly requests: Array<{ method: string; path: string; authorization?: string }> = [];
   readonly proc: ChildProcessWithoutNullStreams;
   readonly exited: Promise<number | null>;
   private sockets = new Set<WebSocket>();
@@ -75,8 +86,16 @@ export class TuiHarness {
   /** The `turnId` of the latest `chat.send`: the fixture gateway answers it, as the real one echoes it. */
   private lastTurnId: string | undefined;
 
-  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions, python: string) {
+  private constructor(entry: string, httpServer: Server, server: WebSocketServer, cols: number, rows: number, args: string[], options: HarnessOptions, python: string) {
     this.server = server;
+    this.httpServer = httpServer;
+    httpServer.on('request', (req, res) => {
+      const path = req.url ?? '/';
+      this.requests.push({ method: req.method ?? 'GET', path, authorization: req.headers.authorization });
+      const answer = req.method === 'GET' && path.startsWith('/api/') ? options.http?.(path.slice('/api'.length)) : undefined;
+      res.writeHead(answer?.status ?? (answer ? 200 : 404), { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(answer ? answer.body : { error: 'Not found' }));
+    });
     mkdirSync(this.project);
     // The TUI signs in with the stored CLI login and nothing else; without
     // one it opens the login prompt instead of connecting.
@@ -90,7 +109,7 @@ export class TuiHarness {
     this.screen.parser.registerOscHandler(52, data => { this.clipboardRequests.push(data); return true; });
     const preamble = options.preamble;
     if (preamble) this.writes = new Promise<void>(resolve => this.screen.write(preamble.replace(/\n/g, '\r\n'), resolve));
-    const port = (server.address() as { port: number }).port;
+    const port = (httpServer.address() as { port: number }).port;
     server.on('connection', socket => {
       this.sockets.add(socket);
       socket.on('message', raw => {
@@ -145,9 +164,10 @@ export class TuiHarness {
     const python = options.python ?? process.env.TUI_PTY_PYTHON ?? 'python3';
     const problem = ptyRelayProblem(python);
     if (problem) throw new Error(problem);
-    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-    return new TuiHarness(entry, server, cols, rows, args, options, python);
+    const httpServer = createServer();
+    const server = new WebSocketServer({ server: httpServer });
+    await new Promise<void>((resolve, reject) => { httpServer.once('listening', resolve); httpServer.once('error', reject); httpServer.listen(0, '127.0.0.1'); });
+    return new TuiHarness(entry, httpServer, server, cols, rows, args, options, python);
   }
   /** The terminal's normal buffer — scrollback and screen — as text, whichever buffer is showing. */
   async normalBuffer(): Promise<string> {
@@ -247,6 +267,8 @@ export class TuiHarness {
     try { await this.exited; } finally { clearTimeout(kill); clearTimeout(relayKill); }
     for (const socket of this.sockets) socket.terminate();
     await new Promise<void>(resolve => this.server.close(() => resolve()));
+    this.httpServer.closeAllConnections();
+    await new Promise<void>(resolve => this.httpServer.close(() => resolve()));
     this.screen.dispose(); rmSync(this.home, { recursive: true, force: true });
   }
 }

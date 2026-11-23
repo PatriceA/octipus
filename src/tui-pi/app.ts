@@ -17,6 +17,7 @@ import { getFuzzyListTheme, getPalette, paletteForBackground, type PaletteName, 
 import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
 import { configureLinks } from './links';
 import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
+import { isHistoryRow, OlderTurns, toChatMessage } from './older-turns';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -95,11 +96,6 @@ function newSessionId(): string {
   return randomUUID();
 }
 
-interface HistoryRow { role: 'user' | 'assistant'; content: string; at: string }
-const isHistoryRow = (v: unknown): v is HistoryRow => {
-  const r = v as HistoryRow | null;
-  return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
-};
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
 const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
@@ -143,6 +139,8 @@ export class OctipusTuiApp {
   private readonly activity: ActivityLine;
   private readonly composer: Composer;
   private readonly subagents = new SubagentPanel();
+  /** Older turns of the session, paged in from the server as the reader scrolls up. */
+  private readonly older: OlderTurns;
   private lastStatus: string | null = null;
   private readonly overlays: OverlayController;
   /** Mutable: `/resume` re-points every later command and chat at another session. */
@@ -234,6 +232,7 @@ export class OctipusTuiApp {
       this.showState();
       if (this.decisions.size) this.attention?.notify('A decision is waiting for you');
     };
+    this.older = new OlderTurns(this.messages, path => this.adapter.getJson(path), () => this.sessionId, () => tui.requestRender());
     this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
@@ -642,7 +641,8 @@ export class OctipusTuiApp {
     const rows = Array.isArray(data) ? data.filter(isHistoryRow) : [];
     this.messages.reset();
     this.subagents.reset();
-    for (const m of rows) this.messages.push({ role: m.role, content: m.content, timestamp: new Date(m.at) });
+    for (const m of rows) this.messages.push(toChatMessage(m));
+    this.older.replayed(rows);
     this.messages.scrollToBottom();
     this.pushMessage('system', `Session ${this.sessionId.slice(0, 8)} · ${rows.length} message${rows.length === 1 ? '' : 's'} replayed.`);
   }
@@ -794,6 +794,7 @@ export class OctipusTuiApp {
           if (this.transcript) this.tui.requestRender(true);
           else this.tui.terminal.clearScreen();
           this.messages.reset();
+          this.older.reset();
           // Turns counted in THIS client reset; tokens and cost do not. They
           // come from the session's cost log, which /clear does not touch, so
           // zeroing them here just made the next turn's `session.stats` snap
@@ -1126,6 +1127,7 @@ export class OctipusTuiApp {
     if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
     this.sessionId = id;
     this.sessionUsed = true;
+    this.older.reset();
     this.session.reset();
     // Not connected: replayed on connect instead.
     this.resumePending = !this.adapter.sendCommand('history');

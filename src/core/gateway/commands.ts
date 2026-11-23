@@ -365,7 +365,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       const rows = await messageRepository.findRecentBySession(ctx.sessionId, 50, ['user', 'assistant']);
       const data = rows
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
-        .map((m) => ({ role: m.role, content: m.content, at: m.createdAt.toISOString() }));
+        // `id` is the cursor for older turns (`GET /sessions/:id/messages?page=true&before=`).
+        .map((m) => ({ id: m.id, role: m.role, content: m.content, at: m.createdAt.toISOString() }));
       if (data.length === 0) return { text: 'No messages in this session yet.', data };
       return { text: data.map((m) => `${m.role === 'user' ? '❯' : ' '} ${m.content}`).join('\n\n'), data };
     },

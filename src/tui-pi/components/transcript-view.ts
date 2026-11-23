@@ -13,7 +13,11 @@
  * While the transcript search is open (`showAll`) every item in memory is
  * rendered: the search reads the rendered rows, and a message outside the
  * window was neither found nor counted.
-
+ *
+ * With the top of everything in memory in view, the pane is told so
+ * (`reachedTop`): it asks the server for older turns when there are any,
+ * and when they arrive the scroll position moves down by the rows they
+ * added (`takeTopShift`), as for the window growing.
  */
 import { type Component, ScrollView, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
@@ -41,7 +45,7 @@ export class TranscriptScroll extends ScrollView {
       this.pendingShift = 0;
       this.scrollTo(this.scrollTop + shift);
     }
-    this.document.laidOut(this);
+    this.document.laidOut(this, contentHeight);
   }
 }
 
@@ -57,14 +61,24 @@ export class TranscriptDocument implements Component {
     this.pane.readingLatest = () => scroll.isFollowingEnd;
   }
 
-  /** After every layout, scroll-only frames included: near the top of the window, render again so older items come in. */
-  laidOut(scroll: TranscriptScroll): void {
-    if (scroll.viewportHeight <= 0 || this.showAll() || scroll.isFollowingEnd) return;
-    if (scroll.scrollTop < scroll.viewportHeight && this.pane.canGrow()) scroll.requestContent();
+  /**
+   * After every layout, scroll-only frames included: near the top of the
+   * window, render again so older items come in; at the top of everything in
+   * memory (while reading history, within a screen of it; while following the
+   * end, when it all fits), older turns from the server, if any.
+   */
+  laidOut(scroll: TranscriptScroll, contentHeight: number): void {
+    if (scroll.viewportHeight <= 0 || this.showAll()) return;
+    const nearTop = scroll.isFollowingEnd ? contentHeight <= scroll.viewportHeight : scroll.scrollTop < scroll.viewportHeight;
+    if (!nearTop) return;
+    if (this.pane.canGrow()) { if (!scroll.isFollowingEnd) scroll.requestContent(); return; }
+    this.pane.reachedTop();
   }
 
   render(width: number): string[] {
     const scroll = this.scroll;
+    const shift = this.pane.takeTopShift(width);
+    if (shift && scroll && !scroll.isFollowingEnd) scroll.pendingShift += shift;
     if (this.showAll()) {
       if (this.pane.canGrow()) {
         const before = this.pane.documentLines(width).length;
