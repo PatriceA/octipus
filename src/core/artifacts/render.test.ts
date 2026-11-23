@@ -54,7 +54,7 @@ describe('sanitizeTemplate', () => {
 describe('renderTemplate', () => {
   test('substitutes values and escapes', () => {
     const out = renderTemplate('<p>{{data.x}}</p>', { data: { x: '<b>z</b>' } });
-    expect(out).toBe('<p>&lt;b&gt;z&lt;/b&gt;</p>');
+    expect(out).toBe('<p>&lt;b&gt;z&lt;&#47;b&gt;</p>');
   });
 
   test('each block iterates and escapes', () => {
@@ -173,5 +173,18 @@ describe('extractInteractiveScript', () => {
   test('a static page is returned untouched with no source', () => {
     const html = '<p>nothing to run</p>';
     expect(extractInteractiveScript(html)).toEqual({ template: html, source: '', warnings: [] });
+  });
+});
+
+describe('renderTemplate sanitizes the expanded HTML', () => {
+  test('an expression between two halves of a tag name does not produce a script', () => {
+    const out = renderTemplate('<scr{{data.x}}ipt src="/a.js"></scr{{data.x}}ipt><p>{{data.y}}</p>', { data: { y: '<b>' } });
+    expect(out).not.toMatch(/<script/i);
+    expect(out).toContain('<p>&lt;b&gt;</p>');
+  });
+
+  test('a handler after a slash is stripped too', () => {
+    expect(renderTemplate('<img/onerror=alert(1) src=x>', { data: {} })).not.toMatch(/onerror/i);
+    expect(renderTemplate('<img/on{{data.e}}error="x" src=x>', { data: {} })).not.toMatch(/onerror/i);
   });
 });

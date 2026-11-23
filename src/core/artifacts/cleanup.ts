@@ -1,7 +1,9 @@
 /**
- * Hourly maintenance: cap snapshot history per source, purge soft-deleted
- * artifacts >30d, drop expired share links. Runs as a recurring scheduler
- * task type so it lives on the same primitive as refresh.
+ * Hourly maintenance: expire inactive artifacts when a retention policy is
+ * set (`artifacts.retentionDays`, off by default), cap snapshot history per
+ * source, purge artifacts past their time in the trash (`artifacts.trashDays`,
+ * 30 by default) with their files, drop expired share links. Runs as a
+ * recurring scheduler task type so it lives on the same primitive as refresh.
  */
 
 import { isJobOn } from '@/core/modules/registry';
@@ -14,13 +16,18 @@ import { getScheduler, type ScheduledTask } from '@/core/scheduler';
 import { rawStore } from '@/db/cache';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
+import { resolveArtifactRetention } from './settings';
 
 export const ARTIFACT_CLEANUP_TASK = 'artifact:cleanup';
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const SNAPSHOT_RETENTION = 50;
-const SOFT_DELETE_TTL_MS = 30 * 24 * HOUR_MS;
+/** Most artifacts one pass expires; the rest wait for the next hourly pass. */
+export const EXPIRE_BATCH = 500;
 
 export interface CleanupReport {
+  /** Artifacts moved to the trash by the retention policy. */
+  expiredArtifacts: number;
   prunedSnapshots: number;
   purgedArtifacts: number;
   expiredShareLinks: number;
@@ -30,6 +37,24 @@ export interface CleanupReport {
 
 export async function runArtifactCleanup(): Promise<CleanupReport> {
   const db = getDb();
+  const { retentionDays, trashDays } = resolveArtifactRetention();
+
+  // Expiry is a soft delete: the artifact goes to the trash (its live viewers
+  // are closed) and is removed for good only after `trashDays`, like one its
+  // owner deleted. Each one is logged with its workspace and slug.
+  let expiredArtifacts = 0;
+  if (retentionDays > 0) {
+    const cutoff = new Date(Date.now() - retentionDays * DAY_MS);
+    for (const a of await artifactsRepository.listInactiveSince(cutoff, EXPIRE_BATCH)) {
+      await artifactsRepository.softDelete(a.id);
+      expiredArtifacts++;
+      coreLogger.info(
+        { artifactId: a.id, workspaceId: a.workspaceId, slug: a.slug, lastActivity: a.updatedAt, retentionDays },
+        'artifact.cleanup.expired — moved to trash',
+      );
+    }
+  }
+
   const sources = await db.select({ id: artifactDataSources.id }).from(artifactDataSources);
   let prunedSnapshots = 0;
   for (const s of sources) {
@@ -37,10 +62,15 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
   }
 
   const purgedIds = await artifactsRepository.purgeSoftDeleted(
-    new Date(Date.now() - SOFT_DELETE_TTL_MS),
+    new Date(Date.now() - trashDays * DAY_MS),
   );
-  // The row is gone; the built JS on disk is not, and nothing else references it.
-  for (const id of purgedIds) await deleteArtifactBundles(id);
+  // The row is gone (versions, sources, snapshots, widgets, exports and share
+  // links cascade with it); the built JS on disk is not, and nothing else
+  // references it.
+  for (const id of purgedIds) {
+    await deleteArtifactBundles(id);
+    coreLogger.info({ artifactId: id, trashDays }, 'artifact.cleanup.purged');
+  }
   const purgedArtifacts = purgedIds.length;
   const expiredShareLinks = await artifactsRepository.deleteExpiredShareLinks(new Date());
 
@@ -60,10 +90,10 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
   }
 
   coreLogger.info(
-    { prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles },
+    { expiredArtifacts, prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles },
     'artifact.cleanup.done',
   );
-  return { prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles };
+  return { expiredArtifacts, prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles };
 }
 
 /**

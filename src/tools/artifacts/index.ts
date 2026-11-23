@@ -18,6 +18,7 @@ import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
+import { publicSlugConflict, type SlugConflict, slugTakenConflict } from '@/core/artifacts/slug';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
 import { uniqueViolation } from '@/db/unique-violation';
@@ -84,6 +85,23 @@ const UPDATE_DESCRIPTION =
  * workspace of the user" would put an artifact somewhere the user never chose
  * (house rule 1).
  */
+/**
+ * A slug conflict as the agent sees it: the typed code, and what to do next
+ * — retry with the suggested slug, or update the artifact that has it.
+ */
+function slugConflictResult(conflict: SlugConflict): { error: string; code: SlugConflict['code']; slug: string; suggested_slug: string | null } {
+  const next = conflict.suggestedSlug
+    ? `Retry with slug "${conflict.suggestedSlug}" (free)`
+    : 'Pick another slug';
+  const or = conflict.code === 'slug_taken' ? ', or update the existing artifact (list_live_artifacts finds it)' : '';
+  return {
+    error: `${conflict.error}. ${next}${or}.`,
+    code: conflict.code,
+    slug: conflict.slug,
+    suggested_slug: conflict.suggestedSlug,
+  };
+}
+
 function requireWorkspaceId(context: AgentContext): string {
   if (!context.workspaceId) {
     // Thrown before any write: a definite no-op, not an uncertain mutation.
@@ -161,12 +179,16 @@ export class ArtifactsTool extends BaseTool {
         if (!ARTIFACT_SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
-        requireWorkspaceId(context);
+        const workspaceId = requireWorkspaceId(context);
         for (const s of (args.sources as Array<{ name: string; kind: string }> | undefined) ?? []) {
           const refusal = spaceSourceRefusal(s.kind, !!context.space);
           if (refusal) return { error: `source "${s.name}": ${refusal}` };
         }
         const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
+        if (visibility === 'public') {
+          const conflict = await publicSlugConflict(workspaceId, args.slug as string);
+          if (conflict) return slugConflictResult(conflict);
+        }
         // Through the agent's artifact store (§5.6): stamped with its
         // workspace — a space's in a space, by the member's role — and author.
         let a;
@@ -180,8 +202,9 @@ export class ArtifactsTool extends BaseTool {
           });
         } catch (err) {
           // Not the driver's "Failed query: insert …" with the whole row in it.
+          // The unique index decides: a create that loses a race gets this too.
           if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
-            return { error: `slug "${args.slug as string}" is already used in this workspace — pick another, or update that artifact` };
+            return slugConflictResult(await slugTakenConflict(workspaceId, args.slug as string, { public: visibility === 'public' }));
           }
           throw err;
         }
@@ -300,6 +323,17 @@ export class ArtifactsTool extends BaseTool {
         const a = await findArtifact(context, args.id as string, 'write');
         if (!a) return { error: 'not found' };
 
+        if (args.visibility === 'public' && a.visibility !== 'public') {
+          const conflict = await publicSlugConflict(a.workspaceId, a.slug);
+          if (conflict) {
+            return {
+              error: `${conflict.error}. Its slug cannot change: create a public copy under a free slug${conflict.suggestedSlug ? ` (e.g. "${conflict.suggestedSlug}")` : ''}, or keep this one non-public.`,
+              code: conflict.code,
+              slug: conflict.slug,
+              suggested_slug: conflict.suggestedSlug,
+            };
+          }
+        }
         if (args.title || args.visibility) {
           await artifactsRepository.update(a.id, {
             title: (args.title as string) ?? a.title,

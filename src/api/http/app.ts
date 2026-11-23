@@ -273,8 +273,8 @@ export class App {
     // without a context.
     hono.use('*', async (c, next) => {
       const request = c.req.raw;
-      const set: Ctx['set'] = { status: undefined, headers: {} };
       const url = new URL(request.url);
+      const set: Ctx['set'] = { status: undefined, headers: headerRecord() };
       const ctx: Ctx = {
         request,
         set,
@@ -288,6 +288,19 @@ export class App {
         headers: Object.fromEntries(request.headers),
       };
       c.set('octiCtx', ctx);
+
+      // Every hook classifies a request by `url.pathname`; the router matches
+      // the percent-decoded path. A path that spells an unreserved character
+      // in percent-encoding (or carries a broken escape) would be routed as one
+      // path and classified as another, so it is refused before any request,
+      // derive or before-hook sees it. The after-hooks still run, so the
+      // refusal carries the same CORS and security headers as any response.
+      if (isNonCanonicalPath(url.pathname)) {
+        set.status = 400;
+        const res = toResponse({ error: 'Bad request path', code: 'non_canonical_path' }, set, 400);
+        await this.runAfter(ctx);
+        return applyHeaders(res, set);
+      }
 
       const applies = (h: { prefixes: string[] }) => inScope(h.prefixes, url.pathname);
 
@@ -449,21 +462,75 @@ async function parseBody(request: Request): Promise<unknown> {
   }
 }
 
+/**
+ * The unreserved characters (RFC 3986 §2.3): letters, digits, `-`, `.`, `_`,
+ * `~`. Their percent-encoded form means the same path, so a canonical path
+ * never uses it.
+ */
+const UNRESERVED_RE = /^[A-Za-z0-9\-._~]$/;
+
+/**
+ * True when `pathname` percent-encodes an unreserved character (`%61` for
+ * `a`, in either hex case) or holds a `%` that is not a valid escape. Such a
+ * path routes the same as its plain spelling but would not match a prefix
+ * test on the raw path. Reserved and other escapes (`%20`, `%2F`) stay
+ * allowed: the router keeps `%2F` encoded and no route prefix contains them.
+ */
+export function isNonCanonicalPath(pathname: string): boolean {
+  for (let i = pathname.indexOf('%'); i !== -1; i = pathname.indexOf('%', i + 1)) {
+    const hex = pathname.slice(i + 1, i + 3);
+    if (!/^[0-9A-Fa-f]{2}$/.test(hex)) return true;
+    if (UNRESERVED_RE.test(String.fromCharCode(Number.parseInt(hex, 16)))) return true;
+  }
+  return false;
+}
+
+/**
+ * `set.headers`, keyed case-insensitively: HTTP header names are, and a hook
+ * defaulting `Content-Security-Policy` with `??=` must see the policy a
+ * handler stored as `content-security-policy` — otherwise both reach the
+ * response and the later one wins. Every name is stored lower-cased.
+ */
+export function headerRecord(): Record<string, string> {
+  const lower = (k: string | symbol) => (typeof k === 'string' ? k.toLowerCase() : k);
+  return new Proxy({} as Record<string, string>, {
+    get: (target, key) => Reflect.get(target, lower(key)),
+    set: (target, key, value) => Reflect.set(target, lower(key), value),
+    has: (target, key) => Reflect.has(target, lower(key)),
+    deleteProperty: (target, key) => Reflect.deleteProperty(target, lower(key)),
+    getOwnPropertyDescriptor: (target, key) => Reflect.getOwnPropertyDescriptor(target, lower(key)),
+    defineProperty: (target, key, desc) => Reflect.defineProperty(target, lower(key), desc),
+  });
+}
+
+/**
+ * Responses a handler built itself. Their own headers are what the handler
+ * meant (a page's own `Content-Security-Policy`, say), so `set.headers` only
+ * adds to them; for a body the application wraps, `set.headers` is the only
+ * place the handler could have put its headers, so it wins.
+ */
+const handlerResponses = new WeakSet<Response>();
+
 function applyHeaders(res: Response, set: Ctx['set']): Response {
   const keys = Object.keys(set.headers);
   if (keys.length === 0) return res;
+  const own = handlerResponses.has(res);
   const out = new Response(res.body, res);
-  for (const k of keys) out.headers.set(k, set.headers[k]);
+  for (const k of keys) {
+    if (own && res.headers.has(k)) continue;
+    out.headers.set(k, set.headers[k]);
+  }
   return out;
 }
 
 export function toResponse(value: unknown, set: Ctx['set'], fallbackStatus: number): Response {
   const status = set.status ?? fallbackStatus;
   if (value instanceof Response) {
-    if (set.status !== undefined && value.status !== set.status) {
-      return new Response(value.body, { status, headers: value.headers });
-    }
-    return value;
+    const res = set.status !== undefined && value.status !== set.status
+      ? new Response(value.body, { status, headers: value.headers })
+      : value;
+    handlerResponses.add(res);
+    return res;
   }
   if (value === undefined || value === null) return new Response(null, { status: set.status ?? 204 });
   if (typeof value === 'string') {

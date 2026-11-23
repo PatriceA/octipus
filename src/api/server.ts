@@ -1,5 +1,11 @@
 import { budgetErrorBody } from './budget-error';
 import { DESKTOP_ORIGINS } from '@/api/desktop-origins';
+import {
+  isArtifactHostPath,
+  isArtifactHostRequest,
+  isRootArtifactPagePath,
+  isSubdomainMode,
+} from '@/core/artifacts/host';
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
@@ -15,6 +21,7 @@ import {
   principalFromUser,
 } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
+import { redactUrlForLog } from '@/utils/log-redact';
 import { setupGatewayWebSocket } from './gateway-ws';
 import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
@@ -166,6 +173,19 @@ export function createServer() {
   const config = getConfig();
 
   const app = new Elysia()
+    // The artifact host (`artifacts.host`) serves hosted artifact pages and
+    // nothing else; in subdomain mode the root `/a/...` pages are served
+    // there only. First, so nothing else (CORS preflight included) answers
+    // first. See `src/core/artifacts/host.ts`.
+    .onBeforeHandle((ctx) => {
+      const { pathname } = new URL(ctx.request.url);
+      const blocked = isArtifactHostRequest(ctx.request)
+        ? !isArtifactHostPath(ctx.request.method, pathname)
+        : isSubdomainMode() && isRootArtifactPagePath(pathname);
+      if (!blocked) return;
+      ctx.set.status = 404;
+      return { error: 'Not found' };
+    })
     // CORS — supports wildcard '*' for LAN access or a list of origins.
     // The Tauri desktop client is a thin client served from its own fixed local
     // origin (no same-origin /api proxy like the web build), so its cross-origin
@@ -182,9 +202,18 @@ export function createServer() {
     )
     // Security headers
     .onAfterHandle(({ set, request }) => {
+      // No cookie is ever scoped to the artifact host: a session there would
+      // be one artifact pages could ride.
+      if (isArtifactHostRequest(request)) {
+        for (const name of Object.keys(set.headers)) {
+          if (name.toLowerCase() === 'set-cookie') delete set.headers[name];
+        }
+      }
       set.headers['X-Content-Type-Options'] = 'nosniff';
       set.headers['X-XSS-Protection'] = '0';
-      set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
+      // Defaults only: `set.headers` is case-insensitive (api/http/app.ts), so
+      // a policy a handler set (artifact pages send no referrer) is kept.
+      set.headers['Referrer-Policy'] ??= 'strict-origin-when-cross-origin';
       set.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
 
       // Artifact pages and embeds intentionally render in iframes and
@@ -196,7 +225,7 @@ export function createServer() {
       // Plugin package pages likewise: a sandboxing CSP of their own, framed by the app (routes/plugin-ui.ts).
       const isPluginPage = path.startsWith('/api/plugin-ui/');
       if (!isArtifactPage && !isPluginPage) {
-        set.headers['X-Frame-Options'] = 'DENY';
+        set.headers['X-Frame-Options'] ??= 'DENY';
         // A handler that serves its own page may set a narrower policy (the
         // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
         set.headers['Content-Security-Policy'] ??= "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
@@ -204,7 +233,8 @@ export function createServer() {
     })
     // Request logging
     .onRequest(({ request }) => {
-      apiLogger.debug({ method: request.method, url: request.url }, 'Request received');
+      // Share links, viewer tokens and OAuth codes travel in the query.
+      apiLogger.debug({ method: request.method, url: redactUrlForLog(request.url) }, 'Request received');
     })
     // Error handling
     .onError(({ error, code, set }) => {
@@ -263,6 +293,11 @@ export function createServer() {
     //                   Phase 1: becomes the only auth signal and `user`
     //                   gets removed.
     .derive(async ({ request }) => {
+      // On the artifact host nobody is signed in: its pages authorize by
+      // share link or public visibility only, whatever credential is sent.
+      if (isArtifactHostRequest(request)) {
+        return { user: null, session: null, principal: ANONYMOUS_PRINCIPAL as Principal };
+      }
       const authHeader = request.headers.get('authorization');
       const sessionManager = getSessionManager();
 

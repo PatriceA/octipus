@@ -34,6 +34,80 @@ labels reflect blast radius, not contract guarantees.
   accepts `skill_nudge`. Other clients and channels get no offer. No
   migration: the offer lives in `messages.metadata`, the opt-out in
   `users.preferences`, the cool-down in `kv_store`.
+- **Live artifacts (BETA): hosting hardening, scoped viewer tokens, retention, slug conflicts**
+  ([docs](docs/ARTIFACTS.md#sandboxing), [hosting](docs/CONFIGURATION.md#artifacts-hosting)).
+  - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages
+    and the SDK (`GET`/`HEAD`): `/api`, `/v1`, sign-in and the
+    `/__artifacts__` mount answer 404 there, credentials sent to it are
+    ignored, no response from it sets a cookie, and of its WebSocket
+    endpoints only the gateway upgrades, admitting artifact viewer tokens
+    only (voice, browser-bridge and federation sockets are refused there). The root `/a/<slug>` pages are no longer
+    served on the app's own host in that mode. **Operators:** the reverse
+    proxy must pass the original `Host` header (matched exactly), and
+    `ARTIFACTS_HOST` is honoured only with `PUBLIC_URL` set to a different
+    host (otherwise it is ignored with an error and the `/__artifacts__`
+    fallback serves). Settings refuses to save the app's own address as the
+    artifact host.
+  - The outer page gets a no-script CSP and `Cross-Origin-Opener-Policy`;
+    embeds, exports and data reads send no referrer and are not cached;
+    exports are inert (`sandbox` CSP) if opened.
+  - **Behaviour change:** the outer page (`/a/<slug>`) can now be framed only
+    by the app itself and the artifact's `allowedEmbedOrigins` (before, it
+    sent no framing policy). A site that frames the outer page rather than
+    `/embed` must be added to the artifact's allowed embed origins.
+  - **Behaviour change for API clients (all routes, not only artifacts):** a
+    request whose *path* percent-encodes an unreserved character (a letter,
+    digit, `-`, `.`, `_` or `~`, e.g. `%61` for `a` or `%7E` for `~`), or
+    holds a malformed `%` escape, is refused with `400`
+    `{"code": "non_canonical_path"}` (with the usual CORS and security
+    headers). Clients must send unreserved characters unencoded, as
+    `encodeURIComponent` does. Other escapes (`%20`, `%2F`, …) and query
+    strings are unaffected. This keeps request checks and routing on the same
+    path.
+  - Fixed: response headers are keyed case-insensitively, and a header a
+    handler set (on `set.headers` or on a `Response` it returns) is never
+    replaced or duplicated by a default; an embed always carries only its own
+    sandboxing policy.
+  - The debug request log no longer records share-link, viewer-token or
+    OAuth-code query values, nor the token segment of public media, invite
+    and form links; the bundled web server's error log omits the query and
+    those tokens too.
+  - Fixed: templates are sanitized again after `{{…}}` expansion, and the
+    built artifact script is no longer served as a separate file
+    (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).
+  - Template values (`{{…}}`) are encoded so that they are always plain text
+    or a single attribute value: besides `& < > " '` they encode whitespace,
+    `/`, `=`, backtick and braces as character references, which the browser
+    decodes back to the same text. Data can no longer add attributes, be
+    altered by the sanitizer, or be expanded as a template; widget output is
+    inserted after the template pass. An event-handler attribute right after a
+    closing quote is stripped too.
+  - Fixed: `allowedEmbedOrigins` was spliced into the embed CSP unchecked, so
+    an entry could add a `sandbox … allow-same-origin` directive. It now takes
+    web origins only (400 otherwise).
+  - Fixed: live refresh in embeds never loaded new data — the SDK read a
+    session-only `/api` route the sandboxed page cannot authenticate to. It
+    reads the embed's own `…/data/<source>` route with its viewer token,
+    which is read-only, for one artifact, expires after 5 minutes, and is
+    refused once the artifact is deleted, its visibility changes, or the
+    share link it came from is revoked. No `/api` route accepts it.
+  - Fixed: the embed CSP kept pinning the SDK hash stored by an earlier
+    release, so after an SDK change browsers refused the new client.
+  - **Retention:** `artifacts.retentionDays` (`ARTIFACTS_RETENTION_DAYS`)
+    moves artifacts with no edit, no view and no data refresh for that many
+    days to the trash (views are recorded in a new `last_viewed_at` column,
+    migration `0204`, at most hourly per artifact); `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
+    the trash keeps them before they are removed with their versions, data
+    and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
+    no existing artifact is deleted by upgrading.
+  - **Slug collisions:** a taken slug is a `409` with `code: "slug_taken"`
+    and a free `suggestedSlug`, from the API, the agent tool and the chat's
+    save dialog; the web forms offer the suggestion. Concurrent creates are
+    decided by the unique index (one `201`, the rest `409`). A deleted
+    artifact frees its slug at once (migration `0203` makes the index cover
+    live artifacts only). Publishing a slug another workspace already has
+    public is a `409` `public_slug_taken`; an ambiguous public slug now
+    resolves to the oldest artifact instead of an arbitrary one.
 - **Approved skills now reach your agents, and learning notes became lessons
   that merge and expire** ([plan](docs/plans/learning-notes-and-skill-discovery.md),
   [reference](docs/SESSION-LEARNING.md#where-a-lesson-goes)). A skill you

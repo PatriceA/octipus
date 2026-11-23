@@ -39,9 +39,10 @@ describe('every module off', () => {
         expect(res.body).toMatchObject({ code: 'module_off', module: m.id });
       }
     }
-    // Percent-encoded, as the router decodes it.
-    expect((await get('/api/c%61ses/x')).body?.code).toBe('module_off');
-    expect((await get('/api/%6D%61il')).body?.code).toBe('module_off');
+    // A percent-encoded spelling of a module route never reaches the router
+    // (api/http/app.ts refuses it), so it cannot slip past the module check.
+    expect((await get('/api/c%61ses/x')).status).toBe(400);
+    expect((await get('/api/%6D%61il')).status).toBe(400);
     // Public forms too: no sign-in needed to be refused.
     expect((await get('/api/forms/sometoken')).body?.code).toBe('module_off');
     // A core route goes on to the rest of the pipeline (here it fails later,

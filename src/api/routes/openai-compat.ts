@@ -224,7 +224,7 @@ export const openaiCompatRoutes = new Elysia()
           const usage = { prompt_tokens: 0, completion_tokens: total, total_tokens: total };
 
           if (wantStream) {
-            set.headers = { ...set.headers, ...SSE_HEADERS };
+            Object.assign(set.headers, SSE_HEADERS);
             return streamCompletion(id, model, content);
           }
           return toChatCompletion(id, model, content, usage);
@@ -268,7 +268,7 @@ export const openaiCompatRoutes = new Elysia()
             set.status = 499;
             return oaiError('The client closed the request', 'invalid_request_error', 'client_closed');
           }
-          set.headers = { ...set.headers, ...SSE_HEADERS };
+          Object.assign(set.headers, SSE_HEADERS);
           return streamed;
         }
         const result = await getProviderRouter().complete(options);
@@ -280,7 +280,7 @@ export const openaiCompatRoutes = new Elysia()
         };
 
         if (wantStream) {
-          set.headers = { ...set.headers, ...SSE_HEADERS };
+          Object.assign(set.headers, SSE_HEADERS);
           return streamCompletion(id, result.model || model, result.content);
         }
         return toChatCompletion(id, result.model || model, result.content, usage);

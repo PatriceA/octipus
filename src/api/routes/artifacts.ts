@@ -12,7 +12,9 @@ import type { ArtifactStore } from '@/db/repositories/space';
 import type { Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import type { Artifact } from '@/db/schema/artifacts';
+import { isEmbedOrigin } from '@/core/artifacts/csp';
 import { mintShareLink } from '@/core/artifacts/share-link';
+import { publicSlugConflict, slugTakenConflict } from '@/core/artifacts/slug';
 import { refreshSource, spaceSourceRefusal } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
 import { announceVersion, restoreVersion, writeVersion } from '@/core/artifacts/version-writer';
@@ -74,13 +76,22 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 400;
         return { error: 'invalid slug (lowercase, digits, dashes, 1-64 chars)' };
       }
+      const workspaceId = principal.workspaceId as string;
+      const visibility = body.visibility ?? 'workspace';
+      if (visibility === 'public') {
+        const conflict = await publicSlugConflict(workspaceId, body.slug);
+        if (conflict) {
+          set.status = 409;
+          return conflict;
+        }
+      }
       try {
         const a = await store.create({
           slug: body.slug,
           createdByAgentId: body.createdByAgentId ?? null,
           title: body.title,
           type: body.type,
-          visibility: body.visibility ?? 'workspace',
+          visibility,
         });
         const warnings: string[] = [];
         if (body.htmlTemplate || body.css) {
@@ -98,9 +109,11 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { artifact: await artifactsRepository.getById(a.id), warnings };
       } catch (err) {
         if (err instanceof SpaceError) throw err;
+        // The unique index decides, so a create that loses a race to the
+        // same slug gets this answer too, not a server error.
         if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
           set.status = 409;
-          return { error: 'slug already exists in this workspace' };
+          return await slugTakenConflict(workspaceId, body.slug, { public: visibility === 'public' });
         }
         coreLogger.error({ err }, 'artifacts.create.failed');
         set.status = 500;
@@ -251,6 +264,18 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         return { error: 'not found' };
       }
       store.assertWrite();
+      const badOrigin = body.allowedEmbedOrigins?.find((o: string) => !isEmbedOrigin(o));
+      if (badOrigin !== undefined) {
+        set.status = 400;
+        return { error: `allowedEmbedOrigins: "${badOrigin}" is not an origin (https://host[:port] or https://*.host)` };
+      }
+      if (body.visibility === 'public' && a.visibility !== 'public') {
+        const conflict = await publicSlugConflict(a.workspaceId, a.slug);
+        if (conflict) {
+          set.status = 409;
+          return conflict;
+        }
+      }
       const patch: Partial<Artifact> = {};
       if (body.title !== undefined) patch.title = body.title;
       if (body.visibility !== undefined) patch.visibility = body.visibility;

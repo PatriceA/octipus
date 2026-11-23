@@ -44,6 +44,12 @@ export interface GatewayConnection {
    * (`registerVirtual`), so opening another `conn` buys no fresh budget.
    */
   rateKey?: string;
+  /**
+   * Opened on the artifact host (`artifacts.host`): only an `artifact_token`
+   * may sign in. A user's session never runs on the origin artifact pages
+   * are served from.
+   */
+  artifactViewerOnly?: boolean;
 }
 
 /**
@@ -143,8 +149,9 @@ export class ConnectionManager {
    * Register a new WebSocket connection (pre-auth). `ip` must come from
    * `clientIp`, never from a forwarded header read directly. `workspace` is
    * the socket URL's `?workspace=`, resolved once the user is known.
+   * `artifactViewerOnly`: the socket was opened on the artifact host.
    */
-  handleOpen(ws: ServerWebSocket<any>, ip: string, workspace?: string): string | null {
+  handleOpen(ws: ServerWebSocket<any>, ip: string, workspace?: string, opts?: { artifactViewerOnly?: boolean }): string | null {
     // The only per-address cap: connections that have not authenticated yet.
     const preAuthCount = this.preAuthByIp.get(ip) || 0;
     if (preAuthCount >= this.budget.maxPreAuth) {
@@ -164,6 +171,7 @@ export class ConnectionManager {
         this.handleAuthTimeout(connectionId);
       }, AUTH_TIMEOUT_MS),
       ...(workspace ? { workspaceHint: workspace } : {}),
+      ...(opts?.artifactViewerOnly ? { artifactViewerOnly: true } : {}),
     };
 
     this.connections.set(connectionId, conn);
@@ -370,6 +378,10 @@ export class ConnectionManager {
     const mark = userChangeMark();
 
     try {
+      if (conn.artifactViewerOnly && msg.method !== 'artifact_token') {
+        this.sendAuthError(conn, 'Only artifact viewers sign in on the artifact host');
+        return;
+      }
       switch (msg.method) {
         case 'session_token': {
           if (!this.sessionValidator) {
@@ -448,21 +460,16 @@ export class ConnectionManager {
             this.sendAuthError(conn, 'Missing artifact id or token');
             return;
           }
-          const { verifyArtifactToken } = await import('@/core/artifacts/token');
-          const payload = verifyArtifactToken(token, { aid });
-          const { isArtifactTokenRevoked } = await import('@/core/artifacts/viewer-access');
           // A token issued before the artifact's visibility changed (or before
-          // it was deleted) no longer stands for the access it was minted under.
-          if (!payload || isArtifactTokenRevoked(aid, payload.iat)) {
+          // it was deleted, or from a share link since revoked) no longer
+          // stands for the access it was minted under.
+          const { authorizeArtifactViewerToken } = await import('@/core/artifacts/viewer-access');
+          const authorized = await authorizeArtifactViewerToken(token, aid);
+          if (!authorized) {
             this.sendAuthError(conn, 'Invalid or expired artifact token');
             return;
           }
-          const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
-          const artifact = await artifactsRepository.getById(aid);
-          if (!artifact || artifact.workspaceId !== payload.wid) {
-            this.sendAuthError(conn, 'Artifact not found');
-            return;
-          }
+          const payload = authorized.payload;
           artifactId = aid;
           artifactTokenExp = payload.exp;
           userId = `artifact:${aid}`;

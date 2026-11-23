@@ -6,7 +6,7 @@
 
 import { publicLinkBase } from '@/core/public-url';
 import { coreLogger } from '@/utils/logger';
-import { resolveArtifactSettings } from './settings';
+import { normalizeHost, resolveArtifactSettings } from './settings';
 
 export type ArtifactsHostMode =
   | { mode: 'subdomain'; host: string; proto: 'http' | 'https' }
@@ -16,6 +16,76 @@ export function getArtifactsHostMode(): ArtifactsHostMode {
   const s = resolveArtifactSettings();
   if (s.host) return { mode: 'subdomain', host: s.host, proto: s.proto };
   return { mode: 'path-prefix', pathPrefix: '/__artifacts__' };
+}
+
+export { normalizeHost } from './settings';
+
+/**
+ * Did this request arrive for the configured artifact host? Only in
+ * subdomain mode, and only on an exact match of the `Host` header against
+ * `artifacts.host` — never a suffix or a pattern, and never a forwarded
+ * header a client could set. The answer only ever narrows what a request may
+ * reach (`isArtifactHostPath`), so a client that lies about its host can only
+ * lock itself out of the app.
+ */
+export function isArtifactHostRequest(request: Request): boolean {
+  const mode = hostModeForRouting();
+  if (mode?.mode !== 'subdomain') return false;
+  const sent = request.headers.get('host') ?? new URL(request.url).host;
+  const host = normalizeHost(sent);
+  return host !== null && host === normalizeHost(mode.host);
+}
+
+let lastRoutingError = '';
+
+/**
+ * The host mode for routing every request, or null while the artifact
+ * settings are invalid (`resolveArtifactSettings` throws on them). The rest of
+ * the app keeps working then; the artifact pages, which read the same
+ * settings, fail on their own. Logged once per distinct error, not per request.
+ */
+function hostModeForRouting(): ArtifactsHostMode | null {
+  try {
+    const mode = getArtifactsHostMode();
+    lastRoutingError = '';
+    return mode;
+  } catch (err) {
+    const message = (err as Error).message;
+    if (message !== lastRoutingError) {
+      lastRoutingError = message;
+      coreLogger.error({ err }, 'artifact.host.settings_invalid — artifact host routing is off until the artifact settings are fixed');
+    }
+    return null;
+  }
+}
+
+/** In subdomain mode (with valid settings): the root `/a/...` pages belong to the artifact host. */
+export function isSubdomainMode(): boolean {
+  return hostModeForRouting()?.mode === 'subdomain';
+}
+
+/** The hosted-page routes, relative to the artifact host's root (or the `/__artifacts__` prefix). */
+const ARTIFACT_PAGE_PATH_RE = /^\/a\/[^/]+(?:\/(?:embed|export\/[^/]+|data\/[^/]+))?\/?$/;
+const ARTIFACT_SDK_PATH = '/octipus-artifact-client.js';
+
+/**
+ * What the artifact host serves: the hosted pages and the SDK, read-only.
+ * Everything else — `/api`, `/v1`, the fallback mount — is the app's, and on
+ * the artifact origin it would be a second front door to it (a sign-in there
+ * would set a session cookie scoped to the artifact host).
+ */
+export function isArtifactHostPath(method: string, pathname: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return pathname === ARTIFACT_SDK_PATH || ARTIFACT_PAGE_PATH_RE.test(pathname);
+}
+
+/**
+ * Is `pathname` one of the hosted-page routes of the root mount (`/a/...`)?
+ * In subdomain mode they are served on the artifact host only: on the app's
+ * host the same URL would put an artifact on the app's origin.
+ */
+export function isRootArtifactPagePath(pathname: string): boolean {
+  return ARTIFACT_PAGE_PATH_RE.test(pathname);
 }
 
 /** Test-only — kept for symmetry with prior API; settings cache is the source of truth. */
@@ -89,4 +159,3 @@ export function pickShareableUrl(args: {
   }
 }
 
-void coreLogger; // referenced from prior versions; kept import-stable

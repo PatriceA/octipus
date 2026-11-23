@@ -20,8 +20,11 @@ export interface ArtifactTokenPayload {
   aud: string;
   /** Workspace id (cross-checked at gateway subscribe). */
   wid: string;
-  /** Visibility-derived scope. */
-  scope: 'view' | 'view+refresh';
+  /**
+   * Always `view`: the token reads one artifact (its gateway events and its
+   * snapshots) and changes nothing. A token claiming anything else is refused.
+   */
+  scope: 'view';
   /** Issued-at, seconds. */
   iat: number;
   /** Expires-at, seconds. */
@@ -109,6 +112,8 @@ export function verifyArtifactToken(
   }
 
   if (payload.aud !== `artifact:${expected.aid}`) return null;
+  if (payload.scope !== 'view') return null;
+  if (typeof payload.iat !== 'number' || typeof payload.exp !== 'number') return null;
   if (payload.aid !== expected.aid) return null;
   const now = Math.floor(Date.now() / 1000);
   if (payload.exp < now) return null;
