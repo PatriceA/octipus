@@ -21,6 +21,47 @@ External Postgres tests gated on `INTEGRATION=1` are skipped in the ordinary
 lane. A green `npm test` does not mean those tests ran. The terminal clients live
 in `src/tui-pi/` and `src/tui-editor/`; they use pi-tui.
 
+## Provider boundary
+
+Code that talks to a model provider is tested against a scripted provider on
+a real local socket, not against a mocked SDK or `fetch`. Two test-only
+modules in `src/models/testing/` make up the seam:
+
+| Module | What it stands in for |
+| --- | --- |
+| `scripted-provider.ts` | The provider's HTTP endpoint (an OpenAI-compatible server, the LiteLLM proxy, a Gemini-compatible gateway). Listens on `127.0.0.1` port 0, records every request (`path`, `query`, `headers`, parsed `body`, arrival time, whether the client hung up), and answers from a queue (`enqueue`) or a handler (`respondWith`): `json`, `text` (malformed bodies), `sse` (streams, optionally ending in a socket reset or held open for an abort), `reset` and `hang`. `chatCompletion`, `chatChunk`, `embeddings` and `openAIError` build OpenAI-shaped bodies. An unscripted request gets a loud 500. |
+| `model-doubles.ts` | The model registry (`registryDouble`, rows built with `modelRow`) and the vault (`vaultDouble`), installed with `vi.mock` so the real router and providers read rows and keys from memory. |
+
+`src/models/litellm-client.boundary.test.ts` (the LiteLLM client: completion,
+embeddings, streaming, vision keys, SDK retries, failure classification) and
+`src/models/providers/router.boundary.test.ts` (resolution, custom endpoint
+credentials and wire shape, the circuit breaker and proxy fallback) show the
+pattern. Assert on what crossed the wire and on the typed result or
+`ClassifiedError`, not on internal calls. Timing (a Retry-After wait, a
+request timeout) runs under `vi.useFakeTimers({ toFake: ['setTimeout',
+'clearTimeout', 'Date'] })`, advancing the clock in small steps while the
+socket I/O runs; `receivedAt` is then fake time. Point the code at the double
+by its URL (`LITELLM_URL`, a row's `endpoint`), never at a real host.
+
+The production acceptance lane (`scripts/e2e/acceptance.ts`) scripts the same
+double with a handler. `litellm-client.test.ts` and the per-provider suites
+still mock the SDK where they test branching the wire cannot show.
+
+### Known provider-boundary gaps
+
+Tests whose names start with "currently" pin behaviour as it is, not as it
+should be. Change the test with the behaviour.
+
+| Pinned behaviour | Why it looks wrong |
+| --- | --- |
+| A rate-limited LiteLLM model is re-sent to the same proxy after the rate limiter's backoff (`router.boundary.test.ts`). | The "fallback" is the same endpoint, and the provider's Retry-After is ignored. |
+| A LiteLLM model whose re-send is rate limited too fails after two sends. | Same: two sends to one endpoint in about a second. |
+| With the LiteLLM breaker open, LiteLLM models are still sent through the fallback. | That breaker never stops a request for the models it guards. |
+| Without a proxy URL, an unknown model resolves to custom-gemini, the last registered provider. | The error is "no model row found" from a provider nobody chose, not "no provider for this model". |
+| `ProviderRouter.embed` chooses by model name only and refuses LiteLLM. | It ignores the row's provider, unlike `LiteLLMClient.embed`. |
+| `LiteLLMClient.stream` re-sends a direct provider's request that failed before its first chunk to the proxy, under the same model id (`litellm-client.boundary.test.ts`). | It contradicts the no-cross-provider-fallback rule `complete()` documents, and can hide the direct provider's real error behind the proxy's "model not found". |
+| A ClassifiedError with `FALLBACK_PROVIDER` recovery (an exhausted quota) counts as retryable, so the agent loop retries the same model up to three times. | Exhausted quota is not cured by waiting. Not pinned by a test here; see `ClassifiedError.isRetryable`. |
+
 ## External database integration
 
 ```bash

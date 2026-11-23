@@ -183,6 +183,65 @@ describe('approve and reject', () => {
   });
 });
 
+describe('approval makes the skill discoverable at once', () => {
+  async function skillRow(id: string) {
+    const { eq } = await import('drizzle-orm');
+    const { getDb } = await import('@/db/postgres');
+    const { skills } = await import('@/db/schema/skills');
+    const [row] = await getDb().select().from(skills).where(eq(skills.id, id));
+    return row;
+  }
+  async function useEmbedding(generateEmbedding: (text: string) => Promise<number[]>) {
+    const { setCapabilitiesForTest } = await import('@/core/capabilities/gates');
+    setCapabilitiesForTest({ embedding: true });
+    const embeddings = await import('@/core/rag/embeddings');
+    vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({ generateEmbedding } as never);
+  }
+  const vector = new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
+
+  test('a new skill has its embedding when the approval returns, and discovery finds it for any role', async () => {
+    const embed = vi.fn(async (_text: string) => vector);
+    await useEmbedding(embed);
+    const id = await seed({ name: 'deploy-checklist' });
+    const result = await service.approveProposal(id, { userId });
+    const row = await skillRow(result!.id);
+    expect(row.descriptionEmbedding).toHaveLength(1024);
+    expect(row.descriptionHash).toBeTruthy();
+    expect(embed).toHaveBeenCalledWith('deploy-checklist\ndeploy-checklist description', 'document');
+
+    const { discoverSkillIds } = await import('@/skills/discovery');
+    expect(await discoverSkillIds({ topic: 'research', message: 'how do I deploy', userId })).toContain(result!.id);
+  });
+
+  test('a proposal merged into an existing skill re-embeds it (the merge cleared the old vector)', async () => {
+    await useEmbedding(async () => vector);
+    const first = await service.approveProposal(await seed({ name: 'release-notes' }), { userId });
+    const second = await service.approveProposal(await seed({ name: 'Release Notes', description: 'new text' }), { userId });
+    expect(second!.id).toBe(first!.id);
+    const row = await skillRow(second!.id);
+    expect(row.descriptionEmbedding).toHaveLength(1024);
+    expect(row.description).toBe('new text');
+  });
+
+  test('an embedding failure is logged and the approval still stands', async () => {
+    await useEmbedding(async () => { throw new Error('provider down'); });
+    const id = await seed({ name: 'flaky-embed' });
+    const result = await service.approveProposal(id, { userId });
+    expect(result).toMatchObject({ promoted: 'skill', name: 'flaky-embed' });
+    expect((await read(id)).status).toBe('promoted');
+    expect((await skillRow(result!.id)).descriptionEmbedding).toBeNull();
+  });
+
+  test('a database error while embedding does not fail the approval either', async () => {
+    await useEmbedding(async () => vector);
+    const backfill = await import('@/skills/embedding-backfill');
+    vi.spyOn(backfill, 'ensureSkillEmbeddings').mockRejectedValue(new Error('connection reset'));
+    const id = await seed({ name: 'db-blip' });
+    expect(await service.approveProposal(id, { userId })).toMatchObject({ promoted: 'skill' });
+    expect((await read(id)).status).toBe('promoted');
+  });
+});
+
 describe('manual merge', () => {
   test('merges one proposal into another: counts, sources, merged_into_id', async () => {
     const into = await seed({ name: 'into', exemplarCount: 2, sourceRefs: ['session:x', 'session:y'] });

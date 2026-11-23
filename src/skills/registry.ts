@@ -160,7 +160,11 @@ export class SkillRegistry {
    * agent loads full content for a specific skill via the built-in
    * `get_skill` tool when it actually needs it.
    */
-  async buildPromptSummary(skillIds: string[], userId?: string): Promise<string> {
+  async buildPromptSummary(
+    skillIds: string[],
+    userId?: string,
+    heading = 'Available skills (call `get_skill` with the id to load the full spec):',
+  ): Promise<string> {
     if (skillIds.length === 0) return '';
     const found = await this.getByIds(skillIds, userId);
     if (found.length === 0) return '';
@@ -171,7 +175,7 @@ export class SkillRegistry {
     // (renderSkill), GET /api/skills/:id (the MCP get_skill) and full-content
     // injection (buildPromptFragment / buildTopicPromptFragment).
     const lines = [
-      'Available skills (call `get_skill` with the id to load the full spec):',
+      heading,
       ...found.map(buildPromptSummary),
     ];
     return lines.join('\n');

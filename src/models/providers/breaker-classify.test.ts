@@ -37,7 +37,14 @@ describe('isTransportFailure (A3 breaker gate)', () => {
   });
 
   test('network error codes count', () => {
-    expect(isTransportFailure({ code: 'ECONNREFUSED', message: 'refused' })).toBe(true);
+    expect(isTransportFailure({ code: 'ECONNRESET', message: 'reset' })).toBe(true);
+    expect(isTransportFailure({ code: 'EAI_AGAIN', message: 'getaddrinfo EAI_AGAIN api.example.com' })).toBe(true);
     expect(isTransportFailure(new Error('fetch failed'))).toBe(true);
+  });
+
+  test('a refused connection or unknown host is one endpoint, not the lane, and does not count', () => {
+    expect(isTransportFailure({ code: 'ECONNREFUSED', message: 'refused' })).toBe(false);
+    expect(isTransportFailure(new Error('getaddrinfo ENOTFOUND gateway.example.invalid'))).toBe(false);
+    expect(isTransportFailure(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:11434'), { code: 'ECONNREFUSED' }) }) }))).toBe(false);
   });
 });

@@ -23,11 +23,17 @@ const vectorFor = (text: string) => (/cache/i.test(text) ? [1, 0.2, 0, 0] : [0, 
 interface ReviewInput {
   trigger: string;
   evidence: Array<{ id: string; kind: string; text: string }>;
-  existing: { skills: Array<{ ref: string; name: string }>; proposals: Array<{ ref: string; name: string; excerpt?: string }> };
+  existing: { skills: Array<{ ref: string; name: string }>; proposals: Array<{ ref: string; name: string; excerpt?: string }>; notes: Array<{ ref: string; title: string; excerpt: string }> };
 }
 const reviewInputs: ReviewInput[] = [];
+/** When set, the reviewer returns this lesson (and no skill). */
+let lessonReply: null | ((input: ReviewInput, cited: string) => Record<string, unknown>) = null;
 
 const complete = vi.fn(async (request: { requestType: string; messages: Array<{ content: string }> }) => {
+  if (request.requestType === 'lesson-note-merge') {
+    return { content: JSON.stringify({ verdict: 'merged', title: 'Pin the lockfile',
+      content: 'We pin the lockfile in CI; floating versions were rejected because a minor release broke the cache.' }), finishReason: 'stop' };
+  }
   if (request.requestType === 'skill-proposal-merge') {
     return { content: JSON.stringify({ verdict: 'merged', description: 'Repair a stale build cache and verify it',
       content: '1. Clear the cache\n2. Rebuild\n3. Verify the tests pass' }), finishReason: 'stop' };
@@ -35,6 +41,9 @@ const complete = vi.fn(async (request: { requestType: string; messages: Array<{ 
   const input = JSON.parse(request.messages[1].content) as ReviewInput;
   reviewInputs.push(input);
   const cited = input.evidence.find(row => row.kind === 'execution');
+  if (lessonReply && cited) {
+    return { content: JSON.stringify({ reason: 'A decision', memories: [], patches: [], skills: [], knowledge: [lessonReply(input, cited.id)] }), finishReason: 'stop' };
+  }
   // The reviewer extends the open proposal it was shown, as the prompt asks.
   const offered = input.existing.proposals[0]?.ref;
   return { content: JSON.stringify({
@@ -58,7 +67,11 @@ beforeAll(async () => {
   await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ('${sessionA}', '${userId}', 'webchat', 'learn-a'), ('${sessionB}', '${userId}', 'webchat', 'learn-b')`);
 
   const embeddings = await import('@/core/rag/embeddings');
-  vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({ generateEmbedding: async (text: string) => vectorFor(text) } as never);
+  // A real service (lesson notes are indexed through it), with the provider seams stubbed.
+  const service = new embeddings.EmbeddingService('test-model');
+  vi.spyOn(service, 'generateEmbedding').mockImplementation(async (text: string) => vectorFor(text));
+  vi.spyOn(service, 'embedBatch').mockImplementation(async (texts: string[]) => texts.map(vectorFor));
+  vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue(service);
   const registry = await import('@/models/model-registry');
   vi.spyOn(registry, 'getModelRegistry').mockReturnValue({
     getModelForTopic: async (topic: string) => (topic === 'background' ? { modelId: 'test-background', name: 'background-test' } : null),
@@ -166,4 +179,46 @@ test('a check that failed before reviewing leaves its evidence to the next autom
   expect(events).toHaveLength(2);
   expect(events.join('\n')).toContain('missing index');
   expect(events.join('\n')).toContain('added the index');
+});
+
+test('two reviews of one decision in two sessions end as one lesson note seen twice, without an evidence footer', async () => {
+  const sessionD = randomUUID();
+  const sessionE = randomUUID();
+  const { executeRaw, queryRaw } = await import('@/db/postgres');
+  await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ('${sessionD}', '${userId}', 'webchat', 'learn-d'), ('${sessionE}', '${userId}', 'webchat', 'learn-e')`);
+  // The reviewer names the lesson note it was shown, as the prompt asks.
+  lessonReply = (input, cited) => ({ title: 'Pin the lockfile', kind: 'decision', sources: [cited],
+    content: 'We pin the lockfile in CI; floating versions were rejected after a minor release broke the build.',
+    ...(input.existing.notes[0] ? { extends: input.existing.notes[0].ref } : {}) });
+  try {
+    await toolResult(sessionD, 'lockfile drift broke the build; pinned it, build green');
+    const first = await runCheck(sessionD, 'plan_completed');
+    expect(first.result).toMatchObject({ outputs: [{ kind: 'knowledge', status: 'saved' }] });
+    await toolResult(sessionE, 'lockfile pinned again after a floating version broke CI; green');
+    const second = await runCheck(sessionE, 'plan_completed');
+    expect(reviewInputs.at(-1)?.existing.notes).toHaveLength(1);
+    expect(second.result).toMatchObject({ outputs: [{ kind: 'knowledge', status: 'merged' }] });
+  } finally {
+    lessonReply = null;
+  }
+  const lessons = (await queryRaw(`SELECT * FROM notes WHERE user_id = $1 AND note_kind = 'lesson'`, [userId])).rows as Array<{ id: string; body: string; frontmatter: Record<string, unknown> }>;
+  expect(lessons).toHaveLength(1);
+  expect(lessons[0].frontmatter).toMatchObject({ sightings: 2, lessonKind: 'decision' });
+  expect(new Set(lessons[0].frontmatter.sessions as string[])).toEqual(new Set([sessionD, sessionE]));
+  expect(lessons[0].frontmatter.learningJobIds).toHaveLength(2);
+  expect(lessons[0].body).not.toContain('Evidence:');
+  const purposes = (await queryRaw(`SELECT DISTINCT purpose FROM embeddings WHERE source_id = $1`, [`note:${lessons[0].id}`])).rows;
+  expect(purposes).toEqual([{ purpose: 'lesson' }]);
+});
+
+test('a failure reading the lesson notes leaves the rest of the review context', async () => {
+  const { gatherReviewContext } = await import('./evidence');
+  const plan = { id: 'p9', title: 'Fix the stale build cache', goal: 'Tests pass again', steps: [] };
+  const { randomUUID: uuid } = await import('node:crypto');
+  const intact = await gatherReviewContext(userId, uuid(), sessionA, new Date(), plan, []);
+  // Not a uuid: the lesson-notes query fails, and only it reads the workspace.
+  const degraded = await gatherReviewContext(userId, 'not-a-workspace', sessionA, new Date(), plan, []);
+  expect(degraded.existing.notes).toEqual([]);
+  expect(degraded.existing.proposals).toEqual(intact.existing.proposals);
+  expect(degraded.existing.skills).toEqual(intact.existing.skills);
 });

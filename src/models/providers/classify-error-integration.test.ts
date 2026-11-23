@@ -140,7 +140,7 @@ describe('DeepSeekProvider classified errors', () => {
     { name: '429 rate limit', err: { status: 429, message: 'Rate limit exceeded' }, reason: FailoverReason.RATE_LIMIT },
     { name: '401 auth failed', err: { status: 401, message: 'Invalid API key' }, reason: FailoverReason.AUTH_FAILED },
     { name: '500 provider down', err: { status: 500, message: 'Internal error' }, reason: FailoverReason.PROVIDER_DOWN },
-    { name: 'ECONNREFUSED network timeout', err: { message: 'connection refused', code: 'ECONNREFUSED' }, reason: FailoverReason.NETWORK_TIMEOUT },
+    { name: 'ECONNREFUSED endpoint unreachable', err: { message: 'connection refused', code: 'ECONNREFUSED' }, reason: FailoverReason.ENDPOINT_UNREACHABLE },
   ];
 
   for (const c of cases) {
@@ -164,7 +164,7 @@ describe('OpenRouterProvider classified errors', () => {
     { name: '429 rate limit', err: { status: 429, message: 'Upstream rate limit' }, reason: FailoverReason.RATE_LIMIT },
     { name: '401 auth failed', err: { status: 401, message: 'Invalid API key' }, reason: FailoverReason.AUTH_FAILED },
     { name: '500 provider down', err: { status: 500, message: 'Internal error' }, reason: FailoverReason.PROVIDER_DOWN },
-    { name: 'ENOTFOUND network timeout', err: { message: 'DNS lookup failed', code: 'ENOTFOUND' }, reason: FailoverReason.NETWORK_TIMEOUT },
+    { name: 'ENOTFOUND endpoint unreachable', err: { message: 'DNS lookup failed', code: 'ENOTFOUND' }, reason: FailoverReason.ENDPOINT_UNREACHABLE },
   ];
 
   for (const c of cases) {

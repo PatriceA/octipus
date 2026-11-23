@@ -66,7 +66,7 @@ test.describe('recall page', () => {
     await expect(recall.getByLabel('excerptChars')).toHaveAttribute('placeholder', '1000 (default)');
     await expect(recall.getByLabel('tokenBudget')).toHaveAttribute('placeholder', '1200 (default)');
     // What it searches, every purpose by default, and the manual off.
-    for (const name of ['notes', 'documents', 'saved knowledge', 'image descriptions']) await expect(recall.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    for (const name of ['notes', 'lessons', 'documents', 'saved knowledge', 'image descriptions']) await expect(recall.getByRole('checkbox', { name, exact: true })).toBeChecked();
     await expect(recall.getByRole('checkbox', { name: 'Octipus manual' })).not.toBeChecked();
     await expect(recall.getByLabel('limit')).toHaveValue('3');
 
@@ -92,7 +92,7 @@ test.describe('recall page', () => {
     const recall = page.locator('li', { hasText: 'Knowledge recall' });
     await recall.getByRole('checkbox', { name: 'documents', exact: true }).click();
     await expect.poll(() => patches.length).toBe(1);
-    expect(patches[0]).toEqual({ config: { limit: 3, purposes: ['note', 'knowledge_artifact', 'image_description'] } });
+    expect(patches[0]).toEqual({ config: { limit: 3, purposes: ['note', 'lesson', 'knowledge_artifact', 'image_description'] } });
     await recall.getByRole('checkbox', { name: 'Octipus manual' }).click();
     await expect.poll(() => patches.length).toBe(2);
     expect(patches[1]).toEqual({ config: { limit: 3, includeProductDocs: true } });
@@ -102,6 +102,29 @@ test.describe('recall page', () => {
     await expect(recall.getByRole('checkbox', { name: 'notes', exact: true })).toBeChecked();
     await expect(recall.getByRole('checkbox', { name: 'notes', exact: true })).toBeDisabled();
     await expect(recall.getByRole('checkbox', { name: 'documents', exact: true })).not.toBeChecked();
+  });
+
+  test('lessons are a purpose of their own: a list stored before them leaves them off until ticked', async ({ authenticatedPage: page }) => {
+    await stubAllDefaults(page);
+    const patches: unknown[] = [];
+    const stored: ContextHooksResponse = {
+      ...hooks,
+      hooks: [{ ...hooks.hooks[0], config: { limit: 3, purposes: ['note', 'document', 'knowledge_artifact', 'image_description'] } }, hooks.hooks[1]],
+    };
+    await page.route('**/api/context-hooks', (route) => json(route, 200, stored));
+    await page.route('**/api/context-hooks/stats*', (route) => json(route, 200, quiet));
+    await page.route('**/api/context-hooks/builtin*', async (route) => {
+      patches.push(route.request().postDataJSON());
+      await json(route, 200, hooks.hooks[0]);
+    });
+    await page.goto('/recall');
+    const recall = page.locator('li', { hasText: 'Knowledge recall' });
+    const lessons = recall.getByRole('checkbox', { name: 'lessons', exact: true });
+    await expect(lessons).not.toBeChecked();
+    await expect(recall.getByTitle(/written by learning reviews/)).toHaveText('lessons');
+    await lessons.click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(patches[0]).toEqual({ config: { limit: 3, purposes: ['note', 'lesson', 'document', 'knowledge_artifact', 'image_description'] } });
   });
 
   test('a recall hook that injects on nearly every message gets the calibration warning', async ({ authenticatedPage: page }) => {

@@ -96,6 +96,10 @@ const TRANSPORT_REASONS = new Set<FailoverReason>([
 
 export function isTransportFailure(error: unknown): boolean {
   if (error instanceof ClassifiedError) return TRANSPORT_REASONS.has(error.reason);
+  // A refused connection or unknown host is one row's endpoint, not the
+  // provider lane: counted, one mistyped custom URL would open the breaker
+  // every row of that provider shares.
+  if (classifyError(error).reason === FailoverReason.ENDPOINT_UNREACHABLE) return false;
   const e = error as { status?: number; statusCode?: number; code?: string; message?: string } | null;
   const status = e?.status ?? e?.statusCode;
   if (typeof status === 'number' && (status >= 500 || status === 429)) return true;
@@ -490,7 +494,8 @@ export class ProviderRouter {
       return result;
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
-      getCircuitBreakerRegistry().recordFailure('litellm');
+      // Same rule as the primary path: a cancellation or a bad request is not the proxy failing.
+      if (isTransportFailure(error)) getCircuitBreakerRegistry().recordFailure('litellm');
       throw classifyError(error, 'litellm');
     } finally {
       token.release();
@@ -511,7 +516,8 @@ export class ProviderRouter {
       getCircuitBreakerRegistry().recordSuccess('litellm');
     } catch (error) {
       meter.failed(isRateLimitResponse(error));
-      getCircuitBreakerRegistry().recordFailure('litellm');
+      // Same rule as the primary path: a cancellation or a bad request is not the proxy failing.
+      if (isTransportFailure(error)) getCircuitBreakerRegistry().recordFailure('litellm');
       throw classifyError(error, 'litellm');
     } finally {
       meter.end();

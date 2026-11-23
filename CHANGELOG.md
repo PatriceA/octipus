@@ -69,7 +69,7 @@ labels reflect blast radius, not contract guarantees.
   - **Retention:** `artifacts.retentionDays` (`ARTIFACTS_RETENTION_DAYS`)
     moves artifacts with no edit, no view and no data refresh for that many
     days to the trash (views are recorded in a new `last_viewed_at` column,
-    migration `0201`, at most hourly per artifact); `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
+    migration `0204`, at most hourly per artifact); `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
     the trash keeps them before they are removed with their versions, data
     and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
     no existing artifact is deleted by upgrading.
@@ -77,10 +77,101 @@ labels reflect blast radius, not contract guarantees.
     and a free `suggestedSlug`, from the API, the agent tool and the chat's
     save dialog; the web forms offer the suggestion. Concurrent creates are
     decided by the unique index (one `201`, the rest `409`). A deleted
-    artifact frees its slug at once (migration `0200` makes the index cover
+    artifact frees its slug at once (migration `0203` makes the index cover
     live artifacts only). Publishing a slug another workspace already has
     public is a `409` `public_slug_taken`; an ambiguous public slug now
     resolves to the oldest artifact instead of an arbitrary one.
+- **Approved skills now reach your agents, and learning notes became lessons
+  that merge and expire** ([plan](docs/plans/learning-notes-and-skill-discovery.md),
+  [reference](docs/SESSION-LEARNING.md#where-a-lesson-goes)). A skill you
+  approve from a proposal is found for every role and for the root turn, with
+  no assignment. A learning review writes at most two lesson notes, each a
+  decision, constraint or fact, merged into the one that already says it; the
+  Notes page shows how often a review saw it (`×N`), recall labels it
+  `Lesson`, and the notes index no longer lists it.
+
+  **Behaviour changes:**
+  - **Lessons replace learning notes.** A note a learning review writes has
+    `note_kind = 'lesson'`, is indexed under the purpose `lesson` and keeps its
+    evidence in the frontmatter, not the body. The review is told to put a
+    lesson in exactly one of memory, lesson note, skill or patch, and is shown
+    up to 5 nearby lesson notes (`existing.notes`) to extend. A lesson that
+    matches one is merged into it (`extends`, the same text, or by meaning at
+    `learning.duplicateSimilarity` as a note; in the related band only if the
+    background model agrees). A match the user archived drops the lesson; one
+    expiry archived is revived; one consolidation merged away counts on the
+    note it went into.
+  - **Lessons are consolidated and expire.** The daily consolidation and
+    **Consolidate now** merge near-duplicate lesson notes (a pinned one is
+    never absorbed; at most 20 merge-model calls per run for lessons, and 20
+    for proposals) and archive lessons that are not pinned and were neither
+    updated nor shown to an agent for `learning.lessonTtlDays` (90). The first
+    daily run after upgrading can archive old learning notes this way.
+  - **Archived notes are no longer recalled or found by search.** Every
+    knowledge search (`search_notes`, `search_knowledge`, the knowledge
+    search API, link suggestions, recall) and the Recall page's has-rows check
+    leave out an archived note's chunks; unarchiving needs no re-index.
+    Browsing the knowledge base and reading an entry by id still show them.
+  - **What counts as a read.** Re-indexing identical content no longer stamps
+    `last_accessed_at`; the semantic-only search honours `skipAccess`; link
+    suggestions and ghost-link resolution no longer count their candidates
+    as read.
+  - **Learned skills reach agents, including the root.** A user's own,
+    non-system, non-archived skill with no `skill_topic_assignments` row is a
+    candidate for every role of that user's specialists and swarm children:
+    by trigger, or among the 5 nearest by meaning (cosine 0.35 or more),
+    shared with assigned skills; never always-injected; not in a shared space.
+    Without a query embedding the 10 most recently used are listed. The root
+    turn gets a `# Learned Skills` index by the same rule. Approval embeds the
+    skill at once. The query embedding is waited for at most 4.5 s.
+  - **Discovery fixes for assigned skills.** Archived skills are no longer
+    discovered; an assignment stored under a lane name (`build`) now matches
+    by trigger, meaning and always-inject too; the result is ranked best
+    first (triggers, then similarity), which changes the 8 candidates the
+    decision model judges.
+  - **Recall:** `lesson` is a recall purpose with a **lessons** checkbox on the
+    Recall page, in the default. The notes index lists and counts only your
+    own notes.
+  - **Migrations.** `0200_lesson_notes` turns the notes learning reviews wrote
+    (tag, `learning-` slug and `learningJobId`, personal or user level) into
+    lessons and moves their embedding rows to `lesson`; bodies are not
+    rewritten. `0201_archived_note_sources` adds a partial index over archived
+    notes for the search filter. `0202_recall_lesson_purpose` adds `lesson` to
+    every stored recall-hook `purposes` list that has `note`.
+
+  **New settings:** `learning.lessonTtlDays` (90; 0 never archives) and
+  `learning.maxLessonsPerReview` (2; 0 to 2). **API:**
+  `POST /api/skills/proposals/consolidate` returns `notesMerged` and
+  `notesArchived` as well; a learning receipt's `knowledge` output can have
+  the status `merged`. The thresholds are not calibrated against real data,
+  and the learning evals, which need a live model, were not run.
+- **Provider failures are classified by what the provider said.**
+  - A 429's `Retry-After` now reaches the retry backoff for providers on the
+    OpenAI SDK (the proxy, custom OpenAI-compatible endpoints and others); it
+    was dropped, so retries came sooner than the provider asked.
+  - A reset connection, including one that drops mid-reply, is a network
+    failure: retried with backoff and counted by the circuit breaker, no
+    longer an unclassified abort. A transient DNS failure (`EAI_AGAIN`) is
+    treated the same way.
+  - A refused connection or an unknown host (`ECONNREFUSED`, `ENOTFOUND`) is
+    a new `endpoint_unreachable` failure: the agent stops at once with a
+    message to check that the model server is running and its endpoint URL
+    is right, instead of retrying for about 14 s. It no longer counts
+    against the circuit breaker its provider's other models share. This
+    also applies to the plain-code errors that used to be retried as
+    network timeouts.
+  - A LiteLLM proxy stream that fails after its first chunk raises a
+    classified error, and one the caller aborts ends as a cancellation
+    instead of passing its partial text off as a finished answer. A
+    cancellation is never counted against the proxy's circuit breaker.
+  - Proxy embeddings are placed by `index`. A reply with the wrong number of
+    vectors, or with repeated or out-of-range indices, fails as an invalid
+    response instead of misaligning vectors with their texts.
+  - A custom-provider model whose API key resolves nowhere fails once, as
+    an auth failure that says where to put the key; it is not retried. A
+    401 from the endpoint is unchanged.
+  - OpenAI's `insufficient_quota` (sent as HTTP 429) is an exhausted quota,
+    no longer a rate limit to wait out.
 - **`/v1/chat/completions` passthrough streams token by token**
   ([API](docs/API.md#notes--limits)). With a registry model id on OpenAI,
   OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex or a custom
