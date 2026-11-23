@@ -330,3 +330,23 @@ describe('POST /notes createOnly', () => {
     expect(fresh.body.created).toBe(true);
   });
 });
+
+describe('POST /notes ifSha256 and deferred indexing', () => {
+  test('a personal save made from an older text is 409 stale and writes nothing; the save does not wait for indexing', async () => {
+    const created = await post(aliceApp, '/api/notes', { title: 'Phone and desktop', body: 'first' });
+    expect(created.body).toMatchObject({ indexed: false, indexQueued: true });
+    const base = created.body.note.bodySha256;
+    await post(aliceApp, '/api/notes', { id: created.body.note.id, title: 'Phone and desktop', body: 'from the phone' });
+    const stale = await post(aliceApp, '/api/notes', { id: created.body.note.id, title: 'Phone and desktop', body: 'from the desktop', ifSha256: base });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('stale');
+    expect((await get(aliceApp, `/api/notes/${created.body.note.id}`)).body.body).toBe('from the phone');
+  });
+
+  test('restoring a note that is not archived is a no-op success', async () => {
+    const created = await post(aliceApp, '/api/notes', { title: 'Never archived', body: 'x' });
+    const before = (await get(aliceApp, `/api/notes/${created.body.note.id}`)).body.updatedAt;
+    expect((await post(aliceApp, `/api/notes/${created.body.note.id}/restore`, {})).status).toBe(200);
+    expect((await get(aliceApp, `/api/notes/${created.body.note.id}`)).body.updatedAt).toBe(before);
+  });
+});

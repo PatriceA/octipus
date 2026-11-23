@@ -352,7 +352,7 @@ export class NoteRepository {
     const result = await this.db
       .update(notes)
       .set({ archivedAt: null, updatedAt: new Date(), frontmatter: withoutArchiveMarkers })
-      .where(and(eq(notes.id, id), ...owner(scope)))
+      .where(and(eq(notes.id, id), ...owner(scope), isNotNull(notes.archivedAt)))
       .returning({ id: notes.id });
     return result.length > 0;
   }

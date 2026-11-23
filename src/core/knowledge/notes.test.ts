@@ -115,6 +115,53 @@ describe('NoteService', () => {
     expect(await svc.getById(personalNoteScope(userId), r.note.id)).not.toBeNull();
   });
 
+  test('deferIndex re-indexes once, after the note is quiet, from its latest text; the save does not wait', async () => {
+    const { INDEX_DEBOUNCE_MS } = await import('./notes');
+    // biome-ignore lint/suspicious/noExplicitAny: spying on the private re-index step
+    const reindex = vi.spyOn(svc as any, 'reindex');
+    reindex.mockClear();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const scope = personalNoteScope(userId);
+      const first = await svc.save({ scope, title: 'Typing', body: 'one', deferIndex: true });
+      expect(first).toMatchObject({ indexed: false, indexQueued: true });
+      await svc.save({ scope, id: first.note.id, title: 'Typing', body: 'one two', deferIndex: true });
+      await svc.save({ scope, id: first.note.id, title: 'Typing', body: 'one two three', deferIndex: true });
+      expect(reindex).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(INDEX_DEBOUNCE_MS - 1);
+      expect(reindex).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(reindex).toHaveBeenCalledTimes(1), { interval: 5, timeout: 5_000 });
+      expect((reindex.mock.calls[0][0] as { body: string }).body).toBe('one two three');
+    } finally {
+      vi.useRealTimers();
+      reindex.mockRestore();
+    }
+  });
+
+  test('ifSha256 refuses a personal save over text saved since, and writes nothing', async () => {
+    const { StaleWriteError } = await import('@/core/docs/hub');
+    const scope = personalNoteScope(userId);
+    const created = await svc.save({ scope, title: 'Shared draft', body: 'v1' });
+    const base = created.note.bodySha256;
+    await svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v2 from the phone' });
+    await expect(svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v1 edited', ifSha256: base })).rejects.toBeInstanceOf(StaleWriteError);
+    expect((await svc.getById(scope, created.note.id))?.body).toBe('v2 from the phone');
+    const ok = await svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v3', ifSha256: (await svc.getById(scope, created.note.id))!.bodySha256 });
+    expect(ok.note.body).toBe('v3');
+  });
+
+  test('restoring a note that is not archived changes nothing', async () => {
+    const scope = personalNoteScope(userId);
+    const created = await svc.save({ scope, title: 'Active one', body: 'x' });
+    const before = (await svc.getById(scope, created.note.id))!;
+    expect(await svc.restore(scope, created.note.id)).toBe(true);
+    const after = (await svc.getById(scope, created.note.id))!;
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+    const { getNoteRepository } = await import('@/db/repositories/note-repository');
+    expect(await getNoteRepository().unarchive(userId, created.note.id)).toBe(false);
+  });
+
   test('unchanged body on re-save is a no-op for links', async () => {
     const first = await svc.save({ scope: personalNoteScope(userId), title: 'Stable', body: 'has [[a]] link' });
     expect(first.links.added).toBe(1);

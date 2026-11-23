@@ -130,6 +130,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           frontmatter: body.frontmatter,
           baseSha256: body.baseSha256,
           createOnly: body.createOnly,
+          ifSha256: body.ifSha256,
+          // An editor saves on every pause: embed once the note is quiet.
+          deferIndex: true,
         });
         return result;
       } catch (err) {
@@ -164,6 +167,12 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
          * ones included) updates that note. `true` refuses that: 409 `exists`.
          */
         createOnly: t.Optional(t.Boolean()),
+        /**
+         * Personal notes: save only while the stored body still has this sha
+         * (the one the edit was made from); otherwise 409 `stale` with
+         * `currentSha256`, and nothing is written.
+         */
+        ifSha256: t.Optional(t.String({ pattern: '^[0-9a-f]{64}$' })),
       }),
       detail: { tags: ['notes'] },
     },

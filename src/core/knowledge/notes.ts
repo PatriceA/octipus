@@ -102,13 +102,31 @@ export interface SaveNoteInput {
    * an existing note is a proposal).
    */
   createOnly?: boolean;
+  /**
+   * Personal notes: write only while the stored body still has this sha
+   * (the one the writer read). Otherwise `StaleWriteError` and nothing is
+   * written — an autosave from an editor never overwrites text saved since
+   * from somewhere else. Space notes merge instead (`baseSha256`).
+   */
+  ifSha256?: string;
+  /**
+   * Re-index a moment after the last save of the note instead of inside this
+   * one (`INDEX_DEBOUNCE_MS`): an editor that saves on every pause does not
+   * re-embed the whole note each time. The result says `indexQueued`.
+   */
+  deferIndex?: boolean;
 }
+
+/** A deferred re-index (`SaveNoteInput.deferIndex`) runs this long after the note's last save. */
+export const INDEX_DEBOUNCE_MS = 5_000;
 
 export interface SaveNoteResult {
   note: Note;
   created: boolean;
-  /** False when the body changed but re-indexing was skipped/failed (logged). */
+  /** False when the body changed but re-indexing was skipped/failed (logged), or was deferred. */
   indexed: boolean;
+  /** The re-index was deferred (`deferIndex`): it runs once the note has been quiet for `INDEX_DEBOUNCE_MS`. */
+  indexQueued?: boolean;
   links: { added: number; removed: number };
   /** Space notes: other changes were merged into the written body (it differs from the input). */
   merged?: boolean;
@@ -199,6 +217,9 @@ export class NoteService {
       existing = await store.getBySlug(desiredSlug);
     }
     if (existing && input.createOnly) throw new NoteExistsError(existing.id, existing.slug);
+    if (existing && scope.kind !== 'space' && input.ifSha256 !== undefined && existing.bodySha256 !== input.ifSha256) {
+      throw new StaleWriteError('unknown_base', existing.bodySha256);
+    }
 
     // A space note's body goes through the hub (or the conditional write):
     // what is saved is the writer's change merged into the current text.
@@ -283,9 +304,44 @@ export class NoteService {
     const links = await this.relink(scope, note, parsed, tags, input.createdByAgentId ?? null);
 
     // 3. Re-index (degrades loudly if no embedding model).
+    if (input.deferIndex) {
+      this.scheduleReindex(note);
+      return { note: this.withLive(scope, note), created, indexed: false, indexQueued: true, links, merged };
+    }
+    this.cancelScheduledReindex(note.id);
     const indexed = await this.reindex(note);
 
     return { note: this.withLive(scope, note), created, indexed, links, merged };
+  }
+
+  /** Deferred re-indexes by note id (`deferIndex`): one pending timer per note. */
+  private readonly pendingIndex = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Re-index the note once it has been quiet for `INDEX_DEBOUNCE_MS`, from
+   * the row as it is then (later saves restart the wait). In-process: a
+   * restart inside the window leaves the earlier chunks until the next save.
+   */
+  private scheduleReindex(note: Note): void {
+    this.cancelScheduledReindex(note.id);
+    const timer = setTimeout(() => {
+      this.pendingIndex.delete(note.id);
+      this.notes.getById(note.userId, note.id)
+        .then(async (row) => {
+          const current = row
+            ?? (note.workspaceId ? await this.notes.getById({ kind: 'space', workspaceId: note.workspaceId, userId: note.userId, role: 'editor', archived: false }, note.id) : null);
+          if (current) await this.reindex(current);
+        })
+        .catch((err: unknown) => coreLogger.warn({ err, component: 'notes', noteId: note.id }, 'Deferred re-index of a note failed; it is searchable by its earlier text until the next save'));
+    }, INDEX_DEBOUNCE_MS);
+    timer.unref?.();
+    this.pendingIndex.set(note.id, timer);
+  }
+
+  private cancelScheduledReindex(noteId: string): void {
+    const timer = this.pendingIndex.get(noteId);
+    if (timer) clearTimeout(timer);
+    this.pendingIndex.delete(noteId);
   }
 
   /** Step 2 of `save`: sync the note's `[[links]]` and `#tags` edges, bind ghosts. */
@@ -626,7 +682,10 @@ export class NoteService {
   async restore(scope: NoteScope, id: string): Promise<boolean> {
     assertNoteAccess(scope, 'write');
     const store = this.store(scope);
-    if (!(await store.getById(id))) return false;
+    const note = await store.getById(id);
+    if (!note) return false;
+    // Already active: nothing to undo (and nothing rewritten).
+    if (!note.archivedAt) return true;
     return store.unarchive(id);
   }
 
