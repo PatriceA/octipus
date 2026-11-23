@@ -10,14 +10,13 @@
  *   - Paste markers `[paste #N +M lines]` come for free from the
  *     Editor; callers should consume `getExpandedText()` on submit.
  *
- * The `@@`-style expert autocompletion called out in plan §4 lives
- * with the multi-agent router in Phase 7 (extension API). Adding
- * a custom AutocompleteProvider here would conflict with the file
- * provider's `@` handling.
+ *   - `@` mentions of agents, skills and sessions (`mentions`), listed
+ *     above the matching files (`../mentions.ts`).
  */
 import { CombinedAutocompleteProvider, Editor, type EditorOptions, type TUI } from '@/tui-kit';
 import { existsSync } from 'node:fs';
 import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
+import { type Mention, MentionAutocompleteProvider } from '../mentions';
 import { getEditorTheme } from '../theme/defaults';
 
 export interface ComposerOptions extends EditorOptions {
@@ -25,6 +24,8 @@ export interface ComposerOptions extends EditorOptions {
   basePath?: string;
   /** Override `fd` discovery (mainly for tests). */
   fdPath?: string | null;
+  /** What `@` mentions can name; without it `@` completes files only. */
+  mentions?: () => Promise<Mention[]>;
 }
 
 const FD_CANDIDATES = ['/usr/bin/fd', '/usr/local/bin/fd', '/opt/homebrew/bin/fd', '/usr/bin/fdfind'];
@@ -38,8 +39,9 @@ function detectFdPath(): string | null {
 
 export class Composer extends Editor {
   constructor(tui: TUI, options: ComposerOptions = {}) {
-    const { basePath = process.cwd(), fdPath = detectFdPath(), ...editorOptions } = options;
+    const { basePath = process.cwd(), fdPath = detectFdPath(), mentions, ...editorOptions } = options;
     super(tui, getEditorTheme(), { paddingX: 1, autocompleteMaxVisible: 5, ...editorOptions });
-    this.setAutocompleteProvider(new CombinedAutocompleteProvider(OCTIPUS_SLASH_COMMANDS, basePath, fdPath));
+    const files = new CombinedAutocompleteProvider(OCTIPUS_SLASH_COMMANDS, basePath, fdPath);
+    this.setAutocompleteProvider(mentions ? new MentionAutocompleteProvider(files, mentions) : files);
   }
 }

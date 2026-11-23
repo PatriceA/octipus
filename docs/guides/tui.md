@@ -164,7 +164,9 @@ The compact details show steps near the active step. The full transcript entry r
 | `Alt+O` | Transcript into the terminal scrollback |
 | `Ctrl+F` / `Ctrl+Shift+F` | Search the transcript |
 
-Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills` and `/compact`.
+Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills`, `/model` and `/compact`.
+
+Typing `@` opens mention completion: the agents the root agent can delegate to (`@agent:coding`), your skills (`@skill:Tech-Writing`, the name with spaces as `-`) and your recent sessions (`@session:1a2b3c4d`, shown with their title), listed above the matching project files (`@src/app.ts`, as before). Keep typing to filter; `Tab` or `Enter` inserts the token. A mention is text in your message: it names the agent, skill or session for the agent reading it, which decides what to do with it — the server does not run the agent, turn the skill on or attach the session by itself (use `/skills` to turn a skill on). The lists come from the same routes the web reads (`/api/roles`, `/api/skills`, `/api/sessions`), are fetched on the first `@` and kept for a minute; one that cannot be loaded is reported in the transcript and left out.
 
 The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace`, `/resume`, `/theme`, `/search`, `/export` and `/scrollback` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 

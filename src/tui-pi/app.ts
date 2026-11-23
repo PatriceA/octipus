@@ -18,6 +18,7 @@ import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
 import { configureLinks } from './links';
 import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
 import { isHistoryRow, OlderTurns, toChatMessage } from './older-turns';
+import { MentionSource } from './mentions';
 import { isModelList, type ModelChoice, modelCommand, modelItems } from './pickers';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
@@ -225,7 +226,8 @@ export class OctipusTuiApp {
     this.settingsPath = options.settingsPath ?? DEFAULT_SETTINGS_PATH;
     if (this.themeSetting !== 'auto') setPalette(this.themeSetting);
     this.sessionUsed = options.sessionId !== undefined;
-    this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
+    const mentions = new MentionSource(path => this.adapter.getJson(path), () => this.sessionId, text => this.pushMessage('system', `Error: ${text}`));
+    this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd(), mentions: () => mentions.list() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
     this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) tui.setFocus(this.composer); });
