@@ -9,6 +9,7 @@ import { coreLogger } from '@/utils/logger';
 import { killProcessTree, posixShellArgv, whichSync, windowsCmdShim } from '@/utils/proc';
 import { resolve } from 'node:path';
 import { tokenizeSafe } from './policy';
+import { createManagedTemporaryDirectory } from '@/core/temporary-directory';
 import type { ShellEnvOptions, ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
@@ -190,6 +191,10 @@ export class LocalShellOperations implements ShellOperations {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
     const finalArgv = wrap.argv;
+    let scratch: ReturnType<typeof createManagedTemporaryDirectory> | null = null;
+    try { if (!wrap.wrapped) scratch = createManagedTemporaryDirectory(); }
+    catch (error) { wrap.cleanup(); throw new ToolNotExecutedError('shell', 'Could not create command temporary directory', { cause: error }); }
+    const cleanupScratch = () => { wrap.cleanup(); scratch?.dispose(); };
     if (wrap.wrapped) {
       coreLogger.debug(
         { runner: wrap.runner, head: finalArgv.slice(0, 4) },
@@ -198,7 +203,7 @@ export class LocalShellOperations implements ShellOperations {
     }
 
     if (options.signal?.aborted) {
-      wrap.cleanup();
+      cleanupScratch();
       return markToolNotExecuted('shell', { stdout: '', stderr: '', exitCode: null, killed: true, timedOut: false, aborted: true, signal: null });
     }
 
@@ -214,6 +219,7 @@ export class LocalShellOperations implements ShellOperations {
       let child: ChildProcessWithoutNullStreams;
       try {
         const env = childEnv(options);
+        Object.assign(env, scratch?.env);
         if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
         const run = windowsCmdShim(finalArgv, env, process.platform, cwd);
         // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
@@ -228,8 +234,9 @@ export class LocalShellOperations implements ShellOperations {
           // waits for those: the call sat unresolved long past a 500ms timeout.
           detached: true,
         });
+        scratch?.attach(child.pid, process.platform !== 'win32');
       } catch (error) {
-        wrap.cleanup();
+        cleanupScratch();
         reject(new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error }));
         return;
       }
@@ -298,7 +305,7 @@ export class LocalShellOperations implements ShellOperations {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         options.signal?.removeEventListener('abort', onAbort);
         untrack();
-        wrap.cleanup();
+        cleanupScratch();
       };
 
       child.on('close', (code, signal) => {
@@ -352,21 +359,29 @@ export class LocalShellOperations implements ShellOperations {
       extraReadWrite: options.extraReadWrite,
       extraReadOnly: options.extraReadOnly,
     });
-    const done = () => { wrap.cleanup(); options.onExit?.(); };
+    let scratch: ReturnType<typeof createManagedTemporaryDirectory> | null = null;
+    try { if (!wrap.wrapped) scratch = createManagedTemporaryDirectory(); }
+    catch (error) { wrap.cleanup(); throw new ToolNotExecutedError('shell', 'Could not create background temporary directory', { cause: error }); }
+    let finished = false;
+    const done = () => { if (finished) return; finished = true; wrap.cleanup(); scratch?.dispose(); options.onExit?.(); };
 
-    const env = childEnv(options);
-    if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
-    let run: ReturnType<typeof windowsCmdShim>;
-    try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { done(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }
-    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
-    const child = spawn(run.argv[0], run.argv.slice(1), {
-      cwd,
-      env,
-      shell: run.shell,
-      windowsHide: true,
-      detached: true,
-      stdio: options.input !== undefined ? ['pipe', 'ignore', 'ignore'] : 'ignore',
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      const env = childEnv(options);
+      Object.assign(env, scratch?.env);
+      if (sshAgent) env.SSH_AUTH_SOCK = sshAgent.socket;
+      const run = windowsCmdShim(wrap.argv, env, process.platform, cwd);
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
+      child = spawn(run.argv[0], run.argv.slice(1), {
+        cwd,
+        env,
+        shell: run.shell,
+        windowsHide: true,
+        detached: true,
+        stdio: options.input !== undefined ? ['pipe', 'ignore', 'ignore'] : 'ignore',
+      });
+    } catch (error) { done(); throw new ToolNotExecutedError('shell', 'Could not spawn background command', { cause: error }); }
+    scratch?.attach(child.pid, process.platform !== 'win32');
     // NOT tracked by `trackGroup`, unlike `exec`. Outliving this process is the
     // whole point here — the caller asked for a background process (a dev
     // server, a watcher) and reaping it at shutdown would defeat the feature.
