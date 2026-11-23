@@ -7,6 +7,24 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **OpenTelemetry tracing**
+  ([docs](docs/OBSERVABILITY.md#tracing-opentelemetry)). Off by default;
+  set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  or `OTEL_TRACES_EXPORTER=otlp`) to export spans over OTLP/HTTP to a
+  collector. Spans: inbound HTTP request (continuing an incoming W3C
+  `traceparent`), `agent.run` per turn, `agent.child` per spawn,
+  `pipeline.run` and `pipeline.stage`, `chat <model>` per model call with
+  provider, model, token counts and streaming, `execute_tool <name>` per tool
+  call, `channel.deliver`, and `webhook.deliver` (which sends `traceparent` on).
+  Spans carry ids, names, counts, status and the error class only, never
+  prompts, completions, tool arguments, message text or the error message.
+  The standard `OTEL_*` variables set headers, service name, resource,
+  sampler and batching; `OTEL_TRACES_EXPORTER` other than `otlp`/`none`, or
+  the `grpc` protocol, stops boot with the reason. New dependencies:
+  `@opentelemetry/api`, `sdk-trace-base`, `context-async-hooks`, `core`,
+  `resources` and `exporter-trace-otlp-http`; the SDK is loaded only when
+  tracing is on.
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

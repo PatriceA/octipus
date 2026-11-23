@@ -17,6 +17,7 @@ import { canActInSession } from '@/core/rooms/access';
 import { limitKindOf } from '@/core/errors/limit-refusal';
 import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { isSessionTurnCancelled } from '@/core/session-turn-lock';
+import { injectTraceHeaders, SpanKind, withSpan } from '@/core/tracing';
 
 export interface ActionResult {
   success: boolean;
@@ -877,29 +878,44 @@ async function executeWebhook(
   // vetted IP so a rebinding resolver can't swap in a private address between
   // the check and the connect.
   const { fetchGuarded } = await import('@/utils/sanitize');
-  let response: Response;
-  try {
-    response = await fetchGuarded(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
+  // The span names the receiving host only: a webhook URL's path and query
+  // are often its secret (an incoming-webhook token), which no redactor can
+  // recognise by shape (src/core/tracing.ts).
+  const target = URL.canParse(url) ? new URL(url) : null;
+  return withSpan('webhook.deliver', {
+    'http.request.method': method,
+    'server.address': target?.hostname,
+    'url.scheme': target?.protocol.replace(/:$/, ''),
+  }, async (span) => {
+    let response: Response;
+    try {
+      response = await fetchGuarded(url, {
+        method,
+        // The trace context goes out with the delivery; a header the hook
+        // configures itself wins.
+        headers: injectTraceHeaders({
+          'Content-Type': 'application/json',
+          ...headers,
+        }),
+        body: method !== 'GET' ? body : undefined,
+      });
+    } catch (err) {
+      span.fail(err);
+      return { success: false, error: `Webhook URL blocked: ${(err as Error).message}` };
+    }
+    span.setAttributes({ 'http.response.status_code': response.status });
+    if (!response.ok) span.failWith(String(response.status));
+
+    const responseData = await response.text();
+
+    return {
+      success: response.ok,
+      data: {
+        status: response.status,
+        body: responseData,
       },
-      body: method !== 'GET' ? body : undefined,
-    });
-  } catch (err) {
-    return { success: false, error: `Webhook URL blocked: ${(err as Error).message}` };
-  }
-
-  const responseData = await response.text();
-
-  return {
-    success: response.ok,
-    data: {
-      status: response.status,
-      body: responseData,
-    },
-  };
+    };
+  }, SpanKind.CLIENT);
 }
 
 async function executeN8NWorkflow(

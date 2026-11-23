@@ -32,6 +32,7 @@ import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 import type { ToolBatchOutcome } from './agent-worker/failure-streak-detector';
 import { readOnlyNotifyAllowed, readOnlyRefusal } from '@/security/read-only-turn';
 import { FORK_REFUSAL, FORK_REFUSED_TOOLS_KEY } from '@/core/swarm/fork';
+import { withSpan } from '@/core/tracing';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
@@ -554,7 +555,7 @@ export class ToolExecutor {
       const promises = group.map(async (tc) => {
         try {
           this.assertCanExecute();
-          const res = await tool.execute(tc.arguments, this.context);
+          const res = await this.traced(tc, 'agent', () => tool.execute(tc.arguments, this.context));
           return { toolCallId: tc.id, result: res } as ToolResult;
         } catch (err) {
           return {
@@ -591,6 +592,22 @@ export class ToolExecutor {
    * merged back into the `results` list in call order. Default fan-out
    * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
    */
+  /**
+   * One tool execution as a span (src/core/tracing.ts): the tool's name, its
+   * call id and the agent that made it, never its arguments or result. A
+   * thrown error marks it failed with the error's class.
+   */
+  private traced<T>(call: ToolCall, toolId: string, run: () => Promise<T>): Promise<T> {
+    return withSpan(`execute_tool ${call.name}`, {
+      'gen_ai.operation.name': 'execute_tool',
+      'gen_ai.tool.name': call.name,
+      'gen_ai.tool.call.id': call.id,
+      'octipus.tool.id': toolId,
+      'octipus.agent.id': this.context.id,
+      'octipus.agent.role': this.context.role,
+    }, run);
+  }
+
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.activeBatches++;
     try {
@@ -797,7 +814,7 @@ export class ToolExecutor {
       if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
-          const executed = await tool.execute(toolCall.arguments, this.context);
+          const executed = await this.traced(toolCall, toolId, () => tool.execute(toolCall.arguments, this.context));
           const result = await this.withheldFromHarness(executed);
           const toolExecMs = Date.now() - toolExecStart;
 
@@ -1083,7 +1100,7 @@ export class ToolExecutor {
       this.assertCanExecute();
       try {
         const toolExecStart = Date.now();
-        const executed = await withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
+        const executed = await this.traced(toolCall, toolId, () => withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
           // Internal orchestration tools (toolId 'agent': spawn_child, plans, memory,
           // status) are not externally observable actions; journaling them would let
           // a bookkeeping hiccup gate real mutations behind a recovery review.
@@ -1098,7 +1115,7 @@ export class ToolExecutor {
                 { toolId, action: permAction, toolName: bareName, args: toolCall.arguments }, current.source))) {
                 throw new Error('Permission changed before tool execution; obtain action authorization again.');
               }
-            }));
+            })));
         const toolExecMs = Date.now() - toolExecStart;
         const uncertainRecord = uncertainExecutionRecord(executed);
         if (uncertainRecord) this.counters.uncertainActionIds = [...(this.counters.uncertainActionIds ?? []), uncertainRecord];
