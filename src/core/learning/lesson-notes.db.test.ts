@@ -335,6 +335,8 @@ describe('migration 0200', () => {
     await row(`note:${tagged}`, 'd');
     await row(`note:${inSpace}`, 'e', 'note', space);
 
+    // An old review note: converted, it must start a full expiry window.
+    await rows(`UPDATE notes SET updated_at = now() - interval '400 days' WHERE id IN ($1, $2)`, [legacy, plain]);
     const sql = readFileSync(join(process.cwd(), 'src/db/migrations/0200_lesson_notes.sql'), 'utf8');
     for (let run = 0; run < 2; run++) {
       for (const statement of sql.split('--> statement-breakpoint')) await rows(statement);
@@ -342,6 +344,10 @@ describe('migration 0200', () => {
 
     expect((await note(legacy)).note_kind).toBe('lesson');
     expect((await note(legacy)).body).toContain('Evidence: session');
+    const [{ fresh }] = await rows(`SELECT updated_at > now() - interval '1 day' AS fresh FROM notes WHERE id = $1`, [legacy]) as Array<{ fresh: boolean }>;
+    expect(fresh).toBe(true);
+    const [{ old }] = await rows(`SELECT updated_at < now() - interval '300 days' AS old FROM notes WHERE id = $1`, [plain]) as Array<{ old: boolean }>;
+    expect(old).toBe(true);
     expect((await purposes(legacy)).sort()).toEqual(['lesson', 'lesson']);
     for (const id of [plain, tagged, inSpace]) {
       expect((await note(id)).note_kind).toBe('note');

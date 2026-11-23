@@ -19,7 +19,11 @@
 -- Bodies are not rewritten (the legacy "Evidence: session ..." footer goes on
 -- the next merge). Safe to run twice: every statement only matches what is
 -- still left to convert.
-UPDATE notes SET note_kind = 'lesson'
+-- updated_at is set so every converted lesson starts a full
+-- learning.lessonTtlDays window: left as it was, the first daily maintenance
+-- after the upgrade would archive old ones before their owner had seen the
+-- change.
+UPDATE notes SET note_kind = 'lesson', updated_at = now()
 WHERE note_kind = 'note' AND 'session-learning' = ANY(tags)
   AND slug LIKE 'learning-%' AND frontmatter ? 'learningJobId'
   AND (workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.id = notes.workspace_id AND w.kind = 'personal'));

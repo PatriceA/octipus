@@ -80,8 +80,9 @@ export interface ConsolidationReport {
   /** Skill and proposal embeddings computed. */
   embedded: number;
   /**
-   * Merges, of proposals and of lesson notes, that only counted (the text was
-   * not rewritten) because the merge model could not be used.
+   * Proposal merges that only counted (the text was not rewritten) because
+   * the merge model could not be used. Lesson notes are never merged that
+   * way: without a verdict they stay apart for a later run.
    */
   degraded: number;
   /** Lesson notes absorbed into another lesson note (and archived). */
