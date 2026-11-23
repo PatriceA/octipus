@@ -11,6 +11,7 @@
  * override and the enabled models they may use, `src/core/commands/model.ts`).
  */
 import type { FuzzyListItem } from '@/tui-kit/fuzzy-list';
+import type { ModelOption, ModelOptions } from '@/core/commands/model';
 
 export interface SessionRow { id: string; title: string; updatedAt: string; messages: number; channel?: string }
 
@@ -62,19 +63,16 @@ export function skillCommand(skill: SkillRow, mode: SkillMode): string {
   return `${skill.id} ${mode === 'automatic' ? 'auto' : mode}`;
 }
 
-export interface ModelRow { name: string; modelId: string; provider: string; isDefault: boolean }
-export interface ModelList { current: string | null; models: ModelRow[] }
-
-export const isModelList = (v: unknown): v is ModelList => {
-  const r = v as ModelList | null;
+export const isModelList = (v: unknown): v is ModelOptions => {
+  const r = v as ModelOptions | null;
   return !!r && Array.isArray(r.models) && r.models.every(m => !!m && typeof m.name === 'string' && typeof m.modelId === 'string');
 };
 
 /** What a model picker entry does: switch to a model, or drop the override. */
-export type ModelChoice = { kind: 'model'; model: ModelRow } | { kind: 'clear' };
+export type ModelPick = { kind: 'model'; model: ModelOption } | { kind: 'clear' };
 
-export function modelItems(list: ModelList): FuzzyListItem<ModelChoice>[] {
-  const items: FuzzyListItem<ModelChoice>[] = list.models.map(model => ({
+export function modelItems(list: ModelOptions): FuzzyListItem<ModelPick>[] {
+  const items: FuzzyListItem<ModelPick>[] = list.models.map(model => ({
     value: { kind: 'model', model },
     label: `${model.name}${model.name === list.current ? '  (this session)' : ''}${model.isDefault ? '  (default)' : ''}`,
     description: `${model.modelId} · ${model.provider}`,
@@ -85,6 +83,6 @@ export function modelItems(list: ModelList): FuzzyListItem<ModelChoice>[] {
 }
 
 /** The `/model` argument an entry sends. */
-export function modelCommand(choice: ModelChoice): string {
+export function modelCommand(choice: ModelPick): string {
   return choice.kind === 'clear' ? 'clear' : choice.model.name;
 }

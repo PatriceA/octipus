@@ -207,11 +207,17 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     description: 'Show, set or clear this session\'s root agent model: /model [<name>|clear|list]',
     handler: async ctx => {
       if (!ctx.sessionId) return { text: 'No active session.' };
-      const { modelChoices, runModelCommand } = await import('@/core/commands/model');
+      // As /history: the session's owner only. A session the server has not
+      // seen yet (the terminal picks its id before the first message) is the
+      // caller's own; the override is keyed by the caller as well.
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const session = await sessionRepository.findById(ctx.sessionId);
+      if (session && !(await canActInSession(session, ctx.userId, 'chat'))) return { text: 'Session not found.' };
+      const { modelOptions, runModelCommand } = await import('@/core/commands/model');
       const args = ctx.rawArgs.trim();
       const { response } = await runModelCommand({ sessionId: ctx.sessionId, userId: ctx.userId, args });
       // Alone or `list`: also the models to choose from, for a picker.
-      if (!args || args.toLowerCase() === 'list') return { text: response, data: await modelChoices(ctx.sessionId, ctx.userId) };
+      if (!args || args.toLowerCase() === 'list') return { text: response, data: await modelOptions(ctx.sessionId, ctx.userId) };
       return { text: response };
     },
   });

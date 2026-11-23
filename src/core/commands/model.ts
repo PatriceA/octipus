@@ -23,10 +23,12 @@ import { registerCommand } from './registry';
  * model the caller may use (coworking spec §8.2).
  */
 /** A model the caller may switch the root agent to, as a picker lists it. */
-export interface ModelChoice { name: string; modelId: string; provider: string; isDefault: boolean }
+export interface ModelOption { name: string; modelId: string; provider: string; isDefault: boolean }
+/** What the gateway's `/model` sends as data: the caller's session override and the models to choose from. */
+export interface ModelOptions { current: string | null; models: ModelOption[] }
 
 /** The caller's session override and the enabled models they may use (`/model list`'s rows). */
-export async function modelChoices(sessionId: string, userId: string): Promise<{ current: string | null; models: ModelChoice[] }> {
+export async function modelOptions(sessionId: string, userId: string): Promise<ModelOptions> {
   const models = (await getModelRegistry().getModelsForUser(userId)).filter(m => m.isEnabled);
   return {
     current: getSessionModel(sessionId, userId) ?? null,

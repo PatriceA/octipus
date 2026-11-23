@@ -19,7 +19,7 @@ import { configureLinks } from './links';
 import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
 import { isHistoryRow, OlderTurns, toChatMessage } from './older-turns';
 import { MentionSource } from './mentions';
-import { isModelList, type ModelChoice, modelCommand, modelItems } from './pickers';
+import { isModelList, modelCommand, modelItems, type ModelPick } from './pickers';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -192,7 +192,7 @@ export class OctipusTuiApp {
   /** The picker open now (history, sessions, models, skills), if any. */
   private pickerHandle: OverlayHandle | null = null;
   /** The picker waiting for the gateway's list, if one is. */
-  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | { command: 'model'; list: FuzzyList<ModelChoice> } | null = null;
+  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | { command: 'model'; list: FuzzyList<ModelPick> } | null = null;
   /** Lists a picker asked for and was closed before they came: their late results are dropped, not shown in the transcript. */
   private readonly cancelledLists: Array<'sessions' | 'skills' | 'model'> = [];
   private readonly search?: TranscriptSearch;
@@ -1162,7 +1162,7 @@ export class OctipusTuiApp {
 
   /** `/model` alone: pick the root agent's model for this session (the gateway's `/model <name>`). */
   private openModelPicker(): void {
-    const list = this.openPicker<ModelChoice>('Model for this session', [], choice => {
+    const list = this.openPicker<ModelPick>('Model for this session', [], choice => {
       this.pushMessage('user', `/model ${modelCommand(choice)}`);
       this.command('model', { value: modelCommand(choice) });
     }, choice => choice.kind === 'clear'

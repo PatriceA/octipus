@@ -301,6 +301,8 @@ describe('/model (the terminal\'s model picker)', () => {
     (await import('@/core/agent/session-model-override'))._resetSessionModelOverridesForTesting();
   });
 
+  beforeEach(() => { vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-model', userId: user } as never); });
+
   test('alone it says what is set and lists the enabled models the caller may use as data', async () => {
     const result = await registry.execute('/model', ctx);
     expect(result!.text).toContain('No session override set');
@@ -308,6 +310,14 @@ describe('/model (the terminal\'s model picker)', () => {
       { name: 'fast', modelId: 'small-1', provider: 'ollama', isDefault: true },
       { name: 'deep', modelId: 'large-2', provider: 'openrouter', isDefault: false },
     ] });
+  });
+
+  test('another user\'s session is refused as /history refuses it; a session not created yet is the caller\'s', async () => {
+    const findById = vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-model', userId: '22222222-2222-4333-8444-555555555555' } as never);
+    expect(await registry.execute('/model', ctx)).toEqual({ text: 'Session not found.' });
+    expect((await registry.execute('/model deep', ctx))!.text).toBe('Session not found.');
+    findById.mockResolvedValue(null);
+    expect((await registry.execute('/model', ctx))!.data).toMatchObject({ current: null });
   });
 
   test('with a name it sets the caller\'s override for the session, as the chat command does; clear drops it', async () => {
