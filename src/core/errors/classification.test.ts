@@ -42,6 +42,12 @@ describe('classifyError — rate limit variants', () => {
     expect(err.retryAfterMs).toBe(12000);
   });
 
+  test('a 429 carrying insufficient_quota is a billing stop, not a rate limit', () => {
+    const err = classifyError({ status: 429, message: 'You exceeded your current quota', error: { code: 'insufficient_quota' } });
+    expect(err.reason).toBe(FailoverReason.QUOTA_EXHAUSTED);
+    expect(err.recovery).toBe(RecoveryAction.FALLBACK_PROVIDER);
+  });
+
   test('extracts retry-after from a fetch Headers object, as current SDK errors carry it', () => {
     const err = classifyError({ status: 429, message: 'rate limited', headers: new Headers({ 'Retry-After': '9' }) });
     expect(err.retryAfterMs).toBe(9000);

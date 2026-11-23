@@ -210,6 +210,12 @@ const PATTERNS: Array<{
     reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER },
   { test: m => /selected model is at capacity|workspace routing discovery failed|reconnecting\.\.\./i.test(m),
     reason: FailoverReason.PROVIDER_DOWN, recovery: RecoveryAction.RETRY_BACKOFF },
+  // A billing stop, which OpenAI sends as a 429 with this code: no wait cures it.
+  {
+    test: (_m, c) => c === 'insufficient_quota' || c === 'billing_hard_limit_reached',
+    reason: FailoverReason.QUOTA_EXHAUSTED,
+    recovery: RecoveryAction.FALLBACK_PROVIDER,
+  },
   // Rate limits (429 is the strongest signal)
   {
     test: (_m, _c, s) => s === 429,

@@ -219,7 +219,7 @@ describe('failure classification over the wire', () => {
     ['403', openAIError(403, 'Key not allowed to access model'), FailoverReason.AUTH_FAILED, RecoveryAction.ROTATE_CREDENTIAL],
     ['400 context_length_exceeded', openAIError(400, "This model's maximum context length is 8192 tokens", { code: 'context_length_exceeded' }), FailoverReason.CONTEXT_TOO_BIG, RecoveryAction.COMPRESS_CONTEXT],
     ['402', openAIError(402, 'Payment required'), FailoverReason.QUOTA_EXHAUSTED, RecoveryAction.FALLBACK_PROVIDER],
-    ['429 insufficient_quota', openAIError(429, 'You exceeded your current quota', { code: 'insufficient_quota' }), FailoverReason.RATE_LIMIT, RecoveryAction.RETRY_BACKOFF],
+    ['429 insufficient_quota', openAIError(429, 'You exceeded your current quota', { code: 'insufficient_quota' }), FailoverReason.QUOTA_EXHAUSTED, RecoveryAction.FALLBACK_PROVIDER],
     ['500', openAIError(500, 'boom', { type: 'server_error' }), FailoverReason.PROVIDER_DOWN, RecoveryAction.FALLBACK_PROVIDER],
     ['503', openAIError(503, 'no healthy deployments'), FailoverReason.PROVIDER_DOWN, RecoveryAction.FALLBACK_PROVIDER],
     ['400 other', openAIError(400, 'messages: field required'), FailoverReason.ABORT_FATAL, RecoveryAction.ABORT],
