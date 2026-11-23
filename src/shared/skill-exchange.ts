@@ -5,7 +5,7 @@
  * (src/skills/exchange.ts, the routes) and the web Skills page; types only,
  * so the web bundle pulls in no server code.
  */
-import type { SkillRegistrySource } from './skill-registry';
+import type { SkillRegistryPreviewSource, SkillRegistrySource } from './skill-registry';
 
 export const SKILL_BUNDLE_FORMAT = 'octipus-skill-bundle';
 export const SKILL_BUNDLE_VERSION = 1;
@@ -90,8 +90,8 @@ export interface SkillImportPreviewItem {
 export interface SkillImportPreview {
   source: SkillImportSourceKind;
   url: string | null;
-  /** The registry listing it came from, or null. */
-  registry: SkillRegistrySource | null;
+  /** The registry listing it came from (and what the caller installed from it before), or null. */
+  registry: SkillRegistryPreviewSource | null;
   contentHash: string;
   signature: BundleSignatureView;
   /** False when the trust settings refuse it; `refusal` says why. */

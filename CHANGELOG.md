@@ -25,7 +25,15 @@ labels reflect blast radius, not contract guarantees.
   `octi plugin build-skill-index <dir> --base-url <https://…/>` to build an
   index (`octipus-skill-index` v1) from a folder of signed bundles, and
   migration `0205_skill_registry_installs` (which listing version each person
-  installed).
+  installed, keyed by registry URL hash, with the history of content hashes
+  so a relabelled old bundle is flagged as a possible rollback and never
+  shown as an update). Index URLs, which may carry a token, are never shown
+  to callers; registry and URL previews need `api:write`, and registry
+  previews and installs are limited to 30 a minute per person.
+- **Fix:** an https download (plugin package, skill bundle, registry index)
+  now has one deadline for every redirect hop and the body together; each
+  hop used to get a fresh timeout, so the stated limits could be exceeded
+  several times over.
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

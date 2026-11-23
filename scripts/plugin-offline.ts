@@ -279,7 +279,10 @@ const LISTING_SUFFIX = '.listing.json';
  * author? }); its digest, content hash, skill names and signing key are read
  * from the bundle itself. The bundle URL is <base-url> + its file name. The
  * index is written to <dir>/index.json unless --out says otherwise; publish it
- * and the bundles unchanged, on any static host.
+ * and the bundles unchanged, on any static host. Symbolic links are never
+ * followed: a linked bundle is reported as skipped, a linked listing file
+ * refused. `generatedAt` is `SOURCE_DATE_EPOCH` when set (reproducible
+ * builds), else now.
  */
 export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Promise<number> {
   let dir = '';
@@ -291,13 +294,18 @@ export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Pro
     const baseProblem = bundleUrlProblem(baseUrl);
     if (baseProblem) throw new UsageError(`--base-url ${baseUrl}: ${baseProblem}`);
     if (!baseUrl.endsWith('/')) throw new UsageError('--base-url must end with "/" (the bundles\' folder)');
+    const epoch = process.env.SOURCE_DATE_EPOCH;
+    if (epoch !== undefined && !/^\d{1,12}$/.test(epoch)) throw new UsageError(`SOURCE_DATE_EPOCH "${epoch}" is not a number of seconds`);
+    const generatedAt = epoch === undefined ? new Date() : new Date(Number(epoch) * 1000);
     const out = resolve(values.out as string | undefined ?? join(dir, 'index.json'));
-    const files = (await readdir(dir, { withFileTypes: true }))
-      .filter((e) => e.isFile() && e.name.endsWith('.json') && !e.name.endsWith(LISTING_SUFFIX) && join(dir, e.name) !== out)
-      .map((e) => e.name)
-      .sort();
+    const candidates = (await readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.name.endsWith('.json') && !e.name.endsWith(LISTING_SUFFIX) && join(dir, e.name) !== out)
+      .sort((a, b) => (a.name < b.name ? -1 : 1));
     const inputs: IndexInput[] = [];
     const skipped: string[] = [];
+    // A link could make the index list (and digest) a file from elsewhere: never followed.
+    for (const e of candidates) if (!e.isFile()) skipped.push(e.name);
+    const files = candidates.filter((e) => e.isFile()).map((e) => e.name);
     for (const file of files) {
       const bytes = await readFile(join(dir, file));
       let format: unknown;
@@ -313,6 +321,7 @@ export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Pro
       const listingFile = `${file.slice(0, -'.json'.length)}${LISTING_SUFFIX}`;
       let listing: string;
       try {
+        if (!(await lstat(join(dir, listingFile))).isFile()) throw new Refusal(`${listingFile} is not a regular file (a symbolic link is not followed)`);
         listing = await readFile(join(dir, listingFile), 'utf8');
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Refusal(`${file}: no ${listingFile} beside it ({ "name", "version", "description"?, "tags"?, "author"? })`);
@@ -323,7 +332,7 @@ export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Pro
     if (inputs.length === 0) throw new Refusal(`No skill bundle (*.json with "format": "${SKILL_BUNDLE_FORMAT}") in ${dir}`);
     let index: ReturnType<typeof buildSkillIndex>;
     try {
-      index = buildSkillIndex(inputs);
+      index = buildSkillIndex(inputs, generatedAt);
     } catch (err) {
       if (err instanceof SkillIndexError) throw new Refusal(err.message);
       throw err;
@@ -336,7 +345,7 @@ export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Pro
       json(io, { out, entries: index.entries.length, unsigned, skipped });
       return 0;
     }
-    for (const file of skipped) io.err(`  · ${file}: not a skill bundle, not indexed\n`);
+    for (const file of skipped) io.err(`  · ${file}: not a skill bundle (or not a regular file), not indexed\n`);
     if (unsigned.length > 0) io.err(`⚠ Unsigned, so no host installs them from a registry: ${unsigned.join(', ')}. Sign them with octi plugin sign-skill-bundle and build the index again.\n`);
     io.out(`✅ Wrote ${out}\n   entries: ${index.entries.length}\n   Publish it and the bundles unchanged: each bundle must hash to its listed digest.\n`);
     return 0;

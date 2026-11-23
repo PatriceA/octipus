@@ -63,7 +63,7 @@ const MAX_LIST_ITEM_CHARS = 2000;
 export const BUNDLE_SKILL_FIELDS = ['name', 'category', 'description', 'content', 'principles', 'bestPractices', 'antiPatterns', 'frameworks'] as const;
 
 export class SkillBundleError extends Error {
-  constructor(message: string, readonly status: 400 | 403 | 404 | 409 = 400) {
+  constructor(message: string, readonly status: 400 | 403 | 404 | 409 | 429 = 400) {
     super(message);
     this.name = 'SkillBundleError';
   }

@@ -192,9 +192,13 @@ Administrators list registries in Settings → Skills, `skills.registries`
 - **`publishers`** are names in `plugins.trustedPublishers` whose keys count
   for bundles **from this registry**. A bundle signed by any other key, a
   trusted publisher of another registry included, is not installed from it.
-  Revocation and expiry (`revoked`, `notAfter`, `plugins.revokedKeys`) apply
-  as everywhere else.
-- At most 20 registries, unique names, https only.
+  A name stands for every `plugins.trustedPublishers` entry of that name:
+  two entries with the same name both count. Revocation and expiry
+  (`revoked`, `notAfter`, `plugins.revokedKeys`) apply as everywhere else.
+- At most 20 registries, unique names, https only. The URL may carry a
+  token in its query: it is shown to administrators in the settings only,
+  never in a listing, a preview or an error, and logged without its query
+  or user info.
 
 ### Browsing
 
@@ -207,15 +211,18 @@ Skills → **Import** → **Browse registries** (`GET
 - the signature status the index **claims**, judged by the operator's keys
   for that registry: signed by one of its publishers, not signed, a key it
   does not trust, expired or revoked. It is checked for real at preview;
-- the version you installed from that registry, and **an update available**
-  when the index lists a newer one. That is all it does: nothing is ever
-  updated, replaced or reinstalled by a registry.
-- A registry that cannot be read (unreachable, too large, malformed) is named
-  with the reason; the others are still listed. A listing that breaks the
-  index rules is skipped and reported.
+- the version (and content hash) you installed from that registry, and
+  **an update available** when the index lists a higher version with
+  content you have not installed before. That is all it does: nothing is
+  ever updated, replaced or reinstalled by a registry.
+- A registry that cannot be read is named with the class of failure only
+  (timed out, an HTTP status, too large, a private address, a redirect not
+  followed, or what is wrong with the document); the others are still
+  listed. A listing that breaks the index rules is skipped and reported.
 
 Indexes are cached for 5 minutes (a failure for 30 seconds), at most 32 of
-them; an answer carries at most 500 listings. Browsing downloads no bundle.
+them, and concurrent reads of one index share a request; an answer carries
+at most 500 listings. Browsing downloads no bundle.
 
 ### Installing from a registry
 
@@ -223,7 +230,11 @@ them; an answer carries at most 500 listings. Browsing downloads no bundle.
 (`{ registry: { registry, name, version } }`), and **Install** is the same
 install, with the same collisions, decisions, audit and content-hash check.
 There is no install without a preview. Anyone signed in may do it (an
-administrator chose the registry); the bundle becomes their own skills.
+administrator chose the registry); the bundle becomes their own skills. An
+API token needs `api:write` for a registry (or URL) preview, since it makes
+the server download, and each person may start at most 30 registry previews
+and installs a minute (`429` beyond). A bundle that matched its digest is
+reused by that digest for 10 minutes (at most 16 bundles, 8 MiB).
 
 Preview and install each download the bundle again and refuse it unless all
 of this holds:
@@ -233,7 +244,8 @@ of this holds:
    not localhost and no private, loopback, link-local or ambiguous IP literal
    (checked when the index is read), and the download goes through the same
    SSRF-guarded fetch as a URL import (every address resolved and checked,
-   redirects https and checked again, at most 1 MiB, 15 s);
+   redirects https and checked again, at most 1 MiB, 15 s for the whole
+   download, redirects included);
 3. the downloaded bytes hash to the index's `bundleSha256`;
 4. it is a valid bundle (schema, limits, content hash) whose `contentHash`,
    skill names and signing key id are the ones the listing claims;
@@ -245,10 +257,31 @@ of this holds:
    not installable.
 
 The audit rows of an install name the registry, the listing and its version.
-Which version you installed is recorded per person, registry and listing
-(`skill_registry_installs`): that is what "update available" compares with.
-To update, preview the newer version and choose **Replace** for each skill
-it collides with.
+Which version and content you installed is recorded per person, registry
+(its name and a hash of its URL: a name reused for another index starts
+afresh) and listing, with every version and content hash installed before
+(`skill_registry_installs`): that is what "update available" and the
+preview's warnings compare with. A skill you then replace with another
+import no longer counts as installed from the registry. To update, preview
+the newer version and choose **Replace** for each skill it collides with.
+
+#### What a signature does not cover
+
+A bundle's signature covers its skills, not the listing's name or version.
+So a registry (or whoever controls its index) can:
+
+- relist an old, validly signed bundle under a higher version (a rollback);
+- relabel a bundle under another listing name;
+- replay a bundle another registry lists, when both trust the same
+  publisher.
+
+Octipus cannot tell these from a genuine release. It narrows them: an
+"update available" is never shown for the content you installed or content
+you installed before; the preview shows what you installed (version and
+content hash) next to the listing, and warns when this content was
+installed before under another version (a possible rollback) or is other
+content under a version that is not higher than yours. Read the content
+before you replace a skill with it.
 
 ### The index
 
@@ -273,8 +306,10 @@ it collides with.
 ```
 
 - **`name`**: the listing's identifier in the registry, lower-case letters,
-  digits, `.`, `_` and `-` (at most 100). **`version`**: semantic
-  (`1.2.0`, `1.2.0-beta.1`). An index may list every version of a name; the
+  digits, `.`, `_` and `-` (at most 100). **`version`**: SemVer 2.0
+  (`1.2.0`, `1.2.0-beta.1`) without build metadata: no leading zeros, no
+  empty identifiers, numbers of at most 6 digits (9 in a pre-release), a
+  pre-release of at most 64 characters. An index may list every version of a name; the
   same name and version twice are both skipped.
 - **`description`** (at most 1,000 characters), **`tags`** (at most 10 of 32)
   and **`author`** (at most 100, or null) are plain, single-line text, shown
@@ -288,8 +323,11 @@ it collides with.
 - **Limits:** the index is at most 1 MiB and 2,000 entries. A larger, or
   newer (`version` above 1), or malformed document is refused as a whole; an
   entry that does not fit is skipped and reported, never installable.
-- The index is not signed: everything it says is either display text or
-  checked against the bundle, whose own signature decides.
+- The index is not signed. Its digests, `contentHash`, `skills` and
+  `publisherKeyId` are checked against the bundle, whose own signature
+  decides who published the content; `name`, `version`, `description`,
+  `tags` and `author` are the registry's word only
+  ([What a signature does not cover](#what-a-signature-does-not-cover)).
 
 ### Publishing a registry
 
@@ -313,7 +351,10 @@ It checks every bundle as an import does and writes `./skills/index.json`
 read from the bundle itself. It warns about unsigned bundles: no Octipus
 installs them from a registry. Publish the folder unchanged; a bundle edited
 afterwards no longer matches its digest. Operators who trust you add the
-index URL and your publisher key.
+index URL and your publisher key. Symbolic links in the folder are never
+followed (a linked bundle is skipped, a linked listing file refused), and
+`generatedAt` is `SOURCE_DATE_EPOCH` when it is set, for reproducible
+builds.
 
 ## SKILL.md
 
@@ -352,9 +393,9 @@ to hand someone skill text with a verifiable publisher, send a signed bundle.
 
 | Method | Endpoint | |
 |--------|----------|--|
-| GET | `/api/skills/exchange/registry?q=&tag=` | `{ registries, listings: [{ registry, name, version, description, tags, author, publisherKeyId, skills, bundleUrl, bundleSha256, contentHash, olderVersions, signature: { status, publisher, detail }, installedVersion, updateAvailable }], errors, problems, truncated }`. Nothing is fetched when no registry is configured. `401` signed out. |
+| GET | `/api/skills/exchange/registry?q=&tag=` | `{ registries, listings: [{ registry, name, version, description, tags, author, publisherKeyId, skills, bundleUrl, bundleSha256, contentHash, olderVersions, signature: { status, publisher, detail }, installedVersion, installedContentHash, updateAvailable }], errors: [{ registry, error }], problems, truncated }`. Index URLs are never in it. Nothing is fetched when no registry is configured. `401` signed out. |
 | GET | `/api/skills/exchange/export?ids=a,b` | `{ bundle, signed: false, note }`. `401` signed out, `400` a mounted id or more than 50, `404` an id you cannot see. |
-| POST | `/api/skills/exchange/preview` | Body: exactly one of `{ bundle }` (the JSON text), `{ skillMd }`, `{ url }` (admins), `{ registry: { registry, name, version } }`. Writes nothing. `{ source, url, registry, contentHash, signature: { status, publisher, keyId, detail }, installable, refusal, warnings, skills: [{ skill, collision: { id, name, kind, canReplace } \| null }] }`. `400` a malformed or tampered source, `403` a URL from a non-admin. |
+| POST | `/api/skills/exchange/preview` | Body: exactly one of `{ bundle }` (the JSON text), `{ skillMd }`, `{ url }` (admins), `{ registry: { registry, name, version } }`. Writes nothing. `{ source, url, registry, contentHash, signature: { status, publisher, keyId, detail }, installable, refusal, warnings, skills: [{ skill, collision: { id, name, kind, canReplace } \| null }] }`. `registry` is `{ registry, name, version, installed: { version, contentHash } \| null }` for a registry listing. `400` a malformed or tampered source, `403` a URL from a non-admin, or a URL or registry source with a token lacking `api:write`, `404` a version the registry does not list, `429` more than 30 registry previews and installs a minute. |
 | POST | `/api/skills/exchange/install` | The same source, plus `contentHash` (from the preview) and `decisions: [{ name, action: "create" \| "skip" \| "rename" (newName) \| "replace" (skillId) }]`. `{ created, replaced, skipped, contentHash, signature }`. `400` refused by the trust settings or a bad decision, `403` replacing what you may not (or a token without `api:write`), `409` a collision without a decision, a taken new name, or a source that changed since the preview. |
 
 These replace `POST /api/skills/import`, which wrote unsigned skills with no

@@ -53,13 +53,14 @@ const { getConfig } = await import('@/config');
 const { auditRepository } = await import('@/db/repositories/audit-repository');
 const { generateSigningKey } = await import('@/plugins/packages/signature');
 const { buildBundle } = await import('@/skills/exchange');
-const { clearSkillRegistryCache } = await import('@/skills/registries');
+const { clearSkillRegistryCache, REGISTRY_FETCH_LIMIT } = await import('@/skills/registries');
 const { MAX_SKILL_INDEX_BYTES } = await import('@/skills/registry-index');
 const { skillRoutes } = await import('./skills');
 
 type TestUser = { id: string; username: string; isAdmin: boolean };
 const alice: TestUser = { id: randomUUID(), username: 'alice', isAdmin: false };
 let current: TestUser | null = alice;
+let scopes: string[] | undefined;
 let app: { handle(req: Request): Promise<Response> };
 let server: Server;
 const acme = generateSigningKey();
@@ -120,7 +121,7 @@ beforeAll(async () => {
   app = new Elysia()
     .derive(() => ({
       user: current,
-      principal: current ? principalFromUser(current) : { kind: 'anonymous' as const, userId: 'anonymous', username: 'anonymous', isAdmin: false },
+      principal: current ? { ...principalFromUser(current), ...(scopes ? { scopes } : {}) } : { kind: 'anonymous' as const, userId: 'anonymous', username: 'anonymous', isAdmin: false },
       session: current ? { userAgent: 'Mozilla/5.0' } : null,
     }))
     .use(skillRoutes);
@@ -128,6 +129,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   current = alice;
+  scopes = undefined;
   fake.files.clear();
   fake.requests = [];
   Object.assign(getConfig().plugins, {
@@ -314,7 +316,124 @@ test('a bundle URL cannot reach a private address: listed literally (skipped) or
   expect(body.listings.map((l: any) => l.name)).toEqual(['hop', 'hop-https']);
   expect(body.problems.map((p: any) => p.problem).join('\n')).toMatch(/private or reserved address \(10\.0\.0\.8\)[\s\S]*private or reserved address \(169\.254\.169\.254\)/);
   expect((await preview(source('literal', '1.0.0'))).status).toBe(404);
-  expect((await preview(source('hop', '1.0.0'))).body.error).toMatch(/Only https URLs are fetched/);
-  expect((await preview(source('hop-https', '1.0.0'))).body.error).toMatch(/SSRF guard/);
+  expect((await preview(source('hop', '1.0.0'))).body.error).toMatch(/could not be downloaded: it redirects somewhere that is not followed/);
+  expect((await preview(source('hop-https', '1.0.0'))).body.error).toMatch(/could not be downloaded: it resolves to a private or reserved address/);
   expect(fake.requests).not.toContain('/notes.json');
+});
+
+test('index URLs (and their tokens) never reach a caller: failures name the registry and the class only', async () => {
+  fake.files.set('/hop-index.json', { status: 302, location: 'https://127.0.0.1/index.json?token=inner-s3cret' });
+  configure([
+    { name: 'gone', url: url('/missing.json?token=s3cret'), publishers: ['Acme'] },
+    { name: 'inward', url: url('/hop-index.json?key=s3cret'), publishers: ['Acme'] },
+  ]);
+  const { body } = await browse();
+  expect(body.errors).toEqual([
+    { registry: 'gone', error: 'the server answered HTTP 404' },
+    { registry: 'inward', error: 'it resolves to a private or reserved address (refused)' },
+  ]);
+  const text = JSON.stringify(body);
+  for (const leak of ['s3cret', REGISTRY_HOST, 'missing.json', '127.0.0.1']) expect(text).not.toContain(leak);
+  const refused = await preview(source('notes', '1.0.0', 'gone'));
+  expect(refused.body.error).toBe('The registry gone could not be read: the server answered HTTP 404');
+
+  // A bundle that cannot be fetched: no bundle URL either.
+  serveIndex([{ ...publish('/notes.json', { name: 'notes', version: '1.0.0' }, [skill('Notes')], acme.privateKeyPem), bundleUrl: url('/gone.json?sig=s3cret') }]);
+  configure([ACME]);
+  const missing = await preview(source('notes', '1.0.0'));
+  expect(missing.body.error).toBe('The bundle of notes 1.0.0 from the registry acme could not be downloaded: the server answered HTTP 404');
+});
+
+test('a read-only token cannot make the server download; registry previews are limited per person', async () => {
+  serveIndex([publish('/notes.json', { name: 'notes', version: '1.0.0' }, [skill('Notes')], acme.privateKeyPem)]);
+  configure([ACME]);
+  scopes = ['api:read'];
+  expect((await preview(source('notes', '1.0.0'))).status).toBe(403);
+  expect((await preview({ url: url('/notes.json') })).status).toBe(403);
+  expect(fake.requests).toEqual([]);
+  scopes = undefined;
+  for (let i = 0; i < REGISTRY_FETCH_LIMIT; i++) expect((await preview(source('notes', '1.0.0'))).status).toBe(200);
+  const limited = await preview(source('notes', '1.0.0'));
+  expect(limited.status).toBe(429);
+  // One index read and one bundle download served every preview.
+  expect(fake.requests).toEqual(['/index.json', '/notes.json']);
+});
+
+test('concurrent reads of one index share a request', async () => {
+  serveIndex([publish('/notes.json', { name: 'notes', version: '1.0.0' }, [skill('Notes')], acme.privateKeyPem)]);
+  configure([ACME]);
+  await Promise.all([browse(), browse(), browse()]);
+  expect(fake.requests).toEqual(['/index.json']);
+});
+
+test('an index that swaps the content of a version between preview and install installs nothing', async () => {
+  serveIndex([publish('/notes.json', { name: 'notes', version: '1.0.0' }, [skill('Notes', 'reviewed')], acme.privateKeyPem)]);
+  configure([ACME]);
+  const shown = await preview(source('notes', '1.0.0'));
+  expect(shown.body.installable).toBe(true);
+  serveIndex([publish('/notes-swapped.json', { name: 'notes', version: '1.0.0' }, [skill('Notes', 'something else')], acme.privateKeyPem)]);
+  clearSkillRegistryCache();
+  const swapped = await install(source('notes', '1.0.0'), shown.body.contentHash);
+  expect(swapped.status).toBe(409);
+  expect(swapped.body.error).toMatch(/not to the sha256:[0-9a-f]{64} that was previewed/);
+  expect(await getDb().select().from(skills)).toEqual([]);
+});
+
+/** Install `version` of notes with `content`, replacing the caller's copy when there is one. */
+async function installNotes(version: string, content: string, entries: unknown[]) {
+  serveIndex(entries);
+  clearSkillRegistryCache();
+  const shown = await preview(source('notes', version));
+  const own = shown.body.skills[0].collision;
+  const done = await install(source('notes', version), shown.body.contentHash, own ? [{ name: 'Notes', action: 'replace', skillId: own.id }] : undefined);
+  expect(done.status).toBe(200);
+  return { shown, done };
+}
+
+test('a signature does not cover the version: a relabelled old bundle is no update, and the preview says so', async () => {
+  configure([ACME]);
+  const v1 = publish('/notes-1.json', { name: 'notes', version: '1.0.0' }, [skill('Notes', 'one')], acme.privateKeyPem);
+  const v2 = publish('/notes-2.json', { name: 'notes', version: '1.1.0' }, [skill('Notes', 'two')], acme.privateKeyPem);
+  await installNotes('1.0.0', 'one', [v1]);
+  const second = await installNotes('1.1.0', 'two', [v1, v2]);
+  expect(second.shown.body.registry.installed).toEqual({ version: '1.0.0', contentHash: v1.contentHash });
+
+  // The registry relists 1.0.0's content as 9.9.9 (a rollback).
+  serveIndex([v1, v2, { ...v1, version: '9.9.9' }]);
+  clearSkillRegistryCache();
+  expect((await browse()).body.listings[0]).toMatchObject({ version: '9.9.9', installedVersion: '1.1.0', installedContentHash: v2.contentHash, updateAvailable: false });
+  const rollback = await preview(source('notes', '9.9.9'));
+  expect(rollback.body.warnings.join('\n')).toMatch(/Possible rollback: this exact content was installed before as 1\.0\.0/);
+
+  // The installed content relabelled higher: no update either.
+  serveIndex([v1, v2, { ...v2, version: '2.0.0' }]);
+  clearSkillRegistryCache();
+  expect((await browse()).body.listings[0]).toMatchObject({ version: '2.0.0', updateAvailable: false });
+  expect((await preview(source('notes', '2.0.0'))).body.warnings.join('\n')).toMatch(/content you installed as 1\.1\.0/);
+
+  // Other content that is not newer.
+  serveIndex([publish('/notes-0.json', { name: 'notes', version: '0.9.0' }, [skill('Notes', 'zero')], acme.privateKeyPem)]);
+  clearSkillRegistryCache();
+  expect((await browse()).body.listings[0]).toMatchObject({ version: '0.9.0', updateAvailable: false });
+  expect((await preview(source('notes', '0.9.0'))).body.warnings.join('\n')).toMatch(/You installed 1\.1\.0 .*other content that is not newer/);
+});
+
+test('an install record follows the registry URL, and lets go of a skill replaced by another import', async () => {
+  const v1 = publish('/notes-1.json', { name: 'notes', version: '1.0.0' }, [skill('Notes', 'one')], acme.privateKeyPem);
+  configure([ACME]);
+  const { done } = await installNotes('1.0.0', 'one', [v1]);
+  expect((await browse()).body.listings[0].installedVersion).toBe('1.0.0');
+
+  // The same name now points at another index: what was installed from the old one does not carry over.
+  serveIndex([v1], '/other-index.json');
+  configure([{ ...ACME, url: url('/other-index.json') }]);
+  expect((await browse()).body.listings[0].installedVersion).toBeNull();
+  configure([ACME]);
+  expect((await browse()).body.listings[0].installedVersion).toBe('1.0.0');
+
+  // Replaced by an uploaded bundle: no longer installed from the registry.
+  const upload = JSON.stringify(buildBundle([skill('Notes', 'my own')]));
+  const shown = await preview({ bundle: upload });
+  expect((await install({ bundle: upload }, shown.body.contentHash, [{ name: 'Notes', action: 'replace', skillId: done.body.created[0].id }])).status).toBe(200);
+  expect((await browse()).body.listings[0]).toMatchObject({ installedVersion: null, updateAvailable: false });
 });

@@ -220,6 +220,11 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     '/exchange/preview',
     async ({ user, principal, session, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      // A URL or registry preview makes the server download: not for a read-only token.
+      if ((body.url !== undefined || body.registry !== undefined) && !requireScope(principal, API_SCOPES.WRITE)) {
+        set.status = 403;
+        return { error: `This token lacks the ${API_SCOPES.WRITE} scope a download needs` };
+      }
       try {
         return await previewImport(body, importActor(user.id, principal, session));
       } catch (error) {

@@ -59,7 +59,13 @@ export interface SkillRegistryListing extends SkillIndexEntry {
   signature: { status: ListedSignatureStatus; publisher: string | null; detail: string };
   /** The version of this listing the caller installed from this registry, or null. */
   installedVersion: string | null;
-  /** A newer version than the installed one is listed. Shown only: nothing is updated without a preview and an install. */
+  /** The content hash of what the caller installed, or null. */
+  installedContentHash: string | null;
+  /**
+   * A higher version than the installed one is listed, with other content.
+   * Shown only: nothing is updated without a preview and an install. A
+   * version number is the registry's claim (signatures do not cover it).
+   */
   updateAvailable: boolean;
 }
 
@@ -80,4 +86,9 @@ export interface SkillRegistrySource {
   registry: string;
   name: string;
   version: string;
+}
+
+/** A registry listing as a preview shows it: the source, and what the caller installed from it before. */
+export interface SkillRegistryPreviewSource extends SkillRegistrySource {
+  installed: { version: string; contentHash: string } | null;
 }

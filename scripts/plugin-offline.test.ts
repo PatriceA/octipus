@@ -256,6 +256,34 @@ describe('build-skill-index', () => {
     expect(parsed.entries.find((e) => e.name === 'pair')).toMatchObject({ skills: ['One', 'Two'], publisherKeyId: null, description: 'Two skills' });
   });
 
+  test('follows no symbolic link; SOURCE_DATE_EPOCH sets generatedAt', async () => {
+    const outside = temp();
+    writeFileSync(join(outside, 'elsewhere.json'), JSON.stringify(buildBundle([skill('Elsewhere')])));
+    writeFileSync(join(outside, 'listing.json'), JSON.stringify({ name: 'notes', version: '1.0.0' }));
+    const dir = temp();
+    symlinkSync(join(outside, 'elsewhere.json'), join(dir, 'elsewhere.json'));
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify(buildBundle([skill('Notes')])));
+    writeFileSync(join(dir, 'notes.listing.json'), JSON.stringify({ name: 'notes', version: '1.0.0' }));
+    const saved = process.env.SOURCE_DATE_EPOCH;
+    process.env.SOURCE_DATE_EPOCH = '1700000000';
+    try {
+      const fake = io();
+      expect(await buildSkillIndexCommand(fake, [dir, '--base-url', 'https://skills.example.com/', '--json'])).toBe(0);
+      expect(jsonOut(fake)).toMatchObject({ entries: 1, skipped: ['elsewhere.json'] });
+      expect(JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8')).generatedAt).toBe('2023-11-14T22:13:20.000Z');
+      rmSync(join(dir, 'notes.listing.json'));
+      symlinkSync(join(outside, 'listing.json'), join(dir, 'notes.listing.json'));
+      const linked = io();
+      expect(await buildSkillIndexCommand(linked, [dir, '--base-url', 'https://skills.example.com/'])).toBe(1);
+      expect(linked.stderr).toMatch(/notes\.listing\.json is not a regular file/);
+      process.env.SOURCE_DATE_EPOCH = 'yesterday';
+      expect(await buildSkillIndexCommand(io(), [dir, '--base-url', 'https://skills.example.com/'])).toBe(2);
+    } finally {
+      if (saved === undefined) delete process.env.SOURCE_DATE_EPOCH;
+      else process.env.SOURCE_DATE_EPOCH = saved;
+    }
+  });
+
   test('refuses a bundle without listing file, a tampered bundle, a non-https or private base URL', async () => {
     const dir = temp();
     writeFileSync(join(dir, 'notes.json'), JSON.stringify(buildBundle([skill('Notes')])));

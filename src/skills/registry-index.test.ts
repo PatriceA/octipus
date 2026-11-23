@@ -60,6 +60,16 @@ describe('parseSkillIndex', () => {
   });
 });
 
+describe('versions', () => {
+  test('SemVer 2.0 only, so the newest never depends on index order', () => {
+    const versions = ['1.0.0', '0.0.1', '1.0.0-0.3.7', '1.0.0-x-y.1', '1.0.0-rc.1', '999999.0.0'];
+    expect(parseSkillIndex(doc(versions.map((version) => entry({ version })))).entries).toHaveLength(versions.length);
+    for (const version of ['01.0.0', '1.00.0', '1.0.0-', '1.0.0-a..b', '1.0.0-01', '1.0.0+build', '1234567.0.0', '1.0.0-1234567890', `1.0.0-${'a'.repeat(65)}`, '1.0', 'v1.0.0']) {
+      expect(parseSkillIndex(doc([entry({ version })])).entries, version).toEqual([]);
+    }
+  });
+});
+
 describe('bundleUrlProblem', () => {
   test('https on a public host only', () => {
     expect(bundleUrlProblem('https://raw.example.org/a/b.json')).toBeNull();

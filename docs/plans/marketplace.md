@@ -432,7 +432,9 @@ marketplace (2026-11-23, [SKILL-EXCHANGE.md#registries](../SKILL-EXCHANGE.md#reg
   `plugins.trustedPublishers` trusted for it; a bundle installs only with a
   valid signature by one of them. The digest never stands in for it. The
   index itself is not signed (unlike a plugin index): nothing in it is
-  trusted.
+  trusted. A bundle signature does not cover the listing's name or version,
+  so a relabelled old bundle (a rollback) is flagged from the install
+  history rather than prevented.
 - **Informed consent.** Installing is the exchange's preview, then install,
   with a decision for every name collision. No auto-updates: a newer version
   is shown as available.

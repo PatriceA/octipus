@@ -51,7 +51,15 @@ export class SkillIndexError extends Error {
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,99}$/;
-const SEMVER_RE = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,64})?$/;
+/**
+ * SemVer 2.0 without build metadata: no leading zeros, no empty
+ * identifiers, numbers of at most 6 digits (9 in a pre-release), a
+ * pre-release of at most 64 characters. Two different valid versions never
+ * compare equal, so which is newest never depends on the index's order.
+ */
+const NUM = '(?:0|[1-9]\\d{0,5})';
+const PRE_ID = '(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)';
+const SEMVER_RE = new RegExp(`^${NUM}\\.${NUM}\\.${NUM}(?:-(?=.{1,64}$)${PRE_ID}(?:\\.${PRE_ID})*)?$`);
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 
 /**
@@ -79,7 +87,7 @@ export function bundleUrlProblem(url: string): string | null {
 
 const entrySchema = z.strictObject({
   name: z.string().regex(NAME_RE, 'lower-case letters, digits, ".", "_" and "-", at most 100, starting with a letter or digit'),
-  version: z.string().regex(SEMVER_RE, 'a semantic version such as 1.2.0'),
+  version: z.string().max(100).regex(SEMVER_RE, 'a semantic version such as 1.2.0 (SemVer 2.0, no build metadata)'),
   description: line(MAX_DESCRIPTION_CHARS).refine((s) => s.trim().length > 0, 'must not be blank'),
   tags: z.array(line(MAX_TAG_CHARS).refine((s) => s.trim().length > 0, 'must not be blank')).max(MAX_TAGS).default([]),
   author: line(100).nullable().default(null),

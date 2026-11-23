@@ -349,6 +349,11 @@ export function ImportSkillsDialog({ isAdmin, onClose }: { isAdmin: boolean; onC
               {preview.registry && (
                 <p className="text-xs text-on-surface-variant break-all">
                   {preview.registry.name} {preview.registry.version} from the registry {preview.registry.registry} ({preview.url})
+                  {preview.registry.installed && (
+                    <span className="block">
+                      You installed {preview.registry.installed.version} ({preview.registry.installed.contentHash}). A version number is the registry&apos;s claim: the signature covers the content only.
+                    </span>
+                  )}
                 </p>
               )}
               <SignatureLine preview={preview} />
