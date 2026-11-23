@@ -318,6 +318,33 @@ async function* classifiedChunks<T>(chunks: AsyncIterable<T>, provider: string):
 }
 
 /**
+ * One vector per input, each at the position its `index` names: the list
+ * order is not part of the embeddings contract, and a vector filed under the
+ * wrong text corrupts a search index silently. A reply with the wrong count,
+ * or indices that are not exactly 0..n-1, is refused. A server that sends no
+ * `index` at all is taken in list order, if the count matches.
+ */
+function vectorsByIndex(data: Array<{ index?: number; embedding: number[] }>, inputs: number, model: string): number[][] {
+  const invalid = (what: string) => new ClassifiedError({
+    reason: FailoverReason.INVALID_RESPONSE,
+    recovery: RecoveryAction.RETRY_NOW,
+    message: `Embedding response from ${model} ${what}`,
+    providerHint: 'litellm',
+  });
+  if (data.length !== inputs) throw invalid(`has ${data.length} vectors for ${inputs} inputs`);
+  if (data.every((d) => d.index === undefined)) return data.map((d) => d.embedding);
+  const out: number[][] = new Array(inputs);
+  for (const d of data) {
+    const i = d.index;
+    if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= inputs || out[i] !== undefined) {
+      throw invalid(`has a missing, repeated or out-of-range index (${String(i)})`);
+    }
+    out[i] = d.embedding;
+  }
+  return out;
+}
+
+/**
  * Client for LiteLLM proxy - provides unified API for all LLM providers
  */
 /** Measured: deepseek-v4.1-flash reasons 1.6k–2.6k tokens before a 300-token JSON answer. */
@@ -937,10 +964,7 @@ export class LiteLLMClient {
       });
       const { recordProviderUsage } = await import('./providers/instrumented');
       await recordProviderUsage({ model: embeddingModel, messages: [], requestType: 'embedding' }, 'litellm', { model: embeddingModel, usage: normalizeUsage(response.usage) });
-      // `index` names the input each vector belongs to; the list order is not
-      // part of the contract, and a vector filed under the wrong text corrupts
-      // the index silently.
-      return [...response.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
+      return vectorsByIndex(response.data, input.length, embeddingModel);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       modelLogger.error(

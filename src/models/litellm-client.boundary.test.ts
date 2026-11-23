@@ -369,6 +369,25 @@ describe('embeddings over the wire', () => {
     expect(await clientWith().embed(['a', 'b', 'c'], 'embed-small')).toEqual([[1], [2], [3]]);
   });
 
+  test.each([
+    ['fewer vectors than inputs', json(embeddings([[1], [2]]))],
+    ['a repeated index', json(embeddings([[1], [2], [3]], { order: [0, 0, 2] }))],
+    ['an index out of range', json(embeddings([[1], [2], [3], [4]], { order: [0, 1, 3] }))],
+    ['an index on some vectors only', json({ object: 'list', data: [{ index: 0, embedding: [1] }, { embedding: [2] }, { index: 2, embedding: [3] }] })],
+  ])('a reply with %s is refused as an invalid response', async (_label, reply) => {
+    proxy.enqueue(reply);
+    registryDouble.add(modelRow({ provider: 'litellm', modelId: 'embed-small' }));
+    const err = await rejection(clientWith().embed(['a', 'b', 'c'], 'embed-small'));
+    expect(err.reason).toBe(FailoverReason.INVALID_RESPONSE);
+    expect(err.message).toContain('embed-small');
+  });
+
+  test('a reply without any index is taken in list order', async () => {
+    proxy.enqueue(json({ object: 'list', data: [{ embedding: [1] }, { embedding: [2] }] }));
+    registryDouble.add(modelRow({ provider: 'litellm', modelId: 'embed-small' }));
+    expect(await clientWith().embed(['a', 'b'], 'embed-small')).toEqual([[1], [2]]);
+  });
+
   test('a single string is sent as a one-element batch', async () => {
     proxy.enqueue(json(embeddings([[0.5, 0.5]])));
     registryDouble.add(modelRow({ provider: 'litellm', modelId: 'embed-small' }));
