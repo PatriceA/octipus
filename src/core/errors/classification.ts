@@ -21,6 +21,12 @@ export enum FailoverReason {
   TOOL_CALL_INVALID = 'tool_call_invalid',
   NETWORK_TIMEOUT = 'network_timeout',
   PROVIDER_DOWN = 'provider_down',
+  /**
+   * The model endpoint refused the connection or its host does not resolve
+   * (ECONNREFUSED, ENOTFOUND): a stopped server or a wrong URL. Retrying
+   * fails the same way until someone fixes it.
+   */
+  ENDPOINT_UNREACHABLE = 'endpoint_unreachable',
   QUOTA_EXHAUSTED = 'quota_exhausted',
   INVALID_RESPONSE = 'invalid_response',
   COMPRESSION_NEEDED = 'compression_needed',
@@ -138,15 +144,19 @@ function extractStatus(err: unknown): number | undefined {
 function extractRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== 'object') return undefined;
   const e = err as Record<string, unknown>;
-  // OpenAI SDK exposes headers at e.headers or e.response.headers
+  // OpenAI SDK exposes headers at e.headers or e.response.headers: a fetch
+  // `Headers` (current SDKs) or a plain record (older SDKs, hand-built errors).
   const headers =
     (e.headers as Record<string, unknown> | undefined) ||
     ((e.response as Record<string, unknown> | undefined)?.headers as
       | Record<string, unknown>
       | undefined);
-  const raw =
-    (headers?.['retry-after'] as string | number | undefined) ??
-    (headers?.['Retry-After'] as string | number | undefined);
+  const header = (name: string): string | number | undefined => {
+    if (!headers) return undefined;
+    if (typeof headers.get === 'function') return (headers as unknown as { get(n: string): string | null }).get(name) ?? undefined;
+    return headers[name] as string | number | undefined;
+  };
+  const raw = header('retry-after') ?? header('Retry-After');
   if (raw == null) return undefined;
   const num = typeof raw === 'number' ? raw : parseFloat(raw);
   if (!Number.isFinite(num)) return undefined;
@@ -173,14 +183,19 @@ function extractMessage(err: unknown): string {
   return String(err);
 }
 
-/** Extract error code (e.g. 'rate_limit_exceeded', 'ECONNRESET') */
-function extractCode(err: unknown): string {
+/**
+ * Extract error code (e.g. 'rate_limit_exceeded', 'ECONNRESET'). Without one
+ * of its own, the error's `cause` chain is read: a transport failure reaches
+ * here wrapped — the SDK's "Connection error." around undici's "fetch failed"
+ * or "terminated", around the socket error that carries the code.
+ */
+function extractCode(err: unknown, depth = 0): string {
   if (!err || typeof err !== 'object') return '';
   const e = err as Record<string, unknown>;
   if (typeof e.code === 'string') return e.code;
   const nested = e.error as Record<string, unknown> | undefined;
   if (nested && typeof nested.code === 'string') return nested.code;
-  return '';
+  return depth < 4 ? extractCode(e.cause, depth + 1) : '';
 }
 
 // ── Pattern matchers (ordered from most specific to least) ─────────
@@ -195,6 +210,12 @@ const PATTERNS: Array<{
     reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER },
   { test: m => /selected model is at capacity|workspace routing discovery failed|reconnecting\.\.\./i.test(m),
     reason: FailoverReason.PROVIDER_DOWN, recovery: RecoveryAction.RETRY_BACKOFF },
+  // A billing stop, which OpenAI sends as a 429 with this code: no wait cures it.
+  {
+    test: (_m, c) => c === 'insufficient_quota' || c === 'billing_hard_limit_reached',
+    reason: FailoverReason.QUOTA_EXHAUSTED,
+    recovery: RecoveryAction.FALLBACK_PROVIDER,
+  },
   // Rate limits (429 is the strongest signal)
   {
     test: (_m, _c, s) => s === 429,
@@ -296,13 +317,23 @@ const PATTERNS: Array<{
     recovery: RecoveryAction.RETRY_BACKOFF,
   },
 
+  // Refused connection / unknown host: a stopped server or a wrong URL, not a
+  // blip. Before the network rule, whose text match would take it. The DNS
+  // blip EAI_AGAIN is not this; it stays transient below.
+  {
+    test: (m, c) =>
+      c === 'ECONNREFUSED' ||
+      c === 'ENOTFOUND' ||
+      (c !== 'EAI_AGAIN' && /ECONNREFUSED|ENOTFOUND|connection refused|Name or service not known/i.test(m)),
+    reason: FailoverReason.ENDPOINT_UNREACHABLE,
+    recovery: RecoveryAction.USER_PROMPT,
+  },
+
   // Network / timeout
   {
     test: (m, c) =>
       c === 'ECONNRESET' ||
-      c === 'ECONNREFUSED' ||
       c === 'ETIMEDOUT' ||
-      c === 'ENOTFOUND' ||
       c === 'EAI_AGAIN' ||
       c === 'UND_ERR_SOCKET' ||
       /timeout|timed.?out|network.*error|socket.hang.up|connection.*(reset|refused|closed)|ENOTFOUND|fetch failed/i.test(
@@ -395,6 +426,13 @@ const PATTERNS: Array<{
   },
 ];
 
+/** What the user reads for a refused connection or unknown host: the cause, then what to fix. */
+function unreachableMessage(message: string, code: string): string {
+  const what = code === 'ENOTFOUND' || /ENOTFOUND|Name or service not known/i.test(message) ? 'host not found' : 'connection refused';
+  return `Model endpoint unreachable (${what}${code ? `, ${code}` : ''}): ${message || 'no response'}. `
+    + 'Check that the model server is running and that the model\'s endpoint URL is correct.';
+}
+
 /**
  * Classify a raw error (thrown from a provider, transport, or internal
  * subsystem) into a structured `ClassifiedError`.
@@ -434,7 +472,7 @@ export function classifyError(
       return new ClassifiedError({
         reason,
         recovery,
-        message: message || reason,
+        message: reason === FailoverReason.ENDPOINT_UNREACHABLE ? unreachableMessage(message, code) : message || reason,
         retryAfterMs,
         providerHint,
         metadata: { status, code: code || undefined },
@@ -490,6 +528,16 @@ export function isTransientDnsError(errMsg: string): boolean {
  * usually clears it. Contrast NXDOMAIN ("Name or service not known" / ENOTFOUND),
  * a permanent lookup failure that stays fatal.
  */
+/**
+ * True when `err` is a permanently unreachable model endpoint: classified as
+ * ENDPOINT_UNREACHABLE (its code is read from the cause chain, so an SDK's
+ * bare "Connection error." counts), or its text says so.
+ */
+export function isFatalConnectionFailure(err: unknown): boolean {
+  if (classifyError(err).reason === FailoverReason.ENDPOINT_UNREACHABLE) return true;
+  return isFatalConnectionError(err instanceof Error ? err.message : String(err ?? ''));
+}
+
 export function isFatalConnectionError(errMsg: string): boolean {
   if (isTransientDnsError(errMsg)) return false;
   return (

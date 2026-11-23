@@ -34,6 +34,33 @@ labels reflect blast radius, not contract guarantees.
   accepts `skill_nudge`. Other clients and channels get no offer. No
   migration: the offer lives in `messages.metadata`, the opt-out in
   `users.preferences`, the cool-down in `kv_store`.
+- **Provider failures are classified by what the provider said.**
+  - A 429's `Retry-After` now reaches the retry backoff for providers on the
+    OpenAI SDK (the proxy, custom OpenAI-compatible endpoints and others); it
+    was dropped, so retries came sooner than the provider asked.
+  - A reset connection, including one that drops mid-reply, is a network
+    failure: retried with backoff and counted by the circuit breaker, no
+    longer an unclassified abort. A transient DNS failure (`EAI_AGAIN`) is
+    treated the same way.
+  - A refused connection or an unknown host (`ECONNREFUSED`, `ENOTFOUND`) is
+    a new `endpoint_unreachable` failure: the agent stops at once with a
+    message to check that the model server is running and its endpoint URL
+    is right, instead of retrying for about 14 s. It no longer counts
+    against the circuit breaker its provider's other models share. This
+    also applies to the plain-code errors that used to be retried as
+    network timeouts.
+  - A LiteLLM proxy stream that fails after its first chunk raises a
+    classified error, and one the caller aborts ends as a cancellation
+    instead of passing its partial text off as a finished answer. A
+    cancellation is never counted against the proxy's circuit breaker.
+  - Proxy embeddings are placed by `index`. A reply with the wrong number of
+    vectors, or with repeated or out-of-range indices, fails as an invalid
+    response instead of misaligning vectors with their texts.
+  - A custom-provider model whose API key resolves nowhere fails once, as
+    an auth failure that says where to put the key; it is not retried. A
+    401 from the endpoint is unchanged.
+  - OpenAI's `insufficient_quota` (sent as HTTP 429) is an exhausted quota,
+    no longer a rate limit to wait out.
 - **`/v1/chat/completions` passthrough streams token by token**
   ([API](docs/API.md#notes--limits)). With a registry model id on OpenAI,
   OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex or a custom
