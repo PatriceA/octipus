@@ -44,7 +44,7 @@ Where the terminal shows links (kitty, Ghostty, WezTerm, iTerm2, Windows Termina
 - In the editor, the wheel scrolls the pane under the pointer (editor, tree or chat) whatever has the focus; the transcript keys apply when the chat pane has focus.
 - Resizing reflows the messages and keeps the reading position.
 
-Long sessions stay fast: only the newest 200 messages are rendered, and scrolling up past them brings older ones in. At most 5,000 messages are kept in memory; beyond that the oldest are dropped and a notice at the top of the transcript says how many. The server keeps the whole session. `/history` reloads its latest 50 messages; loading older turns from the server while scrolling needs a gateway change and is not available yet.
+Long sessions stay fast: only the newest 200 messages are rendered, and scrolling up past them brings older ones in. At most 5,000 messages are kept in memory; beyond that the oldest are dropped and a notice at the top of the transcript says how many. The server keeps the whole session. `/history`, `/resume` and `--session` replay its latest 50 messages; scrolling up past the oldest of them loads earlier ones from the server, 100 at a time, as the web does (`GET /api/sessions/:id/messages?page=true&before=…`), with a notice at the top while there are more, while loading, or when a load failed. After a failure only scrolling up yourself asks again, and not sooner than 3 s, then 6 s, 12 s and so on up to a minute while it keeps failing; a request with no answer in 10 s counts as failed. Older turns stop loading once the 5,000-message limit is reached, or after messages were dropped from memory.
 
 The activity line shows thinking, elapsed time, model and current tool activity; it disappears when the turn ends, so the status bar keeps the model of the current or last turn at the end of its line, and drops it on `/resume`. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
 
@@ -60,17 +60,18 @@ A message you send while a turn runs is not pushed into that turn: it waits in t
 
 ## Pickers
 
-Sessions, skills, commands, themes and input history are chosen from the same list: type to filter (letters in order, `hdr` finds `header`; words separated by spaces must all match), `Up` / `Down` / `PageUp` / `PageDown` to move, `Enter` or a click to choose, `Escape` to close. The box below the list says what the highlighted entry is.
+Sessions, models, skills, commands, themes and input history are chosen from the same list: type to filter (letters in order, `hdr` finds `header`; words separated by spaces must all match), `Up` / `Down` / `PageUp` / `PageDown` to move, `Enter` or a click to choose, `Escape` to close. The box below the list says what the highlighted entry is.
 
 | Opens it | Lists | Choosing |
 | --- | --- | --- |
 | `/sessions` or `/resume` alone | Your recent sessions (title, last update, messages) | Resumes it here |
+| `/model` alone | The enabled models you may use, the default and this session's choice marked | Switches the root agent to it for this session (`/model <name>`; agents it delegates to keep their lane's model); with a choice set, the first entry, **Configured default**, drops it (`/model clear`) |
 | `/skills` alone | Your skills and how each is used now | Then pick Automatic, Always or This session; sent as `/skills <id> <mode>` |
 | `Ctrl+P` / `F4` | Every command, with what it does and where it runs | Runs it |
 | `/theme` alone | `auto`, `dark`, `light`, `high-contrast` | Switches and saves |
 | `Ctrl+R` | What you sent | Puts it in the composer |
 
-The text forms keep working: `/sessions list`, `/resume <n|id>`, `/skills <id> always`. There is no model picker: the gateway has no model command to list from.
+The text forms keep working: `/sessions list`, `/resume <n|id>`, `/skills <id> always`, `/model <name>`, `/model clear`, `/model list`. The session's model choice is the same one the chat's `/model` sets: yours only, kept in the server's memory until it restarts.
 
 ## Attention and the window title
 
@@ -163,7 +164,9 @@ The compact details show steps near the active step. The full transcript entry r
 | `Alt+O` | Transcript into the terminal scrollback |
 | `Ctrl+F` / `Ctrl+Shift+F` | Search the transcript |
 
-Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills` and `/compact`.
+Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/persona`, `/skills`, `/model` and `/compact`.
+
+Typing `@` opens mention completion: the agents the root agent can delegate to (`@agent:coding`), your skills (`@skill:Tech-Writing`, the name with spaces as `-`) and your recent sessions (`@session:1a2b3c4d`, shown with their title), listed above the matching project files (`@src/app.ts`, as before). Keep typing to filter; `Tab` or `Enter` inserts the token. A mention is text in your message: it names the agent, skill or session for the agent reading it, which decides what to do with it — the server does not run the agent, turn the skill on or attach the session by itself (use `/skills` to turn a skill on). The lists come from the same routes the web reads (`/api/roles`, `/api/skills`, `/api/sessions`), are fetched on the first `@` and kept for a minute — fetched again sooner after `/workspace`, `/login` or `/resume`. A list that cannot be loaded (no answer in 10 s counts) is reported in the transcript, at most once a minute, and left out; file completion never waits more than 1.5 s for the lists. Names, descriptions and titles are shown as plain text: escape sequences and control characters in them are removed, and an entry whose token would still hold one is not offered.
 
 The standalone chat shell also handles `/login`, `/logout` (sign out and disconnect), `/whoami`, `/project`, `/workspace`, `/resume`, `/theme`, `/search`, `/export` and `/scrollback` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 
@@ -210,7 +213,7 @@ In the file:
 | `Ctrl+X` / `Ctrl+V` | Cut / paste; `Ctrl+C` copies a selection (with nothing selected it is still the quit key) |
 | `Enter` | New line with the same indentation, one step deeper after an opening bracket |
 
-Long lines scroll horizontally to keep the cursor visible, or break into rows with soft wrap (`Alt+Z` or `/wrap [on|off]`, remembered per project; a wide character is never split). The view keeps three lines between the cursor and its top or bottom while the cursor moves. When the file is longer than the pane a scrollbar is drawn on its right edge. The bracket matching the one at the cursor is underlined. Tabs advance to the next stop of four cells, and wide characters are measured in terminal cells. The cursor moves and deletes by whole characters: an emoji with a skin tone, a flag or a letter with its accent is one step. Tab inserts what the file indents with — a tab, or its step of spaces (two in a file with no indentation yet). Bracketed multiline paste inserts text without inserting the terminal control markers.
+Long lines scroll horizontally to keep the cursor visible, or break into rows with soft wrap (`Alt+Z` or `/wrap [on|off]`, remembered per project; a wide character is never split); with it on, `Up` and `Down` move one row on screen, so a long line is walked row by row — vim's `j` and `k` still move by line). The view keeps three lines between the cursor and its top or bottom while the cursor moves. When the file is longer than the pane a scrollbar is drawn on its right edge. The bracket matching the one at the cursor is underlined. Tabs advance to the next stop of four cells, and wide characters are measured in terminal cells. The cursor moves and deletes by whole characters: an emoji with a skin tone, a flag or a letter with its accent is one step. Tab inserts what the file indents with — a tab, or its step of spaces (two in a file with no indentation yet). Bracketed multiline paste inserts text without inserting the terminal control markers.
 
 Undo (`Ctrl+Z`, redo `Ctrl+Y`) works in steps you would expect: a burst of typing, a paste, a replace-all or an accepted agent edit is one step. The unsaved marker (`●`) compares the buffer with the file as last opened or saved, so undoing back to it clears the marker.
 

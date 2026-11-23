@@ -17,6 +17,7 @@ import { canActInSession } from '@/core/rooms/access';
 import { limitKindOf } from '@/core/errors/limit-refusal';
 import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { isSessionTurnCancelled } from '@/core/session-turn-lock';
+import { injectTraceHeaders, SpanKind, withSpan } from '@/core/tracing';
 
 export interface ActionResult {
   success: boolean;
@@ -588,6 +589,17 @@ async function executeSpawnAgent(
       if (marked) endReadOnlyTurn(sessionId);
     }
 
+    // The concurrent-agent cap refused the root agent's spawn, and nothing was
+    // stored in the session: reported as not started, as the direct spawn
+    // below does, so a webhook delivery is released for a redelivery and the
+    // reservation handed back. A quota or budget refusal is answered in the
+    // session instead (TurnResult.notStarted), and its delivery counts as done.
+    if (result.notStarted) {
+      coreLogger.warn({ hookId: hook?.id, sessionId, error: result.response }, 'Orchestrated hook turn refused before any agent started');
+      await closeThreadIfEnded(thread, hook);
+      return { success: false, error: result.response.slice(0, 1000), notStarted: true, data: { orchestrated: true, ...threadData(thread) } };
+    }
+
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
@@ -877,29 +889,44 @@ async function executeWebhook(
   // vetted IP so a rebinding resolver can't swap in a private address between
   // the check and the connect.
   const { fetchGuarded } = await import('@/utils/sanitize');
-  let response: Response;
-  try {
-    response = await fetchGuarded(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
+  // The span names the receiving host only: a webhook URL's path and query
+  // are often its secret (an incoming-webhook token), which no redactor can
+  // recognise by shape (src/core/tracing.ts).
+  const target = URL.canParse(url) ? new URL(url) : null;
+  return withSpan('webhook.deliver', {
+    'http.request.method': method,
+    'server.address': target?.hostname,
+    'url.scheme': target?.protocol.replace(/:$/, ''),
+  }, async (span) => {
+    let response: Response;
+    try {
+      response = await fetchGuarded(url, {
+        method,
+        // `traceparent` goes out only when the operator opted in
+        // (OCTIPUS_TRACE_PROPAGATE_OUTBOUND); a header the hook configures itself wins.
+        headers: injectTraceHeaders({
+          'Content-Type': 'application/json',
+          ...headers,
+        }),
+        body: method !== 'GET' ? body : undefined,
+      });
+    } catch (err) {
+      span.fail(err);
+      return { success: false, error: `Webhook URL blocked: ${(err as Error).message}` };
+    }
+    span.setAttributes({ 'http.response.status_code': response.status });
+    if (!response.ok) span.failWith(String(response.status));
+
+    const responseData = await response.text();
+
+    return {
+      success: response.ok,
+      data: {
+        status: response.status,
+        body: responseData,
       },
-      body: method !== 'GET' ? body : undefined,
-    });
-  } catch (err) {
-    return { success: false, error: `Webhook URL blocked: ${(err as Error).message}` };
-  }
-
-  const responseData = await response.text();
-
-  return {
-    success: response.ok,
-    data: {
-      status: response.status,
-      body: responseData,
-    },
-  };
+    };
+  }, SpanKind.CLIENT);
 }
 
 async function executeN8NWorkflow(

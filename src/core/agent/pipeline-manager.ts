@@ -79,6 +79,7 @@ import {
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
+import { withSpan } from '@/core/tracing';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -1221,7 +1222,24 @@ export class PipelineManager {
    */
   /** Every agent a pipeline walk spawns records the pipeline as its origin (Mission control). */
   private runGraph(args: Parameters<PipelineManager['runGraphInner']>[0]): ReturnType<PipelineManager['runGraphInner']> {
-    return withAgentOrigin({ pipelineId: args.pipeline.id }, () => this.runGraphInner(args));
+    return withAgentOrigin({ pipelineId: args.pipeline.id }, () => withSpan('pipeline.run', {
+      'octipus.pipeline.id': args.pipeline.id,
+      'octipus.session_id': args.sessionId,
+    }, () => this.runGraphInner(args)));
+  }
+
+  /**
+   * One node visit as a `pipeline.stage` span (src/core/tracing.ts): the
+   * pipeline, the node key (`n0`, `loop1`: never the stage's name or prompt)
+   * and the kind of node. The agent the stage runs nests under it.
+   */
+  private traceStage<T>(pipelineId: string, nodeKey: string, kind: string, stageType: string | undefined, run: () => Promise<T>): Promise<T> {
+    return withSpan('pipeline.stage', {
+      'octipus.pipeline.id': pipelineId,
+      'octipus.pipeline.node_key': nodeKey,
+      'octipus.pipeline.stage_kind': kind,
+      'octipus.pipeline.stage_type': stageType,
+    }, run);
   }
 
   private async runGraphInner(args: {
@@ -1621,7 +1639,7 @@ export class PipelineManager {
         // original question with no idea what was rejected.
         const humanFeedback = pendingFeedback.get(cursor);
         if (humanFeedback) pendingFeedback.delete(cursor);
-        const asked = await this.runHumanNode({
+        const asked = await this.traceStage(pipeline.id, cursor, 'human', undefined, () => this.runHumanNode({
           pipeline,
           node,
           stageTemplate: template.stages[gnode.templateIndex],
@@ -1631,7 +1649,7 @@ export class PipelineManager {
           feedback: humanFeedback,
           context,
           title,
-        });
+        }));
         if (asked.stopped) return asked.stopped;
         previousOutput = asked.output;
         previousRaw = asked.raw;
@@ -1644,7 +1662,7 @@ export class PipelineManager {
         const maxItems = body
           .map((n) => built[n.templateIndex]?.maxPlanItems)
           .find((v): v is number => typeof v === 'number') ?? null;
-        const stepResult = await this.runForeachNode({
+        const stepResult = await this.traceStage(pipeline.id, cursor, 'foreach', undefined, () => this.runForeachNode({
           pipeline,
           node,
           currentItem,
@@ -1656,7 +1674,7 @@ export class PipelineManager {
           // The plan's sign-off is the first body step's (see the head's `requiresApproval`).
           autoApprove: approvesUnattended(context, body[0] ? built[body[0].templateIndex] : undefined),
           independentAutoApprove: !!body[0] && built[body[0].templateIndex]?.autoApproveUnattended === true && context.attended === false,
-        });
+        }));
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
         outcome = stepResult.outcome;
@@ -1847,7 +1865,7 @@ export class PipelineManager {
         if (itemDecisions.length) input += `\n\nRECORDED USER DECISIONS: ${JSON.stringify(itemDecisions)}\nFollow these recorded answers for this item's required work; do not re-ask settled questions or invent a different rule.`;
         const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
         const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
-        const stepResult = await this.runStepNode({
+        const stepResult = await this.traceStage(pipeline.id, cursor, 'step', b.stageType ?? 'standard', () => this.runStepNode({
           retryContract: retryCount < retryLimit,
           pipeline,
           node,
@@ -1883,7 +1901,7 @@ export class PipelineManager {
           itemId: currentItem?.id ?? null,
           checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
           partial,
-        });
+        }));
         if (stepResult.contractFailure) {
           contractRetries.set(retryKey, retryCount + 1);
           contractFeedback = stepResult.contractFailure;

@@ -320,6 +320,17 @@ my linked channels" has already delivered the turn's answer. A direct (non-orche
 when the agent starts, so its later failure is reported by the agent's own
 `agent_error` notification instead.
 
+A run refused before any agent started — the server at its concurrent-agent
+limit (`maxConcurrentAgents`), or, for a direct spawn, a quota or paused spend
+budget — is not a failure of the schedule. `lastError` is set to
+`Not started: <reason>`. A one-shot is retried (1 minute backing off to 1
+hour, for 24 hours after its time) and tells you, with a `schedule_failed`
+notification titled `Scheduled task "<name>" did not start`, only if it gives
+up. A recurring schedule does not retry that run, so the first refusal of a
+streak tells you the same way, and it runs again at its next time. A
+`Not started` marker does not count as a failure streak: if a later run
+starts and fails, that failure notifies as usual.
+
 ### Watch: skip unchanged runs
 
 A recurring schedule whose action is an orchestrated `spawn_agent` turn may

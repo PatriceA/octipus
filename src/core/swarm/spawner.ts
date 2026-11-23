@@ -23,6 +23,7 @@ import type { AgentRole } from '@/core/agent/types';
 import { stageChildMetadata } from '@/core/agent/worker-spawner';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from '@/core/agent/workspace-snapshot';
 import { recordSwarmSpawn } from '@/core/telemetry';
+import { withSpan } from '@/core/tracing';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
@@ -393,7 +394,17 @@ export class SwarmSpawner {
 
     let result: ChildResult;
     try {
-      result = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
+      result = await withSpan('agent.child', {
+        'octipus.agent.parent_id': parent.id,
+        'octipus.agent.role': childRole,
+        'octipus.agent.depth': childDepth,
+        'octipus.agent.planned': !!params.plan?.length,
+      }, async (span) => {
+        const child = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
+        span.setAttributes({ 'octipus.agent.child_status': child.status });
+        if (child.status !== 'ok' && child.status !== 'cache_hit') span.failWith(`child_${child.status}`);
+        return child;
+      });
     } catch (err) {
       await reportAfter('failed', (err as Error)?.message);
       throw err;

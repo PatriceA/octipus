@@ -693,7 +693,9 @@ package, its name and its version.
 The same keys and the same trust settings sign and check skill bundles
 (`octi plugin sign-skill-bundle`, [Exchanging skills](SKILL-EXCHANGE.md#trust-settings)),
 under a domain prefix of their own: a package signature never verifies as a
-bundle signature, or the other way round.
+bundle signature, or the other way round. A skill registry names the
+publishers of `plugins.trustedPublishers` it is trusted for
+([Registries](SKILL-EXCHANGE.md#registries)).
 
 ```
 octi plugin keygen ./acme                       # writes acme.key (private) and acme.pub

@@ -145,6 +145,19 @@ describe('splitParagraphs', () => {
     expect(tablePieces.flatMap((p) => p.split('\n').filter((l) => l.startsWith('| part ')))).toEqual(rows);
   });
 
+  test('a table with an empty header row (a PDF table that had none) repeats that empty header', () => {
+    const header = '| | | |\n| --- | --- | ---: |';
+    const rows = Array.from({ length: 30 }, (_, i) => `| part ${i} | approx. ${i} units in stock | ${i} |`);
+    const pieces = splitParagraphs(`${header}\n${rows.join('\n')}`, 300);
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces) {
+      // Each piece is a valid table on its own: header row, separator, rows.
+      expect(piece.startsWith(`${header}\n| part `)).toBe(true);
+      expect(piece.length).toBeLessThanOrEqual(300);
+    }
+    expect(pieces.flatMap((p) => p.split('\n').slice(2))).toEqual(rows);
+  });
+
   /** Text with whitespace removed, to compare what pieces hold against what went in. */
   const squash = (s: string) => s.replace(/\s+/g, '');
 
