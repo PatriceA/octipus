@@ -11,6 +11,30 @@ export interface FileRef { path: string; version?: string; protectionLevel?: imp
 /** One file stored by `POST /sessions/:id/attachments`. */
 export interface UploadedAttachment { path: string; name: string }
 
+/** How long `getJson` waits for a whole answer. */
+export const GET_JSON_TIMEOUT_MS = 10_000;
+/** The largest answer `getJson` reads; a bigger one is refused rather than held in memory. */
+export const GET_JSON_MAX_BYTES = 5 * 1024 * 1024;
+
+/** A response body as text, refused past `maxBytes` (by its length header, or while reading). */
+async function readBounded(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () => new Error(`the answer is larger than ${Math.round(maxBytes / 1024)} KiB`);
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) { await response.body?.cancel(); throw tooLarge(); }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) { await reader.cancel(); throw tooLarge(); }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** An attachment's base64 bytes as a file for a multipart upload. */
 function decodeAttachment(attachment: ChatAttachment): File {
   return new File([Buffer.from(attachment.data, 'base64')], attachment.name, { type: attachment.mimeType });
@@ -263,15 +287,26 @@ export class GatewayClient {
    * `path` is under the API base (`/api`). Throws with the server's reason
    * when the answer is not a success.
    */
-  async getJson<T>(path: string): Promise<T> {
+  async getJson<T>(path: string, limits: { timeoutMs?: number; maxBytes?: number } = {}): Promise<T> {
+    const { timeoutMs = GET_JSON_TIMEOUT_MS, maxBytes = GET_JSON_MAX_BYTES } = limits;
     const session = readCliSession();
     if (!session) throw new Error('Not signed in');
     const base = apiBaseFromGatewayUrl(this.options.url || DEFAULT_GATEWAY_URL);
     const workspace = this.options.getWorkspace?.();
-    const response = await fetch(`${base}${path}`, {
-      headers: { Authorization: `Bearer ${session.token}`, ...(workspace ? { 'X-Octipus-Workspace': workspace } : {}) },
-    });
-    const body = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+    let text: string;
+    let response: Response;
+    try {
+      response = await fetch(`${base}${path}`, {
+        headers: { Authorization: `Bearer ${session.token}`, ...(workspace ? { 'X-Octipus-Workspace': workspace } : {}) },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      text = await readBounded(response, maxBytes);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') throw new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`);
+      throw error;
+    }
+    let body: (T & { error?: string }) | null = null;
+    try { body = JSON.parse(text) as T & { error?: string }; } catch { body = null; }
     if (!response.ok || body === null) throw new Error(body?.error || `HTTP ${response.status}`);
     return body;
   }
