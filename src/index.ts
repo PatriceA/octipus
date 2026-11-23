@@ -199,9 +199,12 @@ async function main() {
       await bootstrapArtifactSettings();
       const { registerArtifactRefreshHandler } = await import('@/core/artifacts/scheduler');
       const { registerArtifactCleanupHandler, bootstrapArtifactCleanup } = await import('@/core/artifacts/cleanup');
+      const { registerAgentRefreshHandler, bootstrapAgentRefreshSchedules } = await import('@/core/artifacts/agent-refresh');
       registerArtifactRefreshHandler();
       registerArtifactCleanupHandler();
+      registerAgentRefreshHandler();
       await bootstrapArtifactCleanup();
+      await bootstrapAgentRefreshSchedules();
       logger.info('Live artifacts initialized');
     } catch (err) {
       logger.error({ err }, 'Live artifacts init failed — feature will be unavailable but server continues');

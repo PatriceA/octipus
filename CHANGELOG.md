@@ -7,6 +7,28 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Agent refresh for Live Artifacts** (BETA,
+  [docs](docs/ARTIFACTS.md#agent-refresh)). An artifact can now stay current
+  by having an agent regenerate it. The agent that creates a page may store a
+  refresh instruction (`create_live_artifact` → `refresh_instruction`), shown
+  as "set by agent — review before enabling"; the artifact's owner edits it,
+  clicks **Refresh with agent**, and may set a schedule (hourly at most often;
+  off by default). The run is the owner's: an unattended `research` worker
+  on the owner's spend budget and quotas, given only the stored instruction,
+  with exactly two tools, web search and page fetch — never the owner's
+  knowledge, files or other tools; a server that would give it anything else
+  refuses the run. The new version replaces the page only when the run returns
+  exactly one valid page and nobody edited it meanwhile; otherwise the current
+  version stays and the failure is shown. Identical pages write no version,
+  and only the 5 newest refresh versions are kept. One refresh per artifact at
+  a time (`409`), 3 per server process (`429`), 10 minutes per run even if it
+  hangs; a schedule that fails or is refused 5 times in a row turns itself off
+  and notifies the owner, and one nobody opens pauses after the retention
+  window (30 days without one). A refresh does not extend retention. Only the
+  owner can trigger it: workspace members get `403`, viewers and embed tokens
+  have no route to it. Not available in shared spaces; refreshing from the
+  knowledge base is not built. Migration `0207_artifact_agent_refresh` adds
+  the `artifact_agent_refresh` table.
 - **Email channel.** Talk to Octipus by mail: mail to a dedicated IMAP mailbox (an admin's personal one) from an allow-listed, linked sender becomes a conversation, answered by a threaded reply (`Re:`, `In-Reply-To`/`References`) that is saved as a **draft for a person to send** by default (`emailChannel.replyMode: draft`) or sent at once with `Auto-Submitted: auto-replied` (`send`); replying continues the session. A mail counts only when the topmost `Authentication-Results` under an operator-trusted authserv-id reports `dmarc=pass` for the From domain (no DKIM/SPF fallback; the receiving server must strip forged headers carrying its id — see the hard requirements in the docs). Anything else, auto replies, lists, bounces, repeats, late mail and senders over the hourly limit are dropped and recorded, never answered. Email turns are restricted: web search and the bundled help only, no stored grants, no commands or plan `go`, no memory, context hooks or plugin context, attachments not read (never filed into documents or the knowledge index), unattended (approvals refused), and no egress once the session holds private data. The mailbox owner can read every email-channel conversation; their agent cannot, and automatic triage skips the mailbox. Off by default (`emailChannel.*` under Settings → Channels). New table `email_channel_messages` (migration `0206_email_channel`). See docs/CHANNELS.md#email.
 - **Terminal chat: older turns, a model picker and `@` mentions**
   ([guide](docs/guides/tui.md#reading-a-conversation)). Scrolling up past

@@ -183,7 +183,146 @@ new artifacts with these; use `kind: "toolbox"` + `tool_id` instead.
 | `http`       | `{ url, method, headers?, body?, jsonpath? }`                 | `headers` may use `${vault.<key>}` placeholders. |
 | `rss`        | `{ url }`                                                     | Normalized to `{ items: [{title, link, pubDate, summary}] }`. |
 | `mcp`        | `{ server, tool, params }`                                    | Routed through the MCP bridge. |
-| `skill_query`| `{ skill, prompt }`                                           | **Not enabled.** Accepted when a source is added, but every refresh fails with "skill_query refresh not yet enabled": there is no budgeted, permission-checked way yet to run a model on a schedule for an artifact. |
+| `skill_query`| `{ skill, prompt }`                                           | **Not enabled.** Accepted when a source is added, but every refresh fails with "skill_query refresh not yet enabled". To have an agent regenerate a page, use [agent refresh](#agent-refresh) instead. |
+
+## Agent refresh
+
+A data source re-fetches data; an **agent refresh** re-runs an agent to
+regenerate the whole page. It is the way to keep a page current when its
+content is written by an agent (a weekly digest, a summary of what changed)
+rather than bound to a feed.
+
+**What a refresh is.** One agent run, owned by the artifact's owner, from the
+**refresh instruction** stored with the artifact. The agent that creates the
+page may store one (`create_live_artifact({ …, refresh_instruction })`); it is
+shown as **set by agent — review before enabling** until the owner saves it.
+That tool cannot set a schedule. The owner sees and edits
+the instruction on the artifact page (**Agent refresh**) or with
+`PUT /api/artifacts/:id/agent-refresh`. The run is an unattended `research`
+worker of the owner, in the artifact's workspace; anything that would ask for
+approval is refused. It must reply with exactly one fenced `html` block (and
+at most one `css` block), each fence on a line of its own; that is the new
+page. A reply with no html block, two of them, or a fence left open is a
+failed refresh.
+
+**Tools: web search and page fetch, nothing else.** A refresh agent has
+exactly two tools, `websearch__search` and `websearch__fetch_page`: never the
+owner's knowledge base, notes, memory, files, commands, messaging, MCP
+servers or any artifact tool. The spawner narrows a worker's tools to those
+it is given, but falls back to the role's whole set when none of them is
+available, so the tool set is checked before the worker is spawned: if this
+server would give the agent anything other than those two (web search
+turned off or unavailable, say), the refresh is refused with the reason and
+nothing runs.
+
+**The injection boundary, as it really is.** The run's task is a fixed frame
+plus the stored instruction: never the current page, its data, or anything a
+viewer sent or did. The agent then reads pages anyone can write, so a page can
+steer it. That is why it holds nothing private: there is nothing of the
+owner's for it to leak, and the worst a hostile page can do is put bad or
+hostile content on the artifact. That content renders in the sandboxed embed
+like any other version (no access to the app, its cookies or the API), and,
+like every artifact page, it can show anything to whoever views it and load
+`https:` images.
+
+**Who can trigger it.** Only the owner (the artifact's creator):
+
+| Who | Can |
+|---|---|
+| Owner | edit the instruction, set or clear the schedule, **Refresh with agent** (`POST /api/artifacts/:id/agent-refresh/run`) |
+| Workspace member who can view or edit the artifact | nothing: `403`, `code: "not_owner"` (a refresh spends the owner's budget) |
+| Anyone else, signed in | `404`, as for every artifact route |
+| Embed viewer (viewer token, share link, public page) | nothing: no `/api` route accepts a viewer token, and the hosted page routes have no refresh |
+
+Viewer-triggered refresh does not exist. Agent refresh is not available on an
+artifact in a shared space (it runs as the owner's personal agent): `PUT` is
+refused there with `code: "refresh_unavailable"`.
+
+**What it costs.** The run's model calls are the owner's, recorded in
+`cost_log` like any agent of theirs, and counted by their
+[spend budgets](SPEND-BUDGETS.md) and quotas. A paused budget refuses the
+refresh before any agent starts; budgets and quotas are checked again at the
+spawn and before each model call, as for every agent.
+
+**Atomic update.** A new version (change summary `agent refresh`) becomes
+current only when the run succeeded, returned a non-empty page under 512,000
+characters, its script built, and the artifact still shows the version the run
+started from. Otherwise the current version stays, the unused version row is
+removed, and the attempt is recorded as failed: an edit, restore or delete
+while the run was going wins over the refresh. A version a crashed run left
+behind is removed by the next run. A run whose claim another run took over
+writes nothing further, and the artifact never points at a version that was
+removed. Open viewers reload on success. A page identical to the one the last
+refresh made current writes no version; only the 5 newest versions written by
+refreshes are kept (never the current one, never a version a person saved or
+restored — a restore of a refresh's version is the owner's). A refresh does not count as activity for
+[retention](#cleanup-and-retention): it does not touch the artifact's edit
+time.
+
+**State.** The owner sees last refreshed, the last attempt's outcome
+(`success`, `failed`, `refused`) and error, whether one is running, the next
+scheduled run, and why a schedule was switched off
+(`GET /api/artifacts/:id/agent-refresh`). A refusal (spend budget, quota,
+concurrent-agent limit, disabled owner, shared space, refresh job off) is
+recorded like a failure, with its reason, and changes nothing on the page.
+
+**Schedule.** Off by default: a refresh runs only when the owner asks. The
+owner may set one (every hour, 6 hours, day or week in the web app; the API
+takes any whole number of minutes from 60 to 10,080; setting the interval it
+already has changes nothing). It runs on the shared task scheduler
+(`getScheduler`, task type `artifact:agent-refresh`), the primitive
+data-source refresh and cleanup use. A task only starts the run and returns;
+the next is queued when the run ends, so no scheduler worker waits on an
+agent. Changing or clearing the schedule replaces its chain, so a task already
+queued for the old one ends without running; every boot re-arms the stored
+schedules under a new chain (an embedded install's queue is in memory),
+spread over 10 minutes.
+
+**Limits.**
+
+- At least 60 minutes between scheduled runs.
+- One refresh of an artifact at a time: a second request while one runs is
+  `409`, `code: "refresh_in_flight"`, and runs nothing (a conditional claim on
+  the row, so this holds across processes; a claim older than 15 minutes is
+  presumed dead).
+- At most 3 agent refreshes run at once per server process: a manual request
+  beyond that is `429`, `code: "refresh_capacity"`; a scheduled one tries
+  again 5–10 minutes later, without counting as a failure.
+- 10 minutes per run. The attempt ends then even if the run never returns:
+  the worker is stopped, the failure is recorded, the claim and the
+  concurrency slot are released, and whatever the run returns later is
+  dropped.
+- A scheduled attempt that fails or is refused backs off: the next one comes
+  after the interval × 2 per failure in a row, capped at a day — but never
+  sooner than the interval itself, so a daily or weekly schedule keeps its
+  interval. After 5 in a row the schedule switches itself off, says why on the
+  artifact page, and the owner gets a notification (`artifact_refresh_disabled`).
+  A success resets the count; setting the schedule again turns it back on.
+- The schedule pauses (`artifact_refresh_paused`, once, with the reason on the
+  page) when nobody has opened the artifact for the retention window
+  (`artifacts.retentionDays`), or for 30 days when no retention is set,
+  counted from the last view or from when the schedule was set.
+- The schedule stops when the artifact is deleted or expires under
+  [retention](#cleanup-and-retention) (at once for an expiry, at its next run
+  for a deletion), or when the owner's account is disabled. While the
+  `artifacts-refresh` job of the `artifacts` module is off, scheduled runs are
+  skipped and resume when it is back.
+
+**Not built.**
+
+- **Refresh from the knowledge base.** A refresh agent never reads the
+  owner's knowledge base, notes or files. Knowledge holds untrusted text too
+  (auto-indexed research, ingested documents), so such a run is injectable,
+  and the page it writes could send what it read to another site — by
+  navigating its own frame, which no content policy stops — so this cannot be
+  closed without sanitising the generated HTML.
+- **Viewer-triggered refresh.** Viewers and embed tokens cannot start a run.
+- **Refresh in shared spaces.**
+
+Tables: `artifact_agent_refresh` (migration `0207_artifact_agent_refresh.sql`),
+one row per artifact, removed with it. Code: `src/core/artifacts/agent-refresh.ts`
+(claim, atomic landing, schedule) and `agent-refresh-runner.ts` (the run, its
+tools and its deliverable).
 
 ## Templates
 
