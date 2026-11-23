@@ -319,7 +319,7 @@ spread over 10 minutes.
 - **Viewer-triggered refresh.** Viewers and embed tokens cannot start a run.
 - **Refresh in shared spaces.**
 
-Tables: `artifact_agent_refresh` (migration `0205_artifact_agent_refresh.sql`),
+Tables: `artifact_agent_refresh` (migration `0207_artifact_agent_refresh.sql`),
 one row per artifact, removed with it. Code: `src/core/artifacts/agent-refresh.ts`
 (claim, atomic landing, schedule) and `agent-refresh-runner.ts` (the run, its
 tools and its deliverable).

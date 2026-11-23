@@ -27,7 +27,7 @@ labels reflect blast radius, not contract guarantees.
   window (30 days without one). A refresh does not extend retention. Only the
   owner can trigger it: workspace members get `403`, viewers and embed tokens
   have no route to it. Not available in shared spaces; refreshing from the
-  knowledge base is not built. Migration `0205_artifact_agent_refresh` adds
+  knowledge base is not built. Migration `0207_artifact_agent_refresh` adds
   the `artifact_agent_refresh` table.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
