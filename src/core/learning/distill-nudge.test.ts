@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  decideDistillNudge, isComplexRun, type NudgeRunFacts, type NudgeTurnFacts, nudgeTurnGate, type RunEventRow,
-  summarizeRunEvents, verificationPassed,
+  boundRunMaterial, decideDistillNudge, isComplexRun, type NudgeRunFacts, type NudgeTurnFacts, nudgeTurnGate,
+  RUN_MATERIAL_LIMITS, type RunEventRow, summarizeRunEvents, verificationPassed,
 } from './distill-nudge';
 
 const limits = { enabled: true, minToolCalls: 8, minDistinctTools: 3 };
@@ -145,5 +145,30 @@ describe('nudgeTurnGate', () => {
   test('is the turn half alone', () => {
     expect(nudgeTurnGate(turn(), limits)).toBeNull();
     expect(nudgeTurnGate(turn({ trigger: 'schedule' }), limits)).toBe('unattended');
+  });
+});
+
+describe('boundRunMaterial', () => {
+  const msg = (role: string, n: number, size = 100) => ({ role, content: `m${n} ${'x'.repeat(size)}` });
+  test('a short run is handed over whole, with its tools', () => {
+    expect(boundRunMaterial([msg('user', 0, 3), msg('assistant', 1, 3)], ['a', 'b']))
+      .toBe('user: m0 xxx\n\nassistant: m1 xxx\n\nTools used, in order of first use: a, b');
+  });
+  test('at most the configured number of messages: the request and the most recent ones', () => {
+    const rows = [msg('user', 0), ...Array.from({ length: 50 }, (_, i) => msg('assistant', i + 1))];
+    const out = boundRunMaterial(rows, []).split('\n\n');
+    expect(out).toHaveLength(RUN_MATERIAL_LIMITS.messages);
+    expect(out[0]).toMatch(/^user: m0 /);
+    expect(out[1]).toMatch(/^assistant: m22 /);
+    expect(out.at(-1)).toMatch(/^assistant: m50 /);
+  });
+  test('the total is bounded; the request and the answer survive, each clipped', () => {
+    const rows = [msg('user', 0, 20_000), ...Array.from({ length: 10 }, (_, i) => msg('assistant', i + 1, 9_000)), msg('assistant', 99, 20_000)];
+    const out = boundRunMaterial(rows, Array.from({ length: 500 }, (_, i) => `tool_${i}`));
+    expect(out.length).toBeLessThanOrEqual(RUN_MATERIAL_LIMITS.totalChars);
+    expect(out.startsWith('user: m0 ')).toBe(true);
+    expect(out).toContain('assistant: m99 ');
+    expect(out).toContain('assistant: m10 ');
+    expect(out).not.toContain('assistant: m1 ');
   });
 });

@@ -6,7 +6,8 @@ import { interpretDistillOutput, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller
 
 /** What distilling did: an error to surface, nothing worth saving, or the filing result. */
 export type DistillResult =
-  | { error: string }
+  /** `code`: why, for a caller that retries — `truncated` will fail the same way again; `no_model` spent no call. */
+  | { error: string; code: 'no_model' | 'truncated' | 'malformed' }
   | { distilled: false; message: string }
   | FileSkillProposalResult;
 
@@ -23,7 +24,7 @@ export async function distillToProposal(material: string, sourceRef: string, use
   // background model serves it.
   const model = await getModelRegistry().getModelForTopic('skill_distillation');
   if (!model) {
-    return { error: 'No model is bound to the background lane — bind one on the Topics page.' };
+    return { error: 'No model is bound to the background lane — bind one on the Topics page.', code: 'no_model' };
   }
 
   const result = await getLiteLLMClient().complete({
@@ -46,11 +47,12 @@ export async function distillToProposal(material: string, sourceRef: string, use
     toolLogger.warn({ model: model.modelId, userId }, 'Skill distillation truncated at token limit');
     return {
       error: 'Distiller output was truncated at the token limit (finishReason=length) — no proposal filed. Retry with shorter source material.',
+      code: 'truncated',
     };
   }
   if (outcome.kind === 'malformed') {
     toolLogger.warn({ model: model.modelId, reason: outcome.reason }, 'Skill distillation returned a malformed response');
-    return { error: `Distiller returned a malformed response (${outcome.reason}) — no proposal filed.` };
+    return { error: `Distiller returned a malformed response (${outcome.reason}) — no proposal filed.`, code: 'malformed' };
   }
   if (outcome.kind === 'none') {
     return { distilled: false, message: 'Nothing worth distilling into a reusable skill.' };

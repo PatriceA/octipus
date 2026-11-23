@@ -1,5 +1,6 @@
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
+import { stubGateway } from './fixtures/gateway';
 
 /** The offer to distil a finished run into a skill, against stubbed `/api/sessions/:id/distill-nudge` routes. */
 
@@ -40,6 +41,35 @@ test('not now and don\'t ask again close the offer', async ({ authenticatedPage:
   await offer.getByRole('button', { name: 'Not now' }).click();
   await expect.poll(() => decisions).toEqual(['dismiss']);
   await expect(offer).toHaveCount(0);
+});
+
+test('an offer announced after the answer appears; another session answering leaves the result alone', async ({ authenticatedPage: page }) => {
+  const gateway = await stubGateway(page);
+  let announced = false;
+  await page.route('**/api/sessions/sess-1/distill-nudge**', (route) => route.request().method() === 'POST'
+    ? json(route, 200, { state: 'accepted', distilled: true, proposalId: 'p1', status: 'pending', message: 'Filed for review on Skills → Proposals.' })
+    : json(route, 200, announced ? OFFER : { nudge: null }));
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => gateway.subscribed()).toBe(1);
+  const offer = page.getByTestId('distill-nudge');
+  await expect(offer).toHaveCount(0);
+  announced = true;
+  gateway.event('session.skill_nudge', { messageId: OFFER.nudge.messageId }, 'sess-1');
+  await offer.getByRole('button', { name: 'Distil into a skill' }).click();
+  await expect(offer).toContainText('Filed for review on Skills → Proposals.');
+  gateway.event('chat.response', { response: { response: 'Elsewhere.' } }, 'sess-2');
+  await expect(offer).toContainText('Filed for review on Skills → Proposals.');
+});
+
+test('an offer closed for good says so and offers nothing more', async ({ authenticatedPage: page }) => {
+  stubOffer(page, () => ({ status: 502, body: { error: 'Distiller output was truncated. The offer is closed.', code: 'failed', final: true } }));
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  const offer = page.getByTestId('distill-nudge');
+  await offer.getByRole('button', { name: 'Distil into a skill' }).click();
+  await expect(offer).toContainText('The offer is closed.');
+  await expect(offer.getByRole('button', { name: 'Distil into a skill' })).toHaveCount(0);
 });
 
 test('a failed distillation says why and keeps the offer', async ({ authenticatedPage: page }) => {

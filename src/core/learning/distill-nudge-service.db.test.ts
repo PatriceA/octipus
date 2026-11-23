@@ -57,6 +57,7 @@ beforeEach(async () => {
   await executeRaw(`DELETE FROM kv_store WHERE key LIKE 'learning:distill-nudge:%'`);
   await executeRaw(`DELETE FROM skill_proposals`);
   await executeRaw(`UPDATE users SET preferences = '{}'::jsonb`);
+  await executeRaw(`DELETE FROM skill_permissions`);
 });
 
 const facts = (over: Partial<NudgeTurnFacts> = {}): NudgeTurnFacts => ({
@@ -178,6 +179,12 @@ describe('the offer', () => {
     await getDb().insert(messages).values({ sessionId: run.sessionId, role: 'assistant', content: 'Anything else?', createdAt: new Date(Date.now() + 1000) });
     expect(await openDistillNudge(run.sessionId, userId)).toBeNull();
   });
+
+  test('an offer that cannot be stored gives the cool-down back', async () => {
+    const run = await finishedRun(COMPLEX);
+    expect(await offer({ ...run, answerId: '00000000-0000-4000-8000-000000000000' })).toBeNull();
+    expect(await offer(await finishedRun(COMPLEX))).not.toBeNull();
+  });
 });
 
 describe('the decision', () => {
@@ -250,5 +257,126 @@ describe('the decision', () => {
     await expect(resolveDistillNudge(run.sessionId, run.answerId, otherUserId, 'accept')).rejects.toMatchObject({ code: 'not_found' });
     await expect(resolveDistillNudge(randomUUID(), run.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'not_found' });
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  test('a lapsed offer cannot be decided', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const { getDb } = await import('@/db/postgres');
+    const { messages } = await import('@/db/schema/messages');
+    const run = await finishedRun(COMPLEX);
+    await offer(run);
+    await getDb().insert(messages).values({ sessionId: run.sessionId, role: 'assistant', content: 'Anything else?', createdAt: new Date(Date.now() + 1000) });
+    await expect(resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'lapsed' });
+    expect(complete).not.toHaveBeenCalled();
+    expect(await nudgeOf(run.answerId)).toMatchObject({ state: 'offered' });
+  });
+
+  test('accepting goes through the tool middleware and is audited as the owner\'s approval', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const { getDb } = await import('@/db/postgres');
+    const { auditLog } = await import('@/db/schema/audit');
+    const { and, eq } = await import('drizzle-orm');
+    const run = await finishedRun(COMPLEX);
+    await offer(run);
+    await resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept');
+    const rows = await getDb().select({ details: auditLog.details }).from(auditLog)
+      .where(and(eq(auditLog.userId, userId), eq(auditLog.action, 'permission_granted'), eq(auditLog.resourceId, 'skill-distill.distill')));
+    expect(rows.map((row) => row.details)).toContainEqual(expect.objectContaining({
+      authorizationSource: `approval:distill-nudge:${run.answerId}`, toolId: 'skill-distill', action: 'distill' }));
+  });
+
+  test('a plugin\'s tool:before denial refuses it and leaves the offer open', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const { getAgentHooks } = await import('@/core/agent/hooks');
+    const off = getAgentHooks().register('tool:before', (ctx) => {
+      if (ctx.toolId === 'skill-distill') ctx.shortCircuit = { deny: 'no skills from chat today' };
+    });
+    try {
+      const run = await finishedRun(COMPLEX);
+      await offer(run);
+      await expect(resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'refused' });
+      expect(complete).not.toHaveBeenCalled();
+      expect(await nudgeOf(run.answerId)).toMatchObject({ state: 'offered' });
+    } finally { off(); }
+  });
+
+  test('a stored DENY refuses it; a plain ASK is answered by the click; an expired policy is not', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const { getPermissionManager } = await import('@/security/permissions');
+    learning.distillNudgeCooldownHours = 0;
+    await getPermissionManager().setPermission(userId, 'skill-distill', 'distill', 'DENY');
+    const denied = await finishedRun(COMPLEX);
+    await offer(denied);
+    await expect(resolveDistillNudge(denied.sessionId, denied.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'refused' });
+
+    await getPermissionManager().setPermission(userId, 'skill-distill', 'distill', 'ASK');
+    const asked = await finishedRun(COMPLEX);
+    await offer(asked);
+    await expect(resolveDistillNudge(asked.sessionId, asked.answerId, userId, 'accept')).resolves.toMatchObject({ state: 'accepted', distilled: true });
+
+    await getPermissionManager().setPermission(userId, 'skill-distill', 'distill', 'ALLOW', { expiresAt: new Date(Date.now() - 60_000) });
+    const expired = await finishedRun(COMPLEX);
+    await offer(expired);
+    await expect(resolveDistillNudge(expired.sessionId, expired.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'refused' });
+    expect(await nudgeOf(expired.answerId)).toMatchObject({ state: 'offered' });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  test('a cut-off reply closes the offer as failed; so do repeated failures', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    learning.distillNudgeCooldownHours = 0;
+    const cut = await finishedRun(COMPLEX);
+    await offer(cut);
+    complete.mockResolvedValueOnce({ content: '{"name":"rel', finishReason: 'length' });
+    await expect(resolveDistillNudge(cut.sessionId, cut.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'failed', final: true });
+    expect(await nudgeOf(cut.answerId)).toMatchObject({ state: 'failed', failures: 1 });
+    await expect(resolveDistillNudge(cut.sessionId, cut.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'decided' });
+
+    const flaky = await finishedRun(COMPLEX);
+    await offer(flaky);
+    for (let i = 1; i < 3; i++) {
+      complete.mockResolvedValueOnce({ content: 'not json', finishReason: 'stop' });
+      await expect(resolveDistillNudge(flaky.sessionId, flaky.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'failed', final: false });
+      expect(await nudgeOf(flaky.answerId)).toMatchObject({ state: 'offered', failures: i });
+    }
+    complete.mockResolvedValueOnce({ content: 'not json', finishReason: 'stop' });
+    await expect(resolveDistillNudge(flaky.sessionId, flaky.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'failed', final: true });
+    expect(await nudgeOf(flaky.answerId)).toMatchObject({ state: 'failed', failures: 3 });
+  });
+
+  test('an error before the model call leaves the offer open, not stuck in accepted', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const permissions = await import('@/security/permissions');
+    const run = await finishedRun(COMPLEX);
+    await offer(run);
+    const check = vi.spyOn(permissions.getPermissionManager(), 'check').mockRejectedValueOnce(new Error('policy store down'));
+    try {
+      await expect(resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept')).rejects.toMatchObject({ code: 'failed' });
+    } finally { check.mockRestore(); }
+    expect(await nudgeOf(run.answerId)).toMatchObject({ state: 'offered' });
+    await expect(resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept')).resolves.toMatchObject({ state: 'accepted' });
+  });
+
+  test('a long run is handed to the distiller within the bounds, request and answer kept', async () => {
+    const { resolveDistillNudge } = await import('./distill-nudge-service');
+    const { getDb } = await import('@/db/postgres');
+    const { messages } = await import('@/db/schema/messages');
+    const { eq } = await import('drizzle-orm');
+    const { RUN_MATERIAL_LIMITS } = await import('./distill-nudge');
+    const run = await finishedRun(COMPLEX);
+    const base = run.startedAt.getTime() + 2000;
+    await getDb().insert(messages).values(Array.from({ length: 60 }, (_, i) => ({
+      sessionId: run.sessionId, role: 'assistant' as const, content: `progress ${i} ${'x'.repeat(5000)}`, createdAt: new Date(base + i),
+      metadata: { kind: 'progress' as const },
+    })));
+    await getDb().update(messages).set({ createdAt: new Date(Date.now() + 60_000) }).where(eq(messages.id, run.answerId));
+    await offer(run);
+    await resolveDistillNudge(run.sessionId, run.answerId, userId, 'accept');
+    const material = complete.mock.calls[0][0].messages[1].content;
+    expect(material.length).toBeLessThanOrEqual(RUN_MATERIAL_LIMITS.totalChars);
+    expect(material.startsWith('user: Cut the 2.4 release for me')).toBe(true);
+    expect(material).toContain('assistant: Released 2.4');
+    expect(material).toContain('progress 59 ');
+    expect(material).not.toContain('progress 0 ');
   });
 });

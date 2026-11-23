@@ -225,8 +225,11 @@ export default function ChatPage() {
   /** Why the voice conversation could not start (shown under the composer). */
   const [voiceStartError, setVoiceStartError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  /** Bumped when a turn answers: the distil offer is read again. */
-  const [distillNudgeKey, setDistillNudgeKey] = useState(0);
+  /** Per session, bumped when it answers or announces a distil offer: that session's offer is read again. */
+  const [distillNudgeRefresh, setDistillNudgeRefresh] = useState<Record<string, number>>({});
+  const refreshDistillNudge = (sessionId: string | undefined | null) => {
+    if (sessionId) setDistillNudgeRefresh((prev) => ({ ...prev, [sessionId]: (prev[sessionId] ?? 0) + 1 }));
+  };
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
   const [showSidePanel, setShowSidePanel] = useState(true);
@@ -1046,12 +1049,17 @@ export default function ChatPage() {
       case 'chat.response': {
         const result = (payload.response ?? {}) as Record<string, any>;
         handleChatResponse({ ...result, sessionId: eventSessionId ?? result.sessionId }, { id: event.id, timestamp: event.timestamp });
-        setDistillNudgeKey((k) => k + 1);
+        refreshDistillNudge(eventSessionId ?? result.sessionId);
         // The turn set the session's title and counts; the list isn't polled
         // as often while the gateway is live.
         void loadSessions();
         break;
       }
+
+      // A finished turn's answer now carries the offer to distil it (published after the answer).
+      case 'session.skill_nudge':
+        refreshDistillNudge(eventSessionId);
+        break;
 
       case 'chat.error':
         if (concernsThisTab(eventSessionId)) {
@@ -2238,7 +2246,8 @@ export default function ChatPage() {
         <GlobalPermissionBanner inline />
 
         {/* After a complex, successful run: the offer to distil it into a skill. */}
-        <DistillNudge key={`${activeSessionId}-${distillNudgeKey}`} sessionId={activeSessionId} refreshKey={distillNudgeKey} hidden={isLoading} />
+        <DistillNudge key={activeSessionId ?? 'none'} sessionId={activeSessionId}
+          refreshKey={activeSessionId ? distillNudgeRefresh[activeSessionId] ?? 0 : 0} hidden={isLoading} />
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">

@@ -812,7 +812,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
 | `api` | `core` | 254 |
-| `api` | `db` | 154 |
+| `api` | `db` | 155 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
@@ -850,14 +850,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 77 |
-| `core` | `db` | 551 |
+| `core` | `db` | 553 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 251 |
+| `core` | `security` | 252 |
 | `core` | `services` | 4 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 89 |
@@ -951,7 +951,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 156 |
+| `tools` | `core` | 157 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -1072,6 +1072,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
 | `session.plan_updated` | yes | `src/core/agent/work-plan-store.ts` | `*` |
+| `session.skill_nudge` | yes | `src/core/learning/distill-nudge-service.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `session.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `space.presence` | yes | — | `*` |

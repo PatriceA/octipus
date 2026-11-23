@@ -112,15 +112,58 @@ export function isComplexRun(signals: RunSignals, thresholds: Pick<DistillNudgeT
   return signals.toolCalls >= thresholds.minToolCalls || signals.delegated;
 }
 
-/** The skip reason of a gated turn by what its run recorded, or null to offer (subject to the cool-down). */
+/** The skip reason by the run's events and skill use alone (the second, cheaper stage the caller reads). */
+export function nudgeSignalsDecision(signals: RunSignals, skillInjected: boolean, thresholds: DistillNudgeThresholds): NudgeSkipReason | null {
+  if (!isComplexRun(signals, thresholds)) return 'simple';
+  if (signals.skillLoaded || skillInjected) return 'skill_used';
+  if (signals.distilled) return 'already_distilled';
+  return null;
+}
+
+/**
+ * The skip reason of a gated turn by what its run recorded, or null to offer
+ * (subject to the cool-down). In the order the caller reads the facts,
+ * cheapest first: the preference, the run's events, then its checks and the
+ * user's proposals.
+ */
 export function nudgeRunDecision(run: NudgeRunFacts, thresholds: DistillNudgeThresholds): NudgeSkipReason | null {
   if (run.optedOut) return 'opted_out';
-  if (!isComplexRun(run.signals, thresholds)) return 'simple';
+  const bySignals = nudgeSignalsDecision(run.signals, run.skillInjected, thresholds);
+  if (bySignals) return bySignals;
   if (run.verification === false) return 'verification_failed';
-  if (run.signals.skillLoaded || run.skillInjected) return 'skill_used';
-  if (run.signals.distilled) return 'already_distilled';
   if (run.sessionProposal) return 'proposal_exists';
   return null;
+}
+
+/** Bounds of the material an accepted offer hands the distiller (the run's messages). */
+export const RUN_MATERIAL_LIMITS = {
+  /** As many messages as `distill_skill`'s conversation source reads. */
+  messages: 30,
+  /** Each message, at most. */
+  messageChars: 12_000,
+  /** All of it together, the tools line included. */
+  totalChars: 40_000,
+  /** The tools line, at most. */
+  toolsChars: 2_000,
+} as const;
+
+/** Accepts of one offer that may fail before it is closed as `failed`. */
+export const MAX_DISTILL_ATTEMPTS = 3;
+
+/**
+ * The distiller's material for a run: its messages, oldest first, as
+ * `role: text`, and the tools it used. Bounded by `RUN_MATERIAL_LIMITS`: the
+ * request (first message) and the answer (last) are always kept; what does
+ * not fit is dropped from the oldest of the messages between them.
+ */
+export function boundRunMaterial(rows: ReadonlyArray<{ role: string; content: string }>, tools: readonly string[]): string {
+  const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+  let lines = rows.map((m) => `${m.role}: ${clip(m.content, RUN_MATERIAL_LIMITS.messageChars)}`);
+  if (lines.length > RUN_MATERIAL_LIMITS.messages) lines = [lines[0], ...lines.slice(-(RUN_MATERIAL_LIMITS.messages - 1))];
+  const toolsLine = tools.length ? [clip(`Tools used, in order of first use: ${tools.join(', ')}`, RUN_MATERIAL_LIMITS.toolsChars)] : [];
+  const size = () => [...lines, ...toolsLine].reduce((n, line) => n + line.length + 2, 0);
+  while (lines.length > 2 && size() > RUN_MATERIAL_LIMITS.totalChars) lines.splice(1, 1);
+  return [...lines, ...toolsLine].join('\n\n').trim();
 }
 
 /** Both stages at once (what the caller does in two steps, reading in between). */

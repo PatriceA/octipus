@@ -14,7 +14,11 @@ export const DISTILL_NUDGE_RENDER = 'skill_nudge';
 export const DISTILL_NUDGE_DECISIONS = ['accept', 'dismiss', 'never'] as const;
 export type DistillNudgeDecision = (typeof DISTILL_NUDGE_DECISIONS)[number];
 
-export type DistillNudgeState = 'offered' | 'accepted' | 'dismissed';
+/**
+ * `failed`: accepting failed in a way a retry would repeat (the reply was cut
+ * off, the material is too large for the model) or failed too often; closed.
+ */
+export type DistillNudgeState = 'offered' | 'accepted' | 'dismissed' | 'failed';
 
 /** The record on the answer's metadata. */
 export interface DistillNudgeRecord {
@@ -29,6 +33,10 @@ export interface DistillNudgeRecord {
   decidedAt?: string;
   /** Set after `accept`: the proposal the run was filed into, if one was. */
   proposalId?: string;
+  /** Accepts that failed after a model call; at `MAX_DISTILL_ATTEMPTS` the offer is `failed`. */
+  failures?: number;
+  /** `failed`: why. */
+  error?: string;
 }
 
 /** `GET /api/sessions/:id/distill-nudge`: the session's open offer, if any. */
@@ -39,7 +47,7 @@ export interface DistillNudgeView {
 
 /** `POST /api/sessions/:id/distill-nudge/:messageId`: what the decision did. */
 export interface DistillNudgeOutcome {
-  state: Exclude<DistillNudgeState, 'offered'>;
+  state: Exclude<DistillNudgeState, 'offered' | 'failed'>;
   /** `accept`: a proposal exists for it now (filed, or merged into one). */
   distilled?: boolean;
   proposalId?: string;
@@ -50,3 +58,12 @@ export interface DistillNudgeOutcome {
   /** `never`: the offers are now off for this user. */
   optedOut?: boolean;
 }
+
+/**
+ * Why a decision was refused (the route's `code`): `not_found` (not the
+ * caller's offer), `decided` (already decided), `lapsed` (another answer
+ * followed it), `refused` (a policy or a plugin denied distilling, or it
+ * needs an approval the click cannot give), `failed` (the distillation
+ * failed; `final` when the offer is now closed as `failed`).
+ */
+export type DistillNudgeErrorCode = 'not_found' | 'decided' | 'lapsed' | 'refused' | 'failed';

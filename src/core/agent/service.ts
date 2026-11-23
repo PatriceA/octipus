@@ -82,8 +82,6 @@ export interface TurnResult {
   media?: import('@/core/media/turn-media').TurnMediaItem[];
   /** The reply is read aloud: a voice conversation on this session speaks it. */
   spoken?: boolean;
-  /** The answer carries an offer to distil the run into a skill (docs/SESSION-LEARNING.md). */
-  skillNudge?: { messageId: string };
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -1307,8 +1305,9 @@ export class AgentService {
       }
       recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
       // The offer to distil this run into a skill: read from what the run
-      // recorded, no model call; a failure to read never fails the answer.
-      const skillNudge = await this.offerDistillNudge({
+      // recorded, no model call, after the answer is on its way — never
+      // awaited, so it neither delays nor fails the turn.
+      this.offerDistillNudge({
         sessionId: resolvedSessionId, userId, rootAgentId: agentId, answerMessageId: persistedAnswer.id, startedAt: new Date(startTime),
         facts: {
           trigger: scope.trigger, channel, spoken: spokenTurn || channel === 'mobile-voice' || getRunContext()?.spoken === true,
@@ -1326,7 +1325,6 @@ export class AgentService {
         outcome,
         classification,
         ...(turnMedia.length && { media: turnMedia }),
-        ...(skillNudge && { skillNudge }),
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
@@ -1337,17 +1335,22 @@ export class AgentService {
     }
   }
 
-  /** `offerDistillNudge` for the ambient run; logged, never thrown (the answer is already stored). */
-  private async offerDistillNudge(turn: Omit<DistillNudgeTurn, 'runId'>): Promise<{ messageId: string } | undefined> {
+  /**
+   * Start `offerDistillNudge` for the ambient run in the background. Never
+   * throws and is never awaited by the turn: the answer is delivered first,
+   * and an offer made later is announced with `session.skill_nudge`.
+   */
+  private offerDistillNudge(turn: Omit<DistillNudgeTurn, 'runId'>): void {
     const runId = getRunContext()?.runId;
-    if (!runId) return undefined;
-    try {
-      const { offerDistillNudge } = await import('@/core/learning/distill-nudge-service');
-      return (await offerDistillNudge({ ...turn, runId })) ?? undefined;
-    } catch (err) {
-      coreLogger.error({ err, sessionId: turn.sessionId, runId }, 'Could not decide the distil offer');
-      return undefined;
-    }
+    if (!runId) return;
+    void (async () => {
+      try {
+        const { offerDistillNudge } = await import('@/core/learning/distill-nudge-service');
+        await offerDistillNudge({ ...turn, runId });
+      } catch (err) {
+        coreLogger.error({ err, sessionId: turn.sessionId, runId }, 'Could not decide the distil offer');
+      }
+    })();
   }
 
   /**

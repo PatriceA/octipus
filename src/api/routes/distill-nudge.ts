@@ -11,6 +11,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { DistillNudgeError, openDistillNudge, resolveDistillNudge } from '@/core/learning/distill-nudge-service';
 import { canActInSession } from '@/core/rooms/access';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { userRepository } from '@/db/repositories/user-repository';
 import { isAuthenticated, requireScope } from '@/security/principal';
@@ -19,7 +20,7 @@ import { DISTILL_NUDGE_DECISIONS } from '@/shared/distill-nudge';
 import { coreLogger } from '@/utils/logger';
 
 const UUID = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
-const STATUS: Record<DistillNudgeError['code'], number> = { not_found: 404, decided: 409, refused: 403, failed: 502 };
+const STATUS: Record<DistillNudgeError['code'], number> = { not_found: 404, decided: 409, lapsed: 409, refused: 403, failed: 502 };
 
 export const distillNudgeRoutes = new Elysia()
   .use(apiContext)
@@ -46,7 +47,7 @@ export const distillNudgeRoutes = new Elysia()
       if (!(err instanceof DistillNudgeError)) throw err;
       if (err.code === 'failed') coreLogger.warn({ sessionId: session.id, messageId: params.messageId, reason: err.message }, 'Distil offer: accept failed');
       set.status = STATUS[err.code];
-      return { error: err.message, code: err.code };
+      return { error: err.message, code: err.code, ...(err.final ? { final: true } : {}) };
     }
   }, {
     params: t.Object({ id: t.String({ pattern: UUID }), messageId: t.String({ pattern: UUID }) }),
@@ -57,5 +58,8 @@ export const distillNudgeRoutes = new Elysia()
     if (principal.actorUserId) { set.status = 403; return { error: 'Not available while acting as another user.' }; }
     const updated = await userRepository.setDistillNudge(principal.userId, body.enabled);
     if (!updated) { set.status = 404; return { error: 'Account not found' }; }
+    await auditRepository.log({ userId: principal.userId, action: 'settings_changed', resourceType: 'user', resourceId: principal.userId,
+      details: { setting: 'preferences.distillNudge', enabled: body.enabled } })
+      .catch(error => coreLogger.error({ error, userId: principal.userId }, 'Distil offer preference saved but audit write failed'));
     return { distillNudge: updated.preferences?.distillNudge !== false };
   }, { body: t.Object({ enabled: t.Boolean() }) });

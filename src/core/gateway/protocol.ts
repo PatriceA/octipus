@@ -177,6 +177,11 @@ export type GatewayEventType =
   // feedback): payload `{ revision }`, envelope `sessionId`. Clients refresh
   // their plan summary on it instead of polling (`saveWorkPlan`).
   | 'session.plan_updated'
+  // A finished turn's answer now carries the offer to distil it into a skill
+  // (docs/SESSION-LEARNING.md): payload `{ messageId }`, envelope `sessionId`.
+  // Published after the answer, once the run's records were read; the web
+  // chat reads the offer on it (`GET /api/sessions/:id/distill-nudge`).
+  | 'session.skill_nudge'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'

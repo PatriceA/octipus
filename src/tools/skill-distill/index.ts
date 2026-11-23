@@ -74,6 +74,15 @@ export class SkillDistillTool extends BaseTool {
           material = String(args.content ?? '').trim();
           if (!material) return { error: "source='text' requires a non-empty `content`" };
           sourceRef = 'text';
+        } else if (source === 'run') {
+          // The distil offer's own source (src/core/learning/distill-nudge-service.ts),
+          // not offered to models: the run behind an offer its owner just accepted
+          // in this session, and nothing else.
+          const { acceptedRunMaterial } = await import('@/core/learning/distill-nudge-service');
+          const gathered = await acceptedRunMaterial(context.sessionId, String(args.ref ?? ''), context.userId);
+          if ('error' in gathered) return gathered;
+          material = gathered.material;
+          sourceRef = `session:${context.sessionId}`;
         } else if (source === 'trajectory') {
           const gathered = await this.gatherTrajectory(String(args.ref ?? '').trim(), context);
           if ('error' in gathered) return gathered.error;
