@@ -11,11 +11,11 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | Method | Path | Defined in |
 |---|---|---|
 | GET | `/__artifacts__/a/:slug` | `src/api/routes/artifact-pages.ts` |
-| GET | `/__artifacts__/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
+| GET | `/__artifacts__/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/__artifacts__/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug` | `src/api/routes/artifact-pages.ts` |
-| GET | `/a/:slug/bundle.js` | `src/api/routes/artifact-pages.ts` |
+| GET | `/a/:slug/data/:sourceName` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/embed` | `src/api/routes/artifact-pages.ts` |
 | GET | `/a/:slug/export/:exportId` | `src/api/routes/artifact-pages.ts` |
 | GET | `/api/admin/approvals` | `src/api/routes/admin-approvals.ts` |
@@ -810,7 +810,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 30 |
-| `api` | `core` | 252 |
+| `api` | `core` | 260 |
 | `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -822,7 +822,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 31 |
 | `api` | `skills` | 9 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 79 |
+| `api` | `utils` | 80 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
@@ -839,7 +839,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `utils` | 24 |
 | `channels` | `voice` | 5 |
 | `config` | `channels` | 2 |
-| `config` | `core` | 4 |
+| `config` | `core` | 5 |
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
@@ -849,7 +849,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 77 |
-| `core` | `db` | 552 |
+| `core` | `db` | 553 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
@@ -859,10 +859,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 250 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 89 |
+| `core` | `shared` | 90 |
 | `core` | `skills` | 19 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 266 |
+| `core` | `utils` | 267 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -952,7 +952,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 157 |
+| `tools` | `core` | 158 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

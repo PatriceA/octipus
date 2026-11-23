@@ -8,7 +8,8 @@
  */
 import { useState } from 'react';
 import { Modal } from '@/components/ui/modal';
-import { ARTIFACT_SLUG_RE, slugFromTitle } from '../../../../src/shared/artifacts';
+import { ApiError } from '@/lib/api';
+import { ARTIFACT_SLUG_RE, type SlugConflict, slugFromTitle } from '../../../../src/shared/artifacts';
 import { usesOctiBridge } from '../../../../src/shared/inline-ui/bridge';
 import type { InlineUiBlockData, SaveAsArtifactInput, SaveAsArtifactResult } from './context';
 
@@ -26,6 +27,7 @@ export function SaveAsArtifactDialog({ block, open, onClose, save }: {
   const [visibility, setVisibility] = useState<SaveAsArtifactInput['visibility']>('private');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggested, setSuggested] = useState<string | null>(null);
   const [saved, setSaved] = useState<SaveAsArtifactResult | null>(null);
   const bridge = block.scripts && usesOctiBridge(block.js);
   const slugOk = ARTIFACT_SLUG_RE.test(slug);
@@ -34,10 +36,17 @@ export function SaveAsArtifactDialog({ block, open, onClose, save }: {
     if (!title.trim() || !slugOk || pending) return;
     setPending(true);
     setError(null);
+    setSuggested(null);
     try {
       setSaved(await save({ title: title.trim(), slug, visibility }));
     } catch (err) {
-      setError((err as Error).message);
+      const conflict = err instanceof ApiError && err.status === 409 && err.body.code === 'slug_taken' ? (err.body as unknown as SlugConflict) : null;
+      if (conflict) {
+        setError(`The slug "${conflict.slug}" is already used by another artifact in this workspace.`);
+        setSuggested(conflict.suggestedSlug);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setPending(false);
     }
@@ -56,7 +65,20 @@ export function SaveAsArtifactDialog({ block, open, onClose, save }: {
         </div>
       ) : (
         <form className="p-3 space-y-3 text-[12px]" onSubmit={(e) => { e.preventDefault(); void submit(); }} data-testid="inline-ui-save-dialog">
-          {error && <p role="alert" className="px-2 py-1 border border-error/40 bg-error/10 rounded-xs text-error">! {error}</p>}
+          {error && (
+            <div role="alert" className="px-2 py-1 border border-error/40 bg-error/10 rounded-xs text-error">
+              <p>! {error}</p>
+              {suggested && (
+                <button
+                  type="button"
+                  className="mt-1 underline cursor-pointer"
+                  onClick={() => { setSlug(suggested); setSlugEdited(true); setError(null); setSuggested(null); }}
+                >
+                  use {suggested}
+                </button>
+              )}
+            </div>
+          )}
           <p className="text-on-surface-variant">A static copy — no data refresh, and it reaches no network.</p>
           {bridge && (
             <p role="note" className="px-2 py-1 border border-warning/40 bg-warning/10 rounded-xs text-warning">

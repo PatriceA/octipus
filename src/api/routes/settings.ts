@@ -19,6 +19,7 @@ import {
 } from '@/config/settings-registry';
 import { MODULES_SETTING } from '@/core/modules/registry';
 import { getSettingsService } from '@/config/settings-service';
+import { artifactHostSettingRefusal } from '@/core/artifacts/settings';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { getVault } from '@/security/vault';
 import { apiLogger } from '@/utils/logger';
@@ -347,7 +348,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
   // Update a single setting
   .put(
     '/:key',
-    async ({ user, params, body }) => {
+    async ({ user, params, body, request }) => {
       if (!user?.isAdmin) {
         return { error: 'Admin access required' };
       }
@@ -361,6 +362,10 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
       }
       if (key === 'security.executionEnvironments') return { error: 'Manage execution environments in Settings → Environments & Access' };
       if (key === MODULES_SETTING) return { error: MODULES_ELSEWHERE };
+      if (key === 'artifacts.host') {
+        const refusal = artifactHostSettingRefusal(value, request.headers.get('host') ?? new URL(request.url).host);
+        if (refusal) return { error: refusal };
+      }
 
       // Validate workspace paths before saving
       if (key === 'workspace.rootPath' && typeof value === 'string') {
@@ -413,7 +418,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
   // Batch update multiple settings
   .put(
     '/batch',
-    async ({ user, body }) => {
+    async ({ user, body, request }) => {
       if (!user?.isAdmin) {
         return { error: 'Admin access required' };
       }
@@ -434,6 +439,13 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
         if (key === MODULES_SETTING) {
           errors[key] = MODULES_ELSEWHERE;
           continue;
+        }
+        if (key === 'artifacts.host') {
+          const refusal = artifactHostSettingRefusal(value, request.headers.get('host') ?? new URL(request.url).host);
+          if (refusal) {
+            errors[key] = refusal;
+            continue;
+          }
         }
 
         try {

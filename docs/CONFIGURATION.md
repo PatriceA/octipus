@@ -350,9 +350,35 @@ Live artifacts (`docs/ARTIFACTS.md`) ship hosted HTML pages. Two modes:
    the same origin as your main app. Cloudflare users: orange-cloud is
    fine; Universal SSL covers it. If you already have `*.<host>` wildcard
    DNS, no new record is needed.
-2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env.
+2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env, and set
+   `PUBLIC_URL` to the address the app itself is used at. The artifact host
+   serves no app page or API, so it must never be the app's own address:
+   - `ARTIFACTS_HOST` is honoured only while `PUBLIC_URL` (or
+     `oauth.publicUrl`) is set to a different host. Without it, or equal to
+     it, `ARTIFACTS_HOST` is ignored with an error in the log and artifacts
+     are served on the no-DNS fallback below, so a wrong value can never lock
+     you out of the app.
+   - Settings refuses to save as `artifacts.host` the host you are using the
+     app at, or the `PUBLIC_URL` host.
 3. Reverse-proxy any `Host: artifacts.<your-host>` traffic to the same
-   octipus backend; the in-process router matches the host header.
+   octipus backend (or to the bundled web server, which forwards `/a/` with
+   the `Host` header intact). The proxy must pass the original `Host` header
+   through (nginx: `proxy_set_header Host $host;`): the backend compares it,
+   exactly and case-insensitively, with `ARTIFACTS_HOST`. `X-Forwarded-Host`
+   is not read.
+
+On the artifact host the backend serves the hosted pages (`/a/<slug>`,
+`/embed`, `/export/<id>`, `/data/<source>`) and the browser SDK, `GET` and
+`HEAD` only. Everything else answers 404 there: `/api/*`, `/v1/*`, sign-in,
+CORS preflights and the `/__artifacts__` fallback mount. A session cookie or
+token sent to the artifact host is ignored (only public artifacts and
+share links open there), no response from it sets a cookie, and of the
+WebSocket endpoints only the gateway (`/gateway`) upgrades there, admitting
+artifact viewer tokens only; `/voice`, `/ws/browser-bridge` and
+`/federation` are refused. In this mode the
+root `/a/<slug>` pages are not served on the app's host; the web app's own
+frame keeps using `/__artifacts__/a/<slug>/embed` on the app host, sandboxed
+as below.
 
 This puts hosted user-influenced HTML on a different origin so it cannot
 read app cookies, ride `localStorage`, or hit `/api/*` directly with
@@ -361,9 +387,14 @@ session credentials.
 ### No-DNS fallback
 
 Leave `ARTIFACTS_HOST` unset. Artifacts are served at
-`/__artifacts__/a/:slug` on the main host. The iframe still uses
-`sandbox` (no `allow-same-origin`) but a CSP-escape bug becomes a
-same-origin XSS against the app.
+`/__artifacts__/a/:slug` on the main host. The iframe uses
+`sandbox="allow-scripts"` (no `allow-same-origin`), and the embed response
+itself carries `Content-Security-Policy: …; sandbox allow-scripts`, so an
+embed URL opened directly as a page also runs with an opaque origin: it
+cannot read the app's cookies or storage, and the browser does not attach the
+`SameSite=Strict` session cookie to its requests. A browser bug that escapes
+the sandbox becomes a same-origin XSS against the app, which the subdomain
+mode does not.
 
 Acceptable for single-user / trusted-tenant deploys; **not recommended**
 when untrusted users can author artifacts in your workspace.
@@ -378,6 +409,12 @@ when untrusted users can author artifacts in your workspace.
 | `ARTIFACT_SDK_SHA256`     | sha256 of `octipus-artifact-client.js` — pinned in CSP.   |
 | `ARTIFACT_TOKEN_SECRET`   | HMAC key for artifact-scoped JWT. Falls back to JWT_SECRET HKDF. |
 | `ARTIFACT_BUNDLES_DIR`    | Filesystem root for custom JS bundles. Default `data/artifacts/`. |
+| `ARTIFACTS_RETENTION_DAYS`| Move artifacts with no edit, no view and no data refresh for this many days to the trash. `0` (default) = never expire. |
+| `ARTIFACTS_TRASH_DAYS`    | Days a deleted or expired artifact stays in the trash before it is removed with its versions, data, share links and bundle files. Default `30`, minimum `1`. |
+
+Both retention settings are also in Settings → Artifacts
+(`artifacts.retentionDays`, `artifacts.trashDays`) and take effect at the next
+hourly cleanup pass; see [ARTIFACTS.md](./ARTIFACTS.md#cleanup-and-retention).
 
 ## Backend build freshness
 

@@ -38,6 +38,13 @@ export function initializeHotReload(): void {
     const category = key.split('.')[0];
 
     try {
+      // The resolved artifact settings read more than their own category: the
+      // app's public URL decides whether the artifact host is honoured at all.
+      const { artifactSettingsDependOn, resetArtifactSettingsCache } = await import('@/core/artifacts/settings');
+      if (category !== 'artifacts' && artifactSettingsDependOn(key)) {
+        resetArtifactSettingsCache();
+        logger.info({ key }, 'Artifact settings cache reset');
+      }
       switch (category) {
         case 'litellm':
           // Recreate the OpenAI client with new baseURL/apiKey

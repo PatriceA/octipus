@@ -2,7 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import type { SlugConflict } from '../../../../src/shared/artifacts';
 
 const TYPES = ['dashboard', 'news', 'rss', 'table', 'html'] as const;
 
@@ -13,10 +14,12 @@ export default function NewArtifactPage() {
   const [type, setType] = useState<(typeof TYPES)[number]>('dashboard');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<SlugConflict | null>(null);
 
   async function submit() {
     setSubmitting(true);
     setError(null);
+    setConflict(null);
     try {
       const res = await api.post<{ artifact: { id: string } }>('/artifacts', {
         slug,
@@ -25,7 +28,12 @@ export default function NewArtifactPage() {
       });
       router.push(`/artifacts/view?id=${res.artifact.id}`);
     } catch (e) {
-      setError((e as Error).message);
+      const body = e instanceof ApiError && e.status === 409 ? e.body : null;
+      if (body && (body.code === 'slug_taken' || body.code === 'public_slug_taken')) {
+        setConflict(body as unknown as SlugConflict);
+      } else {
+        setError((e as Error).message);
+      }
       setSubmitting(false);
     }
   }
@@ -37,7 +45,11 @@ export default function NewArtifactPage() {
         <Field label="Slug">
           <input
             value={slug}
-            onChange={(e) => setSlug(e.target.value)}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              setConflict(null);
+            }}
+            aria-invalid={conflict !== null}
             className="w-full rounded border border-[#262626] bg-transparent p-2 font-mono"
             placeholder="my-dashboard"
           />
@@ -62,6 +74,29 @@ export default function NewArtifactPage() {
             ))}
           </select>
         </Field>
+        {conflict && (
+          <div role="alert" className="rounded bg-error-container/60 p-3 text-sm text-error">
+            <p>
+              {conflict.code === 'slug_taken'
+                ? <>The slug <code className="font-mono">{conflict.slug}</code> is already used by another artifact in this workspace.</>
+                : <>The slug <code className="font-mono">{conflict.slug}</code> is already the public link of an artifact in another workspace.</>}
+            </p>
+            {conflict.suggestedSlug ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSlug(conflict.suggestedSlug as string);
+                  setConflict(null);
+                }}
+                className="mt-2 rounded border border-error/50 px-2 py-1 text-on-surface hover:bg-error-container"
+              >
+                Use <span className="font-mono">{conflict.suggestedSlug}</span> instead
+              </button>
+            ) : (
+              <p className="mt-1">Pick another slug.</p>
+            )}
+          </div>
+        )}
         {error && <div className="rounded bg-error-container/60 p-3 text-sm text-error">{error}</div>}
         <button
           disabled={!slug || !title || submitting}

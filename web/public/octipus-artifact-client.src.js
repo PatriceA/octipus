@@ -3,7 +3,7 @@
  * Reads the artifact id + scoped JWT from <meta> tags injected at render
  * time. Signs in to the gateway WS with that token (`artifact_token`), then
  * subscribes to the resource `artifact:<id>` — the only one the token opens.
- * Fetches updated snapshots via REST, patches DOM via
+ * Fetches updated snapshots from the embed's data route, patches DOM via
  * `[data-bind="<sourceName>"]` swap.
  *
  * Keep this file dependency-free and ES2017-clean. Bundling: copy verbatim
@@ -34,11 +34,13 @@
     }
   }
 
+  // The page's own data route (`<embed URL>/../data/<source>`), wherever the
+  // embed is mounted. The viewer token is the credential — this sandboxed page
+  // has no cookies — and it reads this one artifact only.
   async function fetchData(sourceName) {
-    const res = await fetch(`/api/artifacts/${encodeURIComponent(ARTIFACT_ID)}/data/${encodeURIComponent(sourceName)}`, {
-      headers: { Authorization: 'ArtifactToken ' + TOKEN },
-      credentials: 'include',
-    });
+    const url = new URL(`data/${encodeURIComponent(sourceName)}`, location.href);
+    url.search = '?vt=' + encodeURIComponent(TOKEN);
+    const res = await fetch(url.href, { credentials: 'omit', cache: 'no-store' });
     if (!res.ok) throw new Error('fetch ' + res.status);
     return res.json();
   }

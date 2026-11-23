@@ -24,6 +24,7 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { inlineUiRepository } from '@/db/repositories/inline-ui-repository';
 import { uniqueViolation } from '@/db/unique-violation';
+import { slugTakenConflict } from '@/core/artifacts/slug';
 import { isAuthenticated } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
@@ -154,7 +155,7 @@ export const inlineUiRoutes = new Elysia({ prefix: '/sessions' })
         if (err instanceof SpaceError) throw err;
         if (uniqueViolation(err) === 'artifacts_workspace_id_slug_uq') {
           set.status = 409;
-          return { error: 'slug already exists in this workspace' };
+          return await slugTakenConflict(principal.workspaceId, body.slug);
         }
         coreLogger.error({ err }, 'inline-ui.promote.failed');
         set.status = 500;

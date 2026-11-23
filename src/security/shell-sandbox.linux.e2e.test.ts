@@ -161,8 +161,11 @@ attempt('readOutsideFile', () => fs.readFileSync(cfg.outsideFile, 'utf8'));
   results.tcpProxy = await tcp('127.0.0.1', proxyPort);
   results.tunnelAllowed = await tunnel(proxyPort, cfg.allowedAuthority);
   results.tunnelDenied = await tunnel(proxyPort, 'denied.test:443');
-  results.tcpOtherLocal = await tcp('127.0.0.1', cfg.otherLocalPort);
-  results.tcpUpstreamDirect = await tcp('127.0.0.1', cfg.upstreamPort);
+  // The relay picks its own port inside the sandbox's network namespace, and it
+  // can be the number a host listener got: that connect reaches the relay.
+  const direct = (port) => port === proxyPort ? { ok: false, code: 'RELAY_PORT' } : tcp('127.0.0.1', port);
+  results.tcpOtherLocal = await direct(cfg.otherLocalPort);
+  results.tcpUpstreamDirect = await direct(cfg.upstreamPort);
   results.tcpInternet = await tcp('1.1.1.1', 443);
   results.dnsLookup = await withTimeout(new Promise((resolve) => {
     dns.lookup('example.com', (e, address) => resolve(e ? { ok: false, code: codeOf(e) } : { ok: true, value: address }));

@@ -382,6 +382,8 @@ For **public repos** none of this matters — anonymous works (60/hr core, 10/mi
 | `bind path "X" does not resolve` | The first segment of your bind path is not a declared source or transform name. Names are case-sensitive. |
 | `required parameter "rows" is missing` | Widget needs it from `bind` *or* `params`. You probably forgot to declare `bind: { rows: "..." }`. |
 | Dashboard refreshes too aggressively / hits rate limit | Bump `refreshSeconds`. Search API needs ≥ 60s anon; core API needs ≥ 60s anon. |
+| `create_live_artifact` returns `code: "slug_taken"` | The slug is used by another artifact in this workspace. Retry with `suggested_slug` (free when returned), or update the existing artifact instead of creating a second one. A deleted artifact frees its slug at once. |
+| `code: "public_slug_taken"` | Another workspace already has a public artifact at `/a/<slug>`. Create the public artifact under `suggested_slug`; an existing artifact cannot be published under that slug (slugs do not change). |
 | Hand-authored `html_template` with placeholders failing | Every `{{data.NAME...}}` must match a declared source or transform name. Prefer leaving `html_template` empty and letting widget `position` auto-layout. |
 
 ---
