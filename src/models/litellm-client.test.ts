@@ -828,7 +828,7 @@ describeUnit('LiteLLMClient — embed', () => {
     let captured: any;
     embeddingsCreateImpl.current = (p: any) => {
       captured = p;
-      return Promise.resolve({ data: [{ embedding: [0.5] }] });
+      return Promise.resolve({ data: [{ embedding: [0.5] }, { embedding: [0.6] }] });
     };
     const client = new LiteLLMClient();
     await client.embed(['a', 'b']);

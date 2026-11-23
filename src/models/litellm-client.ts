@@ -306,6 +306,45 @@ export function createThinkStreamFilter() {
 }
 
 /**
+ * The chunks of an SDK stream, with a failure after the first one (a reset
+ * socket, an error event sent mid-stream) classified like one before it.
+ */
+async function* classifiedChunks<T>(chunks: AsyncIterable<T>, provider: string): AsyncGenerator<T> {
+  try {
+    yield* chunks;
+  } catch (err) {
+    throw classifyError(err, provider);
+  }
+}
+
+/**
+ * One vector per input, each at the position its `index` names: the list
+ * order is not part of the embeddings contract, and a vector filed under the
+ * wrong text corrupts a search index silently. A reply with the wrong count,
+ * or indices that are not exactly 0..n-1, is refused. A server that sends no
+ * `index` at all is taken in list order, if the count matches.
+ */
+function vectorsByIndex(data: Array<{ index?: number; embedding: number[] }>, inputs: number, model: string): number[][] {
+  const invalid = (what: string) => new ClassifiedError({
+    reason: FailoverReason.INVALID_RESPONSE,
+    recovery: RecoveryAction.RETRY_NOW,
+    message: `Embedding response from ${model} ${what}`,
+    providerHint: 'litellm',
+  });
+  if (data.length !== inputs) throw invalid(`has ${data.length} vectors for ${inputs} inputs`);
+  if (data.every((d) => d.index === undefined)) return data.map((d) => d.embedding);
+  const out: number[][] = new Array(inputs);
+  for (const d of data) {
+    const i = d.index;
+    if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= inputs || out[i] !== undefined) {
+      throw invalid(`has a missing, repeated or out-of-range index (${String(i)})`);
+    }
+    out[i] = d.embedding;
+  }
+  return out;
+}
+
+/**
  * Client for LiteLLM proxy - provides unified API for all LLM providers
  */
 /** Measured: deepseek-v4.1-flash reasons 1.6k–2.6k tokens before a 300-token JSON answer. */
@@ -772,8 +811,9 @@ export class LiteLLMClient {
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     const think = createThinkStreamFilter();
+    let finished = false;
 
-    for await (const chunk of stream) {
+    for await (const chunk of classifiedChunks(stream, 'litellm')) {
       if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
@@ -813,8 +853,15 @@ export class LiteLLMClient {
           );
         }
         if (text) yield { content: text };
+        finished = true;
         yield { finishReason: chunk.choices[0].finish_reason };
       }
+    }
+
+    // The SDK ends a stream the caller aborted as if it had completed. Cut
+    // short before its finish_reason, it is a cancellation, not an answer.
+    if (options.signal?.aborted && !finished) {
+      throw classifyError(new Error('Request was aborted.', { cause: options.signal.reason }), 'litellm');
     }
 
     // Stream ended without an explicit finish_reason — still flush.
@@ -917,7 +964,7 @@ export class LiteLLMClient {
       });
       const { recordProviderUsage } = await import('./providers/instrumented');
       await recordProviderUsage({ model: embeddingModel, messages: [], requestType: 'embedding' }, 'litellm', { model: embeddingModel, usage: normalizeUsage(response.usage) });
-      return response.data.map((d) => d.embedding);
+      return vectorsByIndex(response.data, input.length, embeddingModel);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       modelLogger.error(
