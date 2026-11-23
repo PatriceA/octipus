@@ -78,6 +78,7 @@ import {
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
+import { EVIDENCE_REPAIR_LIMIT, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -400,42 +401,15 @@ export async function runStageVerifyCommand(
   }
   try {
     const { runScorers } = await import('@/core/swarm/scorers');
-    const { sessionRepository } = await import('@/db/repositories/session-repository');
-    const session = await sessionRepository.findById(ctx.sessionId);
-    if (!session) throw new Error(`session ${ctx.sessionId} not found`);
-    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string; executionEnvironmentId?: string } | undefined;
-    // The command runs where the stage's agents work: the session's
-    // workspace (loaded into the file-root map by `turnWorkspaceId`), or
-    // its dev-mode project — never a project in a space, whose agents work
-    // in the space's files.
-    const { turnWorkspaceId } = await import('./session-resolver');
-    const { isSharedWorkspaceId, WorkspaceFS } = await import('@/security/workspace-fs');
-    const workspaceId = await turnWorkspaceId(session.userId, session.workspaceId);
-    const inSpace = !!ctx.space || await isSharedWorkspaceId(workspaceId);
+    // The command runs where the stage's agents work (`stageCommandScope`).
+    const scope = await stageCommandScope(ctx);
     // A stage naming a space without its scope is refused outright: never
     // run as personal, and the auditor is told it failed rather than left to
     // judge without it.
-    if (inSpace && !ctx.space) {
-      return `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\nThe stage runs in a space but carries no space scope, so the command was refused.\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`;
+    if (scope.refused) {
+      return `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\n${scope.refused}\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`;
     }
-    const outcome = await runScorers(
-      [{ kind: 'command_exit_zero', command }],
-      { output: '', notes: '' },
-      {
-        userId: ctx.userId,
-        role: ctx.role,
-        canRunCommands: true,
-        // The stage's session, workspace and space: the space role cap and
-        // I6 apply to the verify command as to the stage's own shell.
-        sessionId: ctx.sessionId,
-        workspaceId: ctx.workspaceId ?? workspaceId,
-        space: ctx.space ?? null,
-        projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
-        executionEnvironmentId: sessionCtx?.executionEnvironmentId,
-        hostServices: ctx.hostServices,
-        workspaceRoot: sessionCtx?.executionEnvironmentId ? undefined : WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
-      },
-    );
+    const outcome = await runScorers([{ kind: 'command_exit_zero', command }], { output: '', notes: '' }, scope.scorer);
     const failure = outcome.failures[0];
     if (failure && stageEnvironmentReason(failure.reason)) return `ENVIRONMENT BLOCKED: ${failure.reason}`;
     return failure
@@ -863,6 +837,8 @@ export interface WalkState {
   contractRetries?: Record<string, number>;
   /** Verdict repairs spent in the current audit round, keyed like `contractRetries`. */
   verdictRepairs?: Record<string, number>;
+  /** Trips back to the working stage spent on failing evidence hooks, keyed like `contractRetries`. */
+  evidenceRepairs?: Record<string, number>;
   contractFeedback?: string;
   cursor: string;
   previousOutput: string;
@@ -924,6 +900,7 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     cursor: r.cursor,
     contractRetries: record<number>(r.contractRetries),
     verdictRepairs: record<number>(r.verdictRepairs),
+    evidenceRepairs: record<number>(r.evidenceRepairs),
     contractFeedback: typeof r.contractFeedback === 'string' ? r.contractFeedback : undefined,
     previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
     handoffChain,
@@ -1311,6 +1288,11 @@ export class PipelineManager {
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
     const workspaceRoot = await this.resolveWorkspaceRoot(sessionId, context);
+    // Evidence hooks judge work, so a run that declares no artifact stage has
+    // nothing for them to judge, and an auditor stage is where a deliverable
+    // is accepted (`runStageEvidence`).
+    const graphProduces = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].producesArtifacts === true);
+    const graphAudits = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].stageType === 'qa_validation');
 
     let previousOutput = '';
     // The last stage's reply with its ```handoff fence still in it. Kept beside
@@ -1320,7 +1302,7 @@ export class PipelineManager {
     // its handoff from prose, which is the old behaviour and no worse.
     let previousRaw = '';
     /** Set when the walk left a node that had edges but could take none. */
-    let stoppedShort: { node: string; outcome: NodeOutcome } | null = null;
+    let stoppedShort: { node: string; outcome: NodeOutcome | 'evidence_failed'; detail?: string } | null = null;
     /**
      * A QA failure that burned its retries and could not be escalated.
      *
@@ -1351,6 +1333,8 @@ export class PipelineManager {
     const contractRetries = new Map<string, number>();
     /** Verdict repairs spent in the current audit round, per item and auditor (`VERDICT_REPAIR_LIMIT`). */
     const verdictRepairs = new Map<string, number>();
+    /** Evidence-hook repairs spent per item and auditor (`EVIDENCE_REPAIR_LIMIT`). Never reset within an item. */
+    const evidenceRepairs = new Map<string, number>();
     let contractFeedback: string | undefined;
     /** That node's rejected report, handed back to it so the retry is a correction. */
     let rejectedReport: string | undefined;
@@ -1384,6 +1368,8 @@ export class PipelineManager {
       }
       pendingFeedback.clear(); judgedContext.clear(); contractRetries.clear(); qaAttempts.clear(); verdictRepairs.clear();
       for (const [k, v] of Object.entries(r.verdictRepairs ?? {})) verdictRepairs.set(k, v);
+      evidenceRepairs.clear();
+      for (const [k, v] of Object.entries(r.evidenceRepairs ?? {})) evidenceRepairs.set(k, v);
       for (const [key, attempts] of Object.entries(r.qaAttempts ?? {})) if (Array.isArray(attempts)) qaAttempts.set(key, attempts);
       for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
@@ -1447,6 +1433,7 @@ export class PipelineManager {
         qaAttempts: Object.fromEntries(qaAttempts),
         contractRetries: Object.fromEntries(contractRetries),
         verdictRepairs: Object.fromEntries(verdictRepairs),
+        evidenceRepairs: Object.fromEntries(evidenceRepairs),
         contractFeedback,
         cursor,
         previousOutput,
@@ -1757,6 +1744,54 @@ export class PipelineManager {
         // this existed — fall back to the full re-audit.
         const correcting = isQa && !!pendingRejection && !!rejectedReport;
         const reportUnderCorrection = correcting ? (rejectedReport as string) : undefined;
+        // Nothing below runs, and nothing is read, on an install with no hooks.
+        const hooksDeclared = isQa && (getConfig().agent.evidenceHooks?.length ?? 0) > 0;
+        // A project-wide command judges the whole deliverable, so inside a plan
+        // loop it runs on the LAST item only: `npm test` against item 1 of 10
+        // legitimately fails for the nine nobody has written yet, and would
+        // bounce every early item back to the implementer.
+        let lastItem = true;
+        if (isQa && !correcting && currentItem && gnode.parentKey && (stageTemplate.verifyCommand || hooksDeclared)) {
+          lastItem = isFinalPlanItem(await pipelineRepository.getPlanItems(pipeline.id), currentItem);
+        }
+
+        // Evidence hooks, before anything is asked of the auditor. Not on an
+        // auditor-only re-run (`pendingRejection`): nothing changed since the
+        // hooks last ran against this work.
+        const evidenceKey = `${currentItem?.id ?? 'run'}:${cursor}`;
+        if (isQa && !pendingRejection && hooksDeclared && graphProduces && lastItem) {
+          const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: b.role, hostServices: b.hostServices,
+            checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
+            repair: evidenceRepairs.get(evidenceKey) ?? 0 });
+          if (evidence.stopped) return evidence.stopped;
+          if (evidence.blocked) return this.pauseForEnvironment(pipeline, node, evidence.blocked, attemptId, currentItem?.id ?? null);
+          if (evidence.failed) {
+            // The deliverable is not accepted, whatever an auditor would say
+            // about it: the auditor is not asked. The failure goes back to
+            // the stage the auditor would send failing work to, on its own
+            // budget, and an exhausted budget ends the run failed.
+            const used = evidenceRepairs.get(evidenceKey) ?? 0;
+            const retryEdge = graph.edges.find((e) => e.from === cursor && e.condition === 'qa_fail');
+            const detail = evidenceSummary(evidence.results);
+            await this.updateNode(node.id, { status: 'failed', error: `Evidence hooks failed:\n${detail}`.slice(0, 8000) });
+            if (!retryEdge || used >= EVIDENCE_REPAIR_LIMIT) {
+              coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, repairs: used, limit: EVIDENCE_REPAIR_LIMIT },
+                'Evidence hooks still fail and no repair is left — stopping the pipeline');
+              stoppedShort = { node: node.name, outcome: 'evidence_failed', detail };
+              break;
+            }
+            evidenceRepairs.set(evidenceKey, used + 1);
+            pendingFeedback.set(retryEdge.to, evidenceRepairFeedback(evidence.results, used + 1));
+            recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, parentSubjectId: retryEdge.to, event: 'node_failed',
+              payload: { pipelineId: pipeline.id, itemId: currentItem?.id ?? null, attemptId, reason: 'evidence_failed', evidenceRepair: used + 1, limit: EVIDENCE_REPAIR_LIMIT } });
+            coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, repair: used + 1, limit: EVIDENCE_REPAIR_LIMIT, to: retryEdge.to },
+              'Evidence hooks failed — sending the work back for repair');
+            cursor = retryEdge.to;
+            continue;
+          }
+          if (evidence.results.length) input = `${evidenceGroundTruth(evidence.results)}\n\n---\n\n${input}`;
+        }
+
         // Run the command that DEFINES success, once, before the auditor turn.
         //
         // `runsCommands` only ever declared THAT a stage runs something, never
@@ -1790,16 +1825,7 @@ export class PipelineManager {
               'Stage verifyCommand still holds an unresolved template reference — not running it',
             );
           }
-          // One project-wide command, run once, on the LAST plan item. A
-          // looping QA stage sees this per item, and `npm test` legitimately
-          // fails while items 2..n are unwritten — which would hand the auditor
-          // a FAILED ground truth for work nobody has started yet and bounce it
-          // back to Implementation on every early item.
-          let lastItem = true;
-          if (currentItem && gnode.parentKey) {
-            const items = await pipelineRepository.getPlanItems(pipeline.id);
-            lastItem = isFinalPlanItem(items, currentItem);
-          }
+          // One project-wide command, run once, on the LAST plan item (above).
           if (command && !unresolved && lastItem) {
             const evidence = await runStageVerifyCommand(command, {
               userId: context.userId,
@@ -2032,6 +2058,17 @@ export class PipelineManager {
         stoppedShort =
           unescalatedQaFailure ??
           (routeExhausted(graph, cursor, outcome, traversals) ? { node: node.name, outcome } : null);
+        // A run with no auditor stage accepts its deliverable here, at the
+        // end, so this is where its evidence hooks run. There is no route back
+        // to repair through, so a failure ends the run failed.
+        if (!stoppedShort && graphProduces && !graphAudits) {
+          const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: node.role,
+            hostServices: gnode.templateIndex >= 0 ? stageHostServices(built[gnode.templateIndex], pipeline) : false, checkScope: 'run:final', repair: 0 });
+          if (evidence.stopped) return evidence.stopped;
+          if (evidence.blocked || evidence.failed) {
+            stoppedShort = { node: node.name, outcome: 'evidence_failed', detail: evidence.blocked ?? evidenceSummary(evidence.results) };
+          }
+        }
         break;
       }
 
@@ -2080,7 +2117,11 @@ export class PipelineManager {
       cursor = edge.to;
     }
 
-    const baseSummary = stoppedShort
+    const baseSummary = stoppedShort?.outcome === 'evidence_failed'
+      ? `Pipeline "${title}" FAILED at "${stoppedShort.node}": the project's evidence hooks still fail ` +
+        `and no repair attempt is left (limit ${EVIDENCE_REPAIR_LIMIT}), so the deliverable was not accepted.\n\n` +
+        `${stoppedShort.detail ?? ''}\n\nLast output:\n\n${previousOutput}`
+      : stoppedShort
       ? `Pipeline "${title}" STOPPED at "${stoppedShort.node}" (${stoppedShort.outcome}) — ` +
         `no route out of that stage was left to take, so the remaining stages never ran. ` +
         `Last output:\n\n${previousOutput}`
@@ -2888,6 +2929,74 @@ export class PipelineManager {
       feedback: `Your PASS verdict was rejected: ${failure}\n\n${parsed.feedback}`.trim(),
       issues: [...parsed.issues, failure],
     };
+  }
+
+  /**
+   * Run the project's evidence hooks for this stage and record each result
+   * beside the QA verdict (`verification_evidence`, kind `pre_verify`, same
+   * `checkScope` as the auditor's rows).
+   *
+   * `failed` means at least one hook ran and did not pass: work the stage
+   * before can fix. `blocked` means a hook could not run at all (permission,
+   * shell policy, a misconfigured command, an unresolvable workspace): only the
+   * operator can fix that, so the run pauses rather than spending a repair.
+   * `stopped` is set when the run was cancelled while the hooks ran.
+   *
+   * No hooks for this project → `{ results: [] }` and nothing is recorded, so
+   * a run without hooks behaves exactly as it did before they existed.
+   */
+  private async runStageEvidence(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    sessionId: string;
+    context: AgentContext;
+    role: string;
+    hostServices?: boolean;
+    checkScope: string;
+    repair: number;
+  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; stopped?: { pipelineId: string; result: string } }> {
+    const { pipeline, node } = args;
+    const signal = this.signals.get(pipeline.id);
+    let results: EvidenceHookResult[];
+    try {
+      results = await runEvidenceHooks(
+        { userId: args.context.userId, sessionId: args.sessionId, workspaceId: args.context.workspaceId, space: args.context.space, role: args.role, hostServices: args.hostServices },
+        { signal },
+      );
+    } catch (err) {
+      return { results: [], failed: false, blocked: `Evidence hooks could not be resolved: ${(err as Error).message}` };
+    }
+    if (signal?.aborted) return { results, failed: false, stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped while its evidence hooks ran.' } };
+    for (const result of results) {
+      try {
+        await verificationEvidenceRepository.record({
+          sessionId: args.sessionId,
+          pipelineId: pipeline.id,
+          stage: node.name,
+          kind: 'pre_verify',
+          passed: result.passed,
+          detail: {
+            checkScope: args.checkScope,
+            hook: result.name,
+            command: result.command,
+            exitCode: result.exitCode,
+            durationMs: result.durationMs,
+            timedOut: result.timedOut,
+            outputExcerpt: result.outputExcerpt,
+            evidenceRepair: args.repair,
+            ...(result.reason ? { reason: result.reason } : {}),
+            ...(result.refused ? { refused: true } : {}),
+          },
+        });
+      } catch (err) {
+        // The ledger is the record, not the decision: the gate below still
+        // acts on the result even when it could not be written.
+        coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id, stage: node.name, hook: result.name }, 'Failed to record evidence-hook result');
+      }
+    }
+    const refused = results.find((result) => result.refused);
+    if (refused) return { results, failed: false, blocked: `Evidence hook "${refused.name}" (\`${refused.command}\`) could not run: ${refused.reason ?? 'unknown reason'}` };
+    return { results, failed: results.some((result) => !result.passed) };
   }
 
   private async recordQaEvidence(

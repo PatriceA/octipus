@@ -225,6 +225,47 @@ false with evidence. The audit gate then applies three rules:
   goes back to the builder.
 - Items without criteria are judged exactly as before.
 
+**Project evidence hooks.** An operator can declare commands that count as
+completion evidence for work in a project folder: the `agent.evidenceHooks`
+setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
+`npm test`, `build` → `npm run build`). Code: `src/core/agent/evidence-hooks.ts`.
+
+- **When they run.** At an auditor (`qa_validation`) stage, before the auditor
+  is asked, in a run that has at least one `producesArtifacts` stage. Inside a
+  plan loop they run on the last plan item only, the same rule as a stage's
+  `verifyCommand`, because a project-wide command fails for items nobody has
+  written yet. They do not run on an auditor-only re-run (verdict repair or
+  coverage re-audit), since the work has not changed. A run with no auditor
+  stage runs them once at the end, before it reports completed.
+- **Which hooks apply.** Hooks whose `root` contains the folder the stage's
+  commands run in (the dev-mode project, else the session workspace),
+  resolved from the session. A run whose folder no hook covers behaves as if
+  no hooks existed: no rows, no extra prompt text.
+- **How they run.** Through the `command_exit_zero` gate, the same path as
+  `verifyCommand`: argv only (shell syntax and builtins are refused), the shell
+  tool's content policy, the user's `shell.execute` permission, the process
+  sandbox (`security.shellSandbox`), a workspace-resolved cwd, the hook's
+  timeout (default 120 s, at most 600 s) and the last ~2000 characters of
+  output. The command is the configured string, verbatim; nothing a stage
+  wrote is substituted into it.
+- **What is stored.** One `verification_evidence` row per hook, kind
+  `pre_verify`, with the auditor's `checkScope` and `detail`: `hook`,
+  `command`, `exitCode`, `durationMs`, `timedOut`, `outputExcerpt`,
+  `evidenceRepair`, and `reason`/`refused` when it failed or did not run.
+  `GET /api/verification/:sessionId` returns them with the QA verdict rows,
+  and the agent page's verification panel lists them.
+
+| What the hooks did | What runs next | Budget it uses |
+|---|---|---|
+| Every hook exited 0 in time | The auditor, with the results stated as ground truth | — |
+| A hook ran and failed (non-zero exit or timeout) | The stage the auditor's `qa_fail` edge points at, with the failing output; the auditor is not asked | Its own bound, 2 per plan item (`EVIDENCE_REPAIR_LIMIT`) |
+| Still failing with no repair left, or no `qa_fail` edge | The run stops as `failed`, with the hook results in its summary | — |
+| A hook could not run (refused by permission or policy, misconfigured, no space scope) | The run pauses as environment-blocked; resume once the operator fixed it | — |
+
+A QA pass cannot override failing evidence: while a hook fails the auditor is
+not asked, and an exhausted repair budget ends the run failed rather than
+escalating to a person who could wave it through.
+
 **Best attempt on exhaustion.** Each settled QA verdict for an item is kept, with
 the workspace HEAD it was judged at. When retries run out and an earlier attempt
 did better than the last one (it passed, met more criteria, or had fewer issues),

@@ -1,5 +1,6 @@
 import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { executionEnvironmentsSchema } from '@/shared/execution-environment';
+import { evidenceHooksSchema } from '@/shared/evidence-hooks';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
 import { createPublicKey } from 'node:crypto';
 import { isIP } from 'node:net';
@@ -353,6 +354,13 @@ export const agentConfigSchema = z.object({
    * non-converging run, not to shape a converging one.
    */
   pipelineTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.pipeline),
+  /**
+   * Project evidence hooks (core/agent/evidence-hooks.ts): commands such as a
+   * test suite, a build or a linter, declared per project folder, that a
+   * pipeline runs before it accepts a deliverable. A failing hook sends the
+   * work back for repair; empty (the default) changes nothing.
+   */
+  evidenceHooks: evidenceHooksSchema.default([]),
   // Soft cap on full tool-result messages kept in context before the OLDEST
   // ones are truncated (recent kept full). Left optional with NO default so
   // omitting it preserves today's behaviour (DEFAULT_TOOL_OUTPUT_SOFT_CAP);

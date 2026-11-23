@@ -32,7 +32,7 @@ interface VerificationResponse {
 const KIND_LABEL: Record<EvidenceRecord['kind'], string> = {
   qa_verdict: 'qa verdict',
   schema_gate: 'schema gate',
-  pre_verify: 'pre-verify',
+  pre_verify: 'evidence hook',
   adhoc: 'ad-hoc',
   side_effect: 'side effects',
   audit_coverage: 'audit coverage',
@@ -143,8 +143,13 @@ function detailSummary(detail?: Record<string, unknown> | null): string | null {
     return d.schemaErrors.map((s) => (typeof s === 'string' ? s : JSON.stringify(s))).join('; ');
   }
   if (typeof d.command === 'string') {
-    const exit = typeof d.exitCode === 'number' ? ` (exit ${d.exitCode})` : '';
-    return `${d.command}${exit}`;
+    // Evidence hooks also carry their name, duration and whether they timed out.
+    const how = d.timedOut === true ? 'timed out' : typeof d.exitCode === 'number' ? `exit ${d.exitCode}` : '';
+    const took = typeof d.durationMs === 'number' ? `${(d.durationMs / 1000).toFixed(1)}s` : '';
+    const parts = [how, took].filter(Boolean).join(', ');
+    const label = typeof d.hook === 'string' ? `${d.hook}: ` : '';
+    const reason = d.refused === true && typeof d.reason === 'string' ? ` — ${d.reason}` : '';
+    return `${label}${d.command}${parts ? ` (${parts})` : ''}${reason}`;
   }
   if (typeof d.outputExcerpt === 'string' && d.outputExcerpt.trim()) {
     return d.outputExcerpt.trim();
