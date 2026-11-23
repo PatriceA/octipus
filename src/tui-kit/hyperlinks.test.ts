@@ -39,7 +39,7 @@ describe('linkify', () => {
   });
 
   test('path:line references open the file, resolved from the project', () => {
-    const host = hostname();
+    const host = hostname().toLowerCase();
     expect(links(linkify('Failed at src/app.ts:42:7 and ./lib/x.js:3, not at version 1.2 or 10:30.', '/work/repo'))).toEqual([
       ['src/app.ts:42:7', `file://${host}/work/repo/src/app.ts`],
       ['./lib/x.js:3', `file://${host}/work/repo/lib/x.js`],
