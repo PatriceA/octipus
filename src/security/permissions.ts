@@ -1,6 +1,7 @@
 import { hasAccountAuthority } from './execution-environments';
 import { acknowledgeRecoveryApproval } from '@/db/repositories/recovery-consent';
-import { getFlowLabel } from './flow-guard';
+import { getFlowLabel, isEmailSession } from './flow-guard';
+import { getRunContext } from '@/core/run-context';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { CLI_QUESTION_TOOL, parseCliAnswers } from '@/shared/cli-questions';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
@@ -169,8 +170,14 @@ export class PermissionManager {
           eq(toolPermissions.action, action)
         )
       );
-    const policy = policies.find(p => p.toolId === toolId)
+    // A turn that came in by email (docs/CHANNELS.md#email) runs on the tools'
+    // defaults: the user's stored grants and allow rules ("always allow
+    // shell") were given for chats they sit at, not for a forgeable mail.
+    // Stored DENY still applies (below).
+    const emailTurn = getRunContext()?.channel === 'email' || isEmailSession(scope?.sessionId);
+    const storedPolicy = policies.find(p => p.toolId === toolId)
       ?? policies.find(p => p.toolId === legacyToolId);
+    const policy = emailTurn && storedPolicy?.level !== 'DENY' ? undefined : storedPolicy;
 
     // Stored DENY cannot be overridden by broad allow rules or grant expiry.
     const deniedPolicy = policies.find(p => p.level === 'DENY');
@@ -188,7 +195,8 @@ export class PermissionManager {
         reason: `Denied by rule: ${deniedRule.rule}`, source: 'rule' };
     }
     // Legacy ASK rules must not disappear behind the new read-tool defaults.
-    const rule = legacyRule?.decision === 'ask' ? legacyRule : (currentRule ?? legacyRule);
+    const anyRule = legacyRule?.decision === 'ask' ? legacyRule : (currentRule ?? legacyRule);
+    const rule = emailTurn && anyRule?.decision === 'allow' ? null : anyRule;
     // Explicit per-user policies take precedence over broad allow/ask rules.
     if (!policy && rule && !(rule.decision === 'allow' && (options?.dangerous ?? this.isDangerousAction(toolId, action)))) {
       const allowed = rule.decision === 'allow';

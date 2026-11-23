@@ -835,9 +835,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `utils` | 11 |
 | `channels` | `config` | 8 |
 | `channels` | `core` | 57 |
-| `channels` | `db` | 50 |
+| `channels` | `db` | 48 |
 | `channels` | `models` | 8 |
-| `channels` | `security` | 25 |
+| `channels` | `security` | 26 |
 | `channels` | `shared` | 5 |
 | `channels` | `utils` | 25 |
 | `channels` | `voice` | 5 |
@@ -864,7 +864,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `setup` | 1 |
 | `core` | `shared` | 92 |
 | `core` | `skills` | 20 |
-| `core` | `tools` | 37 |
+| `core` | `tools` | 38 |
 | `core` | `utils` | 268 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
@@ -921,7 +921,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 38 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
-| `security` | `core` | 41 |
+| `security` | `core` | 42 |
 | `security` | `db` | 88 |
 | `security` | `mcp` | 2 |
 | `security` | `plugins` | 2 |
@@ -955,7 +955,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 159 |
+| `tools` | `core` | 160 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

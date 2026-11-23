@@ -200,3 +200,35 @@ export async function sendDraft(repo: MailRepo, id: string, expectedRevision?: s
   void appendToSent(account, composed.raw);
   return { id, messageIdHeader: composed.messageIdHeader };
 }
+
+/**
+ * Send one message from the account without keeping it anywhere: no row, no
+ * copy in the Sent folder. Only for what must not sit in the mailbox, where
+ * its owner (and their agent) could read it: the email channel's link codes
+ * (src/channels/email/). Returns the Message-ID; throws `MailSendError`.
+ */
+export async function sendUnstored(
+  account: MailAccount,
+  message: Pick<MailMessage, 'toAddresses' | 'ccAddresses' | 'subject' | 'bodyText' | 'inReplyTo' | 'references'>,
+  headers?: Record<string, string>,
+): Promise<string> {
+  const outgoing = account.outgoing;
+  if (!outgoing) throw new MailSendError('invalid', 'This mail account has no outgoing server');
+  checkRecipients(message);
+  try {
+    const password = await outgoingPassword(account);
+    if (!password) throw new Error('No password is stored for the outgoing server');
+    const pinned = await pinMailHost(outgoing.host, outgoing.security, account.localNetwork);
+    const composed = await composeMessage(account, message, headers);
+    const transport = transportFor(outgoing, pinned.address, pinned.servername, password);
+    try {
+      await withDeadline(transport.sendMail({ envelope: composed.envelope, raw: composed.raw }), SEND_DEADLINE_MS, 'Sending', () => transport.close());
+    } finally {
+      transport.close();
+    }
+    return composed.messageIdHeader;
+  } catch (err) {
+    const message = (err as { response?: string; message?: string }).response || (err as Error).message || 'The message could not be sent';
+    throw new MailSendError('failed', message.replace(/\s+/g, ' ').trim().slice(0, 300));
+  }
+}

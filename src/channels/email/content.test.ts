@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { mailContent, replyReferences, replySubject, stripQuoted } from './content';
+import { mailContent, replyReferences, replySubject, splitMail, stripQuoted } from './content';
 import { rawMail } from './fixtures';
 
 describe('the new text of a mail', () => {
@@ -15,6 +15,14 @@ describe('the new text of a mail', () => {
     expect(stripQuoted('Answer\n-- \nAnn Example\nCEO')).toBe('Answer');
     expect(stripQuoted('Answer\n\nSent from my iPhone')).toBe('Answer');
     expect(stripQuoted('> point one\nmy answer\n> point two\nother answer')).toBe('> point one\nmy answer\n> point two\nother answer');
+  });
+
+  test('a forward keeps the forwarded mail; an Outlook forward only when the subject says so', () => {
+    const gmail = 'Please summarise the mail below.\n\n---------- Forwarded message ---------\nFrom: Bank <x@bank.test>\nSubject: Invoice\n\nYou owe 5000 EUR.';
+    expect(splitMail(gmail)).toEqual({ own: 'Please summarise the mail below.', forwarded: gmail.slice(gmail.indexOf('----------')) });
+    const outlook = 'Can you check this?\n\n________________________________\nFrom: Bank <x@bank.test>\nSent: Monday\nSubject: Invoice\n\nYou owe 5000 EUR.';
+    expect(splitMail(outlook, { forward: true }).forwarded).toContain('You owe 5000 EUR.');
+    expect(splitMail(outlook)).toEqual({ own: 'Can you check this?', forwarded: '' });
   });
 
   test('nothing left after cutting keeps the text whole', () => {

@@ -1,17 +1,14 @@
 /**
- * The email channel's records (`email_channel_messages`) and the mailbox rows
- * it reads (`mail_messages`, `mail_raw`), behind one interface so the
- * channel's decisions can be tested without a database (inbox.test.ts).
- *
- * The channel acts for nobody here: it reads the received mail of its own
- * account, as the mail sync (core/mail/sync.ts) writes it.
+ * The email channel's own records (`email_channel_messages`), behind one
+ * interface so the channel's decisions can be tested without a database
+ * (channel.test.ts). The mailbox itself is read through the mail repository
+ * as its owner (`MailRepo.channelUnseen`, `MailRepo.raw`), never here.
  */
-import { and, count, desc, eq, gte, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type EmailChannelStatus, emailChannelMessages } from '@/db/schema/email-channel';
-import { mailMessages, mailRaw } from '@/db/schema/mail';
 
-/** An accepted inbound mail: what a reply to it needs. */
+/** An inbound mail the channel answered or ran: what a reply to it needs. */
 export interface InboundRecord {
   id: string;
   address: string;
@@ -38,20 +35,14 @@ export interface OutboundRow {
   address: string;
   userId: string | null;
   threadKey: string;
+  /** The draft or sent message in the mailbox; null for an unstored send (a link code). */
+  mailMessageId: string | null;
   messageIdHeader: string | null;
-  status: 'sent' | 'failed';
+  status: 'sent' | 'drafted' | 'failed';
   reason?: string | null;
 }
 
 export interface EmailChannelStore {
-  /**
-   * Received mail of the account, stored and received since `since`, that
-   * the channel has not looked at, oldest first. Both times count: a first
-   * sync stores a month of old mail at once, which is not answered.
-   */
-  unseen(accountId: string, since: Date, limit: number): Promise<Array<{ id: string; size: number }>>;
-  /** The raw source, or null when the mail was too large to keep it. */
-  raw(mailMessageId: string): Promise<Buffer | null>;
   /** Claim a received mail: the record's id, or null when it was claimed before (by this or another process). */
   claim(accountId: string, mailMessageId: string): Promise<string | null>;
   finish(id: string, patch: InboundPatch): Promise<void>;
@@ -64,34 +55,17 @@ export interface EmailChannelStore {
   /** The mail a reply answers: record `id` of the thread, or the thread's newest accepted mail. */
   replyTarget(accountId: string, threadKey: string, id?: string): Promise<InboundRecord | null>;
   recordOutbound(row: OutboundRow): Promise<void>;
-  /** Forget dropped mail recorded before `before`. */
-  pruneDropped(accountId: string, before: Date): Promise<number>;
+  /**
+   * Retention: forget dropped mail recorded before `droppedBefore` and every
+   * record before `before`; clear the address and subject of records whose
+   * user is gone (or was never linked) once older than `scrubBefore`.
+   */
+  prune(accountId: string, cutoffs: { droppedBefore: Date; before: Date; scrubBefore: Date }): Promise<void>;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const dbEmailChannelStore: EmailChannelStore = {
-  async unseen(accountId, since, limit) {
-    return getDb()
-      .select({ id: mailMessages.id, size: mailMessages.size })
-      .from(mailMessages)
-      .leftJoin(emailChannelMessages, eq(emailChannelMessages.mailMessageId, mailMessages.id))
-      .where(and(
-        eq(mailMessages.accountId, accountId),
-        eq(mailMessages.status, 'received'),
-        gte(mailMessages.createdAt, since),
-        gte(mailMessages.date, since),
-        isNull(emailChannelMessages.id),
-      ))
-      .orderBy(mailMessages.createdAt)
-      .limit(limit);
-  },
-
-  async raw(mailMessageId) {
-    const [row] = await getDb().select({ raw: mailRaw.raw }).from(mailRaw).where(eq(mailRaw.messageId, mailMessageId)).limit(1);
-    return row?.raw ?? null;
-  },
-
   async claim(accountId, mailMessageId) {
     const [row] = await getDb()
       .insert(emailChannelMessages)
@@ -172,11 +146,23 @@ export const dbEmailChannelStore: EmailChannelStore = {
     await getDb().insert(emailChannelMessages).values({ ...row, direction: 'out' });
   },
 
-  async pruneDropped(accountId, before) {
-    const rows = await getDb()
-      .delete(emailChannelMessages)
-      .where(and(eq(emailChannelMessages.accountId, accountId), eq(emailChannelMessages.status, 'dropped'), lt(emailChannelMessages.createdAt, before)))
-      .returning({ id: emailChannelMessages.id });
-    return rows.length;
+  async prune(accountId, { droppedBefore, before, scrubBefore }) {
+    const db = getDb();
+    await db.delete(emailChannelMessages).where(and(
+      eq(emailChannelMessages.accountId, accountId),
+      or(
+        and(eq(emailChannelMessages.status, 'dropped'), lt(emailChannelMessages.createdAt, droppedBefore)),
+        lt(emailChannelMessages.createdAt, before),
+      ),
+    ));
+    await db.update(emailChannelMessages)
+      .set({ address: null, subject: null, references: null })
+      .where(and(
+        eq(emailChannelMessages.accountId, accountId),
+        isNull(emailChannelMessages.userId),
+        ne(emailChannelMessages.status, 'dropped'),
+        lt(emailChannelMessages.createdAt, scrubBefore),
+        sql`${emailChannelMessages.address} IS NOT NULL`,
+      ));
   },
 };

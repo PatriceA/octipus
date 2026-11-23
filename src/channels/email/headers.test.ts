@@ -1,50 +1,99 @@
 import { describe, expect, test } from 'vitest';
 import { rawMail, TRUSTED_ID } from './fixtures';
-import { aligned, authenticationVerdict, headerLines, loopReason, parseAuthenticationResults } from './headers';
+import { authenticationVerdict, headerLines, loopReason, MalformedHeaders, parseAuthenticationResults, plainFromAddress } from './headers';
 
-const verdict = (raw: Buffer, domain = 'example.com', ids = [TRUSTED_ID]) => authenticationVerdict(headerLines(raw), domain, ids);
+const T = [TRUSTED_ID];
+const verdictOf = (headers: string[], domain = 'victim.com', ids = T) =>
+  authenticationVerdict(headerLines(Buffer.from(`${headers.join('\r\n')}\r\nFrom: boss@${domain}\r\n\r\nbody`)), domain, ids);
+const ar = (value: string) => `Authentication-Results: ${value}`;
 
-describe('authentication', () => {
-  test('a DMARC pass for the From domain under the trusted id passes', () => {
-    expect(verdict(rawMail())).toMatchObject({ ok: true, method: 'dmarc' });
+describe('authentication: DMARC pass for the From domain, under the trusted id, and nothing else', () => {
+  test('passes', () => {
+    expect(verdictOf([ar(`${TRUSTED_ID}; spf=pass smtp.mailfrom=victim.com; dkim=pass header.d=victim.com; dmarc=pass (p=reject dis=none) header.from=victim.com`)])).toMatchObject({ ok: true });
+    expect(verdictOf([ar(`MX.Octipus.Test 1; dmarc=pass header.from=Victim.COM`)])).toMatchObject({ ok: true });
+    expect(verdictOf([ar(`(our server) ${TRUSTED_ID}; dmarc=pass header.from=victim.com`)])).toMatchObject({ ok: true });
+    expect(verdictOf([`${ar(`${TRUSTED_ID};`)}`, '\tdmarc=pass header.from=victim.com'])).toMatchObject({ ok: true });
   });
 
-  test('fails closed: no header, an untrusted id, no trusted ids configured', () => {
-    expect(verdict(rawMail({ auth: null }))).toEqual({ ok: false, why: 'no_trusted_results' });
-    expect(verdict(rawMail({ auth: 'mx.evil.test; dmarc=pass header.from=example.com' }))).toEqual({ ok: false, why: 'no_trusted_results' });
-    expect(verdict(rawMail(), 'example.com', [])).toEqual({ ok: false, why: 'no_trusted_results' });
+  test('IDN: the From domain and header.from compare in punycode', () => {
+    const lines = headerLines(Buffer.from(`${ar(`${TRUSTED_ID}; dmarc=pass header.from=xn--bcher-kva.example`)}\r\n\r\nb`));
+    expect(authenticationVerdict(lines, 'bücher.example', T)).toMatchObject({ ok: true });
+    expect(authenticationVerdict(lines, 'bucher.example', T)).toMatchObject({ ok: false });
   });
 
-  test('only the topmost trusted header counts: a pass the sender wrote below the real one is ignored', () => {
-    const forged = rawMail({
-      auth: `${TRUSTED_ID}; spf=fail smtp.mailfrom=evil.test; dkim=none; dmarc=fail header.from=example.com`,
-      below: [`Authentication-Results: ${TRUSTED_ID}; dmarc=pass header.from=example.com`],
+  const rejected: Array<[string, string[]]> = [
+    // Reviewer vectors: sender-chosen values must never read as results.
+    ['SPF quoted local part injecting DKIM', [ar(`${TRUSTED_ID}; spf=pass smtp.mailfrom="a;dkim=pass()header.d=victim.com;"@attacker.com`)]],
+    ['SPF quoted local part injecting DMARC', [ar(`${TRUSTED_ID}; spf=pass smtp.mailfrom="x;dmarc=pass()header.from=victim.com;"@attacker.com`)]],
+    ['DKIM selector injecting DMARC', [ar(`${TRUSTED_ID}; dkim=pass header.d=attacker.com header.s="s;dmarc=pass()header.from=victim.com;"`)]],
+    ['HELO injecting DKIM', [ar(`${TRUSTED_ID}; spf=none smtp.helo=x;dkim=pass()header.d=victim.com`)]],
+    ['reason injecting DKIM', [ar(`${TRUSTED_ID}; dkim=fail reason="bad; dkim=pass header.d=victim.com" header.d=victim.com`)]],
+    ['header.i naming the victim', [ar(`${TRUSTED_ID}; dkim=pass header.d=attacker.com header.i=@victim.com`)]],
+    ['DKIM pass for the From domain without DMARC', [ar(`${TRUSTED_ID}; dkim=pass header.d=victim.com`)]],
+    ['SPF pass for the From domain without DMARC', [ar(`${TRUSTED_ID}; spf=pass smtp.mailfrom=victim.com`)]],
+    ['DKIM at a public suffix', [ar(`${TRUSTED_ID}; dkim=pass header.d=co.uk`)]],
+    ['dmarc=none', [ar(`${TRUSTED_ID}; dmarc=none header.from=victim.com; dkim=pass header.d=victim.com`)]],
+    ['dmarc=fail with a pass in a comment', [ar(`${TRUSTED_ID}; dmarc=fail (dmarc=pass header.from=victim.com) header.from=victim.com`)]],
+    ['DMARC pass for another domain', [ar(`${TRUSTED_ID}; dmarc=pass header.from=attacker.com`)]],
+    ['DMARC pass for a parent domain', [ar(`${TRUSTED_ID}; dmarc=pass header.from=com`)]],
+    ['an id that only starts like the trusted one', [ar(`${TRUSTED_ID}.attacker.com; dmarc=pass header.from=victim.com`)]],
+    ['a pass below the trusted header', [ar(`${TRUSTED_ID}; dmarc=fail header.from=victim.com`), ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com`)]],
+    ['another id above, failing trusted header below', [ar(`other.test; dmarc=pass header.from=victim.com`), ar(`${TRUSTED_ID}; dmarc=fail header.from=victim.com`)]],
+    ['an unbalanced comment', [ar(`${TRUSTED_ID}; dmarc=fail (x header.from=victim.com; dmarc=pass header.from=victim.com`)]],
+    ['a comment hiding a pass', [ar(`${TRUSTED_ID}; dkim=pass (good; dmarc=pass) header.d=attacker.com`)]],
+    ['an unterminated quote', [ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com reason="x`)]],
+    ['a malformed property', [ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com junk`)]],
+    ['no header', []],
+  ];
+  test.each(rejected)('rejects: %s', (_name, headers) => {
+    expect(verdictOf(headers)).toMatchObject({ ok: false });
+  });
+
+  test('fails closed without trusted ids', () => {
+    expect(verdictOf([ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com`)], 'victim.com', [])).toMatchObject({ ok: false });
+  });
+
+  test('parsing follows RFC 8601: quoted strings and comments outside them', () => {
+    expect(parseAuthenticationResults(`${TRUSTED_ID}; spf=pass smtp.mailfrom="a;b"@x.test; dkim=pass (ok) header.d=x.test reason="a ; b"`)).toEqual({
+      authservId: TRUSTED_ID,
+      results: [
+        { method: 'spf', result: 'pass', props: { 'smtp.mailfrom': '"a;b"@x.test' } },
+        { method: 'dkim', result: 'pass', reason: '"a ; b"', props: { 'header.d': 'x.test' } },
+      ],
     });
-    expect(verdict(forged)).toEqual({ ok: false, why: 'dmarc_not_pass' });
+    expect(parseAuthenticationResults(`${TRUSTED_ID}; none`)).toEqual({ authservId: TRUSTED_ID, results: [] });
   });
 
-  test('a DMARC pass for another domain does not vouch for this From', () => {
-    expect(verdict(rawMail({ auth: `${TRUSTED_ID}; dmarc=pass header.from=evil.test` }))).toEqual({ ok: false, why: 'dmarc_not_pass' });
+  test('deeply nested comments cost linear time; an over-long header is not trusted', () => {
+    const deep = `x; ${'('.repeat(40_000)}${')'.repeat(40_000)}`;
+    const started = Date.now();
+    expect(verdictOf([ar(deep)])).toMatchObject({ ok: false });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(verdictOf([ar(`${TRUSTED_ID}; dmarc=pass header.from=victim.com ${'(c)'.repeat(4000)}`)])).toEqual({ ok: false, why: 'no_trusted_results' });
+  });
+});
+
+describe('the From address', () => {
+  const from = (header: string, parsed: string[]) => plainFromAddress(headerLines(Buffer.from(`${header}\r\n\r\nb`)), parsed);
+
+  test('one plain address, as written', () => {
+    expect(from('From: Ann <Ann@Example.com>', ['Ann@Example.com'])).toBe('ann@example.com');
   });
 
-  test('without DMARC, an aligned DKIM or SPF pass passes; an unaligned one does not', () => {
-    expect(verdict(rawMail({ auth: `${TRUSTED_ID}; dkim=pass header.d=example.com` }))).toMatchObject({ ok: true, method: 'dkim' });
-    expect(verdict(rawMail({ auth: `${TRUSTED_ID}; spf=pass smtp.mailfrom=bounce@mail.example.com` }), 'mail.example.com')).toMatchObject({ ok: true, method: 'spf' });
-    expect(verdict(rawMail({ auth: `${TRUSTED_ID}; dkim=pass header.d=evil.test; spf=pass smtp.mailfrom=evil.test` }))).toEqual({ ok: false, why: 'no_aligned_pass' });
+  test('an encoded word, two addresses or two From headers are refused', () => {
+    expect(from('From: =?utf-8?q?victim=40victim.com?=', ['victim@victim.com'])).toBeNull();
+    expect(from('From: a@x.test, b@y.test', ['a@x.test', 'b@y.test'])).toBeNull();
+    expect(from('From: a@x.test\r\nFrom: b@y.test', ['a@x.test'])).toBeNull();
+    expect(from('From: victim@[1.2.3.4]', ['victim@[1.2.3.4]'])).toBeNull();
   });
 
-  test('parsing: comments, version, quoted values; a one-label domain never aligns', () => {
-    expect(parseAuthenticationResults('MX.Test 1; dkim=pass (good sig) header.d="Example.com"')).toEqual({
-      authservId: 'mx.test', results: [{ method: 'dkim', result: 'pass', props: { 'header.d': 'example.com' } }],
-    });
-    expect(aligned('com', 'example.com')).toBe(false);
-    expect(aligned('example.com', 'sub.example.com')).toBe(true);
-    expect(aligned('sub.example.com', 'example.com')).toBe(false);
+  test('a bare CR in the headers is malformed', () => {
+    expect(() => headerLines(Buffer.from('From: attacker@evil.com\rFrom: victim@victim.com\r\n\r\nb'))).toThrow(MalformedHeaders);
   });
 });
 
 describe('loop guards', () => {
-  const reason = (raw: Buffer, from = 'ann@example.com') => loopReason(headerLines(raw), from, 'octipus@company.test');
+  const reason = (raw: Buffer, sender = 'ann@example.com') => loopReason(headerLines(raw), sender, 'octipus@company.test');
 
   test('an ordinary mail passes', () => {
     expect(reason(rawMail())).toBeNull();

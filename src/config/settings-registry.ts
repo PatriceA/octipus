@@ -1720,11 +1720,19 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'emailChannel.replyMode',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: 'draft',
+    description: 'draft (default): each answer is saved as a draft reply in the channel mailbox for a person to review and send. send: answers are sent at once, with no person in between.',
+    isSecret: false,
+  },
+  {
     key: 'emailChannel.accountId',
     category: 'channels',
     valueType: 'string',
     defaultValue: '',
-    description: 'Id of the IMAP mail account the channel reads and answers from: a personal mailbox used for nothing else, with an outgoing (SMTP) server. Automatic triage skips it.',
+    description: 'Id of the IMAP mail account the channel reads and answers from: a personal mailbox of an admin, used for nothing else, with an outgoing (SMTP) server. Automatic triage and the owner\'s mail tool skip it.',
     isSecret: false,
   },
   {

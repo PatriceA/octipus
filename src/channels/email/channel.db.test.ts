@@ -32,6 +32,7 @@ const admin = '66666666-6666-4666-8666-666666666666';
 const ann = '77777777-7777-4777-8777-777777777777';
 
 let account: MailAccount;
+let annAccount: MailAccount;
 let smtp: SMTPServer;
 const wire: Array<{ to: string[]; data: string }> = [];
 let channel: import('./index').EmailChannel;
@@ -46,6 +47,13 @@ async function deliver(m: TestMail): Promise<string> {
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-email-channel-'));
+  const dns = await import('node:dns');
+  const { vi } = await import('vitest');
+  const lookup = dns.promises.lookup;
+  vi.spyOn(dns.promises, 'lookup').mockImplementation((async (host: string, opts: unknown) => {
+    if (host === 'mail.example.com') return [{ address: '93.184.216.34', family: 4 }];
+    return (lookup as (h: string, o: unknown) => Promise<unknown>)(host, opts);
+  }) as never);
   const { initializeDb, executeRaw } = await import('@/db/postgres');
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');
@@ -75,21 +83,26 @@ beforeAll(async () => {
     outgoing: { host: '127.0.0.1', port, security: 'none', username: 'octipus' },
   }, { incoming: 'pw', outgoing: 'pw' });
 
-  const { EmailChannel, sendReplyMail } = await import('./index');
+  annAccount = await createMailAccount(contentRepos(await resolvedPrincipal(ann, null)), {
+    label: 'Ann', address: 'ann@company.test', protocol: 'imap',
+    incoming: { host: 'mail.example.com', port: 993, security: 'tls', username: 'ann' },
+    outgoing: { host: 'mail.example.com', port: 465, security: 'tls', username: 'ann' },
+  }, { incoming: 'pw' });
+
+  const { EmailChannel, adminMailbox } = await import('./index');
   const { dbEmailChannelStore } = await import('./store');
   channel = new EmailChannel({
     store: dbEmailChannelStore,
-    account: async () => account,
+    mailbox: adminMailbox,
     sync: async () => undefined,
-    sendReply: sendReplyMail,
     linkedUser: async (address) => (address === 'ann@example.com' ? { id: ann, username: 'ann' } : null),
     linkCode: async () => 'ABC123',
     now: () => new Date(),
   });
-  channel.start(account, {
-    enabled: true, accountId: account.id, allowedSenders: ['ann@example.com'], trustedAuthservIds: [TRUSTED_ID],
+  expect(await channel.open({
+    enabled: true, replyMode: 'send', accountId: account.id, allowedSenders: ['ann@example.com'], trustedAuthservIds: [TRUSTED_ID],
     pollSeconds: 60, maxMessageBytes: 1024 * 1024, maxPerSenderPerHour: 20,
-  });
+  })).toBe(true);
   channel.on('message', (m: UnifiedMessage) => turns.push(m));
 });
 
@@ -150,5 +163,49 @@ describe('the email channel on the mail stack', () => {
     const { eq } = await import('drizzle-orm');
     const rows = await getDb().select().from(emailChannelMessages).where(eq(emailChannelMessages.messageIdHeader, '<forged@example.com>'));
     expect(rows.map((r) => [r.status, r.reason, r.subject])).toEqual([['dropped', 'unauthenticated', null]]);
+  });
+
+  test('only an admin\'s personal mailbox can serve the channel', async () => {
+    const { adminMailbox } = await import('./index');
+    expect((await adminMailbox(account.id))?.account.id).toBe(account.id);
+    expect(await adminMailbox(annAccount.id)).toBeNull();
+  });
+
+  test('the owner\'s mail tool does not see the channel mailbox', async () => {
+    const { getConfig, refreshConfigKey } = await import('@/config');
+    getConfig();
+    refreshConfigKey('emailChannel.accountId', account.id);
+    const { MailTool } = await import('@/tools/mail');
+    const tool = new MailTool();
+    await tool.initialize();
+    const call = (name: string, args: Record<string, unknown>) => {
+      const handler = tool.getToolHandlers().find((h) => h.name === `mail__${name}`);
+      return handler?.execute(args, { id: 'agent-1', userId: admin, root: true, sessionId: 'mail-tool-test', metadata: {} } as never) as Promise<Record<string, unknown>>;
+    };
+    const accounts = await call('list_mail_accounts', {});
+    expect(accounts).toHaveProperty('accounts');
+    expect(JSON.stringify(accounts)).not.toContain(account.id);
+    const listed = await call('list_mail', { account_id: account.id, status: 'all' });
+    expect(listed).toEqual({ messages: [] });
+    const all = await call('list_mail', { status: 'all' });
+    expect(all).toHaveProperty('messages');
+    expect(JSON.stringify(all)).not.toContain('q1@example.com');
+  });
+
+  test('retention: old dropped records go, and a record whose user is gone loses its address and subject', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { emailChannelMessages } = await import('@/db/schema/email-channel');
+    const { eq } = await import('drizzle-orm');
+    const { dbEmailChannelStore } = await import('./store');
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    const [dropped] = await getDb().insert(emailChannelMessages).values({ accountId: account.id, direction: 'in', status: 'dropped', reason: 'not_allowed', address: 'x@y.test', createdAt: old }).returning();
+    const [orphan] = await getDb().insert(emailChannelMessages).values({ accountId: account.id, direction: 'in', status: 'accepted', address: 'gone@y.test', subject: 'Secret plans', userId: null, threadKey: 't', createdAt: old }).returning();
+    const [kept] = await getDb().insert(emailChannelMessages).values({ accountId: account.id, direction: 'in', status: 'accepted', address: 'ann@example.com', subject: 'Q3', userId: ann, threadKey: 't2', createdAt: old }).returning();
+    const now = Date.now();
+    await dbEmailChannelStore.prune(account.id, { droppedBefore: new Date(now - 30 * 86_400_000), before: new Date(now - 90 * 86_400_000), scrubBefore: new Date(now - 86_400_000) });
+    const row = async (id: string) => (await getDb().select().from(emailChannelMessages).where(eq(emailChannelMessages.id, id)))[0];
+    expect(await row(dropped.id)).toBeUndefined();
+    expect(await row(orphan.id)).toMatchObject({ address: null, subject: null });
+    expect(await row(kept.id)).toMatchObject({ address: 'ann@example.com', subject: 'Q3' });
   });
 });

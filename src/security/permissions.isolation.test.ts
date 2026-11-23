@@ -468,3 +468,18 @@ test('shipping shell middleware runs new elevated CLI forms under one account gr
     await expect(run.execute({ command: 'sudo -n another-command' }, caller)).rejects.toThrow(/denied/i);
   } finally { getConfig().security.executionEnvironments = old; rmSync(root, { recursive: true, force: true }); }
 });
+
+describe('a turn that came in by email (docs/CHANNELS.md#email)', () => {
+  test('runs on the tools\' defaults: the user\'s stored ALLOW grants do not count, a stored DENY does', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const { runWithContext } = await import('@/core/run-context');
+    const pm = getPermissionManager();
+    await pm.setPermission(aliceId, 'shell', 'execute', 'ALLOW');
+    expect((await pm.check(aliceId, 'shell', 'execute')).level).toBe('ALLOW');
+    const inEmail = await runWithContext({ runId: 'run_email', channel: 'email' } as never, () => pm.check(aliceId, 'shell', 'execute'));
+    expect(inEmail).toMatchObject({ level: 'ASK', allowed: false });
+    await pm.setPermission(aliceId, 'shell', 'execute', 'DENY');
+    const denied = await runWithContext({ runId: 'run_email', channel: 'email' } as never, () => pm.check(aliceId, 'shell', 'execute'));
+    expect(denied.level).toBe('DENY');
+  });
+});

@@ -14,7 +14,7 @@ import { users } from './users';
  * `failed`; their Message-IDs let a later reply in the thread find it.
  */
 export type EmailChannelDirection = 'in' | 'out';
-export type EmailChannelStatus = 'processing' | 'accepted' | 'answered' | 'dropped' | 'sent' | 'failed';
+export type EmailChannelStatus = 'processing' | 'accepted' | 'answered' | 'dropped' | 'sent' | 'drafted' | 'failed';
 
 export const emailChannelMessages = pgTable('email_channel_messages', {
   id: uuid('id').primaryKey().defaultRandom(),

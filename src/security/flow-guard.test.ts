@@ -160,3 +160,22 @@ describe('isOwnerOnlyDelivery', () => {
     expect(isOwnerOnlyDelivery('u1', { toolId: 'messaging', action: 'send_message', args: { user_id: 'u1', message: 'hi' } })).toBe(false);
   });
 });
+
+describe('email sessions (docs/CHANNELS.md#email)', () => {
+  it('a web search is held back once the session holds private data, whatever the mode', async () => {
+    const { markEmailSession } = await import('./flow-guard');
+    const search = { toolId: 'websearch', action: 'search' };
+    observeFlow(S, { toolId: 'data', action: 'query' });
+    // An ordinary session: a query is read egress, allowed after a private read.
+    expect(guard(search).level).toBe('ALLOW');
+    markEmailSession(S);
+    expect(guard(search)).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+    expect(guard(search, allow, 'off')).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+  });
+
+  it('a clean email session may still search', async () => {
+    const { markEmailSession } = await import('./flow-guard');
+    markEmailSession('email-clean');
+    expect(applyFlowGuard('ask', 'email-clean', { toolId: 'websearch', action: 'search' }, allow).level).toBe('ALLOW');
+  });
+});

@@ -611,7 +611,12 @@ export const groupChannelsConfigSchema = z.object({
  */
 export const emailChannelConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  /** The IMAP mail account (Mail → mailboxes) the channel reads and answers from. Personal, with an SMTP server. */
+  /**
+   * `draft` (default): each answer is saved as a draft reply in the channel
+   * mailbox for a person to send. `send`: answers are sent at once.
+   */
+  replyMode: z.enum(['draft', 'send']).default('draft'),
+  /** The IMAP mail account (Mail → mailboxes) the channel reads and answers from: an admin's personal mailbox, with an SMTP server. */
   accountId: z.string().default(''),
   /** Addresses allowed to talk to Octipus by mail. Each must also be linked to an account (`link`). */
   allowedSenders: z.array(z.string()).default([]),
