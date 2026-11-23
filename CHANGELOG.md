@@ -245,10 +245,13 @@ labels reflect blast radius, not contract guarantees.
     label/value lines (`Total  415.00`), contents pages and grids that only
     roughly line up keep their lines.
   - A table that runs onto the next page stays one table: rows at the head of
-    the next page whose columns sit where the table's did continue it, even
-    one row and even with no header; a repeated header is dropped, and so are
-    page numbers between the two halves. Text between them other than a page
-    number (a running title) still splits the table in two.
+    the next page whose columns sit where the table's did continue it, with no
+    header of their own (a single row only when it has a number in the
+    table's column of numbers); a repeated header is dropped, and so is one
+    page number at the foot and one at the head, recognised by position (set
+    apart from the table and on none of its column edges). A number in a
+    column, such as a total, is kept, and anything else between the halves
+    (a running title) still splits the table in two; no other text is dropped.
   - A page where neither reading holds comes out exactly as before. Label/value
     forms, bullet lists and tables of contents keep their lines; a gutter
     under three glyphs wide needs six lines, not three; a page of over 10,000

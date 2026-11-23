@@ -769,6 +769,77 @@ describe('reconstructPage — tables across a page break', () => {
     expect(text).toContain('\n\n| Part | Finish | Stock |');
   });
 
+  test('a number in a column under the table is content, never dropped as a page number', () => {
+    const page1 = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    const page2 = stockRows(740, ['Flange', 'Bolt']);
+    // A total one row below, right-aligned under Qty, then the page number.
+    const total = read([[...page1, ...row(652, [['252', 400, 'right']]), item('7', 300, 40)], page2]);
+    expect(lines(total)).toContain('252');
+    expect(lines(total)).toContain('7');
+    // A year further down, but on the first column's edge.
+    const year = read([[...page1, item('2024', 50, 600)], page2]);
+    expect(lines(year)).toContain('2024');
+    // A fraction under Qty, set apart like a footer would be.
+    const fraction = read([[...page1, ...row(600, [['3/4', 400, 'right']])], page2]);
+    expect(lines(fraction)).toContain('3/4');
+  });
+
+  test('a number in a column at the head of the next page is content, never dropped', () => {
+    const page1 = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
+    // Carried forward, under Qty, above the continuing rows.
+    const text = read([page1, [...row(770, [['252', 400, 'right']]), ...stockRows(740, ['Flange', 'Bolt'])]]);
+    expect(lines(text)).toContain('252');
+    expect(text).toContain('Flange');
+  });
+
+  test('one continued row of a three-column table is joined', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket']), item('1', 300, 40)],
+      [item('2', 300, 770), ...row(740, [['Flange', 50], ['Blue', 200], ['8', 400, 'right']]), item(prose('After', 60), 50, 690)],
+    ]);
+    expect(lines(text).slice(0, 7)).toEqual([
+      '| Item | Colour | Qty |',
+      '| --- | --- | ---: |',
+      '| Widget | Red | 7 |',
+      '| Gadget | Red | 56 |',
+      '| Sprocket | Red | 189 |',
+      '| Flange | Blue | 8 |',
+      '',
+    ]);
+  });
+
+  test('a repeated header with no rows under it continues nothing, and a table below it stays its own', () => {
+    const text = read([
+      [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket']), item('1', 300, 40)],
+      [
+        ...row(760, [['Item', 50], ['Colour', 200], ['Qty', 400, 'right']]),
+        ...row(660, [['Region', 50], ['City', 200], ['Sales', 400, 'right']]),
+        ...row(648, [['North', 50], ['Oslo', 200], ['30', 400, 'right']]),
+        ...row(636, [['South', 50], ['Rome', 200], ['140', 400, 'right']]),
+        ...row(624, [['East', 50], ['Kyiv', 200], ['5', 400, 'right']]),
+      ],
+    ]);
+    // Every line is kept, and the second table opens its own block.
+    expect(lines(text)).toContain('1');
+    expect(lines(text)).toContain('Item  Colour  Qty');
+    expect(text).toContain('\n\n| Region | City | Sales |\n| --- | --- | ---: |');
+    expect(lines(text).filter((l) => /^\| -/.test(l))).toHaveLength(2);
+  });
+
+  test('an aligned caption at the head of the next page is not a row of a two-column table', () => {
+    const text = read([
+      [
+        ...row(700, [['Year', 50], ['Revenue', 300, 'right']]),
+        ...row(688, [['2021', 50], ['1,200', 300, 'right']]),
+        ...row(676, [['2022', 50], ['1,350', 300, 'right']]),
+        ...row(664, [['2023', 50], ['1,500', 300, 'right']]),
+      ],
+      [...row(760, [['Figure 4', 50], ['2024', 300, 'right']]), item(prose('This figure shows', 70), 50, 700)],
+    ]);
+    expect(text).not.toContain('| Figure 4');
+    expect(text).toContain('Figure 4  2024');
+  });
+
   test('a table followed by text leaves nothing open; one followed by a page number does', () => {
     const body = [...stockHead, ...stockRows(688, ['Widget', 'Gadget', 'Sprocket'])];
     expect(reconstructPage([...body, item('Note below.', 50, 640)]).openTable).toBeNull();
