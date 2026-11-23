@@ -30,7 +30,7 @@ import { ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/c
 import type { CustomProviderConfig, ModelConfigEntry } from '@/db/schema/models';
 import { modelRow, registryDouble, vaultDouble } from '@/models/testing/model-doubles';
 import {
-  chatChunk, chatCompletion, json, openAIError, sse, startScriptedProvider,
+  chatChunk, chatCompletion, hang, json, openAIError, sse, startScriptedProvider,
 } from '@/models/testing/scripted-provider';
 
 process.env.LOG_LEVEL = 'fatal';
@@ -482,6 +482,26 @@ describe('failure policy', () => {
     for await (const c of router.stream({ model: 'proxy-model', messages: hi })) chunks.push(c);
     expect(chunks).toContainEqual({ content: 'streamed anyway' });
     expect(proxy.requests).toHaveLength(2);
+  });
+
+  test('a caller abort on the proxy fallback is not counted against the proxy breaker', async () => {
+    registryDouble.add(modelRow({ provider: 'litellm', modelId: 'proxy-model' }));
+    for (let i = 0; i < 5; i++) getCircuitBreakerRegistry().recordFailure('litellm');
+    proxy.enqueue(sse([chatChunk({ content: 'first' })], { then: 'hold' }), hang());
+    const streamAbort = new AbortController();
+    let streamError: unknown;
+    try {
+      for await (const _ of router.stream({ model: 'proxy-model', messages: hi, signal: streamAbort.signal })) streamAbort.abort();
+    } catch (e) {
+      streamError = e;
+    }
+    expect((streamError as ClassifiedError).reason).toBe(FailoverReason.CASCADED_CANCELLATION);
+    const completeAbort = new AbortController();
+    const pending = rejection(router.complete({ model: 'proxy-model', messages: hi, signal: completeAbort.signal }));
+    await proxy.waitForRequests(2);
+    completeAbort.abort();
+    expect((await pending).reason).toBe(FailoverReason.CASCADED_CANCELLATION);
+    expect(getCircuitBreakerRegistry().getStatus('litellm').failures).toBe(5);
   });
 
   test('an open breaker on a direct provider refuses a stream before any request', async () => {

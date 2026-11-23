@@ -492,7 +492,8 @@ export class ProviderRouter {
       return result;
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
-      getCircuitBreakerRegistry().recordFailure('litellm');
+      // Same rule as the primary path: a cancellation or a bad request is not the proxy failing.
+      if (isTransportFailure(error)) getCircuitBreakerRegistry().recordFailure('litellm');
       throw classifyError(error, 'litellm');
     } finally {
       token.release();
@@ -510,7 +511,8 @@ export class ProviderRouter {
       getCircuitBreakerRegistry().recordSuccess('litellm');
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
-      getCircuitBreakerRegistry().recordFailure('litellm');
+      // Same rule as the primary path: a cancellation or a bad request is not the proxy failing.
+      if (isTransportFailure(error)) getCircuitBreakerRegistry().recordFailure('litellm');
       throw classifyError(error, 'litellm');
     } finally {
       token.release();
