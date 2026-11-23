@@ -1,5 +1,5 @@
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, ne, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, gte, inArray, isNotNull, isNull, like, lt, ne, notExists, or, sql } from 'drizzle-orm';
 import { revokeArtifactViewers } from '@/core/artifacts/viewer-access';
 import { getDb } from '../postgres';
 import { workspaces } from '../schema/organizations';
@@ -178,14 +178,29 @@ export class ArtifactsRepository {
         eq(artifacts.id, id),
         isNull(artifacts.deletedAt),
         expected === null ? isNull(artifacts.currentVersionId) : eq(artifacts.currentVersionId, expected),
+        // Never point at a version that is gone (removed as an orphan meanwhile).
+        exists(this.db.select({ one: sql`1` }).from(artifactVersions).where(and(eq(artifactVersions.id, versionId), eq(artifactVersions.artifactId, id)))),
       ))
       .returning({ id: artifacts.id });
     return rows.length > 0;
   }
 
-  /** Remove a version that never became current (a refresh that did not land). */
-  async deleteVersion(id: string): Promise<void> {
-    await this.db.delete(artifactVersions).where(eq(artifactVersions.id, id));
+  /**
+   * Remove a version of `artifactId` that is not its current one (a refresh
+   * that did not land). One statement: a concurrent compare-and-set that made
+   * it current first wins, and the row stays. True when it was removed.
+   */
+  async deleteVersionUnlessCurrent(artifactId: string, id: string): Promise<boolean> {
+    const current = this.db
+      .select({ one: sql`1` })
+      // i2: the version's own artifact, by id, for the refresh that wrote the version
+      .from(artifacts)
+      .where(and(eq(artifacts.id, artifactId), eq(artifacts.currentVersionId, id)));
+    const removed = await this.db
+      .delete(artifactVersions)
+      .where(and(eq(artifactVersions.id, id), eq(artifactVersions.artifactId, artifactId), notExists(current)))
+      .returning({ id: artifactVersions.id });
+    return removed.length > 0;
   }
 
   /**

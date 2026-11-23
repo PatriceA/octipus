@@ -250,7 +250,7 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
   });
   const [draft, setDraft] = useState<string | null>(null);
   const save = useMutation({
-    mutationFn: (body: { instruction?: string; intervalMinutes?: number | null; knowledgeAccess?: boolean }) =>
+    mutationFn: (body: { instruction?: string; intervalMinutes?: number | null }) =>
       api.put<{ refresh: AgentRefreshView | null }>(`/artifacts/${id}/agent-refresh`, body),
     onSuccess: (data) => {
       qc.setQueryData(key, data);
@@ -309,22 +309,6 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
           ))}
         </select>
       </div>
-      <label className="mt-2 flex items-start gap-2 text-xs">
-        <input
-          type="checkbox"
-          checked={r?.knowledgeAccess ?? false}
-          disabled={!r || save.isPending}
-          onChange={(e) => save.mutate({ knowledgeAccess: e.target.checked })}
-          className="mt-0.5"
-        />
-        <span>
-          Use my knowledge base instead of the web.
-          <span className="block text-warning">
-            Anything the agent reads there can end up on the page, visible to everyone who can view this artifact.
-            The page must be self-contained (no scripts, nothing from other sites) and is served with no network access.
-          </span>
-        </span>
-      </label>
       <button
         onClick={() => run.mutate()}
         disabled={!r || r.running || run.isPending || draft !== null}

@@ -122,8 +122,6 @@ async function handleSdk(ctx: HandlerCtx) {
 /** Render the authorized bundle inline under its exact CSP hash. */
 function buildEmbedHtml(input: {
   artifact: Artifact;
-  /** The current version's own network (`none` for a knowledge-base refresh's page). */
-  versionNetwork?: 'default' | 'none';
   templateBody: string;
   css: string;
   token: string;
@@ -132,10 +130,9 @@ function buildEmbedHtml(input: {
   bundle?: { source: string };
 }): { html: string; csp: string } {
   const settings = resolveArtifactSettings();
-  // A closed page (a saved interactive answer, or a version an agent wrote
-  // from the owner's knowledge base) reaches nothing: no live refresh, so no
-  // SDK, gateway or viewer token in it either.
-  const closed = input.artifact.network === 'none' || input.versionNetwork === 'none';
+  // A closed page (a saved interactive answer) reaches nothing: no live
+  // refresh, so no SDK, gateway or viewer token in it either.
+  const closed = input.artifact.network === 'none';
   const cspHashes = settings.sdkSha256 && !closed ? [settings.sdkSha256] : [];
   const script = input.bundle?.source.replace(/<\/script/gi, '<\\/script');
   if (script) cspHashes.push(createHash('sha256').update(script).digest('hex'));
@@ -326,7 +323,7 @@ async function handleEmbed(ctx: HandlerCtx) {
     if (await file.exists()) bundle = { source: await file.text() };
   }
 
-  const page = buildEmbedHtml({ artifact: auth.artifact, versionNetwork: version?.network, templateBody: body, css, token, bundle });
+  const page = buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token, bundle });
   ctx.set.headers['content-type'] = 'text/html; charset=utf-8';
   // Also as a header: `frame-ancestors` is ignored when delivered via <meta>,
   // so `allowedEmbedOrigins` was never actually enforced. The <meta> copy stays

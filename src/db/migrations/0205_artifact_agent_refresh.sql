@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS "artifact_agent_refresh" (
   "owner_user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE cascade,
   "instruction" text NOT NULL,
   "instruction_set_by" text DEFAULT 'owner' NOT NULL,
-  "knowledge_access" boolean DEFAULT false NOT NULL,
   "interval_minutes" integer,
   "schedule_chain" text,
   "next_run_at" timestamp with time zone,
@@ -29,7 +28,3 @@ CREATE TABLE IF NOT EXISTS "artifact_agent_refresh" (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "artifact_agent_refresh_owner_idx" ON "artifact_agent_refresh" ("owner_user_id");
---> statement-breakpoint
--- A version written by a knowledge-base refresh is served with the closed
--- embed policy (nothing loads from the network). Existing versions: default.
-ALTER TABLE "artifact_versions" ADD COLUMN IF NOT EXISTS "network" text DEFAULT 'default' NOT NULL;

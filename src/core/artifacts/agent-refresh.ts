@@ -39,10 +39,10 @@ import type { AgentRefreshView } from '@/shared/artifacts';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { buildAndStoreBundle } from './bundler';
-import { findExternalReference, parseRefreshDeliverable, type RefreshDeliverable, type RefreshRunner, runRefreshAgent } from './agent-refresh-runner';
+import { parseRefreshDeliverable, type RefreshDeliverable, type RefreshRunner, runRefreshAgent } from './agent-refresh-runner';
 import { extractInteractiveScript } from './render';
 import { resolveArtifactRetention } from './settings';
-import { announceVersion } from './version-writer';
+import { announceVersion, REFRESH_VERSION_MARKER } from './version-writer';
 
 export const AGENT_REFRESH_TASK = 'artifact:agent-refresh';
 /** Longest one refresh run may take; the worker is stopped after it. */
@@ -63,8 +63,7 @@ export const BOOT_JITTER_MS = 10 * 60_000;
 export const DEFAULT_IDLE_DAYS = 30;
 /** Versions written by agent refreshes kept per artifact; older ones are deleted (never the current one). */
 export const KEEP_REFRESH_VERSIONS = 5;
-/** `schemaJson` of a version an agent refresh wrote: what pruning recognises. */
-export const REFRESH_VERSION_MARKER = '{"origin":"agent-refresh"}';
+export { REFRESH_VERSION_MARKER };
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -126,7 +125,6 @@ export function toView(row: ArtifactAgentRefresh): AgentRefreshView {
   return {
     instruction: row.instruction,
     instructionSetBy: row.instructionSetBy,
-    knowledgeAccess: row.knowledgeAccess,
     intervalMinutes: row.intervalMinutes,
     nextRunAt: iso(row.nextRunAt),
     scheduleDisabledReason: row.scheduleDisabledReason,
@@ -162,15 +160,21 @@ async function refusalOf(row: ArtifactAgentRefresh, artifact: Artifact, deps: Ag
 
 /**
  * A version a run inserted but never made current or removed (its process
- * died between the two): removed now, under this run's claim.
+ * died between the two, or it is still finishing after its claim was taken
+ * over): removed now, under this run's claim. The row is re-read under the
+ * claim, the pending mark is cleared only while this run holds it, and the
+ * version is deleted only if it is not current — one statement, so a late
+ * run that makes it current first keeps it, and one that tries after finds
+ * it gone (`setCurrentVersionIf` requires the row).
  */
-async function removeOrphanVersion(row: ArtifactAgentRefresh, artifact: Artifact): Promise<void> {
-  if (!row.pendingVersionId) return;
-  if (row.pendingVersionId !== artifact.currentVersionId) {
-    await artifactsRepository.deleteVersion(row.pendingVersionId);
-    coreLogger.info({ artifactId: artifact.id, versionId: row.pendingVersionId }, 'artifact.agent_refresh.orphan_version_removed');
+async function removeOrphanVersion(artifactId: string, startedAt: Date): Promise<void> {
+  const row = await repo.get(artifactId);
+  const pending = row?.pendingVersionId;
+  if (!pending) return;
+  if (!(await repo.setPendingVersion(artifactId, startedAt, null))) return;
+  if (await artifactsRepository.deleteVersionUnlessCurrent(artifactId, pending)) {
+    coreLogger.info({ artifactId, versionId: pending }, 'artifact.agent_refresh.orphan_version_removed');
   }
-  await repo.setPendingVersion(artifact.id, null);
 }
 
 /**
@@ -208,7 +212,7 @@ export async function startAgentRefresh(
 
     let refusal: string | null;
     try {
-      await removeOrphanVersion(row, artifact);
+      await removeOrphanVersion(artifactId, startedAt);
       refusal = await refusalOf(row, artifact, deps);
     } catch (err) {
       const error = `Could not check whether the refresh may run: ${(err as Error).message}`;
@@ -261,25 +265,38 @@ async function runClaimed(
   };
   const timedOut = () => finish({ outcome: 'failed', error: `The refresh took longer than ${Math.round(deps.maxRuntimeMs / 60_000)} minutes and was stopped` });
 
+  // The run is raced against the deadline: a run that never settles (a
+  // provider that hangs, a worker that ignores the abort) still ends this
+  // attempt on time, records it and frees its slot. Whatever it returns
+  // later is dropped.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), deps.maxRuntimeMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(new Error('timeout'));
+      reject(new Error('timeout'));
+    }, deps.maxRuntimeMs);
+  });
   let output: string;
   try {
-    output = await deps.run({
+    const running = deps.run({
       artifactId: artifact.id,
       workspaceId: artifact.workspaceId,
       ownerUserId: row.ownerUserId,
       title: artifact.title,
       instruction: row.instruction,
-      knowledgeAccess: row.knowledgeAccess,
       trigger,
       sessionId: row.sessionId,
       signal: controller.signal,
       onSession: (sessionId) => repo.setSession(artifact.id, sessionId),
     });
+    running.catch((err: unknown) => {
+      if (controller.signal.aborted) coreLogger.debug({ err, artifactId: artifact.id }, 'artifact.agent_refresh.late_run_ended');
+    });
+    output = await Promise.race([running, deadline]);
   } catch (err) {
     if (controller.signal.aborted) return timedOut();
-    const refused = limitKindOf(err) !== null || isConcurrencyLimitError(err);
+    const refused = limitKindOf(err) !== null || isConcurrencyLimitError(err) || (err as Error)?.name === 'RefreshToolsetError';
     return finish({ outcome: refused ? 'refused' : 'failed', error: (err as Error).message || String(err) });
   } finally {
     clearTimeout(timer);
@@ -288,35 +305,16 @@ async function runClaimed(
 
   const parsed = parseRefreshDeliverable(output);
   if (!parsed.ok) return finish({ outcome: 'failed', error: parsed.error });
-  if (row.knowledgeAccess) {
-    // Served with a policy that loads nothing (the version's `network`), so
-    // a page that needs the network would only render broken: say so.
-    // No script either: a sandboxed frame may still navigate itself
-    // (`location = 'https://…?d=…'`), which no CSP directive stops.
-    if (extractInteractiveScript(parsed.page.template).source.trim()) {
-      return finish({
-        outcome: 'failed',
-        error: 'A refresh with knowledge access must produce a page without JavaScript (<script> or on…= handlers): a script could send what the page shows to another site. The current version was kept.',
-      });
-    }
-    const ref = findExternalReference(parsed.page.template, parsed.page.css);
-    if (ref) {
-      return finish({
-        outcome: 'failed',
-        error: `A refresh with knowledge access must produce a self-contained page, and this one loads or links to an external address (${ref}). Its version may load nothing from the network; the current version was kept.`,
-      });
-    }
-  }
 
-  const landed = await landVersion(row, artifact, parsed.page);
+  const landed = await landVersion(row, artifact, parsed.page, startedAt);
   if (!landed.ok) return finish({ outcome: 'failed', error: landed.error });
   if (landed.unchanged) return finish({ outcome: 'success', error: null, versionId: landed.versionId, unchanged: true });
   announceVersion(artifact.id, landed.versionId);
   return finish({ outcome: 'success', error: null, versionId: landed.versionId }, { pageHash: landed.pageHash, versionId: landed.versionId });
 }
 
-function pageHash(template: string, css: string, script: string, network: 'default' | 'none'): string {
-  return createHash('sha256').update(network).update('\0').update(template).update('\0').update(css).update('\0').update(script).digest('hex');
+function pageHash(template: string, css: string, script: string): string {
+  return createHash('sha256').update(template).update('\0').update(css).update('\0').update(script).digest('hex');
 }
 
 /**
@@ -330,33 +328,34 @@ async function landVersion(
   row: ArtifactAgentRefresh,
   artifact: Artifact,
   page: RefreshDeliverable,
+  startedAt: Date,
 ): Promise<{ ok: true; versionId: string; pageHash: string; unchanged: boolean } | { ok: false; error: string }> {
   const extracted = extractInteractiveScript(page.template);
-  // A page from the owner's knowledge base is closed on its version: served
-  // with no network at all, whatever the artifact's setting later becomes.
-  const network = row.knowledgeAccess ? 'none' as const : 'default' as const;
-  const hash = pageHash(extracted.template, page.css, extracted.source, network);
+  const hash = pageHash(extracted.template, page.css, extracted.source);
   if (artifact.currentVersionId && row.lastVersionId === artifact.currentVersionId && row.lastPageHash === hash) {
     return { ok: true, versionId: artifact.currentVersionId, pageHash: hash, unchanged: true };
   }
 
   // Named on the row before the insert, so a crash after it leaves a trace
   // the next run cleans up (removeOrphanVersion).
+  // Only while this run still holds its claim: one presumed dead and taken
+  // over writes nothing.
   const versionId = randomUUID();
-  await repo.setPendingVersion(artifact.id, versionId);
+  if (!(await repo.setPendingVersion(artifact.id, startedAt, versionId))) {
+    return { ok: false, error: 'A newer refresh took over this one\'s claim; nothing was written' };
+  }
   await artifactsRepository.createVersion({
     id: versionId,
     artifactId: artifact.id,
     htmlTemplate: extracted.template,
     css: page.css,
     schemaJson: REFRESH_VERSION_MARKER,
-    network,
-    changeSummary: network === 'none' ? 'agent refresh (knowledge, offline)' : 'agent refresh',
+    changeSummary: 'agent refresh',
     createdByUserId: row.ownerUserId,
   });
   const discard = async (error: string) => {
-    await artifactsRepository.deleteVersion(versionId);
-    await repo.setPendingVersion(artifact.id, null);
+    await artifactsRepository.deleteVersionUnlessCurrent(artifact.id, versionId);
+    await repo.setPendingVersion(artifact.id, startedAt, null);
     return { ok: false as const, error };
   };
   if (extracted.source.trim()) {
@@ -369,7 +368,7 @@ async function landVersion(
   if (!(await artifactsRepository.setCurrentVersionIf(artifact.id, artifact.currentVersionId, versionId))) {
     return discard('The artifact was edited, restored or deleted while the refresh ran; its current version was kept');
   }
-  await repo.setPendingVersion(artifact.id, null);
+  await repo.setPendingVersion(artifact.id, startedAt, null);
   const pruned = await artifactsRepository.pruneMarkedVersions(artifact.id, REFRESH_VERSION_MARKER, KEEP_REFRESH_VERSIONS);
   if (pruned > 0) coreLogger.debug({ artifactId: artifact.id, pruned }, 'artifact.agent_refresh.versions_pruned');
   return { ok: true, versionId, pageHash: hash, unchanged: false };

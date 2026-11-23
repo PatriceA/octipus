@@ -196,7 +196,7 @@ rather than bound to a feed.
 **refresh instruction** stored with the artifact. The agent that creates the
 page may store one (`create_live_artifact({ …, refresh_instruction })`); it is
 shown as **set by agent — review before enabling** until the owner saves it.
-That tool cannot set a schedule or knowledge access. The owner sees and edits
+That tool cannot set a schedule. The owner sees and edits
 the instruction on the artifact page (**Agent refresh**) or with
 `PUT /api/artifacts/:id/agent-refresh`. The run is an unattended `research`
 worker of the owner, in the artifact's workspace; anything that would ask for
@@ -205,51 +205,31 @@ at most one `css` block), each fence on a line of its own; that is the new
 page. A reply with no html block, two of them, or a fence left open is a
 failed refresh.
 
-**Tools: web or knowledge, never both.**
-
-| Mode | Tools | Default |
-|---|---|---|
-| Web | `websearch__search`, `websearch__fetch_page` | yes |
-| Knowledge (owner opt-in per artifact) | `knowledge__search_knowledge`, `knowledge__read_knowledge` | no |
-
-No run gets files, commands, messaging or any artifact tool.
+**Tools: web search and page fetch, nothing else.** A refresh agent has
+exactly two tools, `websearch__search` and `websearch__fetch_page`: never the
+owner's knowledge base, notes, memory, files, commands, messaging, MCP
+servers or any artifact tool. The spawner narrows a worker's tools to those
+it is given, but falls back to the role's whole set when none of them is
+available, so the tool set is checked before the worker is spawned: if this
+server would give the agent anything other than those two (web search
+turned off or unavailable, say), the refresh is refused with the reason and
+nothing runs.
 
 **The injection boundary, as it really is.** The run's task is a fixed frame
 plus the stored instruction: never the current page, its data, or anything a
-viewer sent or did. What the agent reads with its tools is not trusted, and
-the boundary is that untrusted web content and private data never meet in
-one run:
-
-- A **web** run reads pages anyone can write, so a page can steer it. It has
-  nothing private to leak (no knowledge base, no files), and the worst it can
-  do is put bad or hostile content on the page. That page renders in the
-  sandboxed embed like any other version (no access to the app, its cookies
-  or the API), but it may load `https:` images and, like every artifact,
-  can show anything to whoever views it.
-- A **knowledge** run reads the owner's private knowledge and has no web
-  tool, so no fetched page can instruct it and it has no tool that sends data
-  anywhere. Its page cannot send anything either: it must be self-contained
-  (no `<script>` or `on…=` handler, and no absolute external URL in a
-  `src`/`srcset`/`href`/`action`/`poster`/`content` attribute, a CSS `url()`
-  or an `@import`) or the refresh fails with the reason and the current
-  version stays; and the version it writes is marked closed
-  (`artifact_versions.network = 'none'`) and served with the closed embed
-  policy in every hosting path (path prefix, artifact host, header and
-  `<meta>` copy): `connect-src 'none'`, `img-src data: blob:`, no `https:`
-  source anywhere, and no SDK, gateway or viewer token in the page. The mark
-  is on the version: switching knowledge access off later does not loosen a
-  page already written, a restore of that version stays closed, and a hand
-  edit or a web-mode refresh writes a normal version. **What it reads may
-  still be shown on the page**, to anyone who can view the artifact
-  (everyone, for a public or share-linked one): turn it on only for
-  artifacts whose viewers may see that knowledge. The web app shows this
-  warning next to the switch.
+viewer sent or did. The agent then reads pages anyone can write, so a page can
+steer it. That is why it holds nothing private: there is nothing of the
+owner's for it to leak, and the worst a hostile page can do is put bad or
+hostile content on the artifact. That content renders in the sandboxed embed
+like any other version (no access to the app, its cookies or the API), and,
+like every artifact page, it can show anything to whoever views it and load
+`https:` images.
 
 **Who can trigger it.** Only the owner (the artifact's creator):
 
 | Who | Can |
 |---|---|
-| Owner | edit the instruction, set or clear the schedule, switch knowledge access, **Refresh with agent** (`POST /api/artifacts/:id/agent-refresh/run`) |
+| Owner | edit the instruction, set or clear the schedule, **Refresh with agent** (`POST /api/artifacts/:id/agent-refresh/run`) |
 | Workspace member who can view or edit the artifact | nothing: `403`, `code: "not_owner"` (a refresh spends the owner's budget) |
 | Anyone else, signed in | `404`, as for every artifact route |
 | Embed viewer (viewer token, share link, public page) | nothing: no `/api` route accepts a viewer token, and the hosted page routes have no refresh |
@@ -264,17 +244,18 @@ refused there with `code: "refresh_unavailable"`.
 refresh before any agent starts; budgets and quotas are checked again at the
 spawn and before each model call, as for every agent.
 
-**Atomic update.** A new version (change summary `agent refresh`, or
-`agent refresh (knowledge, offline)` for a closed one) becomes
+**Atomic update.** A new version (change summary `agent refresh`) becomes
 current only when the run succeeded, returned a non-empty page under 512,000
 characters, its script built, and the artifact still shows the version the run
 started from. Otherwise the current version stays, the unused version row is
 removed, and the attempt is recorded as failed: an edit, restore or delete
 while the run was going wins over the refresh. A version a crashed run left
-behind is removed by the next run. Open viewers reload on success. A page
-identical to the one the last refresh made current writes no version; only
-the 5 newest versions written by refreshes are kept (never the current one,
-never a version a person saved). A refresh does not count as activity for
+behind is removed by the next run. A run whose claim another run took over
+writes nothing further, and the artifact never points at a version that was
+removed. Open viewers reload on success. A page identical to the one the last
+refresh made current writes no version; only the 5 newest versions written by
+refreshes are kept (never the current one, never a version a person saved or
+restored — a restore of a refresh's version is the owner's). A refresh does not count as activity for
 [retention](#cleanup-and-retention): it does not touch the artifact's edit
 time.
 
@@ -307,7 +288,10 @@ spread over 10 minutes.
 - At most 3 agent refreshes run at once per server process: a manual request
   beyond that is `429`, `code: "refresh_capacity"`; a scheduled one tries
   again 5–10 minutes later, without counting as a failure.
-- 10 minutes per run; the worker is then stopped and the attempt fails.
+- 10 minutes per run. The attempt ends then even if the run never returns:
+  the worker is stopped, the failure is recorded, the claim and the
+  concurrency slot are released, and whatever the run returns later is
+  dropped.
 - A scheduled attempt that fails or is refused backs off: the next one comes
   after the interval × 2 per failure in a row, capped at a day — but never
   sooner than the interval itself, so a daily or weekly schedule keeps its
@@ -323,6 +307,17 @@ spread over 10 minutes.
   for a deletion), or when the owner's account is disabled. While the
   `artifacts-refresh` job of the `artifacts` module is off, scheduled runs are
   skipped and resume when it is back.
+
+**Not built.**
+
+- **Refresh from the knowledge base.** A refresh agent never reads the
+  owner's knowledge base, notes or files. Knowledge holds untrusted text too
+  (auto-indexed research, ingested documents), so such a run is injectable,
+  and the page it writes could send what it read to another site — by
+  navigating its own frame, which no content policy stops — so this cannot be
+  closed without sanitising the generated HTML.
+- **Viewer-triggered refresh.** Viewers and embed tokens cannot start a run.
+- **Refresh in shared spaces.**
 
 Tables: `artifact_agent_refresh` (migration `0205_artifact_agent_refresh.sql`),
 one row per artifact, removed with it. Code: `src/core/artifacts/agent-refresh.ts`

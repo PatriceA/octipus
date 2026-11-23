@@ -15,21 +15,20 @@ labels reflect blast radius, not contract guarantees.
   clicks **Refresh with agent**, and may set a schedule (hourly at most often;
   off by default). The run is the owner's: an unattended `research` worker
   on the owner's spend budget and quotas, given only the stored instruction,
-  with web search by default or, as a per-artifact opt-in with a warning, the
-  owner's knowledge base instead — never both in one run. A knowledge-base
-  page must be self-contained (no script, no external URL) and its version is
-  served with a policy that loads nothing from the network. The new version
-  replaces the page only when the run returns exactly one valid page and
-  nobody edited it meanwhile; otherwise the current version stays and the
-  failure is shown. Identical pages write no version, and only the 5 newest
-  refresh versions are kept. One refresh per artifact at a time (`409`), 3 per
-  server process (`429`), 10 minutes per run; a schedule that fails or is
-  refused 5 times in a row turns itself off and notifies the owner, and one
-  nobody opens pauses after the retention window (30 days without one). A
-  refresh does not extend retention. Only the owner can trigger it: workspace
-  members get `403`, viewers and embed tokens have no route to it. Not
-  available in shared spaces. Migration `0205_artifact_agent_refresh` adds the
-  `artifact_agent_refresh` table.
+  with exactly two tools, web search and page fetch — never the owner's
+  knowledge, files or other tools; a server that would give it anything else
+  refuses the run. The new version replaces the page only when the run returns
+  exactly one valid page and nobody edited it meanwhile; otherwise the current
+  version stays and the failure is shown. Identical pages write no version,
+  and only the 5 newest refresh versions are kept. One refresh per artifact at
+  a time (`409`), 3 per server process (`429`), 10 minutes per run even if it
+  hangs; a schedule that fails or is refused 5 times in a row turns itself off
+  and notifies the owner, and one nobody opens pauses after the retention
+  window (30 days without one). A refresh does not extend retention. Only the
+  owner can trigger it: workspace members get `403`, viewers and embed tokens
+  have no route to it. Not available in shared spaces; refreshing from the
+  knowledge base is not built. Migration `0205_artifact_agent_refresh` adds
+  the `artifact_agent_refresh` table.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

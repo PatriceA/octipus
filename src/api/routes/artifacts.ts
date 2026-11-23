@@ -541,12 +541,9 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         await artifactRefreshRepository.setInstruction(a.id, user.id, instruction, 'owner');
       }
       const existing = await artifactRefreshRepository.get(a.id);
-      if (!existing && ((interval !== undefined && interval !== null) || body.knowledgeAccess === true)) {
+      if (!existing && interval !== undefined && interval !== null) {
         set.status = 400;
         return { error: 'set a refresh instruction first' };
-      }
-      if (existing && body.knowledgeAccess !== undefined) {
-        await artifactRefreshRepository.setKnowledgeAccess(a.id, body.knowledgeAccess);
       }
       if (existing && interval !== undefined) await setAgentRefreshSchedule(a.id, interval);
       const row = await artifactRefreshRepository.get(a.id);
@@ -556,7 +553,6 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       body: t.Object({
         instruction: t.Optional(t.String()),
         intervalMinutes: t.Optional(t.Union([t.Number(), t.Null()])),
-        knowledgeAccess: t.Optional(t.Boolean()),
       }),
     },
   )

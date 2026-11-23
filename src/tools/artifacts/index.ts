@@ -282,8 +282,7 @@ export class ArtifactsTool extends BaseTool {
         if (refreshInstruction) {
           // Stored for the owner (this agent's user), marked as the agent's: the
           // owner reviews it on the artifact page and alone decides when, or on
-          // what schedule, it runs, and whether it may read their knowledge.
-          // This tool cannot set a schedule or knowledge access.
+          // what schedule, it runs. This tool cannot set a schedule.
           await artifactRefreshRepository.setInstruction(a.id, context.userId, refreshInstruction, 'agent');
         }
 

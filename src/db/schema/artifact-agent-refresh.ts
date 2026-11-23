@@ -1,4 +1,4 @@
-import { boolean, index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { artifacts } from './artifacts';
 import { users } from './users';
 
@@ -26,12 +26,6 @@ export const artifactAgentRefresh = pgTable(
     instruction: text('instruction').notNull(),
     /** Who wrote the instruction last: `agent` (create_live_artifact — the owner should review it) or `owner`. */
     instructionSetBy: text('instruction_set_by').$type<'agent' | 'owner'>().notNull().default('owner'),
-    /**
-     * Owner opt-in: the run searches the owner's knowledge base INSTEAD of
-     * the web. Never both in one run, so fetched web content and private
-     * knowledge never meet (docs/ARTIFACTS.md#agent-refresh).
-     */
-    knowledgeAccess: boolean('knowledge_access').notNull().default(false),
     /** Minutes between scheduled runs; null = manual refresh only. */
     intervalMinutes: integer('interval_minutes'),
     scheduleChain: text('schedule_chain'),

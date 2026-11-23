@@ -20,6 +20,13 @@ import { publishArtifactVersionUpdated } from './events';
 import { artifactLifecycleBus } from './lifecycle-bus';
 import { extractInteractiveScript } from './render';
 
+/**
+ * `schemaJson` of a version an agent refresh wrote (src/core/artifacts/
+ * agent-refresh.ts): what its pruning recognises. Nothing a person saves
+ * carries it — a restore of such a version does not.
+ */
+export const REFRESH_VERSION_MARKER = '{"origin":"agent-refresh"}';
+
 /** Does this template carry `data-octi-h` markers, i.e. bindings a bundle owns? */
 function hasBoundHandlers(template: string): boolean {
   return /\sdata-octi-h\s*=/.test(template);
@@ -99,9 +106,8 @@ export async function restoreVersion(opts: {
     htmlTemplate: opts.target.htmlTemplate,
     css: opts.target.css,
     jsBundleSha256: opts.target.jsBundleSha256,
-    schemaJson: opts.target.schemaJson,
-    // A closed page stays closed when restored: its content was made for it.
-    network: opts.target.network,
+    // A restore is the owner's save: never a refresh's, so never pruned as one.
+    schemaJson: opts.target.schemaJson === REFRESH_VERSION_MARKER ? '{}' : opts.target.schemaJson,
     changeSummary: `restore from ${opts.target.id}`,
     createdByUserId: opts.userId,
   });

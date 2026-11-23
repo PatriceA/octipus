@@ -45,12 +45,6 @@ export interface AgentRefreshView {
   instruction: string;
   /** `agent`: written by the agent that created the page — the owner should review it before running it. */
   instructionSetBy: 'agent' | 'owner';
-  /**
-   * The run searches the owner's knowledge base instead of the web (never
-   * both). Whatever it reads can end up on the page, visible to anyone who
-   * can view the artifact.
-   */
-  knowledgeAccess: boolean;
   /** Minutes between scheduled runs; null = manual only. */
   intervalMinutes: number | null;
   nextRunAt: string | null;

@@ -32,10 +32,6 @@ export class ArtifactRefreshRepository {
     return row;
   }
 
-  async setKnowledgeAccess(artifactId: string, on: boolean): Promise<void> {
-    await this.db.update(artifactAgentRefresh).set({ knowledgeAccess: on, updatedAt: new Date() }).where(eq(artifactAgentRefresh.artifactId, artifactId));
-  }
-
   /** Turn the schedule on under `chain` (clearing a server stop and the failure streak), or off with `interval: null`. */
   async setSchedule(artifactId: string, interval: number | null, chain: string | null, nextRunAt: Date | null): Promise<void> {
     const now = new Date();
@@ -108,9 +104,21 @@ export class ArtifactRefreshRepository {
     await this.db.update(artifactAgentRefresh).set({ sessionId }).where(eq(artifactAgentRefresh.artifactId, artifactId));
   }
 
-  /** Name the version a run is about to insert (before the insert), or clear it. */
-  async setPendingVersion(artifactId: string, versionId: string | null): Promise<void> {
-    await this.db.update(artifactAgentRefresh).set({ pendingVersionId: versionId }).where(eq(artifactAgentRefresh.artifactId, artifactId));
+  /**
+   * Name the version a run is about to insert (before the insert), or clear
+   * it — only while the run's claim (`startedAt`) is still the row's. False
+   * when another run took the claim over.
+   */
+  async setPendingVersion(artifactId: string, startedAt: Date, versionId: string | null): Promise<boolean> {
+    const rows = await this.db
+      .update(artifactAgentRefresh)
+      .set({ pendingVersionId: versionId })
+      .where(and(
+        eq(artifactAgentRefresh.artifactId, artifactId),
+        sql`date_trunc('milliseconds', ${artifactAgentRefresh.runStartedAt}) = ${startedAt.toISOString()}::timestamptz`,
+      ))
+      .returning({ id: artifactAgentRefresh.artifactId });
+    return rows.length > 0;
   }
 
   /**
