@@ -42,7 +42,9 @@ labels reflect blast radius, not contract guarantees.
     replaced or duplicated by a default; an embed always carries only its own
     sandboxing policy.
   - The debug request log no longer records share-link, viewer-token or
-    OAuth-code query values.
+    OAuth-code query values, nor the token segment of public media, invite
+    and form links; the bundled web server's error log omits the query and
+    those tokens too.
   - Fixed: templates are sanitized again after `{{…}}` expansion, and the
     built artifact script is no longer served as a separate file
     (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).

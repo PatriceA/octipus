@@ -205,9 +205,19 @@ function notModified(req, etag, mtimeMs) {
   return Number.isFinite(ifModifiedSince) && Math.floor(mtimeMs / 1000) * 1000 <= ifModifiedSince;
 }
 
+/**
+ * The request path for a log line: no query string (share links and viewer
+ * tokens travel there) and no capability token in the path (the backend's
+ * `redactUrlForLog` list, src/utils/log-redact.ts).
+ */
+function pathForLog(url) {
+  const path = (url ?? '').split('?')[0];
+  return path.replace(/^(\/api\/(?:media\/public|invites|forms)\/)[^/]+/, '$1[REDACTED]');
+}
+
 const server = createServer((req, res) => {
   handle(req, res).catch((err) => {
-    process.stderr.write(`web server: ${req.method} ${req.url} failed: ${err?.stack ?? err}\n`);
+    process.stderr.write(`web server: ${req.method} ${pathForLog(req.url)} failed: ${err?.stack ?? err}\n`);
     if (res.headersSent) res.destroy();
     else {
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });

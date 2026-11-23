@@ -110,3 +110,18 @@ describe('redactUrlForLog', () => {
     expect(redactUrlForLog('not a url')).toBe('not a url');
   });
 });
+
+describe('redactUrlForLog on capability paths', () => {
+  test('the token segment of a media link, an invite and a form is redacted', () => {
+    for (const [raw, kept] of [
+      ['http://h/api/media/public/AbCdEfGhIjKlMnOpQrStUvWxYz012345', '/api/media/public/'],
+      ['http://h/api/invites/inv-secret-1/accept', '/accept'],
+      ['http://h/api/forms/form-secret-2?x=1', 'x=1'],
+    ] as const) {
+      const out = redactUrlForLog(raw);
+      expect(out).not.toMatch(/AbCdEf|inv-secret-1|form-secret-2/);
+      expect(out).toContain(kept);
+    }
+    expect(redactUrlForLog('http://h/api/invites')).toBe('http://h/api/invites');
+  });
+});

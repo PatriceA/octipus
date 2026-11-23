@@ -93,9 +93,18 @@ export function redactLogObject(obj: Record<string, unknown>): Record<string, un
 const SENSITIVE_QUERY_PARAM = /^(t|vt|code|sig|signature)$/i;
 
 /**
+ * Routes whose path segment after the prefix is the credential itself: a
+ * public media link, an invite and a public form. (`web/serve.mjs` keeps its
+ * own copy of this list: it is plain JavaScript and cannot import this.)
+ */
+const PATH_TOKEN_RE = /^(\/api\/(?:media\/public|invites|forms)\/)[^/]+/;
+
+/**
  * A URL for a log line, with the value of every credential-bearing query
  * parameter replaced by `[REDACTED]` (names matching the key pattern, plus
- * `SENSITIVE_QUERY_PARAM`). The path and the other parameters are kept. A
+ * `SENSITIVE_QUERY_PARAM`), and the token segment of a capability path
+ * (`PATH_TOKEN_RE`) too. The rest of the path and the other parameters are
+ * kept. A
  * string that is not a URL is returned as is.
  */
 export function redactUrlForLog(raw: string): string {
@@ -106,6 +115,10 @@ export function redactUrlForLog(raw: string): string {
     return raw;
   }
   let changed = false;
+  if (PATH_TOKEN_RE.test(url.pathname)) {
+    url.pathname = url.pathname.replace(PATH_TOKEN_RE, `$1${REDACTED}`);
+    changed = true;
+  }
   for (const key of [...new Set(url.searchParams.keys())]) {
     if (SENSITIVE_QUERY_PARAM.test(key) || (!ALLOW_KEY.test(key) && SENSITIVE_KEY.test(key))) {
       url.searchParams.set(key, REDACTED);
