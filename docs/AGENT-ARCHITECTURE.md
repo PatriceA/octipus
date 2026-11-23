@@ -234,20 +234,37 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   is asked, in a run that has at least one `producesArtifacts` stage. Inside a
   plan loop they run on the last plan item only, the same rule as a stage's
   `verifyCommand`, because a project-wide command fails for items nobody has
-  written yet. They do not run on an auditor-only re-run (verdict repair or
-  coverage re-audit), since the work has not changed. A run with no auditor
-  stage runs them once at the end, before it reports completed.
-- **Which hooks apply.** Hooks whose `root` contains the folder the stage's
-  commands run in (the dev-mode project, else the session workspace),
-  resolved from the session. A run whose folder no hook covers behaves as if
-  no hooks existed: no rows, no extra prompt text.
+  written yet. A passing result stays current until a stage that is not
+  `readOnly` runs, so a verdict repair, a coverage re-audit or a contract
+  retry of a read-only auditor does not run them again; a non-read-only
+  auditor (the Bug Fix recipe's `Verify Fix`) makes them run again.
+- **Before `completed`, always.** When the walk is about to report
+  `completed` and the work as it stands has no passing result (the auditor
+  was skipped by a person, the final plan item was skipped, a stage changed
+  files after the auditor, or the run has no auditor), the hooks run then. A
+  failure there ends the run `failed`; there is no stage left to repair
+  through.
+- **Which hooks apply, and where they run.** A hook applies when its `root`
+  is the folder the stage's commands run in (the dev-mode project, else the
+  session workspace) or a folder inside it, and it runs in its `root`. Both
+  sides are compared after `realpath`, so a symlinked root or a different
+  letter case on a case-insensitive filesystem still matches. A hook whose
+  root lies *above* that folder is not run (it would run where the stage may
+  not) and pauses the run with that explanation. When hooks are configured
+  but none applies, or the run declares no `producesArtifacts` stage, the run
+  summary says that no hook ran, a warning is logged, and a run event is
+  recorded.
+- **The auditor's `runsCommands`.** When the hooks passed for the work being
+  judged, the auditor is told not to re-run them, and its `runsCommands`
+  declaration is lifted for that visit, as for a `verifyCommand`.
 - **How they run.** Through the `command_exit_zero` gate, the same path as
   `verifyCommand`: argv only (shell syntax and builtins are refused), the shell
-  tool's content policy, the user's `shell.execute` permission, the process
-  sandbox (`security.shellSandbox`), a workspace-resolved cwd, the hook's
-  timeout (default 120 s, at most 600 s) and the last ~2000 characters of
-  output. The command is the configured string, verbatim; nothing a stage
-  wrote is substituted into it.
+  tool's content policy, the session user's `shell.execute` permission, the
+  process sandbox (`security.shellSandbox`) and directory checks, the hook's
+  timeout (default 120 s, at most 600 s; 900 s for all hooks of one visit) and
+  the last ~2000 characters of output. The command is the configured string,
+  verbatim; nothing a stage wrote is substituted into it. Output handed back
+  to a stage is wrapped in `<hook-output>` and labelled as data.
 - **What is stored.** One `verification_evidence` row per hook, kind
   `pre_verify`, with the auditor's `checkScope` and `detail`: `hook`,
   `command`, `exitCode`, `durationMs`, `timedOut`, `outputExcerpt`,
@@ -260,11 +277,12 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
 | Every hook exited 0 in time | The auditor, with the results stated as ground truth | — |
 | A hook ran and failed (non-zero exit or timeout) | The stage the auditor's `qa_fail` edge points at, with the failing output; the auditor is not asked | Its own bound, 2 per plan item (`EVIDENCE_REPAIR_LIMIT`) |
 | Still failing with no repair left, or no `qa_fail` edge | The run stops as `failed`, with the hook results in its summary | — |
-| A hook could not run (refused by permission or policy, misconfigured, no space scope) | The run pauses as environment-blocked; resume once the operator fixed it | — |
+| A hook could not run (refused by permission or policy, misconfigured, root above the stage folder, no space scope) | The run pauses as environment-blocked, at the auditor or at the end-of-run check; resume once the operator fixed it | — |
 
 A QA pass cannot override failing evidence: while a hook fails the auditor is
-not asked, and an exhausted repair budget ends the run failed rather than
-escalating to a person who could wave it through.
+not asked, an exhausted repair budget ends the run failed rather than
+escalating to a person who could wave it through, and a person skipping the
+auditor still meets the end-of-run check.
 
 **Best attempt on exhaustion.** Each settled QA verdict for an item is kept, with
 the workspace HEAD it was judged at. When retries run out and an earlier attempt

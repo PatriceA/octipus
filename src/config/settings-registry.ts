@@ -518,7 +518,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'json',
     defaultValue: [],
     description:
-      'Project evidence hooks: [{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]. A pipeline whose stages work in root (or below it) runs each command, argv only and under the shell tool\'s permission and sandbox, before it accepts a deliverable. A failing hook sends the work back for repair; still failing after the repair limit, the run fails.',
+      'Project evidence hooks: [{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]. A hook applies when root is the folder a pipeline\'s stages run commands in or a folder inside it, and runs in root, argv only and under the shell tool\'s permission and sandbox, before the pipeline accepts a deliverable. A failing hook sends the work back for repair; still failing after the repair limit, the run fails.',
     isSecret: false,
   },
   {

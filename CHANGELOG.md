@@ -10,17 +10,20 @@ labels reflect blast radius, not contract guarantees.
 - **Project evidence hooks for pipelines** ([docs](docs/AGENT-ARCHITECTURE.md#qa-retry-loop)).
   New setting `agent.evidenceHooks` (default `[]`, nothing changes until set):
   `[{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]`.
-  A pipeline whose stages work in `root` runs each command before its QA stage
-  is asked (on the last plan item in a loop; at the end of a run with no QA
-  stage). Commands run like a stage `verifyCommand`: argv only, shell tool
+  A hook applies when `root` is the folder the pipeline's stages run commands
+  in or a folder inside it, and runs in `root`. The pipeline runs the hooks
+  before its QA stage is asked (on the last plan item in a loop), and again
+  before it reports `completed` whenever the work changed since, the QA stage
+  was skipped, or there is none. When hooks are configured but none applies,
+  the run summary says so. Commands run like a stage `verifyCommand`: argv only, shell tool
   policy, the user's `shell.execute` permission, the shell sandbox, a timeout.
   Each result is a `pre_verify` row in `verification_evidence` (command, exit
   code, duration, timeout flag, last ~2000 characters of output), shown by
   `GET /api/verification/:sessionId` and the agent page. A failing hook sends
   the work back to the implementing stage with the output, at most 2 times per
   plan item; still failing, the run ends `failed`, and a QA pass cannot
-  override it. A hook that cannot run (refused, misconfigured) pauses the run
-  as environment-blocked.
+  override it. A hook that cannot run (refused, misconfigured, or rooted above
+  the stage folder) pauses the run as environment-blocked.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

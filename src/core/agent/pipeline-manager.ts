@@ -78,7 +78,7 @@ import {
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
-import { EVIDENCE_REPAIR_LIMIT, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
+import { configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -1292,7 +1292,18 @@ export class PipelineManager {
     // nothing for them to judge, and an auditor stage is where a deliverable
     // is accepted (`runStageEvidence`).
     const graphProduces = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].producesArtifacts === true);
-    const graphAudits = graph.nodes.some((n) => n.templateIndex >= 0 && built[n.templateIndex].stageType === 'qa_validation');
+    /**
+     * Whether the work as it stands now has passing evidence. `passed` holds
+     * only while no stage that may change files has run since the hooks last
+     * passed; `none` means hooks are configured but none applies to this
+     * run's folder, which cannot change mid-run. Completion requires `passed`
+     * (or `none`, said in the summary), so no route to `completed` skips them.
+     */
+    let evidenceState: 'stale' | 'passed' | 'none' = 'stale';
+    let lastEvidence: EvidenceHookResult[] = [];
+    let evidenceNote: string | undefined;
+    /** The last node the walk visited, for the end-of-run evidence check. */
+    let lastNode: PipelineNodeRow | undefined;
 
     let previousOutput = '';
     // The last stage's reply with its ```handoff fence still in it. Kept beside
@@ -1302,7 +1313,8 @@ export class PipelineManager {
     // its handoff from prose, which is the old behaviour and no worse.
     let previousRaw = '';
     /** Set when the walk left a node that had edges but could take none. */
-    let stoppedShort: { node: string; outcome: NodeOutcome | 'evidence_failed'; detail?: string } | null = null;
+    /** `repairs` is set when evidence failed at an auditor after its repair budget ran out. */
+    let stoppedShort: { node: string; outcome: NodeOutcome | 'evidence_failed'; detail?: string; repairs?: number } | null = null;
     /**
      * A QA failure that burned its retries and could not be escalated.
      *
@@ -1538,6 +1550,7 @@ export class PipelineManager {
 
       const gnode = byKey.get(cursor);
       const node = nodes.get(cursor);
+      if (node) lastNode = node;
       if (!gnode || !node) {
         await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Unknown node '${cursor}'.` });
         return { pipelineId: pipeline.id, result: `Pipeline failed: unknown node '${cursor}'.` };
@@ -1759,12 +1772,16 @@ export class PipelineManager {
         // auditor-only re-run (`pendingRejection`): nothing changed since the
         // hooks last ran against this work.
         const evidenceKey = `${currentItem?.id ?? 'run'}:${cursor}`;
-        if (isQa && !pendingRejection && hooksDeclared && graphProduces && lastItem) {
+        if (isQa && evidenceState === 'stale' && hooksDeclared && graphProduces && lastItem) {
           const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: b.role, hostServices: b.hostServices,
             checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
             repair: evidenceRepairs.get(evidenceKey) ?? 0 });
           if (evidence.stopped) return evidence.stopped;
           if (evidence.blocked) return this.pauseForEnvironment(pipeline, node, evidence.blocked, attemptId, currentItem?.id ?? null);
+          if (evidence.unmatched) {
+            evidenceState = 'none';
+            evidenceNote = evidence.unmatched;
+          }
           if (evidence.failed) {
             // The deliverable is not accepted, whatever an auditor would say
             // about it: the auditor is not asked. The failure goes back to
@@ -1777,10 +1794,14 @@ export class PipelineManager {
             if (!retryEdge || used >= EVIDENCE_REPAIR_LIMIT) {
               coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, repairs: used, limit: EVIDENCE_REPAIR_LIMIT },
                 'Evidence hooks still fail and no repair is left — stopping the pipeline');
-              stoppedShort = { node: node.name, outcome: 'evidence_failed', detail };
+              stoppedShort = { node: node.name, outcome: 'evidence_failed', detail, repairs: used };
               break;
             }
             evidenceRepairs.set(evidenceKey, used + 1);
+            // Whatever this auditor was in the middle of (a verdict repair, a
+            // re-audit) is moot: the work is going back to be changed.
+            pendingRejection = undefined;
+            rejectedReport = undefined;
             pendingFeedback.set(retryEdge.to, evidenceRepairFeedback(evidence.results, used + 1));
             recordRunEvent({ runId: sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, parentSubjectId: retryEdge.to, event: 'node_failed',
               payload: { pipelineId: pipeline.id, itemId: currentItem?.id ?? null, attemptId, reason: 'evidence_failed', evidenceRepair: used + 1, limit: EVIDENCE_REPAIR_LIMIT } });
@@ -1789,8 +1810,15 @@ export class PipelineManager {
             cursor = retryEdge.to;
             continue;
           }
-          if (evidence.results.length) input = `${evidenceGroundTruth(evidence.results)}\n\n---\n\n${input}`;
+          if (evidence.results.length) {
+            evidenceState = 'passed';
+            lastEvidence = evidence.results;
+          }
         }
+        // Passing hooks for the work as it stands are the ground truth, on a
+        // re-audit or contract retry of the same work too, where they are
+        // not run again.
+        if (isQa && evidenceState === 'passed' && !correcting) input = `${evidenceGroundTruth(lastEvidence)}\n\n---\n\n${input}`;
 
         // Run the command that DEFINES success, once, before the auditor turn.
         //
@@ -1804,7 +1832,10 @@ export class PipelineManager {
         // The result is stated whether it passed or failed: a failing verify
         // command is exactly the evidence the auditor needs to write an honest
         // FAIL, and hiding it would leave it guessing again.
-        let frameworkVerified = false;
+        // The hooks executed what this auditor would have executed, and it was
+        // told not to re-run them: holding it to `runsCommands` would fail it
+        // for obeying, exactly as with a `verifyCommand` below.
+        let frameworkVerified = isQa && evidenceState === 'passed';
         if (isQa && !correcting && stageTemplate.verifyCommand) {
           const command = expandPromptTemplate(stageTemplate.verifyCommand, {
             description,
@@ -1909,6 +1940,9 @@ export class PipelineManager {
           checkpoint: { seq: checkpoint.seq, state: checkpoint.state as Record<string, unknown> },
           partial,
         });
+        // A stage that may change files makes earlier evidence stale. A
+        // read-only one cannot (the snapshot gate enforces it).
+        if (!b.readOnly && evidenceState === 'passed') evidenceState = 'stale';
         if (stepResult.contractFailure) {
           contractRetries.set(retryKey, retryCount + 1);
           contractFeedback = stepResult.contractFailure;
@@ -2058,17 +2092,6 @@ export class PipelineManager {
         stoppedShort =
           unescalatedQaFailure ??
           (routeExhausted(graph, cursor, outcome, traversals) ? { node: node.name, outcome } : null);
-        // A run with no auditor stage accepts its deliverable here, at the
-        // end, so this is where its evidence hooks run. There is no route back
-        // to repair through, so a failure ends the run failed.
-        if (!stoppedShort && graphProduces && !graphAudits) {
-          const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: node.role,
-            hostServices: gnode.templateIndex >= 0 ? stageHostServices(built[gnode.templateIndex], pipeline) : false, checkScope: 'run:final', repair: 0 });
-          if (evidence.stopped) return evidence.stopped;
-          if (evidence.blocked || evidence.failed) {
-            stoppedShort = { node: node.name, outcome: 'evidence_failed', detail: evidence.blocked ?? evidenceSummary(evidence.results) };
-          }
-        }
         break;
       }
 
@@ -2117,16 +2140,39 @@ export class PipelineManager {
       cursor = edge.to;
     }
 
+    // The backstop. Every route to `completed` passes here: a skipped auditor,
+    // a skipped final plan item, a run with no auditor at all, or a stage that
+    // changed files after the auditor last ran the hooks. If hooks apply and
+    // the work as it stands has no passing result, they run now, and a
+    // failure blocks completion. There is no stage left to repair through.
+    if (!stoppedShort && graphProduces && evidenceState === 'stale' && lastNode) {
+      const producer = [...graph.nodes].reverse().find((n) => n.templateIndex >= 0 && built[n.templateIndex].producesArtifacts === true);
+      const stage = producer ? built[producer.templateIndex] : undefined;
+      const persisted = await this.getPipeline(pipeline.id);
+      const evidence = await this.runStageEvidence({ pipeline, node: lastNode, sessionId, context, role: stage?.role ?? lastNode.role,
+        hostServices: stage ? stageHostServices(stage, persisted ?? pipeline) : false, checkScope: 'run:final', repair: 0 });
+      if (evidence.stopped) return evidence.stopped;
+      if (evidence.blocked) {
+        return this.pauseForEnvironment(pipeline, lastNode, `End-of-run evidence check: ${evidence.blocked}`, randomUUID(), currentItem?.id ?? null);
+      }
+      if (evidence.unmatched) evidenceNote = evidence.unmatched;
+      if (evidence.failed) stoppedShort = { node: lastNode.name, outcome: 'evidence_failed', detail: evidenceSummary(evidence.results) };
+    } else if (!stoppedShort && !graphProduces && (getConfig().agent.evidenceHooks?.length ?? 0) > 0) {
+      evidenceNote = 'Evidence hooks are configured, but this run declares no artifact-producing stage, so none ran.';
+    }
+
     const baseSummary = stoppedShort?.outcome === 'evidence_failed'
-      ? `Pipeline "${title}" FAILED at "${stoppedShort.node}": the project's evidence hooks still fail ` +
-        `and no repair attempt is left (limit ${EVIDENCE_REPAIR_LIMIT}), so the deliverable was not accepted.\n\n` +
-        `${stoppedShort.detail ?? ''}\n\nLast output:\n\n${previousOutput}`
+      ? `Pipeline "${title}" FAILED at "${stoppedShort.node}": ` +
+        (stoppedShort.repairs === undefined
+          ? 'the project\'s evidence hooks failed when the run was about to complete, with no stage left to repair the work, '
+          : `the project's evidence hooks still fail after ${stoppedShort.repairs} repair attempt(s) (limit ${EVIDENCE_REPAIR_LIMIT}), `) +
+        `so the deliverable was not accepted.\n\n${stoppedShort.detail ?? ''}\n\nLast output:\n\n${previousOutput}`
       : stoppedShort
       ? `Pipeline "${title}" STOPPED at "${stoppedShort.node}" (${stoppedShort.outcome}) — ` +
         `no route out of that stage was left to take, so the remaining stages never ran. ` +
         `Last output:\n\n${previousOutput}`
       : `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
-    const summary = appendSources(baseSummary, pipelineSources);
+    const summary = appendSources(evidenceNote && !stoppedShort ? `${baseSummary}\n\n_${evidenceNote}_` : baseSummary, pipelineSources);
     await this.updatePipeline(pipeline.id, {
       status: stoppedShort ? 'failed' : 'completed',
       summary,
@@ -2954,17 +3000,30 @@ export class PipelineManager {
     hostServices?: boolean;
     checkScope: string;
     repair: number;
-  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; stopped?: { pipelineId: string; result: string } }> {
+  }): Promise<{ results: EvidenceHookResult[]; failed: boolean; blocked?: string; unmatched?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node } = args;
+    let hooks: ReturnType<typeof configuredEvidenceHooks>;
+    try {
+      hooks = configuredEvidenceHooks();
+    } catch (err) {
+      return { results: [], failed: false, blocked: `The agent.evidenceHooks setting is invalid: ${(err as Error).message}` };
+    }
+    // No hooks: nothing is read, run or recorded, exactly as before hooks existed.
+    if (hooks.length === 0) return { results: [], failed: false };
     const signal = this.signals.get(pipeline.id);
     let results: EvidenceHookResult[];
+    let unmatched: string | undefined;
     try {
-      results = await runEvidenceHooks(
+      ({ results, unmatched } = await runEvidenceHooks(
         { userId: args.context.userId, sessionId: args.sessionId, workspaceId: args.context.workspaceId, space: args.context.space, role: args.role, hostServices: args.hostServices },
-        { signal },
-      );
+        { hooks, signal },
+      ));
     } catch (err) {
       return { results: [], failed: false, blocked: `Evidence hooks could not be resolved: ${(err as Error).message}` };
+    }
+    if (unmatched) {
+      recordRunEvent({ runId: args.sessionId, subject: 'pipeline', subjectId: pipeline.id, event: 'result', payload: { source: 'evidence-hooks', unmatched } });
+      return { results, failed: false, unmatched };
     }
     if (signal?.aborted) return { results, failed: false, stopped: { pipelineId: pipeline.id, result: 'Pipeline stopped while its evidence hooks ran.' } };
     for (const result of results) {
