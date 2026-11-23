@@ -3,6 +3,7 @@
 export * from './agent-events';
 export * from './agents';
 export * from './api-tokens';
+export * from './artifact-agent-refresh';
 export * from './artifact-data-snapshots';
 export * from './artifact-data-sources';
 export * from './artifact-share-links';

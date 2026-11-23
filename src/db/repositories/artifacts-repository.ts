@@ -163,6 +163,29 @@ export class ArtifactsRepository {
       .where(eq(artifacts.id, id));
   }
 
+  /**
+   * Point a live artifact at `versionId` only while its current version is
+   * still `expected` (null: it has none). False when the artifact was edited,
+   * restored or deleted meanwhile — the caller's version is then not shown.
+   */
+  async setCurrentVersionIf(id: string, expected: string | null, versionId: string): Promise<boolean> {
+    const rows = await this.db
+      .update(artifacts)
+      .set({ currentVersionId: versionId, updatedAt: new Date() })
+      .where(and(
+        eq(artifacts.id, id),
+        isNull(artifacts.deletedAt),
+        expected === null ? isNull(artifacts.currentVersionId) : eq(artifacts.currentVersionId, expected),
+      ))
+      .returning({ id: artifacts.id });
+    return rows.length > 0;
+  }
+
+  /** Remove a version that never became current (a refresh that did not land). */
+  async deleteVersion(id: string): Promise<void> {
+    await this.db.delete(artifactVersions).where(eq(artifactVersions.id, id));
+  }
+
   /** Also ends the artifact's live embed viewers. */
   async softDelete(id: string): Promise<void> {
     await this.db

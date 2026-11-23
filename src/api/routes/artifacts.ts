@@ -21,7 +21,14 @@ import { announceVersion, restoreVersion, writeVersion } from '@/core/artifacts/
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
 import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
-import { ARTIFACT_SLUG_RE } from '@/shared/artifacts';
+import {
+  AGENT_REFRESH_MAX_INSTRUCTION_CHARS,
+  AGENT_REFRESH_MAX_INTERVAL_MINUTES,
+  AGENT_REFRESH_MIN_INTERVAL_MINUTES,
+  ARTIFACT_SLUG_RE,
+} from '@/shared/artifacts';
+import { setAgentRefreshSchedule, startAgentRefresh, toView } from '@/core/artifacts/agent-refresh';
+import { artifactRefreshRepository } from '@/db/repositories/artifact-refresh-repository';
 import { uniqueViolation } from '@/db/unique-violation';
 
 /**
@@ -473,6 +480,111 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
     const sources = await artifactsRepository.listSources(a.id);
     const results = await Promise.all(sources.map((s) => refreshSource(s.id)));
     return { refreshed: sources.length, results };
+  })
+
+  // ── agent refresh (docs/ARTIFACTS.md#agent-refresh) ──────────
+  // The owner's only: a run spends the owner's budget as the owner, so a
+  // workspace member who may view or even edit the artifact gets 403 here.
+  .get('/:id/agent-refresh', async ({ params, user, principal, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'unauthenticated' };
+    }
+    const a = await artifactStore(principal).findById(params.id);
+    if (!a) {
+      set.status = 404;
+      return { error: 'not found' };
+    }
+    if (a.createdByUserId !== user.id) {
+      set.status = 403;
+      return { error: 'only the artifact\'s owner can see or change its agent refresh', code: 'not_owner' };
+    }
+    const row = await artifactRefreshRepository.get(a.id);
+    return { refresh: row ? toView(row) : null };
+  })
+
+  .put(
+    '/:id/agent-refresh',
+    async ({ params, user, principal, body, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const store = artifactStore(principal);
+      const a = await store.findById(params.id);
+      if (!a) {
+        set.status = 404;
+        return { error: 'not found' };
+      }
+      store.assertWrite();
+      if (a.createdByUserId !== user.id) {
+        set.status = 403;
+        return { error: 'only the artifact\'s owner can see or change its agent refresh', code: 'not_owner' };
+      }
+      if (body.instruction !== undefined) {
+        const instruction = body.instruction.trim();
+        if (!instruction || instruction.length > AGENT_REFRESH_MAX_INSTRUCTION_CHARS) {
+          set.status = 400;
+          return { error: `instruction must be 1-${AGENT_REFRESH_MAX_INSTRUCTION_CHARS} characters` };
+        }
+        await artifactRefreshRepository.setInstruction(a.id, user.id, instruction);
+      }
+      if (body.intervalMinutes !== undefined) {
+        const interval = body.intervalMinutes;
+        if (interval !== null && (!Number.isInteger(interval) || interval < AGENT_REFRESH_MIN_INTERVAL_MINUTES || interval > AGENT_REFRESH_MAX_INTERVAL_MINUTES)) {
+          set.status = 400;
+          return { error: `intervalMinutes must be a whole number from ${AGENT_REFRESH_MIN_INTERVAL_MINUTES} to ${AGENT_REFRESH_MAX_INTERVAL_MINUTES}, or null for manual refresh only` };
+        }
+        if (!(await artifactRefreshRepository.get(a.id))) {
+          set.status = 400;
+          return { error: 'set a refresh instruction before a schedule' };
+        }
+        await setAgentRefreshSchedule(a.id, interval);
+      }
+      const row = await artifactRefreshRepository.get(a.id);
+      return { refresh: row ? toView(row) : null };
+    },
+    {
+      body: t.Object({
+        instruction: t.Optional(t.String()),
+        intervalMinutes: t.Optional(t.Union([t.Number(), t.Null()])),
+      }),
+    },
+  )
+
+  .post('/:id/agent-refresh/run', async ({ params, user, principal, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'unauthenticated' };
+    }
+    const store = artifactStore(principal);
+    const a = await store.findById(params.id);
+    if (!a) {
+      set.status = 404;
+      return { error: 'not found' };
+    }
+    store.assertWrite();
+    if (a.createdByUserId !== user.id) {
+      set.status = 403;
+      return { error: 'only the artifact\'s owner can refresh it with an agent', code: 'not_owner' };
+    }
+    const started = await startAgentRefresh(a.id, 'user');
+    if (started.status === 'busy') {
+      set.status = 409;
+      return { error: 'a refresh of this artifact is already running', code: 'refresh_in_flight' };
+    }
+    if (started.status === 'unavailable') {
+      set.status = 400;
+      return { error: started.error, code: 'refresh_unavailable' };
+    }
+    if (started.status === 'refused') {
+      set.status = 422;
+      return { error: started.error, code: 'refresh_refused' };
+    }
+    // Not awaited: an agent run takes minutes. The row shows its progress.
+    void started.done;
+    set.status = 202;
+    return { status: 'started' };
   })
 
   .get(

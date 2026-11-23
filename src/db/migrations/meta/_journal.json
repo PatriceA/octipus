@@ -1436,6 +1436,13 @@
       "when": 1795824000000,
       "tag": "0204_artifact_last_viewed",
       "breakpoints": true
+    },
+    {
+      "idx": 205,
+      "version": "7",
+      "when": 1795910400000,
+      "tag": "0205_artifact_agent_refresh",
+      "breakpoints": true
     }
   ]
 }

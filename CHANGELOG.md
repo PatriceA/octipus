@@ -7,6 +7,23 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Agent refresh for Live Artifacts** (BETA,
+  [docs](docs/ARTIFACTS.md#agent-refresh)). An artifact can now stay current
+  by having an agent regenerate it. The agent that creates a page may store a
+  refresh instruction (`create_live_artifact` → `refresh_instruction`); the
+  artifact's owner sees and edits it on the artifact page, clicks **Refresh
+  with agent**, and may set a schedule (hourly at most often; off by
+  default). The run is the owner's: an unattended `research` worker with
+  read-only tools, on the owner's spend budget and quotas, given only the
+  stored instruction. The new version replaces the page only when the run
+  returns a valid page and nobody edited it meanwhile; otherwise the current
+  version stays and the failure is shown. One refresh per artifact at a time
+  (`409`), 10 minutes per run, and a schedule that fails or is refused 5 times
+  in a row turns itself off and notifies the owner. Only the owner can
+  trigger it: workspace members get `403`, viewers and embed tokens have no
+  route to it. Not available in shared spaces. Migration
+  `0205_artifact_agent_refresh` adds the `artifact_agent_refresh` table.
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

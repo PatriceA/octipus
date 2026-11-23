@@ -835,6 +835,9 @@ outgoing-webhook CRUD API. See [Hooks](HOOKS.md) and [Webhooks](WEBHOOKS.md).
 | POST | `/api/artifacts/:id/data-sources` | Add data source |
 | DELETE | `/api/artifacts/:id/data-sources/:sourceId` | Remove data source |
 | POST | `/api/artifacts/:id/refresh` | Refresh artifact data |
+| GET | `/api/artifacts/:id/agent-refresh` | Owner only: the refresh instruction, schedule and last attempt ([agent refresh](ARTIFACTS.md#agent-refresh)) |
+| PUT | `/api/artifacts/:id/agent-refresh` | Owner only: set the instruction and/or `intervalMinutes` (60–10080, or null for manual only) |
+| POST | `/api/artifacts/:id/agent-refresh/run` | Owner only: start an agent refresh (202; 409 while one runs; 422 when refused) |
 | GET | `/api/artifacts/:id/data/:sourceName` | Get data from source |
 | POST | `/api/artifacts/:id/share-links` | Create share link |
 | GET | `/api/artifacts/:id/share-links` | List share links |
