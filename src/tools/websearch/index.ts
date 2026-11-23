@@ -1,5 +1,5 @@
-import type { Browser, } from 'playwright';
-import { browserEgressFor } from '@/security/browser-egress';
+import type { Browser, BrowserContext } from 'playwright';
+import { assertNotRefusedByProxy, browserEgressFor, explainProxyFailure } from '@/security/browser-egress';
 import { sharedChromium } from '../browser/shared-chromium';
 import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import type { ToolManifest } from '@/core/types';
@@ -184,6 +184,9 @@ export class WebSearchTool extends BaseTool {
    * is routed through its own egress proxy (closed with the context), so the
    * search engine, every redirect hop and every sub-resource are judged.
    */
+  /** Contexts routed through an egress proxy (`createBrowserContext`). */
+  private readonly proxiedContexts = new WeakSet<BrowserContext>();
+
   private async createBrowserContext(browser: Browser) {
     const egress = await browserEgressFor();
     const context = await browser.newContext({
@@ -201,7 +204,10 @@ export class WebSearchTool extends BaseTool {
         'Upgrade-Insecure-Requests': '1',
       },
     });
-    if (egress) context.once('close', () => egress.close());
+    if (egress) {
+      this.proxiedContexts.add(context);
+      context.once('close', () => egress.close());
+    }
     return context;
   }
 
@@ -345,16 +351,25 @@ export class WebSearchTool extends BaseTool {
     const page = await context.newPage();
 
     try {
-      const response = await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' });
+      const proxied = this.proxiedContexts.has(context);
+      let response: Awaited<ReturnType<typeof page.goto>>;
+      try { response = await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' }); }
+      catch (error) { throw proxied ? explainProxyFailure(error) : error; }
 
-      // Post-connect SSRF check: reject a rebind to a private IP that happened
-      // between validation and this navigation (Playwright can't be IP-pinned).
-      const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
-      if (!addrCheck.ok) {
-        return { error: `URL blocked: ${addrCheck.reason}` };
+      if (proxied) {
+        // The egress proxy judged and pinned every request before it was sent;
+        // serverAddr() would be the proxy's own address. Only its refusal counts.
+        assertNotRefusedByProxy(response);
+      } else {
+        // Post-connect SSRF check: reject a rebind to a private IP that happened
+        // between validation and this navigation (Playwright can't be IP-pinned).
+        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+        if (!addrCheck.ok) {
+          return { error: `URL blocked: ${addrCheck.reason}` };
+        }
+        // Every redirect hop and the serving address, against the egress policy.
+        await egress.assertBrowserNavigationAllowed(response);
       }
-      // Every redirect hop and the serving address, against the egress policy.
-      await egress.assertBrowserNavigationAllowed(response);
 
       // Let JS-heavy SPAs (fifa.com, most modern sites) actually render. A fixed
       // 1s timeout returned empty bodies as silent "ok" successes. `networkidle`

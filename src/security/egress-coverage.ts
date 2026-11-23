@@ -16,6 +16,7 @@ export const UNJUDGED_EGRESS: readonly UnjudgedEgress[] = [
   { tool: 'docker', actions: ['compose_project', 'start_container', 'build_image', 'exec_command'], why: 'containers and image builds use the Docker daemon\'s network, not Octipus\'s' },
   { tool: 'browser-ext', actions: ['navigate', 'new_tab', 'evaluate', 'click', 'press_key', 'fill', 'select', 'drag', 'fill_login'], why: 'drives the user\'s own browser, whose requests do not pass through Octipus' },
   { tool: 'mcp_admin', actions: ['mcp_add_server'], why: 'an added MCP server is its own process with its own network' },
+  { tool: 'test_container', actions: ['run'], why: 'the test container runs on Docker\'s bridge network, not through Octipus' },
 ];
 
 /** CLI agents with vendor-native tools (not `octipusToolsOnly`): their tools run inside the vendor CLI. */

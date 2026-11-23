@@ -33,12 +33,19 @@ labels reflect blast radius, not contract guarantees.
   are logged and audited (`permission_denied`, resource `egress`: host, port,
   tool, role, rule; no payloads). No policy configured: no change, except
   two fixes below.
-- **Artifact data sources and the visual tool no longer reach private
-  addresses.** `http`/`rss` artifact sources and the `art_collect_http_json`,
+- **Breaking — artifact data sources and the visual tool no longer reach
+  private addresses.** `http`/`rss` artifact sources and the `art_collect_http_json`,
   `_http_text`, `_html_scrape` and `_rss` collectors fetched a model-chosen
   URL with a bare `fetch` (the cloud metadata address included); `visual`
   navigated to any URL. Both now go through the SSRF guard, so a source or
-  capture of `localhost` or a LAN address is refused.
+  capture of `localhost` or a LAN address is refused, with or without an
+  egress policy.
+- **git and github tools refuse option-like values.** A branch, remote,
+  URL, path, target or repository that starts with `-` is refused, and git's
+  positionals follow `--`: `pull` with a branch of
+  `--upload-pack=<command>` ran that command on the server.
+- **Headless Chromium hardening.** The shared browser and `visual` run with
+  WebRTC limited to proxied UDP and QUIC off, with or without a policy.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

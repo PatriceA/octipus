@@ -1,4 +1,5 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
+import { BROWSER_HARDENING_ARGS, assertNotRefusedByProxy, explainProxyFailure } from '@/security/browser-egress';
 import { logger } from '../utils/logger';
 
 export interface ScreenshotOptions {
@@ -68,6 +69,8 @@ export class ScreenshotCapture {
 
     this.browser = await launcher.launch({
       headless: this.headless,
+      // Chromium: WebRTC held to proxied UDP, QUIC off (BROWSER_HARDENING_ARGS).
+      ...(this.browserType === 'chromium' ? { args: BROWSER_HARDENING_ARGS } : {}),
     });
 
     this.context = await this.browser.newContext({
@@ -87,7 +90,15 @@ export class ScreenshotCapture {
   async navigate(url: string, waitUntil: 'load' | 'domcontentloaded' | 'networkidle' = 'networkidle'): Promise<void> {
     if (!this.page) await this.init();
 
-    await this.page!.goto(url, { waitUntil });
+    if (!this.proxy) {
+      await this.page!.goto(url, { waitUntil });
+    } else {
+      // Through the egress proxy: its refusal is a refusal, not a page to capture.
+      let response;
+      try { response = await this.page!.goto(url, { waitUntil }); }
+      catch (error) { throw explainProxyFailure(error); }
+      assertNotRefusedByProxy(response);
+    }
     this.log.debug({ url }, 'Navigated to URL');
   }
 

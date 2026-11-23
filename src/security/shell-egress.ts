@@ -25,6 +25,7 @@
  * Only tool calls are judged (a subject is set); with no active policy
  * nothing changes.
  */
+import { readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { ownNodeBinary } from '@/mcp/transports/stdio';
@@ -57,6 +58,31 @@ export function shellSocketParent(): string | undefined {
 
 let advisoryWarned = false;
 
+let staleCleaned = false;
+
+/**
+ * Once per process: remove socket directories a previous run left behind (a
+ * crash skips `close`). Only directories older than this process — a
+ * concurrent command's live directory is newer.
+ */
+export function cleanStaleShellSockets(parent = shellSocketParent(), startedAt = Date.now() - process.uptime() * 1000): void {
+  if (!parent) return;
+  let entries: string[];
+  try { entries = readdirSync(parent); } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') coreLogger.warn({ parent, err: (err as Error).message }, 'Shell egress: the proxy socket directory could not be listed');
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith('egress-')) continue;
+    const path = join(parent, name);
+    try {
+      if (statSync(path).mtimeMs < startedAt) rmSync(path, { recursive: true, force: true });
+    } catch (err) {
+      coreLogger.warn({ path, err: (err as Error).message }, 'Shell egress: a stale proxy socket directory could not be removed');
+    }
+  }
+}
+
 /** Inside a network namespace, loopback is the sandbox's own: never proxied. */
 export const SANDBOX_LOOPBACK = 'localhost,127.0.0.1,::1';
 
@@ -88,6 +114,7 @@ export async function prepareShellEgress(argv: string[], options: ShellEgressOpt
     throw new ToolNotExecutedError('shell', `The egress policy requires enforced network confinement (security.egressPolicy.requireEnforcement), but shell commands run without a process sandbox here (security.shellSandbox=${mode}${mode === 'off' ? '' : ', no working runner'}), so their network cannot be confined. The command was not run.`);
   }
   const confined = runner === 'bwrap' || runner === 'firejail';
+  if (confined && !staleCleaned) { staleCleaned = true; cleanStaleShellSockets(); }
   if (runner === 'firejail' && !shellSocketParent()) {
     coreLogger.warn('Shell egress under firejail without XDG_RUNTIME_DIR: the proxy socket falls back to the temp directory, which firejail hides, so the command will have no network');
   }
@@ -107,7 +134,7 @@ export async function prepareShellEgress(argv: string[], options: ShellEgressOpt
     return {
       // The namespace's loopback is the command's own (a server it started
       // itself): not through the proxy, which would refuse it as private.
-      argv: bridgedArgv(argv, proxy.socketPath), env: { OCTIPUS_BRIDGE_NO_PROXY: SANDBOX_LOOPBACK }, enforcement: 'enforced', proxy, close,
+      argv: bridgedArgv(argv, proxy.socketPath), env: { OCTIPUS_BRIDGE_NO_PROXY: SANDBOX_LOOPBACK, OCTIPUS_BRIDGE_TOKEN: proxy.socketToken ?? '' }, enforcement: 'enforced', proxy, close,
       wrap: { allowNetwork: false, extraReadWrite: [proxy.socketDir], extraReadOnly: ownNodeBinary() },
     };
   }
@@ -181,7 +208,7 @@ export function egressEnforcementStatus(): { active: boolean; default: 'allow' |
     { path: 'plugin packages (declared network hosts)', enforcement: 'enforced', detail: 'Applied on top of the manifest in the package egress proxy; where a package runs unsandboxed the proxy itself is advisory (see the package status).' },
     ...UNJUDGED_EGRESS.map((u) => uncovered(`${u.tool}: ${u.actions.join(', ')}`, u.why)),
     uncovered(UNJUDGED_CLI_NATIVE_TOOLS, 'their tools run inside the vendor CLI process'),
-    { path: 'github tool API calls, websearch through SearXNG, operator-configured MCP servers, SSH execution environments', enforcement: 'not covered', detail: 'Fixed or operator-chosen destinations (the GitHub API, your SearXNG, servers you configured, a remote host\'s own network), not judged by the tool policy.' },
+    { path: 'github tool API calls, websearch through SearXNG, connections tool requests, plugin host collector fetches, operator-configured MCP servers, SSH execution environments', enforcement: 'not covered', detail: 'Fixed or operator/user-configured destinations (the GitHub API, your SearXNG, a configured connection\'s approved origin, an approved repository\'s remotes, servers you configured, a remote host\'s own network), not judged by the tool policy.' },
   ];
   return {
     active, default: policy.default, ruleCount, requireEnforcement: policy.requireEnforcement,

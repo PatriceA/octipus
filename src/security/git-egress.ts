@@ -19,25 +19,86 @@ import { lookup } from 'node:dns/promises';
 import { coreLogger } from '@/utils/logger';
 import { activeEgressPolicy, currentEgressSubject, EgressDeniedError, type EgressSubject, type EgressTarget, egressPolicyActive, enforceEgress, precheckEgressName, reportEgressDenial } from './egress-policy';
 
-/** A git remote's network target, `null` for a local path, or `unjudgeable` for a transport the policy cannot see into. */
+/** A git remote's network target, `null` for a local path, or `unjudgeable` for a transport or spelling the policy cannot judge with certainty. */
 export function gitRemoteTarget(spec: string): EgressTarget | null | 'unjudgeable' {
   const remote = spec.trim();
+  if (remote.length === 0) return null;
+  // A DOS drive path (`C:\\repo`, `C:/repo`) is local, as git reads it on
+  // Windows; elsewhere git reads `c:/repo` as ssh to host `c`.
+  if (process.platform === 'win32' && /^[a-z]:[\\/]/i.test(remote)) return null;
+  if (remote !== spec || /[\s\\\x00-\x1f\x7f]/.test(remote)) return 'unjudgeable';
   if (/^[a-z][a-z0-9+.-]*::/i.test(remote)) return 'unjudgeable';
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(remote)?.[1]?.toLowerCase();
-  if (scheme) {
-    if (scheme === 'file') return null;
-    if (scheme !== 'https' && scheme !== 'http' && scheme !== 'ssh' && scheme !== 'git+ssh' && scheme !== 'ssh+git') return 'unjudgeable';
-    let url: URL;
-    try { url = new URL(scheme.includes('ssh') ? remote.replace(/^[^:]+:/, 'http:') : remote); } catch { return 'unjudgeable'; }
-    const ssh = scheme.includes('ssh');
-    return { host: url.hostname, port: url.port ? Number(url.port) : ssh ? 22 : scheme === 'https' ? 443 : 80, scheme: ssh ? 'ssh' : scheme as 'http' | 'https' };
+  if (scheme) return urlTarget(remote, scheme);
+  // git's `url_is_local_not_ssh`: no colon, or a slash before the first
+  // colon (or, on Windows, a drive prefix, above): a local path.
+  const colon = remote.indexOf(':');
+  const slash = remote.indexOf('/');
+  if (colon < 0 || (slash >= 0 && slash < colon)) return null;
+  return scpTarget(remote);
+}
+
+/**
+ * An scp-style remote, cut exactly where git cuts it (`host_end` and the
+ * separator search in connect.c): brackets, if the host part opens with `[`
+ * or `@[`, are removed and their content kept whole; otherwise the host part
+ * ends at the FIRST colon. ssh then takes the user up to the LAST `@`.
+ * Anything git would read differently from a human — an `@` or `:` in what
+ * follows the separator before any `/`, brackets elsewhere, an empty host —
+ * is refused rather than guessed.
+ */
+function scpTarget(remote: string): EgressTarget | 'unjudgeable' {
+  const at = remote.indexOf('@[');
+  const start = at >= 0 ? at + 1 : 0;
+  let hostPart: string;
+  let rest: string;
+  let bracketed = false;
+  if (remote[start] === '[') {
+    const close = remote.indexOf(']', start + 1);
+    if (close < 0) return 'unjudgeable';
+    const sep = remote.indexOf(':', close + 1);
+    if (sep !== close + 1) return 'unjudgeable';
+    hostPart = remote.slice(0, start) + remote.slice(start + 1, close);
+    rest = remote.slice(sep + 1);
+    bracketed = true;
+  } else {
+    const sep = remote.indexOf(':');
+    hostPart = remote.slice(0, sep);
+    rest = remote.slice(sep + 1);
   }
-  // A Windows drive path (`C:\\repo`, `C:/repo`) is local.
-  if (/^[a-z]:[\\/]/i.test(remote)) return null;
-  // scp-like `[user@]host:path`: a colon before any slash (git's own rule).
-  const scp = /^(?:[^@/]+@)?(\[[^\]]+\]|[^:/]+):(?!\/\/)/.exec(remote);
-  if (scp) return { host: scp[1], port: 22, scheme: 'ssh' };
-  return null;
+  if (!bracketed && /[[\]]/.test(hostPart)) return 'unjudgeable';
+  // What follows must read as a path: no further `user@host:` before a slash.
+  const firstSegment = rest.split('/')[0];
+  if (/[@:]/.test(firstSegment)) return 'unjudgeable';
+  const lastAt = hostPart.lastIndexOf('@');
+  let hostAndPort = lastAt >= 0 ? hostPart.slice(lastAt + 1) : hostPart;
+  let port = 22;
+  if (bracketed) {
+    // `[user@host:port]:path`: one colon is a port; several, an IPv6 address.
+    const colons = hostAndPort.split(':').length - 1;
+    if (colons === 1) {
+      const [h, p] = hostAndPort.split(':');
+      if (!/^\d{1,5}$/.test(p) || Number(p) < 1 || Number(p) > 65535) return 'unjudgeable';
+      hostAndPort = h;
+      port = Number(p);
+    }
+  } else if (hostAndPort.includes(':')) return 'unjudgeable';
+  if (!hostAndPort || /[@[\]/]/.test(hostAndPort)) return 'unjudgeable';
+  return { host: hostAndPort, port, scheme: 'ssh' };
+}
+
+/** An `http(s)://` or `ssh://` remote; anything another URL parser (curl, ssh) could read differently is refused. */
+function urlTarget(remote: string, scheme: string): EgressTarget | null | 'unjudgeable' {
+  if (scheme === 'file') return null;
+  const ssh = scheme === 'ssh' || scheme === 'git+ssh' || scheme === 'ssh+git';
+  if (!ssh && scheme !== 'https' && scheme !== 'http') return 'unjudgeable';
+  const authority = remote.slice(remote.indexOf('://') + 3).split('/')[0];
+  // One `@` at most, and nothing curl or ssh splits differently from WHATWG.
+  if ((authority.match(/@/g) ?? []).length > 1 || /[%?#]/.test(authority)) return 'unjudgeable';
+  let url: URL;
+  try { url = new URL(ssh ? `http://${remote.slice(remote.indexOf('://') + 3)}` : remote); } catch { return 'unjudgeable'; }
+  if (!url.hostname) return 'unjudgeable';
+  return { host: url.hostname, port: url.port ? Number(url.port) : ssh ? 22 : scheme === 'https' ? 443 : 80, scheme: ssh ? 'ssh' : scheme as 'http' | 'https' };
 }
 
 /**

@@ -29,7 +29,7 @@ vi.mock('@/db/repositories/audit-repository', () => ({
   auditRepository: { log: async (entry: Record<string, unknown>) => { state.audits.push(entry); } },
 }));
 
-const { prepareShellEgress, shellEgressStatus, egressEnforcementStatus } = await import('./shell-egress');
+const { cleanStaleShellSockets, prepareShellEgress, shellEgressStatus, egressEnforcementStatus } = await import('./shell-egress');
 const { _forceNoSandboxRunnerForTests, _forceSandboxRunnerForTests, _resetSandboxDetectionForTests } = await import('./shell-sandbox');
 const { withEgressSubject } = await import('./egress-policy');
 const { ToolNotExecutedError } = await import('@/core/tool-execution-error');
@@ -106,8 +106,47 @@ describe('prepareShellEgress', () => {
       expect(egress?.argv.slice(-2)).toEqual(['curl', 'https://x']);
       expect(egress?.wrap.extraReadWrite).toEqual([egress?.proxy.socketDir]);
       // The namespace's own loopback stays direct (a server the command started).
-      expect(egress?.env).toEqual({ OCTIPUS_BRIDGE_NO_PROXY: 'localhost,127.0.0.1,::1' });
+      expect(egress?.env).toEqual({ OCTIPUS_BRIDGE_NO_PROXY: 'localhost,127.0.0.1,::1', OCTIPUS_BRIDGE_TOKEN: egress?.proxy.socketToken });
     } finally { egress?.close(); }
+  });
+
+  test('the proxy socket answers only a client that sends this command\'s token', async () => {
+    policy({ default: 'deny', rules: [{ action: 'allow', host: 'allowed.test' }] });
+    _forceSandboxRunnerForTests('bwrap', '/usr/bin/bwrap');
+    const egress = await prepareShellEgress(['curl'], { allowNetwork: true, mode: 'required', subject, proxyOverrides: local });
+    try {
+      const socketPath = egress!.proxy.socketPath!;
+      const ask = (prefix: string) => new Promise<string>((resolve) => {
+        const s = connect(socketPath, () => s.write(`${prefix}GET http://allowed.test:${upstreamPort}/ HTTP/1.1\r\nHost: allowed.test\r\nConnection: close\r\n\r\n`));
+        let buf = '';
+        s.on('data', (d: Buffer) => { buf += d.toString(); });
+        s.on('close', () => resolve(buf));
+        s.on('error', () => resolve(buf));
+      });
+      // Another sandbox that can see the socket, without the token: nothing.
+      expect(await ask('')).toBe('');
+      expect(await ask('wrong-token\n')).toBe('');
+      // The command's own launcher, with it: served.
+      expect(egress!.env.OCTIPUS_BRIDGE_TOKEN).toBe(egress!.proxy.socketToken);
+      expect(await ask(`${egress!.proxy.socketToken}\n`)).toMatch(/^HTTP\/1\.1 200[\s\S]*upstream-ok/);
+    } finally { egress?.close(); }
+  });
+
+  test('stale socket directories of an earlier run are removed; live ones are kept', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'octi-stale-'));
+    try {
+      const { mkdirSync, utimesSync, existsSync } = await import('node:fs');
+      mkdirSync(join(parent, 'egress-old'));
+      mkdirSync(join(parent, 'egress-new'));
+      mkdirSync(join(parent, 'unrelated'));
+      const past = new Date(Date.now() - 3_600_000);
+      utimesSync(join(parent, 'egress-old'), past, past);
+      utimesSync(join(parent, 'unrelated'), past, past);
+      cleanStaleShellSockets(parent, Date.now() - 60_000);
+      expect(existsSync(join(parent, 'egress-old'))).toBe(false);
+      expect(existsSync(join(parent, 'egress-new'))).toBe(true);
+      expect(existsSync(join(parent, 'unrelated'))).toBe(true);
+    } finally { rmSync(parent, { recursive: true, force: true }); }
   });
 
   test('the proxy socket is not under the workspace root, which other sandboxed commands mount', async () => {
@@ -191,9 +230,10 @@ describe('operator status', () => {
     expect(shellEgressStatus()).toMatchObject({ enforcement: 'enforced', runner: 'bwrap' });
     const all = egressEnforcementStatus();
     expect(all).toMatchObject({ active: true, default: 'deny', ruleCount: 0 });
-    expect(all.paths.map((p) => p.enforcement)).toEqual(['enforced', 'enforced', 'enforced', 'partial', 'enforced', 'not covered', 'not covered', 'not covered', 'not covered', 'not covered']);
+    expect(all.paths.map((p) => p.enforcement)).toEqual(['enforced', 'enforced', 'enforced', 'partial', 'enforced', 'not covered', 'not covered', 'not covered', 'not covered', 'not covered', 'not covered']);
+    expect(all.paths.map((p) => p.path).join('\n')).toMatch(/test_container: run/);
     expect(all.paths.map((p) => p.path).join('\n')).toMatch(/docker: compose_project, start_container, build_image, exec_command/);
     state.policy = egressPolicySchema.parse({ default: 'deny', requireEnforcement: true });
-    expect(egressEnforcementStatus().paths.filter((p) => p.enforcement === 'refused').map((p) => p.path.split(':')[0])).toEqual(['docker', 'browser-ext', 'mcp_admin', expect.stringContaining('CLI-agent')]);
+    expect(egressEnforcementStatus().paths.filter((p) => p.enforcement === 'refused').map((p) => p.path.split(':')[0])).toEqual(['docker', 'browser-ext', 'mcp_admin', 'test_container', expect.stringContaining('CLI-agent')]);
   });
 });

@@ -1,5 +1,6 @@
 import type { Browser } from 'playwright';
 import { toolLogger } from '@/utils/logger';
+import { BROWSER_HARDENING_ARGS } from '@/security/browser-egress';
 
 /** A headless Chromium nobody used for this long is closed. */
 export const BROWSER_IDLE_MS = 5 * 60_000;
@@ -8,7 +9,8 @@ type Launch = () => Promise<Browser>;
 
 const defaultLaunch: Launch = async () => {
   const { chromium } = await import('playwright');
-  return chromium.launch({ headless: true });
+  // WebRTC held to proxied UDP and QUIC off: see BROWSER_HARDENING_ARGS.
+  return chromium.launch({ headless: true, args: BROWSER_HARDENING_ARGS });
 };
 
 /**

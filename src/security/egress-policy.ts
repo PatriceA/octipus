@@ -199,6 +199,16 @@ export function egressRoleChain(metadata: unknown): string[] {
   return Array.isArray(chain) ? chain.filter((r): r is string => typeof r === 'string') : [];
 }
 
+/**
+ * A child's context metadata with the spawn chain's roles appended: the
+ * parent's own chain and the parent's role. Every spawn path calls it (the
+ * swarm spawner, pipeline/hook workers), so no child loses its ancestors.
+ */
+export function withEgressRoleChain(metadata: Record<string, unknown> | undefined, parent: { role?: string; metadata?: unknown }): Record<string, unknown> {
+  const chain = [...egressRoleChain(parent.metadata), ...(parent.role ? [parent.role] : [])];
+  return { ...(metadata ?? {}), [EGRESS_ROLE_CHAIN_KEY]: chain };
+}
+
 /** The roles a call is judged under: the agent's own and every ancestor's in its spawn chain. */
 export function subjectRoles(subject: EgressSubject): string[] {
   return [...new Set([...(subject.roles ?? []), ...(subject.role ? [subject.role] : [])])];

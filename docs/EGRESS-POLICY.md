@@ -94,23 +94,28 @@ A role scope is a boundary along the whole spawn chain: an agent's tool call
 is judged under its own role and under the role of every agent above it, and
 allowed only when each of them allows it. A `coding` agent under
 `roles.coding.default: deny` cannot reach a host by spawning a `research`
-child to fetch it.
+child to fetch it. The chain is carried by every spawn path: swarm children
+and the workers of pipeline stages, hook actions and the plugin host agent.
+
+A scheduled artifact refresh runs for no agent, so it has no role: only the
+global rules and `tools.artifacts` apply to it. A refresh a tool call
+triggers is judged as that call (its tool and role chain).
 
 ## Where it applies
 
 To tool calls: every handler of a built-in tool runs with its tool id, the
 agent's role and its ancestors' roles (`BaseTool`); a plugin package's
 network as `plugin:<name>`; an artifact data source as `artifacts` (a
-scheduled refresh as its owner's). Octipus's own traffic — model providers,
+scheduled refresh as its owner's, with no role). Octipus's own traffic — model providers,
 webhooks, hooks, federation, provider discovery — is not a tool's and is not
 judged by it.
 
 | Path | Status | What is judged |
 |---|---|---|
 | Web fetch (`fetchGuarded`): websearch's API-schema fetch, vision's image URLs, artifact `http`/`rss` sources and the `art_collect_*` collectors, the plugin host's `web:read` | Enforced | Every hop: each redirect target is judged like the first URL, before it is contacted. Private and metadata addresses refused. |
-| Browser pages: `browser` (every action, `evaluate` included), `websearch` search and fetch_page, `visual` | Enforced | The browser context is routed through its own egress proxy, so every request a page makes — redirect hops, sub-resources, scripts, clicks — is judged before it is sent; Chromium's loopback bypass is switched off. A context opened before the policy applied is not reused under it. `visual` refuses private addresses up front and, under a policy, captures with Chromium. Not through the proxy: WebRTC and the browser's own DNS prefetch. Under a `deny` default, allow the search engines (`www.google.com`, `html.duckduckgo.com`) for `websearch`. |
+| Browser pages: `browser` (every action, `evaluate` included), `websearch` search and fetch_page, `visual` | Enforced | The browser context is routed through its own egress proxy, so every request a page makes — redirect hops, sub-resources, scripts, clicks — is judged before it is sent; Chromium's loopback bypass is switched off. A context opened before the policy applied, or for another tool or role chain, is not reused. Behind the proxy, a navigation the proxy refused is reported as a refusal (the proxy's own `403`, or a failed tunnel), and the post-connect address check is skipped: `serverAddr()` would be the proxy itself, which already pinned and judged the connection. `visual` refuses private addresses up front and, under a policy, captures with Chromium. Every headless Chromium runs with WebRTC limited to proxied UDP and QUIC off (with or without a policy), so a page cannot send UDP around the proxy. Not through the proxy: the browser's own DNS prefetch. Under a `deny` default, allow the search engines (`www.google.com`, `html.duckduckgo.com`) for `websearch`. |
 | Shell commands (`shell` run / run_background) | Enforced with a Linux or macOS sandbox, advisory without | See below. |
-| `git` clone / pull / push, `github` repo_clone | Partial | The URL git will use — `insteadOf` applied, push URLs for a push — is judged with its addresses before git starts, as `https`/`http` or `ssh`. A transport the policy cannot see (`git://`, `ext::`, other `<helper>::`) is refused. What git does after it starts (HTTP redirects, submodules, LFS) is not judged; git does not run through the proxy. Private hosts are not refused here (git to an internal server worked before and still does when allowed). |
+| `git` clone / pull / push, `github` repo_clone | Partial | See [git](#git). |
 | Plugin packages with declared `network` hosts | Enforced where the package is sandboxed | The policy is applied in the package's egress proxy on top of its manifest: a declared host the policy denies is refused. Under a `deny` default the package needs an allow (`"plugin:<name>": { "default": "allow" }` allows exactly its manifest). Under `plugins.sandbox: off` the proxy itself is advice only ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#network)). |
 
 ### Not covered
@@ -124,8 +129,13 @@ marked *refused*:
 | `docker`: compose_project, start_container, build_image, exec_command | Containers and builds use the Docker daemon's network | Refused |
 | `browser-ext`: navigate, new_tab, evaluate, click, press_key, fill, select, drag, fill_login | Drives the user's own browser | Refused (also `visual`'s extension fallback) |
 | `mcp_admin`: mcp_add_server | An added MCP server is its own process | Refused |
+| `test_container`: run (`run_test_container`) | The container runs on Docker's bridge network | Refused |
 | CLI-agent models with vendor-native tools | Their tools run inside the vendor CLI | Refused (the run fails before the CLI starts) |
-| The `github` tool's API calls, websearch through your SearXNG, MCP servers you configured, the SSH execution environment, system-run commands (verification gates, Companion maintenance) | Fixed or operator-chosen destinations, or another machine's network | Still run |
+| The `github` tool's API calls, websearch through your SearXNG, the `connections` tool (a configured connection's approved origins), the plugin host's repository collector (an approved repository's remotes), MCP servers you configured, the SSH execution environment, system-run commands (verification gates, Companion maintenance) | Fixed or operator/user-configured destinations, or another machine's network | Still run |
+
+The list was made by searching every tool for a process or container it
+starts with network of its own; skill scripts run with no network at all
+(`--unshare-all`) and are not on it.
 
 `GET /api/settings/egress` lists all of them.
 
@@ -153,8 +163,13 @@ applies.
 
 The proxy's socket is created under `$XDG_RUNTIME_DIR` (else the temp
 directory), outside every workspace folder, and mounted only into the
-command it serves. firejail hides the temp directory: without
-`XDG_RUNTIME_DIR`, a firejail command has no network (the log says so).
+command it serves. firejail does not hide `$XDG_RUNTIME_DIR`, so every
+proxy also requires a per-command token: the launcher sends it first on each
+connection, from an environment variable it removes before starting the
+command; a client without it gets nothing. Socket directories a crashed run
+left behind are removed the next time a sandboxed command needs a proxy.
+firejail hides the temp directory: without `XDG_RUNTIME_DIR`, a firejail
+command has no network (the log says so).
 Clients that ignore proxy variables, and protocols that cannot go through an
 HTTP proxy (`git` over SSH, raw sockets, DNS), fail under the enforced modes.
 A `CONNECT` tunnel's contents are opaque to the proxy: it is judged as
@@ -163,6 +178,42 @@ it — narrow such rules with `ports`.
 
 `GET /api/settings/egress` and a warning in the server log say which mode the
 shell is in.
+
+## git
+
+The `git` and `github` tools run git as a process of their own, not through
+the proxy, so a policy is applied before git starts:
+
+- **The URL git will use** is judged with its addresses, as `https`/`http`
+  or `ssh`: `insteadOf` applied (`git ls-remote --get-url`), a remote's push
+  URLs for a push, and for a push to a URL the `pushInsteadOf` rewrite.
+  scp-style remotes are cut where git cuts them (the host ends at the first
+  `:`, brackets kept whole); a spelling git or ssh could read differently
+  from a person (`a:x@b:repo`, a backslash or two `@` in a URL) is refused.
+  `git://`, `ext::` and other `<helper>::` transports are refused.
+- **`gh repo clone`** is judged on what gh will clone: the repository URL on
+  its host as `gh repo view` reports it, over the protocol gh is configured
+  to use for that host (`git_protocol`), and the parent of a fork.
+- **Repository configuration** the model could have written that reroutes
+  the run or runs a command — `http.proxy`, `remote.<name>.proxy`,
+  `remote.<name>.uploadpack`/`receivepack`, `core.sshCommand`,
+  `core.gitProxy`, `core.fsmonitor`, `core.hooksPath`, credential helpers,
+  `protocol.*`, includes, filter and merge drivers, submodule recursion — is
+  refused at repository scope. The operator's global and system git
+  configuration is trusted and left alone.
+- **pull, push and clone run with hooks off**, `ext::` disabled and no
+  fsmonitor.
+
+Not judged: what git does after it starts (an HTTP redirect it follows,
+submodules, LFS endpoints), and hooks of local actions such as commit.
+Private hosts are not refused for git (an internal server worked before and
+still does when a rule allows it).
+
+Independently of any policy, no value the model passes — a branch, remote,
+URL, path, target, repository — may start with `-`: `pull` with a branch of
+`--upload-pack=<command>` ran that command on the server. git's positionals
+follow `--`; gh's are checked instead, since gh gives `--` a meaning of its
+own.
 
 ## Refusals
 

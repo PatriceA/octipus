@@ -1,4 +1,5 @@
 import { executionEnvironmentFor } from '@/security/execution-environments';
+import { withEgressRoleChain } from '@/security/egress-policy';
 import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
 import { createStageDelegation } from './stage-delegation';
 import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
@@ -1099,7 +1100,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // forwarding them the agent's own metadata is empty and the `plan` tool
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
-    contextMetadata: pipelineMetadata(context.metadata, { planMode: planModeWorker, userMedia: childMedia }),
+    // The caller's role chain rides along: the egress policy judges the worker under every ancestor's role too.
+    contextMetadata: withEgressRoleChain(pipelineMetadata(context.metadata, { planMode: planModeWorker, userMedia: childMedia }), context),
   });
 
   const workerId = worker.getContext().id;
@@ -1577,7 +1579,7 @@ export async function handleWorkerFailure(
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,
-      contextMetadata: pipelineMetadata(context.metadata, { planMode: respawnCtx.planMode === true }),
+      contextMetadata: withEgressRoleChain(pipelineMetadata(context.metadata, { planMode: respawnCtx.planMode === true }), context),
       parentSignal: recoverySignal,
     });
     respawnCtx.onWorkerReady?.(retryWorker);

@@ -3,10 +3,10 @@
  * page makes — redirect hops included — is judged before it is sent.
  * Skipped where no Chromium is installed for Playwright.
  */
-import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { egressPolicySchema } from '@/shared/egress-policy';
+import { installedChromium } from '@/test-helpers/chromium';
 
 const state = vi.hoisted(() => ({ policy: undefined as unknown }));
 vi.mock('@/config', async (orig) => {
@@ -24,8 +24,9 @@ vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { log: a
 
 const { chromium } = await import('playwright');
 const { browserEgressFor } = await import('./browser-egress');
-const executable = (() => { try { return chromium.executablePath(); } catch { return ''; } })();
-const haveChromium = !!executable && existsSync(executable);
+/** An installed headless Chromium shell (Playwright's own download is not assumed), or ''. */
+const executable = installedChromium();
+const haveChromium = !!executable;
 
 describe.skipIf(!haveChromium)('browser egress proxy (real Chromium)', () => {
   let server: Server;
@@ -49,7 +50,7 @@ describe.skipIf(!haveChromium)('browser egress proxy (real Chromium)', () => {
     state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'good.test' }] });
     const egress = await browserEgressFor({ tool: 'browser', role: 'research' }, { resolve: resolveTest, allowPrivateAddresses: true });
     expect(egress).not.toBeNull();
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true, executablePath: executable });
     try {
       const context = await browser.newContext({ proxy: egress!.proxy });
       const page = await context.newPage();

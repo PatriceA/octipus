@@ -1,5 +1,5 @@
 import type { ContextTurnHandle } from '@/core/context-hooks';
-import { EGRESS_ROLE_CHAIN_KEY, egressRoleChain } from '@/security/egress-policy';
+import { EGRESS_ROLE_CHAIN_KEY, withEgressRoleChain } from '@/security/egress-policy';
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
 import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
@@ -1870,7 +1870,7 @@ export class SwarmSpawner {
           // The egress policy judges a child under its own role AND every
           // ancestor's, so a restricted parent cannot fetch through a child
           // of a looser role (docs/EGRESS-POLICY.md#roles).
-          [EGRESS_ROLE_CHAIN_KEY]: [...egressRoleChain(opts.parentContext.metadata), opts.parentContext.role],
+          [EGRESS_ROLE_CHAIN_KEY]: withEgressRoleChain(undefined, opts.parentContext)[EGRESS_ROLE_CHAIN_KEY],
           ...(opts.fork ? forkMetadata(opts.fork, opts.parentContext) : {}),
         },
       });

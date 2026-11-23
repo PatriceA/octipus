@@ -142,7 +142,8 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
         extraReadOnly: ownNodeBinary(), extraReadWrite: [...writable, proxy.socketDir],
       });
       if (wrapped.wrapped) {
-        return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
+        // The launcher proves itself to the proxy with its token (not passed on to the server).
+        return { argv: wrapped.argv, env: { ...env, OCTIPUS_BRIDGE_TOKEN: proxy.socketToken ?? '' }, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
       }
     }
     // No sandbox (off or no runner): the proxy is advice only.

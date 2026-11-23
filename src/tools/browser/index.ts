@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page, Response as PlaywrightResponse } from 'playwright';
 import {redactCredentialData} from '@/security/credential-redaction';
 import {getVault} from '@/security/vault';
 import {fillLoginFields} from './login-fill';
@@ -7,7 +7,7 @@ import { decide, decisionModelBound, type DecisionSite, recordShadow } from '@/m
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability, type ToolExecutionOptions } from '../base-tool';
 import { sharedChromium } from './shared-chromium';
-import { browserEgressFor, unproxiedContextError } from '@/security/browser-egress';
+import { assertNotRefusedByProxy, browserEgressFor, egressSubjectKey, explainProxyFailure, unproxiedContextError } from '@/security/browser-egress';
 import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
 
 const DEFAULT_TIMEOUT = 30000;
@@ -62,7 +62,7 @@ export class BrowserTool extends BaseTool {
 
   private contexts: Map<string, BrowserContext> = new Map();
   /** Contexts routed through an egress proxy (src/security/browser-egress.ts). */
-  private judgedContexts = new WeakSet<BrowserContext>();
+  private judgedContexts = new WeakMap<BrowserContext, string>();
   private pages: Map<string, Page> = new Map();
   private pageOwners=new Map<string,string>();
   private owner(context:AgentContext):string{return `${context.userId}:${context.workspaceId??''}:${context.space?'shared':'private'}`;}
@@ -158,24 +158,18 @@ export class BrowserTool extends BaseTool {
         egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
 
         const page = await this.getOrCreatePage(args.contextId?`${this.owner(context)}:${args.contextId}`:undefined);
-        const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
-
-        // Post-connect SSRF check: Playwright can't be IP-pinned, so verify the
-        // address actually connected to wasn't a private IP a rebinding resolver
-        // swapped in between validation and navigation.
-        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
-        if (!addrCheck.ok) {
+        let blocked: string | null;
+        try {
+          blocked = await this.judgeNavigation(page, () => page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT }), assertPublicAddress, egress);
+        } catch (error) {
           // Never handed out, so nothing would ever close it: close it now
           // (its own context goes with it, see getOrCreatePage).
-          await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a blocked page failed'));
-          return { error: `URL blocked: ${addrCheck.reason}` };
-        }
-        // Every redirect hop and the address the page came from, against the egress policy.
-        try {
-          await egress.assertBrowserNavigationAllowed(response);
-        } catch (error) {
           await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a refused page failed'));
           throw error;
+        }
+        if (blocked) {
+          await page.close().catch((err: unknown) => toolLogger.warn({ err }, 'Closing a blocked page failed'));
+          return { error: `URL blocked: ${blocked}` };
         }
 
         const pageId = this.generatePageId();
@@ -211,19 +205,16 @@ export class BrowserTool extends BaseTool {
         egress.enforceEgressForUrl(args.url as string, validation.addresses, 'browser');
 
         const page = this.getPage(args.pageId as string,context);
-        const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
-
-        // Post-connect SSRF check (see comment in `open`).
-        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
-        if (!addrCheck.ok) {
-          await page.goto('about:blank').catch(() => {});
-          return { error: `URL blocked: ${addrCheck.reason}` };
-        }
+        let blocked: string | null;
         try {
-          await egress.assertBrowserNavigationAllowed(response);
+          blocked = await this.judgeNavigation(page, () => page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT }), assertPublicAddress, egress);
         } catch (error) {
           await page.goto('about:blank').catch((err: unknown) => toolLogger.warn({ err }, 'Leaving a refused page failed'));
           throw error;
+        }
+        if (blocked) {
+          await page.goto('about:blank').catch((err: unknown) => toolLogger.warn({ err }, 'Leaving a blocked page failed'));
+          return { error: `URL blocked: ${blocked}` };
         }
 
         return {
@@ -515,6 +506,29 @@ export class BrowserTool extends BaseTool {
     );
   }
 
+  /**
+   * Navigate and judge where it went. A context routed through the egress
+   * proxy was judged by the proxy before every request was sent, and its
+   * `serverAddr()` is the proxy's own address, so only the proxy's refusal is
+   * read. Otherwise the post-connect SSRF check (Playwright cannot be
+   * IP-pinned: a rebinding resolver could have swapped in a private address)
+   * and the policy backstop on the redirect chain. Returns why the SSRF check
+   * blocked it, or null; throws a policy refusal.
+   */
+  private async judgeNavigation(page: Page, navigate: () => Promise<PlaywrightResponse | null>,
+    assertPublicAddress: (ip: string | null | undefined) => { ok: boolean; reason?: string },
+    egress: typeof import('@/security/egress-policy')): Promise<string | null> {
+    const proxied = this.judgedContexts.has(page.context());
+    let response: PlaywrightResponse | null;
+    try { response = await navigate(); }
+    catch (error) { throw proxied ? explainProxyFailure(error) : error; }
+    if (proxied) { assertNotRefusedByProxy(response); return null; }
+    const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+    if (!addrCheck.ok) return addrCheck.reason ?? 'private address';
+    await egress.assertBrowserNavigationAllowed(response);
+    return null;
+  }
+
   private async getOrCreatePage(contextId?: string): Promise<Page> {
     const browser = await sharedChromium.get();
 
@@ -529,7 +543,7 @@ export class BrowserTool extends BaseTool {
     const egress = await browserEgressFor();
     const context = await browser.newContext(egress ? { proxy: egress.proxy } : {});
     if (egress) {
-      this.judgedContexts.add(context);
+      this.judgedContexts.set(context, egressSubjectKey(currentEgressSubject()));
       context.once('close', () => egress.close());
     }
     if (contextId) {
@@ -557,9 +571,17 @@ export class BrowserTool extends BaseTool {
     return page;
   }
 
-  /** A context opened before the egress policy applied is not used under it: its traffic would not be judged. */
+  /**
+   * Under an active policy a context is used only through its own egress
+   * proxy, and only by the subject (user, tool, role chain) it was opened
+   * for: the proxy judges its requests as that subject.
+   */
   private assertJudged(context: BrowserContext): void {
-    if (!this.judgedContexts.has(context) && currentEgressSubject() && egressPolicyActive(activeEgressPolicy())) throw unproxiedContextError();
+    const subject = currentEgressSubject();
+    if (!subject || !egressPolicyActive(activeEgressPolicy())) return;
+    const openedFor = this.judgedContexts.get(context);
+    if (openedFor === undefined) throw unproxiedContextError();
+    if (openedFor !== egressSubjectKey(subject)) throw new Error('This browser context was opened by another tool or agent role, whose egress policy its traffic is judged under. Open a new page (without contextId, or with a new one).');
   }
 
   private generatePageId(): string {

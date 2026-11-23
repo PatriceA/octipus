@@ -188,6 +188,14 @@ export interface EgressProxyOptions {
   hostApi?: { host: string; port: number };
 }
 
+/** Set on a 403 the egress policy (or the private-address guard) caused, so a browser tool can tell it from a site's own 403. */
+export const EGRESS_REFUSED_HEADER = 'x-octipus-egress-refused';
+
+/** A refusal reason as a header value (one line, printable ASCII). */
+function headerSafe(value: string): string {
+  return value.replace(/[^\x20-\x7e]/g, '?').slice(0, 300);
+}
+
 /** The only path prefix forwarded to the host API. */
 export const HOST_API_PATH_PREFIX = '/api/plugin-host/';
 /** The header the proxy stamps on host API requests with the package's label (any client copy is dropped). */
@@ -247,6 +255,13 @@ export interface EgressProxy {
   socketPath: string | null;
   /** The directory holding the socket, to mount into a sandbox. */
   socketDir: string | null;
+  /**
+   * The secret a client of the Unix socket must send first, one line
+   * (`<token>\n`), before anything else: the socket's directory may be
+   * visible to another sandbox (firejail does not hide /run/user), and only
+   * the launcher this proxy was started for knows it (`OCTIPUS_BRIDGE_TOKEN`).
+   */
+  socketToken: string | null;
   close(): Promise<void>;
 }
 
@@ -381,7 +396,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     }
     const nameRefused = declared(host, port) ? policyRefusal(host, port, 'http') : null;
     if (nameRefused) {
-      res.writeHead(403, { 'content-type': 'text/plain' }).end(`${nameRefused}\n`);
+      res.writeHead(403, { 'content-type': 'text/plain', [EGRESS_REFUSED_HEADER]: headerSafe(nameRefused) }).end(`${nameRefused}\n`);
       return;
     }
     if (!declared(host, port)) {
@@ -392,7 +407,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     const vetted = await vet(host, port, 'http', 'http');
     if (res.destroyed) return;
     if (!('ip' in vetted)) {
-      res.writeHead(vetted.status, { 'content-type': 'text/plain' }).end(`${vetted.message}\n`);
+      res.writeHead(vetted.status, { 'content-type': 'text/plain', ...(vetted.status === 403 ? { [EGRESS_REFUSED_HEADER]: headerSafe(vetted.message) } : {}) }).end(`${vetted.message}\n`);
       return;
     }
     // The Host the server sees is the target's, never what the client sent
@@ -478,10 +493,37 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   let unix: NetServer | null = null;
   let socketDir: string | null = null;
   let socketPath: string | null = null;
+  const socketToken = options.unixSocket && process.platform !== 'win32' ? randomBytes(32).toString('base64url') : null;
   if (options.unixSocket && process.platform !== 'win32') {
     socketDir = socketDirFor(options.socketParent, label);
     socketPath = join(socketDir, 'proxy.sock');
-    unix = createNetServer((socket) => server.emit('connection', socket));
+    const token = socketToken;
+    unix = createNetServer((socket) => {
+      // The first line must be this proxy's token; nothing is parsed before it.
+      let buffered = Buffer.alloc(0);
+      const timer = setTimeout(() => socket.destroy(), 5_000);
+      const onData = (chunk: Buffer) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        const newline = buffered.indexOf(0x0a);
+        if (newline < 0) { if (buffered.length > 256) socket.destroy(); return; }
+        socket.off('data', onData);
+        clearTimeout(timer);
+        const given = buffered.subarray(0, newline);
+        const known = Buffer.from(token as string);
+        if (given.length !== known.length || !timingSafeEqual(given, known)) {
+          coreLogger.warn({ pkg: label }, 'Egress proxy socket: a client without this proxy\'s token was refused');
+          socket.destroy();
+          return;
+        }
+        socket.pause();
+        const rest = buffered.subarray(newline + 1);
+        if (rest.length) socket.unshift(rest);
+        server.emit('connection', socket);
+        socket.resume();
+      };
+      socket.on('data', onData);
+      socket.on('error', () => socket.destroy());
+    });
     await new Promise<void>((resolve, reject) => {
       unix!.once('error', reject);
       unix!.listen(socketPath, () => { unix!.off('error', reject); resolve(); });
@@ -494,6 +536,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     port,
     socketPath,
     socketDir,
+    socketToken,
     close() {
       closed ??= (async () => {
         forgetKey();
@@ -516,14 +559,18 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
  * the proxy's Unix socket, and runs the command with the proxy variables
  * pointing at it, passing stdio through and exiting with its code.
  * `OCTIPUS_BRIDGE_NO_PROXY` in its environment becomes the command's
- * `NO_PROXY` (and is not passed on).
+ * `NO_PROXY` (and is not passed on); `OCTIPUS_BRIDGE_TOKEN` is the proxy's
+ * `socketToken`, sent first on every connection and not passed on either.
  */
 export const SANDBOX_BRIDGE_SOURCE = `
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const [sock, ...cmd] = process.argv.slice(1);
+const token = process.env.OCTIPUS_BRIDGE_TOKEN || '';
+delete process.env.OCTIPUS_BRIDGE_TOKEN;
 const srv = net.createServer((c) => {
   const u = net.connect(sock);
+  u.write(token + '\\n');
   c.pipe(u); u.pipe(c);
   c.on('error', () => u.destroy()); u.on('error', () => c.destroy());
   c.on('close', () => u.destroy()); u.on('close', () => c.destroy());

@@ -1,5 +1,7 @@
 import { getExecutionSignal } from '@/core/execution-scope';
 import { enforceGitRemotes } from '@/security/git-egress';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentShellOptions, shellOperationsFor, quoteRuntimeArg } from '@/security/environment-runtime';
@@ -201,7 +203,33 @@ export class GitHubTool extends BaseTool {
     execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>,
     options?: ToolExecutionOptions,
   ): void {
-    super.registerTool(name, description, parameters, (args, context) => this.caller.run(context, () => execute(args, context)), options);
+    super.registerTool(name, description, parameters, (args, context) => {
+      // Values gh takes as positionals (or splices into a flag) must not read
+      // as an option: `gh repo clone <repo> -- --upload-pack=<cmd>`-style
+      // injection. gh's cobra parser gives `--` a meaning of its own (git
+      // flags for repo clone), so the values are checked instead.
+      refuseOptionLike(args);
+      return this.caller.run(context, () => execute(args, context));
+    }, options);
+  }
+
+  /**
+   * Under an active egress policy, the URLs `gh repo clone` will fetch, as gh
+   * resolves them in the environment the clone runs in: the repository's
+   * URL on its host (`gh repo view`), over the protocol gh is configured to
+   * use for that host (`git_protocol`), and the parent of a fork, which gh
+   * adds as `upstream` and fetches too.
+   */
+  private async ghCloneUrls(repo: string): Promise<string[]> {
+    const view = JSON.parse(await this.gh(['repo', 'view', repo, '--json', 'url,sshUrl,parent'])) as { url: string; sshUrl: string; parent?: { name?: string; owner?: { login?: string } } | null };
+    const host = new URL(view.url).host;
+    const protocol = (await this.gh(['config', 'get', 'git_protocol', '-h', host]).catch(() => '')).trim() || 'https';
+    const ssh = protocol === 'ssh';
+    const urls = [ssh ? view.sshUrl : `${view.url}.git`];
+    const owner = view.parent?.owner?.login;
+    const name = view.parent?.name;
+    if (owner && name) urls.push(ssh ? `git@${host}:${owner}/${name}.git` : `https://${host}/${owner}/${name}.git`);
+    return urls;
   }
 
   /**
@@ -305,8 +333,8 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name or URL)', required: true },
       path: { type: 'string', description: 'Local destination path' },
     }), async (args) => {
-      // gh clones over git from github.com (or GH_HOST): judged by the egress policy first.
-      await enforceGitRemotes([ghCloneUrl(args.repo as string)]);
+      // Judged by the egress policy first, on the URLs gh will clone from.
+      if (currentEgressSubject() && egressPolicyActive(activeEgressPolicy())) await enforceGitRemotes(await this.ghCloneUrls(args.repo as string));
       const ghArgs = ['repo', 'clone', args.repo as string];
       if (args.path) ghArgs.push(args.path as string);
       return { output: await this.gh(ghArgs) };
@@ -685,13 +713,17 @@ function splitList(v: unknown): string[] {
 export const githubTool = new GitHubTool();
 
 /**
- * The URL `gh repo clone <repo>` fetches from: the repo itself when it is a
- * URL or `host:path`, else `https://<GH_HOST or github.com>/<owner/name>`.
+ * Argument keys whose values gh reads as positionals or splices into a flag
+ * name (`--${method}`): none may start with `-`.
  */
-export function ghCloneUrl(repo: string): string {
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(repo) || /^[^/]+:/.test(repo)) return repo;
-  const parts = repo.split('/');
-  // HOST/OWNER/REPO is gh's own three-part form.
-  if (parts.length === 3) return `https://${parts[0]}/${parts[1]}/${parts[2]}`;
-  return `https://${process.env.GH_HOST || 'github.com'}/${repo}`;
+const OPTION_LIKE_KEYS = ['repo', 'number', 'tag', 'name', 'run_id', 'workflow', 'path', 'ref', 'method', 'event', 'kind', 'org', 'branch', 'base', 'head', 'reply_to', 'thread_id'];
+
+/** Refuse any of those values that gh could read as an option. */
+export function refuseOptionLike(args: Record<string, unknown>): void {
+  for (const key of OPTION_LIKE_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string' && value.trim().startsWith('-')) {
+      throw new ToolNotExecutedError('github', `The ${key} must not start with "-" (it would be read as a gh option)`);
+    }
+  }
 }

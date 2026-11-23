@@ -113,7 +113,7 @@ const ownLoopback = () => timed(new Promise((resolve) => {
   const out = {
     proxyVar: process.env.HTTP_PROXY || null,
     noProxy: process.env.NO_PROXY,
-    bridgeVarLeaked: 'OCTIPUS_BRIDGE_NO_PROXY' in process.env,
+    bridgeVarLeaked: 'OCTIPUS_BRIDGE_NO_PROXY' in process.env || 'OCTIPUS_BRIDGE_TOKEN' in process.env,
     ownLoopback: await ownLoopback(),
     allowed: await get('http://allowed.test:' + port + '/'),
     denied: await get('http://denied.test:' + port + '/'),

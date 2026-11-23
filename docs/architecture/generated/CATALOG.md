@@ -860,7 +860,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 255 |
+| `core` | `security` | 256 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 92 |
@@ -956,13 +956,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 159 |
+| `tools` | `core` | 161 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 13 |
 | `tools` | `plugins` | 9 |
-| `tools` | `security` | 101 |
+| `tools` | `security` | 103 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 10 |
 | `tools` | `skills` | 7 |
@@ -982,6 +982,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `utils` | `models` | 4 |
 | `utils` | `security` | 4 |
 | `visual` | `models` | 1 |
+| `visual` | `security` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
 | `voice` | `config` | 8 |

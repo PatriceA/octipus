@@ -6,7 +6,7 @@
  */
 import dns from 'node:dns';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -120,7 +120,8 @@ describe('git remotes', () => {
     ['/srv/repos/r.git', null],
     ['./r', null],
     ['file:///srv/r.git', null],
-    ['C:\\repos\\r', null],
+    ['C:\\repos\\r', process.platform === 'win32' ? null : 'unjudgeable'],
+    ['c:/repo', process.platform === 'win32' ? null : { host: 'c', port: 22, scheme: 'ssh' }],
     ['git://git.example/r', 'unjudgeable'],
     ['ext::sh -c touch% /tmp/x', 'unjudgeable'],
   ])('%s', (spec, expected) => {
@@ -159,12 +160,41 @@ describe('git remotes', () => {
     }
   }, 30_000);
 
-  test('gh repo clone is judged as the host it clones from', async () => {
-    const { ghCloneUrl } = await import('@/tools/github');
-    expect(ghCloneUrl('owner/name')).toBe('https://github.com/owner/name');
-    expect(ghCloneUrl('ghe.example/owner/name')).toBe('https://ghe.example/owner/name');
-    expect(ghCloneUrl('git@ghe.example:o/r.git')).toBe('git@ghe.example:o/r.git');
-    expect(ghCloneUrl('https://ghe.example/o/r')).toBe('https://ghe.example/o/r');
+  test('gh repo clone is judged on the URL gh resolves (its host and git_protocol), and option-like values are refused', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'octi-fake-gh-'));
+    const marker = join(bin, 'cloned');
+    const protocolFile = join(bin, 'protocol');
+    writeFileSync(protocolFile, 'ssh');
+    writeFileSync(join(bin, 'gh'), `#!/bin/sh
+case "$1 $2" in
+  "repo view") echo '{"url":"https://ghe.example/o/r","sshUrl":"git@ghe.example:o/r.git","parent":{"name":"up","owner":{"login":"p"}}}' ;;
+  "config get") cat "${protocolFile}" ;;
+  "repo clone") touch "${marker}" ;;
+esac
+`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      const { GitHubTool } = await import('@/tools/github');
+      const tool = new GitHubTool();
+      await tool.initialize();
+      const clone = tool.getToolHandlers().find((h) => h.name.endsWith('repo_clone'))!;
+      const context = { id: 'agent-1', userId: 'u1', sessionId: 's1', role: 'coding', status: 'running' } as never;
+      // The server's GH_HOST says github.com; gh is configured for ghe.example over ssh.
+      state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'github.com' }, { action: 'allow', host: 'ghe.example', schemes: ['https'] }] });
+      await expect(clone.execute({ repo: 'o/r' }, context)).rejects.toThrow(/ghe\.example:22 \(ssh\)/);
+      expect(existsSync(marker)).toBe(false);
+      writeFileSync(protocolFile, 'https');
+      await expect(clone.execute({ repo: 'o/r' }, context)).resolves.toBeDefined();
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
+      await expect(clone.execute({ repo: '--upload-pack=touch /tmp/x' }, context)).rejects.toThrow(/must not start with "-"/);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 });
 
@@ -177,6 +207,7 @@ describe('what the policy cannot judge', () => {
     expect(unjudgedEgressRefusal('docker', 'build_image')).toMatch(/docker\.build_image is refused/);
     expect(unjudgedEgressRefusal('browser-ext', 'navigate')).toMatch(/user's own browser/);
     expect(unjudgedEgressRefusal('mcp_admin', 'mcp_add_server')).toMatch(/refused/);
+    expect(unjudgedEgressRefusal('test_container', 'run')).toMatch(/test_container\.run is refused.*bridge network/);
     expect(unjudgedEgressRefusal('docker', 'list_containers')).toBeNull();
     expect(cliNativeToolsRefusal(false)).toMatch(/vendor-native tools/);
     expect(cliNativeToolsRefusal(true)).toBeNull();
@@ -200,6 +231,12 @@ describe('what the policy cannot judge', () => {
 });
 
 describe('roles along the spawn chain', () => {
+  test('every spawn path appends the parent\'s role to the chain', async () => {
+    const { withEgressRoleChain } = await import('./egress-policy');
+    expect(withEgressRoleChain({ pipelineId: 'p' }, { role: 'coding', metadata: { egressRoleChain: ['general'] } })).toEqual({ pipelineId: 'p', egressRoleChain: ['general', 'coding'] });
+    expect(withEgressRoleChain(undefined, { role: 'general' })).toEqual({ egressRoleChain: ['general'] });
+  });
+
   test('a child is judged under its own role and every ancestor\'s', () => {
     const policy = egressPolicySchema.parse({ roles: { coding: { default: 'deny' }, research: { rules: [{ action: 'allow', host: 'arxiv.org' }] } } });
     const target = { host: 'arxiv.org', port: 443, scheme: 'https' as const };
