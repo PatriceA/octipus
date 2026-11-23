@@ -279,8 +279,20 @@ class ProviderRateLimiter {
    */
   reportTokens(tokensUsed: number): void {
     if (tokensUsed > 0 && this.config.tpm > 0) {
-      this.tokenTimestamps.push({ ts: Date.now(), tokens: tokensUsed });
+      const now = Date.now();
+      // Every routed call writes here and only `hasTokenBudget` used to prune:
+      // drop what left the window on each write, so the window holds at most
+      // one minute of entries. Entries are in time order.
+      let expired = 0;
+      while (expired < this.tokenTimestamps.length && now - this.tokenTimestamps[expired].ts >= RPM_WINDOW_MS) expired++;
+      if (expired > 0) this.tokenTimestamps.splice(0, expired);
+      this.tokenTimestamps.push({ ts: now, tokens: tokensUsed });
     }
+  }
+
+  /** Entries in the TPM window (tests). */
+  tokenWindowSize(): number {
+    return this.tokenTimestamps.length;
   }
 
   /** Report a failed request */
@@ -540,6 +552,11 @@ export class RateLimitManager {
         limiter.reportTokens(tokensUsed);
       },
     };
+  }
+
+  /** Entries held in a provider's TPM window (tests: it must stay bounded). */
+  tokenWindowSize(provider: string): number {
+    return this.getLimiter(provider).tokenWindowSize();
   }
 
   /** Check if a provider has TPM budget for a request */
