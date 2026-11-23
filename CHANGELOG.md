@@ -7,6 +7,47 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Open to-dos no longer disappear behind finished ones**
+  ([API](docs/API.md#tasks)). `GET /api/tasks` sorted by the status text
+  (`archived`, `done`, `in_progress`, `open`) and stopped at 200 rows, so after
+  about 200 finished to-dos the open ones fell off the web page and the mobile
+  app. Without `status` it now returns every active task (in progress, then
+  open) followed by one page of done tasks, most recently finished first:
+  `?doneLimit=` (default 50, at most 500) and `?doneOffset=` page through them,
+  and a new `done: {total, offset, limit, hasMore}` field says how many there
+  are. Archived tasks are no longer in the unfiltered list (both clients hid
+  them); `?status=archived` lists them. The `tasks` array keeps its shape, so a
+  client calling the endpoint with no parameters keeps working. The web list
+  shows the total and a **Show more done** button.
+- **Deleting a to-do on the web can be undone.** The confirm dialog and hard
+  delete are replaced by archiving the to-do and an **Undo** toast that puts
+  its status back.
+- **Notes for daily use on the web.**
+  - A personal note saves itself a moment after you stop typing, with a quiet
+    Saved / Saving… / Not saved (Retry) status in place of the Save button.
+    Unsaved changes are saved when you open another note, go back, leave the
+    page or hide the tab, and a copy is kept in this browser until the server
+    has them: a failed save or a closed tab never loses the draft, and opening
+    the note again brings it back (asking first if the note changed since).
+    Space notes are unchanged: the text saves itself, **Save details** stores
+    the rest.
+  - The open note is in the address bar (`/notes?note=<id>`): reload,
+    bookmarks and back/forward work.
+  - Archiving a note shows **Undo**, and the navigator has an **archive** view
+    listing archived notes with **restore**; an archived note opens read-only.
+    New route `POST /api/notes/:id/restore`; `GET /api/notes?archived=only`
+    lists archived notes ([API](docs/API.md#notes)).
+  - Creating a note can no longer overwrite another one: `POST /api/notes`
+    accepts `createOnly: true` (409 `exists` when a note, archived or not,
+    already has the slug), and the web app sends it for new notes. Before, a
+    new note titled like an existing or archived one replaced its text.
+  - Search runs on the server and includes note bodies:
+    `GET /api/notes?q=` matches every word in the title, slug, tags or body
+    and shows a line of the matching text. It replaces filtering titles over
+    the first 500 notes in the browser.
+  - At phone width the notes page shows one pane at a time (the list, or the
+    open note with a back button); the context panel opens as a sheet and is
+    closed by default.
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

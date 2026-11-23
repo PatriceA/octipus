@@ -298,13 +298,36 @@ tools, and which runs through the plugin host API scopes `agent:run` and
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?view=next` for next-action order with a `bucket` and `reason` each) |
+| GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?assigneeKind=`/`?assigneeRef=`, `?view=next` for next-action order with a `bucket` and `reason` each). Without `status`: every active task, then a page of done ones (see below) |
 | GET | `/api/tasks/:id` | Get one task |
 | POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional) |
 | PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links |
 | DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
 | GET | `/api/tasks/role-agents` | The caller's role agents: task counts, on/off, `pipelineTemplate` (the template each task runs through, or null) |
 | PUT | `/api/tasks/role-agents` | Turn a role agent on or off (`{role, enabled}`); with `enabled: true`, `pipelineTemplate` (an id or name) makes it run each task through that pipeline and `null` makes it work tasks itself. A template with a required parameter is refused |
+
+**The unfiltered list.** `GET /api/tasks` with no `status` (and no `view`)
+returns `{serverNow, tasks, done}`: `tasks` holds every active task (in
+progress, then open; each by priority, due date, newest) followed by one page
+of done tasks, most recently completed first. Finished tasks never push an
+active one out of the list. `?doneLimit=` sets the page size (default 50,
+0–500; `0` returns only the active tasks) and `?doneOffset=` where it starts.
+`done` is `{total, offset, limit, hasMore}`: load more by asking again with
+`doneOffset` advanced by `limit` while `hasMore` is true. Archived tasks are not
+in this list; ask for them with `?status=archived`. `?status=X` returns up to
+200 tasks of that status (done and archived most recently finished first) and
+no `done` field. Other filters (`due`, `category`, assignee) apply to both
+parts. Clients that call it without parameters (the mobile app) keep working:
+`tasks` is the same array shape as before.
+
+To show a to-do list, use the unfiltered call, not one call per status:
+`GET /api/tasks` gives **all** active to-dos (never cut at 200, unlike
+`?status=open`) plus the 50 most recently done, and `?doneLimit=0` gives only
+the active ones. For a "Completed" view, page the done ones with
+`?doneLimit=50&doneOffset=50` and so on (each response repeats the active
+tasks; take the ones with `status: "done"`), or ask for a larger first page
+(`doneLimit` up to 500). `done.total` is the count for a "Completed (n)"
+label.
 
 A parent or blocker the caller cannot see, a self-link, or a parent loop is a
 `400`. Only an active (open or in-progress) blocker blocks; a done one is
@@ -578,8 +601,8 @@ in its body.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (max 500). |
-| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). |
+| GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (default 100, max 500), `q`, `archived=only`. `q` searches on the server: a note matches when every word of `q` (up to 8, case-insensitive, `%`/`_` literal) appears in its title, slug, tags or body; title matches come first, then pinned, then most recently updated. Archived notes never match unless `archived=only`. `archived=only` lists only archived notes (each with `archivedAt`), most recently archived first: the archive view. |
+| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). With `id` it updates that note. Without `id`, a note already at the slug (given, or derived from the title; archived notes included) is **updated**; send `createOnly: true` to create only, which answers `409 {code: "exists", id, slug}` and writes nothing when the slug is taken. The web app sends it for every new note. |
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
@@ -587,6 +610,7 @@ in its body.
 | GET | `/api/notes/:id` | Read a note with its backlinks. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
+| POST | `/api/notes/:id/restore` | Undo an archive: the note is back in lists, search and recall → `{ restored: true }`. `404` when the caller cannot reach the note; in a space, editors and owners only (`403` otherwise). |
 | DELETE | `/api/notes/:id` | Archive (soft): the note's chunks stay but no search or recall returns them. On a lesson note this is your own archive: a later learning review that finds the same lesson drops it instead of reviving the note. `?hard=true` also deletes the note's chunks and edges. |
 
 ## Graph
