@@ -3,6 +3,7 @@
 import { ExternalLink, Info, Plus, Terminal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { CliModelPicker } from './cli-model-picker';
 import { PROVIDER_DEFAULTS, type CLITool, type Model } from '@/lib/types/models';
 
 export interface CLIStatusPanelProps {
@@ -162,39 +163,22 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
 
               {tool.available && registered && (
                 <div className="flex items-center gap-2 pl-4 text-xs">
-                  <label className="text-on-surface-variant shrink-0">Model:</label>
-                  {options.length > 0 ? (
-                    <select
-                      value={currentModel}
-                      onChange={(e) => handleModelChange(tool, registered, e.target.value)}
-                      disabled={!onUpdate}
-                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-on-surface text-xs flex-1 max-w-xs"
-                    >
-                      <option value="">(vendor default)</option>
-                      {options.map(opt => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label} {opt.tier ? `· ${opt.tier}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      defaultValue={currentModel}
-                      onBlur={(e) => {
-                        if (e.target.value !== currentModel) handleModelChange(tool, registered, e.target.value);
-                      }}
-                      disabled={!onUpdate}
-                      placeholder="(vendor default)"
-                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-on-surface text-xs flex-1 max-w-xs font-mono"
-                    />
-                  )}
+                  <span className="text-on-surface-variant shrink-0">Model:</span>
+                  <CliModelPicker
+                    label={`Model for ${tool.name}`}
+                    value={currentModel}
+                    onChange={value => void handleModelChange(tool, registered, value)}
+                    models={options}
+                    disabled={!onUpdate}
+                    commitCustomOnBlur
+                    className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-on-surface text-xs w-full max-w-xs"
+                  />
                   {tool.modelFlag && (
                     <span className="text-[10px] text-on-surface-variant font-mono">→ {tool.modelFlag}</span>
                   )}
                   {options.length === 0 && provider && (
                     <span className="text-[10px] text-on-surface-variant">
-                      (catalog unavailable — type a model ID)
+                      (catalog unavailable — use the default or enter a custom model ID)
                     </span>
                   )}
                 </div>

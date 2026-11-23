@@ -122,7 +122,7 @@ test('session CLI controls save role-specific choices, survive navigation, reset
   await selectChatSession(page, 'sess-1');
   await page.getByText('Models for this session', { exact: true }).click();
   await page.getByLabel('Agent for build My Codex').selectOption('review');
-  await page.getByLabel('Model for build My Codex').fill('account-model');
+  await page.getByLabel('Model for build My Codex').selectOption('account-model');
   await page.getByLabel('Effort for build My Codex').selectOption('xhigh');
   await page.screenshot({ path: test.info().outputPath('session-model-controls.png') });
   await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -139,7 +139,36 @@ test('session CLI controls save role-specific choices, survive navigation, reset
   await page.getByRole('button', { name: 'Reset to defaults' }).click();
   await expect.poll(() => overrides).toEqual([]);
   refuse = true;
-  await page.getByLabel('Model for build My Codex').fill('another-model');
+  await page.getByLabel('Model for build My Codex').selectOption('account-model');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Session model settings changed' })).toBeVisible();
 });
+
+ test('CLI model picker preserves old choices, allows explicit custom IDs and retries a failed catalog', async ({ authenticatedPage: page }) => {
+  let attempts = 0;
+  await page.route('**/api/sessions/*/model-controls', route => json(route, 200, {
+    revision: 0, overrides: [{ modelName: 'My Codex', topic: 'build', model: 'older-model' }], runs: [],
+    bindings: [{ topic: 'build', modelName: 'My Codex', adapter: 'Codex CLI', model: 'configured-model', efforts: [], models: [{ id: 'cached-model', label: 'Cached model' }] }],
+  }));
+  await page.route('**/api/sessions/*/model-controls/catalog?**', route => {
+    attempts++;
+    return json(route, 200, attempts === 1 ? { models: [], error: 'Vendor catalog unavailable' } : { models: [{ id: 'new-model', label: 'New account model' }] });
+  });
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await page.getByText(/Models for this session/).click();
+  const picker = page.getByRole('combobox', { name: 'Model for build My Codex', exact: true });
+  await expect(picker).toHaveValue('older-model');
+  await expect(picker.locator('option[value="older-model"]')).toHaveText('older-model · current selection (not in catalog)');
+  await expect(picker.locator('option[value=""]')).toContainText('Use configured default (configured-model)');
+  await expect(page.getByRole('textbox', { name: /Custom Model/ })).toHaveCount(0);
+  await expect(picker.locator('option[value="cached-model"]')).toHaveText('Cached model');
+  await page.getByRole('button', { name: 'Retry catalog' }).click();
+  await expect(picker.locator('option[value="new-model"]')).toHaveText('New account model');
+  await expect(picker).toHaveValue('older-model');
+  await picker.selectOption('__custom__');
+  await page.getByRole('textbox', { name: 'Custom Model for build My Codex' }).fill('custom-model');
+  await picker.selectOption('new-model');
+  await expect(picker).toHaveValue('new-model');
+  await expect(page.getByRole('textbox', { name: /Custom Model/ })).toHaveCount(0);
+ });

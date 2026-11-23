@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Session CLI model controls now use the same catalog dropdown as the Models page. Defaults and saved models remain visible, with custom IDs behind an explicit option and catalog failures offering a retry.
+
 - **Today, and to-dos linked to notes** ([guide](docs/guides/todos-notes-today.md),
   [API](docs/API.md#note--to-do-links)). A **Today** page (first in the
   sidebar, and a tab beside To-dos) shows the day: overdue, due today and My

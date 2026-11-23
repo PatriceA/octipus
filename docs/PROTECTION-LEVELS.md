@@ -214,3 +214,15 @@ Operator-configured MCP servers are not plugin packages and are not gated.
 - Levels on notes, tasks and contacts (contacts hold personal data and will
   likely start at 3).
 - A web control to set levels (the API is there).
+
+### An older screenshot conversation is stuck at level 4
+
+Older unclassified uploads may already have raised a conversation to level 4.
+That label records what the conversation has held; changing a document's label
+or a later attachment choice does not lower it. There is currently no supported
+control to lower an existing session's recorded level. To continue in that same
+session, configure a local model on Models. A vendor CLI is not a local model.
+Alternatively, start a new conversation and classify the screenshots as Public
+or Internal before sending, after checking they contain no sensitive information.
+Do not edit the database label: running processes and previous CLI contexts may
+still retain content from the original conversation.
