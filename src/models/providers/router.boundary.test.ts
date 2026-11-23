@@ -87,6 +87,14 @@ async function advanceUntil(done: () => boolean, limitMs: number): Promise<void>
   expect(done()).toBe(true);
 }
 
+/** Run the fake clock until `p` settles (an SDK's own retry backoff included). */
+async function settle<T>(p: Promise<T>): Promise<T> {
+  let done = false;
+  p.then(() => { done = true; }, () => { done = true; });
+  await advanceUntil(() => done, 60_000);
+  return p;
+}
+
 const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
 
 let router: InstanceType<typeof ProviderRouter>;
@@ -390,6 +398,23 @@ describe('failure policy', () => {
     expect(err.reason).toBe(FailoverReason.PROVIDER_DOWN);
     expect(err.message).toMatch(/circuit breaker is open/i);
     expect(upstream.requests).toHaveLength(5);
+  });
+
+  test('an unreachable custom endpoint fails fast and leaves the breaker its rows share closed', async () => {
+    fakeClock();
+    const dead = await startScriptedProvider();
+    const deadUrl = dead.url;
+    await dead.close();
+    registryDouble.add(customRow({ name: 'mistyped', modelId: 'mistyped-model', endpoint: deadUrl }), customRow({ name: 'healthy', modelId: 'healthy-model' }));
+    vaultDouble.set('system', 'gateway_key', 'vault-key');
+    for (let i = 0; i < 6; i++) {
+      const err = await settle(rejection(router.complete({ model: 'mistyped-model', messages: hi })));
+      expect(err.reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+      expect(err.isRetryable).toBe(false);
+    }
+    expect(getCircuitBreakerRegistry().getStatus('custom-openai')).toMatchObject({ state: 'closed', failures: 0 });
+    upstream.enqueue(json(chatCompletion({ content: 'still served' })));
+    expect((await settle(router.complete({ model: 'healthy-model', messages: hi }))).content).toBe('still served');
   });
 
   test('auth failures never open the breaker', async () => {

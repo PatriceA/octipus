@@ -21,6 +21,12 @@ export enum FailoverReason {
   TOOL_CALL_INVALID = 'tool_call_invalid',
   NETWORK_TIMEOUT = 'network_timeout',
   PROVIDER_DOWN = 'provider_down',
+  /**
+   * The model endpoint refused the connection or its host does not resolve
+   * (ECONNREFUSED, ENOTFOUND): a stopped server or a wrong URL. Retrying
+   * fails the same way until someone fixes it.
+   */
+  ENDPOINT_UNREACHABLE = 'endpoint_unreachable',
   QUOTA_EXHAUSTED = 'quota_exhausted',
   INVALID_RESPONSE = 'invalid_response',
   COMPRESSION_NEEDED = 'compression_needed',
@@ -305,13 +311,23 @@ const PATTERNS: Array<{
     recovery: RecoveryAction.RETRY_BACKOFF,
   },
 
+  // Refused connection / unknown host: a stopped server or a wrong URL, not a
+  // blip. Before the network rule, whose text match would take it. The DNS
+  // blip EAI_AGAIN is not this; it stays transient below.
+  {
+    test: (m, c) =>
+      c === 'ECONNREFUSED' ||
+      c === 'ENOTFOUND' ||
+      (c !== 'EAI_AGAIN' && /ECONNREFUSED|ENOTFOUND|connection refused|Name or service not known/i.test(m)),
+    reason: FailoverReason.ENDPOINT_UNREACHABLE,
+    recovery: RecoveryAction.USER_PROMPT,
+  },
+
   // Network / timeout
   {
     test: (m, c) =>
       c === 'ECONNRESET' ||
-      c === 'ECONNREFUSED' ||
       c === 'ETIMEDOUT' ||
-      c === 'ENOTFOUND' ||
       c === 'EAI_AGAIN' ||
       c === 'UND_ERR_SOCKET' ||
       /timeout|timed.?out|network.*error|socket.hang.up|connection.*(reset|refused|closed)|ENOTFOUND|fetch failed/i.test(
@@ -404,6 +420,13 @@ const PATTERNS: Array<{
   },
 ];
 
+/** What the user reads for a refused connection or unknown host: the cause, then what to fix. */
+function unreachableMessage(message: string, code: string): string {
+  const what = code === 'ENOTFOUND' || /ENOTFOUND|Name or service not known/i.test(message) ? 'host not found' : 'connection refused';
+  return `Model endpoint unreachable (${what}${code ? `, ${code}` : ''}): ${message || 'no response'}. `
+    + 'Check that the model server is running and that the model\'s endpoint URL is correct.';
+}
+
 /**
  * Classify a raw error (thrown from a provider, transport, or internal
  * subsystem) into a structured `ClassifiedError`.
@@ -443,7 +466,7 @@ export function classifyError(
       return new ClassifiedError({
         reason,
         recovery,
-        message: message || reason,
+        message: reason === FailoverReason.ENDPOINT_UNREACHABLE ? unreachableMessage(message, code) : message || reason,
         retryAfterMs,
         providerHint,
         metadata: { status, code: code || undefined },
@@ -499,6 +522,16 @@ export function isTransientDnsError(errMsg: string): boolean {
  * usually clears it. Contrast NXDOMAIN ("Name or service not known" / ENOTFOUND),
  * a permanent lookup failure that stays fatal.
  */
+/**
+ * True when `err` is a permanently unreachable model endpoint: classified as
+ * ENDPOINT_UNREACHABLE (its code is read from the cause chain, so an SDK's
+ * bare "Connection error." counts), or its text says so.
+ */
+export function isFatalConnectionFailure(err: unknown): boolean {
+  if (classifyError(err).reason === FailoverReason.ENDPOINT_UNREACHABLE) return true;
+  return isFatalConnectionError(err instanceof Error ? err.message : String(err ?? ''));
+}
+
 export function isFatalConnectionError(errMsg: string): boolean {
   if (isTransientDnsError(errMsg)) return false;
   return (

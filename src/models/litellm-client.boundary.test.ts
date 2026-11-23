@@ -35,7 +35,8 @@ vi.mock('@/security/vault', async (importOriginal) => ({
   getVault: (await import('@/models/testing/model-doubles')).vaultDouble.vault,
 }));
 
-import { ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { APIConnectionError } from 'openai';
+import { ClassifiedError, classifyError, FailoverReason, isFatalConnectionFailure, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 import { modelRow, registryDouble, vaultDouble } from '@/models/testing/model-doubles';
 import {
@@ -279,6 +280,38 @@ describe('failure classification over the wire', () => {
     expect(err.reason).toBe(FailoverReason.CASCADED_CANCELLATION);
     expect(err.recovery).toBe(RecoveryAction.ABORT);
     await proxy.requests[0].closed;
+  });
+});
+
+describe('unreachable endpoints', () => {
+  test('a proxy that refuses the connection fails fast as an unreachable endpoint', async () => {
+    const dead = await startScriptedProvider();
+    const deadUrl = dead.url;
+    await dead.close();
+    process.env.LITELLM_URL = deadUrl;
+    try {
+      const err = await rejection(clientWith().completeViaProxy({ model: 'gpt-4o', messages: hi }));
+      expect(err.reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+      expect(err.isRetryable).toBe(false);
+      expect(err.message).toMatch(/Model endpoint unreachable \(connection refused, ECONNREFUSED\)/);
+      expect(isFatalConnectionFailure(err)).toBe(true);
+    } finally {
+      process.env.LITELLM_URL = proxy.url;
+    }
+  });
+
+  test.each([
+    ['ENOTFOUND', FailoverReason.ENDPOINT_UNREACHABLE, false],
+    ['ECONNREFUSED', FailoverReason.ENDPOINT_UNREACHABLE, false],
+    ['EAI_AGAIN', FailoverReason.NETWORK_TIMEOUT, true],
+    ['ECONNRESET', FailoverReason.NETWORK_TIMEOUT, true],
+    ['UND_ERR_SOCKET', FailoverReason.NETWORK_TIMEOUT, true],
+  ])('the SDK connection error around %s is %s', (code, reason, retryable) => {
+    const socket = Object.assign(new Error(`getaddrinfo ${code} gateway.example`), { code });
+    const err = classifyError(new APIConnectionError({ cause: new TypeError('fetch failed', { cause: socket }) }), 'litellm');
+    expect(err.reason).toBe(reason);
+    expect(err.isRetryable).toBe(retryable);
+    expect(isFatalConnectionFailure(err)).toBe(!retryable);
   });
 });
 

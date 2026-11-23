@@ -7,6 +7,7 @@ import {
   isRateLimitError,
   isTransientError,
   isFatalConnectionError,
+  isFatalConnectionFailure,
   isTransientDnsError,
 } from './classification';
 
@@ -54,6 +55,32 @@ describe('classifyError — wrapped transport failures', () => {
     expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
     expect(err.recovery).toBe(RecoveryAction.RETRY_BACKOFF);
     expect(err.metadata?.code).toBe('UND_ERR_SOCKET');
+  });
+
+  test.each([
+    ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:11434', 'connection refused'],
+    ['ENOTFOUND', 'getaddrinfo ENOTFOUND gateway.example.invalid', 'host not found'],
+  ])('%s under an SDK connection error fails fast as an unreachable endpoint', (code, text, what) => {
+    const socket = Object.assign(new Error(text), { code });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+    expect(err.isRetryable).toBe(false);
+    expect(err.message).toContain(`Model endpoint unreachable (${what}, ${code})`);
+    expect(err.message).toContain('endpoint URL');
+    expect(isFatalConnectionFailure(err)).toBe(true);
+  });
+
+  test('the EAI_AGAIN DNS blip stays transient', () => {
+    const socket = Object.assign(new Error('getaddrinfo EAI_AGAIN api.example.com'), { code: 'EAI_AGAIN' });
+    const err = classifyError(new Error('Connection error.', { cause: new TypeError('fetch failed', { cause: socket }) }));
+    expect(err.reason).toBe(FailoverReason.NETWORK_TIMEOUT);
+    expect(err.isRetryable).toBe(true);
+    expect(isFatalConnectionFailure(err)).toBe(false);
+  });
+
+  test('a refused connection named only in the text is unreachable too', () => {
+    expect(classifyError(new Error('connect ECONNREFUSED 127.0.0.1:11434')).reason).toBe(FailoverReason.ENDPOINT_UNREACHABLE);
+    expect(isFatalConnectionFailure(new Error('Connection error.', { cause: { code: 'ECONNREFUSED' } }))).toBe(true);
   });
 
   test('an own code wins over one in the cause', () => {
