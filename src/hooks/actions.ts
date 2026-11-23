@@ -588,6 +588,17 @@ async function executeSpawnAgent(
       if (marked) endReadOnlyTurn(sessionId);
     }
 
+    // The concurrent-agent cap refused the root agent's spawn, and nothing was
+    // stored in the session: reported as not started, as the direct spawn
+    // below does, so a webhook delivery is released for a redelivery and the
+    // reservation handed back. A quota or budget refusal is answered in the
+    // session instead (TurnResult.notStarted), and its delivery counts as done.
+    if (result.notStarted) {
+      coreLogger.warn({ hookId: hook?.id, sessionId, error: result.response }, 'Orchestrated hook turn refused before any agent started');
+      await closeThreadIfEnded(thread, hook);
+      return { success: false, error: result.response.slice(0, 1000), notStarted: true, data: { orchestrated: true, ...threadData(thread) } };
+    }
+
     // For orchestrated hooks, notify the owner with the result if either:
     // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
