@@ -11,16 +11,20 @@ labels reflect blast radius, not contract guarantees.
   ([docs](docs/OBSERVABILITY.md#tracing-opentelemetry)). Off by default;
   set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
   or `OTEL_TRACES_EXPORTER=otlp`) to export spans over OTLP/HTTP to a
-  collector. Spans: inbound HTTP request (continuing an incoming W3C
-  `traceparent`), `agent.run` per turn, `agent.child` per spawn,
+  collector. Spans: inbound HTTP request (health and metrics excluded),
+  `agent.run` per turn, `agent.child` per spawn,
   `pipeline.run` and `pipeline.stage`, `chat <model>` per model call with
   provider, model, token counts and streaming, `execute_tool <name>` per tool
-  call, `channel.deliver`, and `webhook.deliver` (which sends `traceparent` on).
+  call, `channel.deliver`, and `webhook.deliver`. An inbound `traceparent`
+  is continued only with `OCTIPUS_TRACE_TRUST_INBOUND=true` (otherwise linked
+  from a new trace), and webhooks send `traceparent` only with
+  `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true`; `tracestate` is never forwarded.
   Spans carry ids, names, counts, status and the error class only, never
   prompts, completions, tool arguments, message text or the error message.
   The standard `OTEL_*` variables set headers, service name, resource,
-  sampler and batching; `OTEL_TRACES_EXPORTER` other than `otlp`/`none`, or
-  the `grpc` protocol, stops boot with the reason. New dependencies:
+  sampler and batching. An `OTEL_TRACES_EXPORTER` without `otlp`, or the
+  `grpc` protocol, is logged and leaves tracing off; boot is unaffected. The
+  shutdown flush is capped at 1.5 s. New dependencies:
   `@opentelemetry/api`, `sdk-trace-base`, `context-async-hooks`, `core`,
   `resources` and `exporter-trace-otlp-http`; the SDK is loaded only when
   tracing is on.

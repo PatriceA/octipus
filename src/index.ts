@@ -52,7 +52,8 @@ async function main() {
 
   try {
     // Tracing before anything that could start a span. Off unless the OTEL_*
-    // variables configure an exporter; then a bad configuration fails boot.
+    // variables configure an exporter; a configuration it cannot honour is
+    // logged and leaves it off.
     await initTracing();
 
     // Initialize vault first — providers resolve API keys through it. If the
@@ -654,9 +655,6 @@ async function main() {
       // force-exit watchdog on a long-poll socket.
       stopApiServer();
 
-      // The spans of the requests and turns that just ended.
-      await shutdownTracing();
-
       // The store requests counted since their last audit row (src/plugins/packages/store-audit.ts).
       try {
         const { flushStoreAudits } = await import('@/plugins/packages/store-audit');
@@ -673,6 +671,11 @@ async function main() {
       } catch {
         // Module may not have loaded; nothing to close.
       }
+
+      // The spans of the requests and turns that just ended. After the audit
+      // rows and the LISTEN close, and capped (SHUTDOWN_FLUSH_MS) well inside
+      // the 4 s watchdog: a collector that is down must not cost them.
+      await shutdownTracing();
 
       // The engine was asked to stop at the start; it has had the whole shutdown to exit.
       await engineStopped;

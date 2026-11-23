@@ -306,9 +306,15 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   // Started by hand rather than with `withSpan`: a generator yields between
   // chunks, and the consumer's own spans in between are not this call's children.
   const span = startSpan(`chat ${options.model}`, modelSpanAttributes(provider, options, true), SpanKind.CLIENT);
+  // Everything before the request: a failure here sent nothing and bills
+  // nothing, so it ends the span without the accounting in `finally` below.
   let prepared: CompletionOptions;
+  let restorer: ReturnType<typeof streamRestorerFor>;
+  let leave: () => void;
   try {
     prepared = await prepare(options, provider);
+    restorer = streamRestorerFor(pseudonymized.get(prepared));
+    leave = await enterLocalRunner(prepared, provider);
   } catch (err) {
     span.fail(err);
     span.end();
@@ -321,8 +327,6 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   // What the provider generated, for an estimate when it never reports usage.
   let chunks = 0;
   let outputChars = 0;
-  const restorer = streamRestorerFor(pseudonymized.get(prepared));
-  const leave = await enterLocalRunner(prepared, provider);
   const started = Date.now();
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {

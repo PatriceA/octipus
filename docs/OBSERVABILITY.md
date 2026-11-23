@@ -103,6 +103,8 @@ environment variables, here the standard OpenTelemetry ones:
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource; the default `service.name` is `octipus`, `service.version` the running version. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling (default `parentbased_always_on`), e.g. `parentbased_traceidratio` and `0.1`. |
 | `OTEL_BSP_*` | Batch size, queue size and delay of the batch span processor. |
+| `OCTIPUS_TRACE_TRUST_INBOUND=true` | Continue a caller's `traceparent` (see Propagation). Off by default. |
+| `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true` | Send `traceparent` on webhook deliveries. Off by default. |
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
@@ -112,11 +114,17 @@ OTEL_TRACES_SAMPLER_ARG=0.25
 ```
 
 Spans are sent as OTLP/HTTP with JSON bodies, which every collector accepts on
-its HTTP port (4318). A configuration this build cannot honour stops the
-process at boot with the reason rather than exporting nothing:
-`OTEL_TRACES_EXPORTER` other than `otlp` or `none`, or
-`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. Export failures (a collector that is down)
-are logged at `warn`. Pending spans are flushed at shutdown.
+its HTTP port (4318); `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is accepted
+and logged, and the spans still go as JSON. A configuration this build cannot
+honour is logged at `error` and leaves tracing off; the server boots normally:
+`OTEL_TRACES_EXPORTER` without `otlp` (`console`, `zipkin`), or
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. In a list such as `otlp,console` spans go
+to OTLP and the rest is ignored with a warning. Export failures (a collector
+that is down) are logged at `warn`, at most once a minute per message.
+
+At shutdown the pending spans get 1.5 s to reach the collector, after the
+other shutdown work; spans not out by then are dropped, so a collector that
+is down never holds up the process.
 
 While tracing is off, the OpenTelemetry SDK is never loaded: the span helpers
 return before touching it, and only the dependency-free
@@ -126,7 +134,7 @@ return before touching it, and only the dependency-free
 
 | Span | Kind | Where | Attributes |
 |---|---|---|---|
-| `<METHOD> <route>` | server | every HTTP request (the application layer, `src/api/http/app.ts`) | `http.request.method`, `http.route`, `url.path`, `url.scheme`, `http.response.status_code` |
+| `<METHOD> <route>` | server | every HTTP request (the application layer, `src/api/http/app.ts`) except health checks and metrics scrapes | `http.request.method`, `http.route` (or `url.path` when no route matched), `url.scheme`, `http.response.status_code` |
 | `agent.run` | internal | every orchestrated turn, rooms included (`AgentService`) | `octipus.run_id`, `octipus.session_id`, `octipus.channel`, `octipus.trigger`, `octipus.outcome`, `octipus.topic` |
 | `agent.child` | internal | a child agent spawn (`SwarmSpawner.spawnChild`) | `octipus.agent.parent_id`, `.role`, `.depth`, `.planned`, `.child_status` |
 | `pipeline.run` | internal | a pipeline walk | `octipus.pipeline.id`, `octipus.session_id` |
@@ -143,9 +151,20 @@ turn are siblings under `agent.run`, in the order they ran. `octipus.run_id`
 is the same `run_…` id stamped into the logs, so a trace and its log lines
 find each other.
 
-**Propagation.** An inbound request carrying a W3C `traceparent` header
-continues that trace. Outgoing webhook deliveries carry `traceparent` (and
-`tracestate`) of their span, unless the hook configures that header itself.
+**Propagation.** By default an inbound W3C `traceparent` is not trusted: the
+header is read before authentication, so honouring it would let any caller
+force sampling on, switch it off for their own requests, or splice spans into
+a trace id of their choosing. The request starts a new trace instead, with a
+span link to the caller's context. Set `OCTIPUS_TRACE_TRUST_INBOUND=true` when
+the server sits behind a proxy or gateway you control that sets the header;
+the request then continues that trace.
+
+Outgoing webhook deliveries carry nothing by default, so no trace id leaves
+for a third-party host. With `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true` they carry
+the `traceparent` of their span, unless the hook configures that header
+itself. `tracestate` is never sent: it can hold whatever an inbound caller put
+there.
+
 Turns that arrive over the gateway WebSocket or a polling channel start a
 trace of their own at `agent.run`.
 
@@ -167,9 +186,11 @@ reaches a span. Specifically:
   error's class (`DiaryUnreadable`, `ClassifiedError`, a status code for an
   HTTP failure), never the message, which can quote user content; no exception
   events or stack traces are recorded.
-- **URLs.** An inbound request records its path through the log redactor
+- **URLs.** An inbound request that matched a route records the route
+  template (`/api/devices/push-token/:token`) and not its path, which can hold
+  a token. One that matched none records its path through the log redactor
   (`redactUrlForLog`: the token segment of a public media, invite or form link
-  is replaced) and the route template; the query string is not recorded at all.
+  is replaced). The query string is not recorded at all.
   A webhook records only the receiving host: a webhook URL's path is often its
   secret.
 - **Channels** record the channel type, never the channel id (a phone number on

@@ -584,15 +584,6 @@ export class ToolExecutor {
   }
 
   /**
-   * Handle tool calls from the LLM with permission gating.
-   * Returns tool result messages to append to the conversation.
-   *
-   * Swarm Phase 2: `spawn_child` calls in the same turn that share a
-   * `parallelGroup` are fanned out via `Promise.all` and their results
-   * merged back into the `results` list in call order. Default fan-out
-   * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
-   */
-  /**
    * One tool execution as a span (src/core/tracing.ts): the tool's name, its
    * call id and the agent that made it, never its arguments or result. A
    * thrown error marks it failed with the error's class.
@@ -608,6 +599,15 @@ export class ToolExecutor {
     }, run);
   }
 
+  /**
+   * Handle tool calls from the LLM with permission gating.
+   * Returns tool result messages to append to the conversation.
+   *
+   * Swarm Phase 2: `spawn_child` calls in the same turn that share a
+   * `parallelGroup` are fanned out via `Promise.all` and their results
+   * merged back into the `results` list in call order. Default fan-out
+   * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
+   */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.activeBatches++;
     try {

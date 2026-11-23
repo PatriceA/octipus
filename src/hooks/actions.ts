@@ -891,8 +891,8 @@ async function executeWebhook(
     try {
       response = await fetchGuarded(url, {
         method,
-        // The trace context goes out with the delivery; a header the hook
-        // configures itself wins.
+        // `traceparent` goes out only when the operator opted in
+        // (OCTIPUS_TRACE_PROPAGATE_OUTBOUND); a header the hook configures itself wins.
         headers: injectTraceHeaders({
           'Content-Type': 'application/json',
           ...headers,
