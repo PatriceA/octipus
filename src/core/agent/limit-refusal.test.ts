@@ -133,7 +133,7 @@ describe('AgentService.handleMessage', () => {
     expect(fixture.persisted).toEqual([]);
   });
 
-  test('a budget or quota refusal at spawn, or any other failure, is not: it is answered in the session', async () => {
+  test('a budget or quota refusal at spawn (answered in the session) or any other failure is not reported as not started', async () => {
     const others = [
       new SpendBudgetExceededError(reason),
       new QuotaExceededError({ kind: 'concurrentAgents', current: 2, max: 2, userId: 'user' }),
@@ -170,6 +170,16 @@ describe('AgentService.handleMessage', () => {
       expect(result.metadata?.limit).toEqual(refusal.refusal);
       expect(fixture.created.at(-1)).toEqual({ sessionId: 'session', role: 'assistant', content: refusal.text, metadata: { limit: refusal.refusal } });
       expect(fixture.created.filter((m) => m.role === 'user')).toHaveLength(1);
+    });
+
+    test('the agent cap after the "go" was stored is not reported as not started', async () => {
+      fixture.context = plan;
+      fixture.root.mockRejectedValueOnce(new ConcurrencyLimitError(3));
+      const result = await new AgentService().handleMessage('session', 'user', 'go', 'webchat');
+      expect(result.outcome).toBe('failed');
+      // The "go" and the start notice are already in the session.
+      expect(fixture.created.filter((m) => m.role === 'user')).toHaveLength(1);
+      expect(result.notStarted).toBeUndefined();
     });
   });
 

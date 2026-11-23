@@ -86,8 +86,10 @@ export interface TurnResult {
   /**
    * The global concurrent-agent cap refused the root agent's spawn: no agent
    * ran and nothing was stored in the session, so a caller may retry the same
-   * input. A quota or spend-budget refusal is not this: it is answered in the
-   * session (`metadata.limit`), which is where its owner reads it.
+   * input. Never set once the turn stored its message (a room post, the
+   * plan-execute path). A quota or spend-budget refusal is not this: it is
+   * answered in the session (`metadata.limit`), which is where its owner
+   * reads it.
    */
   notStarted?: boolean;
 }
@@ -1505,8 +1507,11 @@ export class AgentService {
       // A room turn's runner reports it to the room (`room.turn` done,
       // failed); a scheduled hook records the run as failed (hooks/actions.ts).
       outcome: 'failed',
-      // The concurrent-agent cap refused the root agent's spawn: nothing ran.
-      ...(isConcurrencyLimitError(error) && { notStarted: true }),
+      // The concurrent-agent cap refused the root agent's spawn and nothing
+      // was written for this turn. Not when the turn had already stored its
+      // message (a room post; the plan-execute path, which also used up the
+      // session's plan): a retry would store it again.
+      ...(isConcurrencyLimitError(error) && !userMessageSaved && { notStarted: true }),
     };
   }
 
