@@ -26,8 +26,22 @@ export type EmbeddingPurpose =
   | 'image_description'
   | 'knowledge_artifact'
   | 'note'
+  // A note a learning review wrote (`notes.note_kind = 'lesson'`); NoteService
+  // picks the purpose from the note's kind (`notePurposeFor`).
+  | 'lesson'
   | 'message'
   | 'ephemeral';
+
+/** One purpose, or several (e.g. a note search over `'note'` and `'lesson'`). */
+export type PurposeFilter = EmbeddingPurpose | readonly EmbeddingPurpose[];
+
+/** `AND purpose …` for a raw query; empty without a filter. */
+function purposeSql(purpose: PurposeFilter | undefined): SQL {
+  if (purpose === undefined) return sql``;
+  if (typeof purpose === 'string') return sql`AND purpose = ${purpose}`;
+  if (purpose.length === 0) return sql``;
+  return sql`AND purpose IN (${sql.join(purpose.map((p) => sql`${p}`), sql`, `)})`;
+}
 
 export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
@@ -224,6 +238,21 @@ function repoScopeSql(scope?: SearchScope) {
   const selected = ids?.length ? sql`AND repo_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})` : sql``;
   const visible = repoVisibilitySql(scope);
   return sql`${selected} ${visible ? sql`AND ${visible}` : sql``}`;
+}
+
+/**
+ * The chunk's source is not an archived note: `NOT EXISTS` an archived
+ * `notes` row whose `'note:' || id` is the chunk's `source_id`. Archiving a
+ * note keeps its chunks (unarchiving, however it is done, then needs no
+ * re-index, and the lesson filer still sees an archived lesson to drop its
+ * duplicate), so every search and the "has rows" check apply this in SQL,
+ * in each leg before its limit. The anti-join reads only archived notes, by
+ * the partial expression index `notes_archived_source_idx` (migration 0201).
+ * A row whose source is not a note, or a note that has no row, passes.
+ * `sourceId` is the chunk's `source_id` column as the query names it.
+ */
+function notArchivedNoteSql(sourceId: SQL | typeof embeddings.sourceId = sql`embeddings.source_id`): SQL {
+  return sql`NOT EXISTS (SELECT 1 FROM notes archived_note WHERE archived_note.archived_at IS NOT NULL AND 'note:' || archived_note.id::text = ${sourceId})`;
 }
 
 /**
@@ -426,8 +455,10 @@ export class EmbeddingService {
         // which is exactly what `last_verified_at` records — so a nightly
         // re-crawl keeps unchanged facts fresh without rewriting a row.
         // Metadata is refreshed as well, so a re-index re-tags a row written
-        // before its source carried a provenance tag.
-        set: { lastAccessedAt: sql`now()`, lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id`, metadata: sql`excluded.metadata` },
+        // before its source carried a provenance tag. `last_accessed_at` is
+        // left alone: indexing is not a read (it says when a search last
+        // returned the row, which lesson expiry relies on).
+        set: { lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id`, metadata: sql`excluded.metadata` },
       })
       .returning({ id: embeddings.id });
     return result[0].id;
@@ -686,7 +717,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, scope?: SearchScope): Promise<SearchResult[]> {
+  async search(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: PurposeFilter, minSimilarity = 0, scope?: SearchScope): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query, 'query');
@@ -704,9 +735,10 @@ export class EmbeddingService {
     // candidates at all; the repo scope narrows within it.
     const filters = [
       scopePredicate(knowledge, 'read'),
-      purpose ? eq(embeddings.purpose, purpose) : undefined,
+      typeof purpose === 'string' ? eq(embeddings.purpose, purpose) : purpose?.length ? inArray(embeddings.purpose, [...purpose]) : undefined,
       scope?.repoIds?.length ? inArray(embeddings.repoId, scope.repoIds) : undefined,
       repoVisibilitySql(scope),
+      notArchivedNoteSql(embeddings.sourceId),
     ].filter(Boolean);
     const conditions = filters.length > 0 ? and(...filters) : undefined;
 
@@ -749,14 +781,14 @@ export class EmbeddingService {
         ageDays: Math.round(Number(r.ageDays) || 0),
       }))
       .filter(r => r.similarity >= minSimilarity);
-    this.recordAccess(out.map((r) => r.id));
+    if (!scope?.skipAccess) this.recordAccess(out.map((r) => r.id));
     return out;
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: EmbeddingPurpose, scope?: SearchScope): Promise<SearchResult[]> {
+  async ftsSearch(knowledge: KnowledgeScope, query: string, limit = 5, purpose?: PurposeFilter, scope?: SearchScope): Promise<SearchResult[]> {
     const db = getDb();
-    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const purposeFilter = purposeSql(purpose);
     const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     const scopeFilter = globalDocsScopeSql(scope);
     const repoFilter = repoScopeSql(scope);
@@ -771,6 +803,7 @@ export class EmbeddingService {
         ${userFilter}
         ${scopeFilter}
         ${repoFilter}
+        AND ${notArchivedNoteSql()}
       ORDER BY similarity DESC
       LIMIT ${limit}
     `);
@@ -813,7 +846,7 @@ export class EmbeddingService {
     knowledge: KnowledgeScope,
     query: string,
     limit = 5,
-    purpose?: EmbeddingPurpose,
+    purpose?: PurposeFilter,
     alpha = 0.6,
     minSimilarity = 0,
     scope?: SearchScope,
@@ -830,13 +863,15 @@ export class EmbeddingService {
     }
 
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
-    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const purposeFilter = purposeSql(purpose);
     // Tenant scope: whose rows are candidates at all.
     const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     // Optional hard-scope to the global product-docs corpus (see searchGlobalDocs).
     const scopeFilter = globalDocsScopeSql(scope);
     // Optional multi-repo scope.
     const repoFilter = repoScopeSql(scope);
+    // An archived note's chunks are not candidates (`notArchivedNoteSql`).
+    const liveFilter = sql`AND ${notArchivedNoteSql()}`;
     const k = 60; // RRF constant
 
     const results = await withFilteredVectorScan('embeddings', (q) => q.execute(sql`
@@ -849,6 +884,7 @@ export class EmbeddingService {
           ${userFilter}
           ${scopeFilter}
           ${repoFilter}
+          ${liveFilter}
         LIMIT 50
       ),
       vec AS (
@@ -860,7 +896,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
                1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
-        WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter} ${repoFilter}
+        WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter} ${repoFilter} ${liveFilter}
         ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
@@ -952,7 +988,7 @@ export class EmbeddingService {
    * `purposes`, `excludeProductDocs` and `perSource` filter in SQL, in both
    * legs, so the candidate window holds only rows the caller can use: a large
    * document's chunks or the product manual cannot crowd out the one note
-   * that answers.
+   * that answers. An archived note's chunks are left out the same way.
    *
    * When the query cannot be embedded, the keyword leg runs alone and
    * `embeddingError` says why: a caller that needs the vector leg has to know
@@ -1000,7 +1036,8 @@ export class EmbeddingService {
     const userFilter = sql`AND ${scopePredicate(knowledge, 'read')}`;
     const scopeFilter = globalDocsScopeSql(scope);
     const repoFilter = repoScopeSql(scope);
-    const filters = sql`${purposeFilter} ${productDocsFilter} ${userFilter} ${scopeFilter} ${repoFilter}`;
+    const liveFilter = sql`AND ${notArchivedNoteSql()}`;
+    const filters = sql`${purposeFilter} ${productDocsFilter} ${userFilter} ${scopeFilter} ${repoFilter} ${liveFilter}`;
     const k = 60;
     const perSourceCap = perSource === undefined ? null : Math.max(1, Math.floor(perSource));
     // The capped lexemes OR-ed into a tsquery, in its input syntax (each
@@ -1181,8 +1218,8 @@ export class EmbeddingService {
 
   /**
    * Whether `knowledge` holds any row it may read of one of `purposes`
-   * (the product docs only unless excluded): one indexed lookup, no content
-   * returned. The Recall page's calibration asks it before saying that
+   * (the product docs only unless excluded), an archived note's rows not
+   * counted: one indexed lookup, no content returned. The Recall page's calibration asks it before saying that
    * nothing clears a recall hook's bar.
    */
   async hasReadableRows(knowledge: KnowledgeScope, options: { purposes: readonly EmbeddingPurpose[]; excludeProductDocs: boolean }): Promise<boolean> {
@@ -1192,6 +1229,7 @@ export class EmbeddingService {
       SELECT 1 AS found FROM embeddings
       WHERE ${scopePredicate(knowledge, 'read')}
         AND purpose IN (${sql.join(options.purposes.map((p) => sql`${p}`), sql`, `)}) ${productDocsFilter}
+        AND ${notArchivedNoteSql()}
       LIMIT 1
     `);
     return rows(result).length > 0;
@@ -1351,7 +1389,9 @@ export class EmbeddingService {
   }> {
     const db = getDb();
     const visible = scopePredicate(scope, 'read');
-    const conditions = purpose ? and(visible, eq(embeddings.purpose, purpose)) : visible;
+    // An archived note is out of the knowledge base until it is unarchived: not searched, not listed.
+    const live = and(visible, notArchivedNoteSql(embeddings.sourceId));
+    const conditions = purpose ? and(live, eq(embeddings.purpose, purpose)) : live;
 
     const [entries, countResult] = await Promise.all([
       db.select({

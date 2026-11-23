@@ -16,6 +16,7 @@ import { skills } from '@/db/schema/skills';
 import { getConfig } from '@/config';
 import { type MergeResult, mergeIntoProposal, ProposalNotOpenError, promoteIfEligible } from '@/services/skill-proposal-merge';
 import { type SkillProposalView, sessionCountOf } from '@/shared/skill-proposals';
+import { ensureSkillEmbeddings } from '@/skills/embedding-backfill';
 import { applySkillPatch, assertPatchable, SkillPatchError, skillContentHash } from '@/skills/patch';
 import { normalizeSkillName } from '@/tools/skill-distill/distiller';
 import { coreLogger } from '@/utils/logger';
@@ -242,9 +243,28 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
       { proposalId: id, skillId: skill?.id, merged },
       merged ? 'Skill proposal merged into existing skill' : 'Skill proposal promoted to skill',
     );
+    await embedApprovedSkill(skill.id, id);
     return { promoted: 'skill', id: skill.id, name: skill.name, record: skill };
   }
 
+}
+
+/**
+ * Embed the skill an approval just created or merged into, after its
+ * transaction committed, so discovery finds it by meaning on the next agent
+ * start instead of after the daily maintenance. The approval stands whatever
+ * happens here: a failure is logged, and discovery keeps the skill as a
+ * bounded stale candidate until a later refill embeds it.
+ */
+async function embedApprovedSkill(skillId: string, proposalId: string): Promise<void> {
+  try {
+    const result = await ensureSkillEmbeddings({ ids: [skillId] });
+    if (result.failed > 0) {
+      coreLogger.warn({ proposalId, skillId }, 'Approved skill could not be embedded; it is embedded by a later refill');
+    }
+  } catch (err) {
+    coreLogger.error({ err, proposalId, skillId }, 'Approved skill could not be embedded; the approval stands and a later refill embeds it');
+  }
 }
 
 /**

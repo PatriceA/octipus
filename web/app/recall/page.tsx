@@ -34,9 +34,14 @@ const EVENT_ROW_LABEL: Record<ContextHookEvent, string> = {
 };
 const PURPOSE_LABEL: Record<RecallPurpose, string> = {
   note: 'notes',
+  lesson: 'lessons',
   document: 'documents',
   knowledge_artifact: 'saved knowledge',
   image_description: 'image descriptions',
+};
+/** What a purpose's checkbox searches, where its label alone does not say. */
+const PURPOSE_TITLE: Partial<Record<RecallPurpose, string>> = {
+  lesson: 'Notes written by learning reviews of your sessions: decisions, constraints and facts about your work',
 };
 const KIND_LABEL: Record<ContextHookKind, string> = { recall: 'knowledge recall', note: 'context note', notes_index: 'notes index' };
 const EVAL_KEY = 'octipus.recall.eval';
@@ -190,7 +195,7 @@ function HookRow({ hook }: { hook: ContextHookView }) {
         <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
           <span className="text-on-surface-variant" title="purposes: which knowledge-base rows recall searches (at least one)">searches</span>
           {RECALL_PURPOSES.map((p) => (
-            <label key={p} className="flex items-center gap-1 cursor-pointer">
+            <label key={p} className="flex items-center gap-1 cursor-pointer" title={PURPOSE_TITLE[p]}>
               <input
                 type="checkbox"
                 checked={purposes.includes(p)}

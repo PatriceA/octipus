@@ -132,7 +132,7 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
-        purpose: { type: 'string', description: 'Filter by row purpose: document, note, message, image_description, knowledge_artifact, ephemeral, or omit for all. (Raw source code is never indexed — use the repo_registry tool to navigate code.)' },
+        purpose: { type: 'string', description: 'Filter by row purpose: document, note (notes the user wrote), lesson (notes written by learning reviews), message, image_description, knowledge_artifact, ephemeral, or omit for all. (Raw source code is never indexed — use the repo_registry tool to navigate code.)' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), keyword (full-text only), or graph (hybrid entry points, then follow authored knowledge_links edges one hop).' },
         min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
         repos: { type: 'string', description: 'Optional comma-separated repo names or ids to scope the search to (multi-repo). Omit to search across all repos and non-repo content. Get repo names/ids from the repo_registry tool.' },

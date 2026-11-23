@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 const OUTPUT_LABELS: Record<string, string> = {
   'skill:merged': 'merged into an existing proposal',
   'skill:candidate': 'kept as a candidate',
+  'knowledge:merged': 'merged into an existing lesson',
 };
 
 function outputLabel(output: { kind: string; status: string }): string {

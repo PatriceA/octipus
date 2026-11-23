@@ -62,6 +62,19 @@ describe('NoteService', () => {
     await executeRaw('TRUNCATE TABLE knowledge_links');
   });
 
+  test('a lesson note sorts after ordinary notes by its kind, even without the tag', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { notes } = await import('@/db/schema/notes');
+    const { createHash } = await import('node:crypto');
+    const bodySha256 = createHash('sha256').update('').digest('hex');
+    const lesson = randomUUID(), own = randomUUID();
+    await getDb().insert(notes).values([
+      { userId, id: lesson, slug: 'untagged-lesson', title: 'Lesson', bodySha256, noteKind: 'lesson', tags: [], updatedAt: new Date('2026-10-29') },
+      { userId, id: own, slug: 'own', title: 'Own', bodySha256, tags: [], updatedAt: new Date('2000-01-01') },
+    ]);
+    expect((await svc.list(personalNoteScope(userId))).map(note => note.id)).toEqual([own, lesson]);
+  });
+
   test('automated learnings cannot crowd ordinary or pinned notes out of the first page', async () => {
     const { getDb } = await import('@/db/postgres');
     const { notes } = await import('@/db/schema/notes');
