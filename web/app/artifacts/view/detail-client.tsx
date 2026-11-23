@@ -250,7 +250,7 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
   });
   const [draft, setDraft] = useState<string | null>(null);
   const save = useMutation({
-    mutationFn: (body: { instruction?: string; intervalMinutes?: number | null }) =>
+    mutationFn: (body: { instruction?: string; intervalMinutes?: number | null; knowledgeAccess?: boolean }) =>
       api.put<{ refresh: AgentRefreshView | null }>(`/artifacts/${id}/agent-refresh`, body),
     onSuccess: (data) => {
       qc.setQueryData(key, data);
@@ -276,6 +276,11 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
       <p className="mb-2 text-xs text-on-surface-variant">
         An agent re-runs this instruction as you, on your budget, and replaces the page when it succeeds.
       </p>
+      {r?.instructionSetBy === 'agent' && draft === null && (
+        <div className="mb-2 rounded bg-warning-container/60 p-2 text-xs text-warning">
+          Set by agent — review before enabling. Saving it marks it as yours.
+        </div>
+      )}
       <textarea
         value={instruction}
         onChange={(e) => setDraft(e.target.value)}
@@ -304,6 +309,21 @@ function AgentRefreshSection({ id, workspaceId }: { id: string; workspaceId: str
           ))}
         </select>
       </div>
+      <label className="mt-2 flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={r?.knowledgeAccess ?? false}
+          disabled={!r || save.isPending}
+          onChange={(e) => save.mutate({ knowledgeAccess: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span>
+          Use my knowledge base instead of the web.
+          <span className="block text-warning">
+            Anything the agent reads there can end up on the page, visible to everyone who can view this artifact.
+          </span>
+        </span>
+      </label>
       <button
         onClick={() => run.mutate()}
         disabled={!r || r.running || run.isPending || draft !== null}

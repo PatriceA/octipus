@@ -78,7 +78,7 @@ const REFRESH_INSTRUCTION_DESCRIPTION =
   'Optional. The instruction an agent re-runs later to regenerate this page with current information ' +
   '(e.g. "Summarise the five most-discussed Rust releases this week as a table with links"). ' +
   'The refresh agent gets ONLY this text (not the current page) and read-only web search, and must reply with a complete ```html page. ' +
-  'It runs only when the owner clicks "Refresh with agent" or sets a schedule on the artifact page, as the owner and on their budget. ' +
+  'It is stored as "set by agent" for the owner to review; it runs only when the owner clicks "Refresh with agent" or sets a schedule on the artifact page, as the owner and on their budget. ' +
   'Write it self-contained: say what to look up, how to lay the page out, and what to leave out.';
 
 const UPDATE_DESCRIPTION =
@@ -280,9 +280,11 @@ export class ArtifactsTool extends BaseTool {
         }
 
         if (refreshInstruction) {
-          // Stored for the owner (this agent's user), who sees and edits it on
-          // the artifact page and decides when, or on what schedule, it runs.
-          await artifactRefreshRepository.setInstruction(a.id, context.userId, refreshInstruction);
+          // Stored for the owner (this agent's user), marked as the agent's: the
+          // owner reviews it on the artifact page and alone decides when, or on
+          // what schedule, it runs, and whether it may read their knowledge.
+          // This tool cannot set a schedule or knowledge access.
+          await artifactRefreshRepository.setInstruction(a.id, context.userId, refreshInstruction, 'agent');
         }
 
         const warnings: string[] = [...versionWarnings];

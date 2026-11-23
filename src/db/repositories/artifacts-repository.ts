@@ -167,11 +167,13 @@ export class ArtifactsRepository {
    * Point a live artifact at `versionId` only while its current version is
    * still `expected` (null: it has none). False when the artifact was edited,
    * restored or deleted meanwhile — the caller's version is then not shown.
+   * `updatedAt` is left alone: this is an agent refresh, not a person's edit,
+   * and retention must not count it as activity (docs/ARTIFACTS.md).
    */
   async setCurrentVersionIf(id: string, expected: string | null, versionId: string): Promise<boolean> {
     const rows = await this.db
       .update(artifacts)
-      .set({ currentVersionId: versionId, updatedAt: new Date() })
+      .set({ currentVersionId: versionId })
       .where(and(
         eq(artifacts.id, id),
         isNull(artifacts.deletedAt),
@@ -184,6 +186,26 @@ export class ArtifactsRepository {
   /** Remove a version that never became current (a refresh that did not land). */
   async deleteVersion(id: string): Promise<void> {
     await this.db.delete(artifactVersions).where(eq(artifactVersions.id, id));
+  }
+
+  /**
+   * Keep the newest `keep` versions of `artifactId` whose `schemaJson` is
+   * `marker` (an agent refresh's) and delete the older ones — never the
+   * current version, never a version a person wrote. Returns how many went.
+   */
+  async pruneMarkedVersions(artifactId: string, marker: string, keep: number): Promise<number> {
+    const marked = await this.db
+      .select({ id: artifactVersions.id })
+      .from(artifactVersions)
+      .where(and(eq(artifactVersions.artifactId, artifactId), eq(artifactVersions.schemaJson, marker)))
+      .orderBy(desc(artifactVersions.createdAt))
+      .offset(keep);
+    if (marked.length === 0) return 0;
+    const current = (await this.getById(artifactId))?.currentVersionId ?? null;
+    const ids = marked.map((v) => v.id).filter((v) => v !== current);
+    if (ids.length === 0) return 0;
+    const removed = await this.db.delete(artifactVersions).where(inArray(artifactVersions.id, ids)).returning({ id: artifactVersions.id });
+    return removed.length;
   }
 
   /** Also ends the artifact's live embed viewers. */

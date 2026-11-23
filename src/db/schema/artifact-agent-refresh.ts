@@ -1,4 +1,4 @@
-import { index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { artifacts } from './artifacts';
 import { users } from './users';
 
@@ -24,12 +24,22 @@ export const artifactAgentRefresh = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     instruction: text('instruction').notNull(),
+    /** Who wrote the instruction last: `agent` (create_live_artifact — the owner should review it) or `owner`. */
+    instructionSetBy: text('instruction_set_by').$type<'agent' | 'owner'>().notNull().default('owner'),
+    /**
+     * Owner opt-in: the run searches the owner's knowledge base INSTEAD of
+     * the web. Never both in one run, so fetched web content and private
+     * knowledge never meet (docs/ARTIFACTS.md#agent-refresh).
+     */
+    knowledgeAccess: boolean('knowledge_access').notNull().default(false),
     /** Minutes between scheduled runs; null = manual refresh only. */
     intervalMinutes: integer('interval_minutes'),
     scheduleChain: text('schedule_chain'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),
     /** Why the schedule was switched off by the server (failures, owner disabled, artifact gone). */
     scheduleDisabledReason: text('schedule_disabled_reason'),
+    /** When the owner last set the schedule: an unviewed artifact's idle time counts from here. */
+    scheduleSetAt: timestamp('schedule_set_at', { withTimezone: true }),
     /** The automation session refresh runs are recorded in (created on the first run). */
     sessionId: uuid('session_id'),
     runStartedAt: timestamp('run_started_at', { withTimezone: true }),
@@ -40,6 +50,15 @@ export const artifactAgentRefresh = pgTable(
     lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
     /** Scheduled attempts in a row that did not succeed; reset by a success. */
     consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    /** Hash of the last page a refresh landed, with `lastVersionId`: an identical page writes no version. */
+    lastPageHash: text('last_page_hash'),
+    lastVersionId: uuid('last_version_id'),
+    /**
+     * The id of the version a run is about to write, set before the row is
+     * inserted and cleared once it is current or removed; a crash between
+     * the two leaves it here, and the next run removes that version.
+     */
+    pendingVersionId: uuid('pending_version_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },

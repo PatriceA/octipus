@@ -521,26 +521,34 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         set.status = 403;
         return { error: 'only the artifact\'s owner can see or change its agent refresh', code: 'not_owner' };
       }
+      // Nothing is stored for an artifact the refresh could never run on.
+      if (principal.workspaceKind === 'shared') {
+        set.status = 400;
+        return { error: 'agent refresh runs as your personal agent, so it is not available on an artifact in a shared space', code: 'refresh_unavailable' };
+      }
+      const interval = body.intervalMinutes;
+      if (interval !== undefined && interval !== null && (!Number.isInteger(interval) || interval < AGENT_REFRESH_MIN_INTERVAL_MINUTES || interval > AGENT_REFRESH_MAX_INTERVAL_MINUTES)) {
+        set.status = 400;
+        return { error: `intervalMinutes must be a whole number from ${AGENT_REFRESH_MIN_INTERVAL_MINUTES} to ${AGENT_REFRESH_MAX_INTERVAL_MINUTES}, or null for manual refresh only` };
+      }
       if (body.instruction !== undefined) {
         const instruction = body.instruction.trim();
         if (!instruction || instruction.length > AGENT_REFRESH_MAX_INSTRUCTION_CHARS) {
           set.status = 400;
           return { error: `instruction must be 1-${AGENT_REFRESH_MAX_INSTRUCTION_CHARS} characters` };
         }
-        await artifactRefreshRepository.setInstruction(a.id, user.id, instruction);
+        // Saved by the owner: no longer the agent's unreviewed suggestion.
+        await artifactRefreshRepository.setInstruction(a.id, user.id, instruction, 'owner');
       }
-      if (body.intervalMinutes !== undefined) {
-        const interval = body.intervalMinutes;
-        if (interval !== null && (!Number.isInteger(interval) || interval < AGENT_REFRESH_MIN_INTERVAL_MINUTES || interval > AGENT_REFRESH_MAX_INTERVAL_MINUTES)) {
-          set.status = 400;
-          return { error: `intervalMinutes must be a whole number from ${AGENT_REFRESH_MIN_INTERVAL_MINUTES} to ${AGENT_REFRESH_MAX_INTERVAL_MINUTES}, or null for manual refresh only` };
-        }
-        if (!(await artifactRefreshRepository.get(a.id))) {
-          set.status = 400;
-          return { error: 'set a refresh instruction before a schedule' };
-        }
-        await setAgentRefreshSchedule(a.id, interval);
+      const existing = await artifactRefreshRepository.get(a.id);
+      if (!existing && ((interval !== undefined && interval !== null) || body.knowledgeAccess === true)) {
+        set.status = 400;
+        return { error: 'set a refresh instruction first' };
       }
+      if (existing && body.knowledgeAccess !== undefined) {
+        await artifactRefreshRepository.setKnowledgeAccess(a.id, body.knowledgeAccess);
+      }
+      if (existing && interval !== undefined) await setAgentRefreshSchedule(a.id, interval);
       const row = await artifactRefreshRepository.get(a.id);
       return { refresh: row ? toView(row) : null };
     },
@@ -548,6 +556,7 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       body: t.Object({
         instruction: t.Optional(t.String()),
         intervalMinutes: t.Optional(t.Union([t.Number(), t.Null()])),
+        knowledgeAccess: t.Optional(t.Boolean()),
       }),
     },
   )
@@ -572,6 +581,10 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
     if (started.status === 'busy') {
       set.status = 409;
       return { error: 'a refresh of this artifact is already running', code: 'refresh_in_flight' };
+    }
+    if (started.status === 'capacity') {
+      set.status = 429;
+      return { error: 'the server is already running its maximum of agent refreshes; try again in a few minutes', code: 'refresh_capacity' };
     }
     if (started.status === 'unavailable') {
       set.status = 400;

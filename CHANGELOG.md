@@ -10,19 +10,24 @@ labels reflect blast radius, not contract guarantees.
 - **Agent refresh for Live Artifacts** (BETA,
   [docs](docs/ARTIFACTS.md#agent-refresh)). An artifact can now stay current
   by having an agent regenerate it. The agent that creates a page may store a
-  refresh instruction (`create_live_artifact` → `refresh_instruction`); the
-  artifact's owner sees and edits it on the artifact page, clicks **Refresh
-  with agent**, and may set a schedule (hourly at most often; off by
-  default). The run is the owner's: an unattended `research` worker with
-  read-only tools, on the owner's spend budget and quotas, given only the
-  stored instruction. The new version replaces the page only when the run
-  returns a valid page and nobody edited it meanwhile; otherwise the current
-  version stays and the failure is shown. One refresh per artifact at a time
-  (`409`), 10 minutes per run, and a schedule that fails or is refused 5 times
-  in a row turns itself off and notifies the owner. Only the owner can
-  trigger it: workspace members get `403`, viewers and embed tokens have no
-  route to it. Not available in shared spaces. Migration
-  `0205_artifact_agent_refresh` adds the `artifact_agent_refresh` table.
+  refresh instruction (`create_live_artifact` → `refresh_instruction`), shown
+  as "set by agent — review before enabling"; the artifact's owner edits it,
+  clicks **Refresh with agent**, and may set a schedule (hourly at most often;
+  off by default). The run is the owner's: an unattended `research` worker
+  on the owner's spend budget and quotas, given only the stored instruction,
+  with web search by default or, as a per-artifact opt-in with a warning, the
+  owner's knowledge base instead — never both in one run. The new version
+  replaces the page only when the run returns exactly one valid page and
+  nobody edited it meanwhile; otherwise the current version stays and the
+  failure is shown. Identical pages write no version, and only the 5 newest
+  refresh versions are kept. One refresh per artifact at a time (`409`), 3 per
+  server process (`429`), 10 minutes per run; a schedule that fails or is
+  refused 5 times in a row turns itself off and notifies the owner, and one
+  nobody opens pauses after the retention window (30 days without one). A
+  refresh does not extend retention. Only the owner can trigger it: workspace
+  members get `403`, viewers and embed tokens have no route to it. Not
+  available in shared spaces. Migration `0205_artifact_agent_refresh` adds the
+  `artifact_agent_refresh` table.
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a

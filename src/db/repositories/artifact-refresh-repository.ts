@@ -21,28 +21,34 @@ export class ArtifactRefreshRepository {
     return row ?? null;
   }
 
-  /** Store (or replace) the instruction; the owner is set on the first write only. */
-  async setInstruction(artifactId: string, ownerUserId: string, instruction: string): Promise<ArtifactAgentRefresh> {
+  /** Store (or replace) the instruction and who wrote it; the owner is set on the first write only. */
+  async setInstruction(artifactId: string, ownerUserId: string, instruction: string, setBy: 'agent' | 'owner'): Promise<ArtifactAgentRefresh> {
     const now = new Date();
     const [row] = await this.db
       .insert(artifactAgentRefresh)
-      .values({ artifactId, ownerUserId, instruction, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: artifactAgentRefresh.artifactId, set: { instruction, updatedAt: now } })
+      .values({ artifactId, ownerUserId, instruction, instructionSetBy: setBy, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: artifactAgentRefresh.artifactId, set: { instruction, instructionSetBy: setBy, updatedAt: now } })
       .returning();
     return row;
   }
 
-  /** Turn the schedule on under `chain` (clearing a server stop), or off with `interval: null`. */
+  async setKnowledgeAccess(artifactId: string, on: boolean): Promise<void> {
+    await this.db.update(artifactAgentRefresh).set({ knowledgeAccess: on, updatedAt: new Date() }).where(eq(artifactAgentRefresh.artifactId, artifactId));
+  }
+
+  /** Turn the schedule on under `chain` (clearing a server stop and the failure streak), or off with `interval: null`. */
   async setSchedule(artifactId: string, interval: number | null, chain: string | null, nextRunAt: Date | null): Promise<void> {
+    const now = new Date();
     await this.db
       .update(artifactAgentRefresh)
       .set({
         intervalMinutes: interval,
         scheduleChain: chain,
         nextRunAt,
+        scheduleSetAt: interval === null ? null : now,
         scheduleDisabledReason: null,
         consecutiveFailures: 0,
-        updatedAt: new Date(),
+        updatedAt: now,
       })
       .where(eq(artifactAgentRefresh.artifactId, artifactId));
   }
@@ -70,6 +76,20 @@ export class ArtifactRefreshRepository {
     return rows.length > 0;
   }
 
+  /** A scheduled attempt that broke before it could record itself: counted as a failure. */
+  async recordScheduleError(artifactId: string, chain: string, error: string): Promise<void> {
+    await this.db
+      .update(artifactAgentRefresh)
+      .set({
+        lastOutcome: 'failed',
+        lastError: error,
+        lastAttemptAt: new Date(),
+        consecutiveFailures: sql`${artifactAgentRefresh.consecutiveFailures} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(artifactAgentRefresh.artifactId, artifactId), eq(artifactAgentRefresh.scheduleChain, chain)));
+  }
+
   /** Move a schedule to a new chain (boot re-arm); false when it was turned off meanwhile. */
   async rechain(artifactId: string, from: string, to: string): Promise<boolean> {
     const rows = await this.db
@@ -86,6 +106,11 @@ export class ArtifactRefreshRepository {
 
   async setSession(artifactId: string, sessionId: string): Promise<void> {
     await this.db.update(artifactAgentRefresh).set({ sessionId }).where(eq(artifactAgentRefresh.artifactId, artifactId));
+  }
+
+  /** Name the version a run is about to insert (before the insert), or clear it. */
+  async setPendingVersion(artifactId: string, versionId: string | null): Promise<void> {
+    await this.db.update(artifactAgentRefresh).set({ pendingVersionId: versionId }).where(eq(artifactAgentRefresh.artifactId, artifactId));
   }
 
   /**
@@ -109,13 +134,14 @@ export class ArtifactRefreshRepository {
   /**
    * Release the claim taken at `startedAt` and record how the attempt ended.
    * `countsAsFailure` adds to the schedule's failure streak; a success resets
-   * it. A claim taken over meanwhile (this run was presumed dead) records
-   * nothing: the newer run owns the row.
+   * it. `landed` records the page a success made current. A claim taken over
+   * meanwhile (this run was presumed dead) records nothing: the newer run
+   * owns the row.
    */
   async finishRun(
     artifactId: string,
     startedAt: Date,
-    result: { outcome: AgentRefreshOutcome; error: string | null; countsAsFailure: boolean },
+    result: { outcome: AgentRefreshOutcome; error: string | null; countsAsFailure: boolean; landed?: { pageHash: string; versionId: string } },
   ): Promise<ArtifactAgentRefresh | null> {
     const now = new Date();
     const success = result.outcome === 'success';
@@ -126,6 +152,7 @@ export class ArtifactRefreshRepository {
         lastOutcome: result.outcome,
         lastError: result.error,
         ...(success ? { lastSuccessAt: now } : {}),
+        ...(result.landed ? { lastPageHash: result.landed.pageHash, lastVersionId: result.landed.versionId } : {}),
         consecutiveFailures: success
           ? 0
           : result.countsAsFailure

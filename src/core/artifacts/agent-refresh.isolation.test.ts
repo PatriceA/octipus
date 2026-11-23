@@ -51,6 +51,15 @@ vi.mock('@/core/agent', async (importOriginal) => {
   };
 });
 
+// The agent tool's write permission (an ASK) is allowed, as in the slug suite.
+vi.mock('@/security/permissions', () => ({
+  getPermissionManager: () => ({
+    onRequest: () => () => {},
+    onResolved: () => () => {},
+    check: async () => ({ level: 'ALLOW', source: 'policy' }),
+  }),
+}));
+
 const DAY = 24 * 60 * 60 * 1000;
 const alice = randomUUID();
 const bob = randomUUID();
@@ -115,6 +124,10 @@ async function current(id: string) {
   return { versionId: a?.currentVersionId ?? null, versions: (await artifactsRepository.listVersions(id)).length };
 }
 
+function taskOf(artifactId: string, chain: string): import('@/core/scheduler').ScheduledTask {
+  return { payload: { artifactId, chain } } as unknown as import('@/core/scheduler').ScheduledTask;
+}
+
 async function settled(id: string): Promise<import('@/shared/artifacts').AgentRefreshView> {
   for (let i = 0; i < 200; i++) {
     const s = await state(id);
@@ -147,7 +160,7 @@ describe('manual refresh by the owner', () => {
 
     // The run was the owner's, from the stored instruction only.
     expect(script.calls).toHaveLength(1);
-    expect(script.calls[0]).toMatchObject({ ownerUserId: alice, instruction: 'List this week\'s Rust releases', trigger: 'user', workspaceId: a.workspaceId });
+    expect(script.calls[0]).toMatchObject({ ownerUserId: alice, instruction: 'List this week\'s Rust releases', knowledgeAccess: false, trigger: 'user', workspaceId: a.workspaceId });
     expect(JSON.stringify(script.calls[0])).not.toContain('<p>old</p>');
   });
 
@@ -309,15 +322,15 @@ describe('the schedule', () => {
   test('a schedule that keeps failing backs off, then turns itself off and tells the owner', async () => {
     const a = await seed('flaky');
     const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
-    const { handleAgentRefreshTask, MAX_SCHEDULE_FAILURES, nextScheduleDelayMs, setAgentRefreshSchedule } = await import('./agent-refresh');
+    const { runScheduledAttempt, MAX_SCHEDULE_FAILURES, nextScheduleDelayMs, setAgentRefreshSchedule } = await import('./agent-refresh');
     await setAgentRefreshSchedule(a.id, 60);
     const chain = (await artifactRefreshRepository.get(a.id))!.scheduleChain!;
     const notify = vi.fn(async () => {});
-    const task = { payload: { artifactId: a.id, chain } } as unknown as import('@/core/scheduler').ScheduledTask;
+    const task = taskOf(a.id, chain);
     for (let i = 1; i <= MAX_SCHEDULE_FAILURES; i++) {
       script.steps.push({ fail: new Error(`upstream down ${i}`) });
       const before = Date.now();
-      await handleAgentRefreshTask(task, { notify });
+      await (await runScheduledAttempt(task, { notify })).settled;
       const row = (await artifactRefreshRepository.get(a.id))!;
       expect(row.consecutiveFailures).toBe(i);
       if (i < MAX_SCHEDULE_FAILURES) {
@@ -326,6 +339,8 @@ describe('the schedule', () => {
     }
     expect(nextScheduleDelayMs(60, 1)).toBe(2 * 60 * 60_000);
     expect(nextScheduleDelayMs(60, 10)).toBe(24 * 60 * 60_000);
+    // Never sooner than the interval itself: a weekly schedule stays weekly.
+    expect(nextScheduleDelayMs(7 * 24 * 60, 3)).toBe(7 * DAY);
     const s = await state(a.id);
     expect(s.intervalMinutes).toBeNull();
     expect(s.nextRunAt).toBeNull();
@@ -333,16 +348,179 @@ describe('the schedule', () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(alice, 'artifact_refresh_disabled', expect.stringContaining('flaky'), expect.any(String), { artifactId: a.id });
     // The old chain's next task ends without running.
-    await handleAgentRefreshTask(task, { notify });
+    await (await runScheduledAttempt(task, { notify })).settled;
     expect(script.calls).toHaveLength(MAX_SCHEDULE_FAILURES);
     // The current version was never replaced.
     expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
   });
 
+  test('an error before the attempt is recorded and the schedule still re-arms', async () => {
+    const a = await seed('broken-attempt');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const { runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
+    await setAgentRefreshSchedule(a.id, 60);
+    const before = (await artifactRefreshRepository.get(a.id))!;
+    const spy = vi.spyOn(artifactRefreshRepository, 'claimRun').mockRejectedValueOnce(new Error('database went away'));
+    try {
+      await (await runScheduledAttempt(taskOf(a.id, before.scheduleChain!))).settled;
+    } finally {
+      spy.mockRestore();
+    }
+    const after = (await artifactRefreshRepository.get(a.id))!;
+    expect(after.lastOutcome).toBe('failed');
+    expect(after.lastError).toMatch(/could not run: database went away/);
+    expect(after.consecutiveFailures).toBe(1);
+    expect(after.scheduleChain).toBe(before.scheduleChain);
+    expect(after.nextRunAt!.getTime()).toBeGreaterThan(before.nextRunAt!.getTime());
+    expect(script.calls).toHaveLength(0);
+  });
+
+  test('a scheduled attempt does not hold the scheduler while the agent runs; it re-arms when the run ends', async () => {
+    const a = await seed('non-blocking');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const { runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
+    await setAgentRefreshSchedule(a.id, 60);
+    const armed = (await artifactRefreshRepository.get(a.id))!;
+    let release!: (s: string) => void;
+    script.steps.push({ wait: new Promise<string>((r) => { release = r; }) });
+    const { settled } = await runScheduledAttempt(taskOf(a.id, armed.scheduleChain!));
+    // Returned with the run still going.
+    expect((await state(a.id)).running).toBe(true);
+    expect((await artifactRefreshRepository.get(a.id))!.nextRunAt!.getTime()).toBe(armed.nextRunAt!.getTime());
+    release(PAGE);
+    await settled;
+    expect((await state(a.id)).lastOutcome).toBe('success');
+    expect((await artifactRefreshRepository.get(a.id))!.nextRunAt!.getTime()).toBeGreaterThan(armed.nextRunAt!.getTime());
+  });
+
+  test('agent refreshes are capped per process: a scheduled one waits without failing, a manual one gets 429', async () => {
+    const { MAX_CONCURRENT_AGENT_REFRESHES, runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const releases: Array<(s: string) => void> = [];
+    const running = [];
+    for (let i = 0; i < MAX_CONCURRENT_AGENT_REFRESHES; i++) {
+      const a = await seed(`cap-${i}`);
+      script.steps.push({ wait: new Promise<string>((r) => { releases.push(r); }) });
+      expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+      running.push(a);
+    }
+    const extra = await seed('cap-extra');
+    const res = await call('POST', `/api/artifacts/${extra.id}/agent-refresh/run`);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ code: 'refresh_capacity' });
+
+    await setAgentRefreshSchedule(extra.id, 60);
+    const chain = (await artifactRefreshRepository.get(extra.id))!.scheduleChain!;
+    const t0 = Date.now();
+    await (await runScheduledAttempt(taskOf(extra.id, chain))).settled;
+    const row = (await artifactRefreshRepository.get(extra.id))!;
+    expect(row.consecutiveFailures).toBe(0);
+    expect(row.lastAttemptAt).toBeNull();
+    const wait = row.nextRunAt!.getTime() - t0;
+    expect(wait).toBeGreaterThanOrEqual(5 * 60_000 - 1000);
+    expect(wait).toBeLessThanOrEqual(10 * 60_000 + 1000);
+    expect(script.calls).toHaveLength(MAX_CONCURRENT_AGENT_REFRESHES);
+
+    for (const r of releases) r(PAGE);
+    for (const a of running) expect((await settled(a.id)).lastOutcome).toBe('success');
+  });
+
+  test('boot re-arms an overdue schedule with jitter, not all at once', async () => {
+    const a = await seed('boot-overdue');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const { bootstrapAgentRefreshSchedules, BOOT_JITTER_MS, setAgentRefreshSchedule } = await import('./agent-refresh');
+    await setAgentRefreshSchedule(a.id, 60);
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { eq } = await import('drizzle-orm');
+    await getDb().update(artifactAgentRefresh).set({ nextRunAt: new Date(Date.now() - DAY) }).where(eq(artifactAgentRefresh.artifactId, a.id));
+    const { getScheduler } = await import('@/core/scheduler');
+    const schedule = vi.spyOn(getScheduler(), 'schedule');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      await bootstrapAgentRefreshSchedules();
+      const mine = schedule.mock.calls.find((c) => (c[2] as { artifactId?: string }).artifactId === a.id);
+      expect(mine?.[3]?.delayMs).toBe(BOOT_JITTER_MS / 2);
+      expect((await artifactRefreshRepository.get(a.id))!.scheduleChain).toBe((mine?.[2] as { chain: string }).chain);
+    } finally {
+      schedule.mockRestore();
+      random.mockRestore();
+    }
+  });
+
+  test('setting the interval it already runs at mints no new chain and keeps the failure count', async () => {
+    const a = await seed('same-interval');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { intervalMinutes: 60 } })).status).toBe(200);
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { eq } = await import('drizzle-orm');
+    await getDb().update(artifactAgentRefresh).set({ consecutiveFailures: 2 }).where(eq(artifactAgentRefresh.artifactId, a.id));
+    const before = (await artifactRefreshRepository.get(a.id))!;
+    expect((await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { intervalMinutes: 60 } })).status).toBe(200);
+    const after = (await artifactRefreshRepository.get(a.id))!;
+    expect(after.scheduleChain).toBe(before.scheduleChain);
+    expect(after.consecutiveFailures).toBe(2);
+    expect(after.nextRunAt!.getTime()).toBe(before.nextRunAt!.getTime());
+  });
+
+  test('a schedule nobody opens pauses after the idle window, with one notice, and runs nothing', async () => {
+    const a = await seed('unviewed');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const { DEFAULT_IDLE_DAYS, runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
+    await setAgentRefreshSchedule(a.id, 60);
+    const chain = (await artifactRefreshRepository.get(a.id))!.scheduleChain!;
+    const { getDb } = await import('@/db/postgres');
+    const { artifactAgentRefresh } = await import('@/db/schema/artifact-agent-refresh');
+    const { artifacts } = await import('@/db/schema/artifacts');
+    const { eq } = await import('drizzle-orm');
+    const long = new Date(Date.now() - (DEFAULT_IDLE_DAYS + 1) * DAY);
+    await getDb().update(artifactAgentRefresh).set({ scheduleSetAt: long }).where(eq(artifactAgentRefresh.artifactId, a.id));
+    await getDb().update(artifacts).set({ lastViewedAt: long }).where(eq(artifacts.id, a.id));
+    const notify = vi.fn(async () => {});
+    script.steps.push({ reply: PAGE });
+    await (await runScheduledAttempt(taskOf(a.id, chain), { notify })).settled;
+    await (await runScheduledAttempt(taskOf(a.id, chain), { notify })).settled;
+    expect(script.calls).toHaveLength(0);
+    const s = await state(a.id);
+    expect(s.intervalMinutes).toBeNull();
+    expect(s.scheduleDisabledReason).toMatch(/nobody has opened this artifact in 30 days/);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(alice, 'artifact_refresh_paused', expect.any(String), expect.any(String), { artifactId: a.id });
+
+    // A retention policy sets the window instead.
+    const b = await seed('unviewed-retention');
+    await setAgentRefreshSchedule(b.id, 60);
+    const chainB = (await artifactRefreshRepository.get(b.id))!.scheduleChain!;
+    await getDb().update(artifactAgentRefresh).set({ scheduleSetAt: new Date(Date.now() - 11 * DAY) }).where(eq(artifactAgentRefresh.artifactId, b.id));
+    policy.retentionDays = 10;
+    await (await runScheduledAttempt(taskOf(b.id, chainB), { notify })).settled;
+    expect((await state(b.id)).scheduleDisabledReason).toMatch(/in 10 days/);
+  });
+
+  test('a refresh does not count as activity for retention', async () => {
+    const a = await seed('no-retention-bump');
+    const { getDb } = await import('@/db/postgres');
+    const { artifacts } = await import('@/db/schema/artifacts');
+    const { eq } = await import('drizzle-orm');
+    const old = new Date(Date.now() - 100 * DAY);
+    await getDb().update(artifacts).set({ updatedAt: old }).where(eq(artifacts.id, a.id));
+    script.steps.push({ reply: PAGE });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    expect((await settled(a.id)).lastOutcome).toBe('success');
+    const [row] = await getDb().select().from(artifacts).where(eq(artifacts.id, a.id));
+    expect(row.updatedAt.getTime()).toBe(old.getTime());
+    policy.retentionDays = 90;
+    const { runArtifactCleanup } = await import('./cleanup');
+    await runArtifactCleanup();
+    const [expired] = await getDb().select().from(artifacts).where(eq(artifacts.id, a.id));
+    expect(expired.deletedAt).toBeInstanceOf(Date);
+  });
+
   test('retention expiry cancels the schedule, and its queued task runs nothing', async () => {
     const a = await seed('expiring');
     const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
-    const { handleAgentRefreshTask, setAgentRefreshSchedule } = await import('./agent-refresh');
+    const { runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
     await setAgentRefreshSchedule(a.id, 60);
     const chain = (await artifactRefreshRepository.get(a.id))!.scheduleChain!;
     const { getDb } = await import('@/db/postgres');
@@ -359,7 +537,7 @@ describe('the schedule', () => {
     expect(row.scheduleDisabledReason).toMatch(/expired after 90 days/);
 
     script.steps.push({ reply: PAGE });
-    await handleAgentRefreshTask({ payload: { artifactId: a.id, chain } } as unknown as import('@/core/scheduler').ScheduledTask);
+    await (await runScheduledAttempt(taskOf(a.id, chain))).settled;
     expect(script.calls).toHaveLength(0);
     // And a manual request has nothing to refresh.
     const { startAgentRefresh } = await import('./agent-refresh');
@@ -369,19 +547,129 @@ describe('the schedule', () => {
   test('a deleted artifact stops its schedule at the next fire', async () => {
     const a = await seed('deleted-scheduled');
     const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
-    const { handleAgentRefreshTask, setAgentRefreshSchedule } = await import('./agent-refresh');
+    const { runScheduledAttempt, setAgentRefreshSchedule } = await import('./agent-refresh');
     await setAgentRefreshSchedule(a.id, 60);
     const chain = (await artifactRefreshRepository.get(a.id))!.scheduleChain!;
     expect((await call('DELETE', `/api/artifacts/${a.id}`)).status).toBe(200);
-    await handleAgentRefreshTask({ payload: { artifactId: a.id, chain } } as unknown as import('@/core/scheduler').ScheduledTask);
+    await (await runScheduledAttempt(taskOf(a.id, chain))).settled;
     expect(script.calls).toHaveLength(0);
     expect((await artifactRefreshRepository.get(a.id))?.scheduleDisabledReason).toBe('The artifact was deleted');
   });
 });
 
+describe('versions', () => {
+  test('an identical page writes no version, and only the newest refresh versions are kept', async () => {
+    const a = await seed('versions');
+    const { KEEP_REFRESH_VERSIONS } = await import('./agent-refresh');
+    script.steps.push({ reply: PAGE });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    await settled(a.id);
+    const first = await current(a.id);
+    expect(first.versions).toBe(2);
+    script.steps.push({ reply: PAGE });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    expect((await settled(a.id)).lastOutcome).toBe('success');
+    expect(await current(a.id)).toEqual(first);
+
+    for (let i = 0; i < KEEP_REFRESH_VERSIONS + 3; i++) {
+      script.steps.push({ reply: `\`\`\`html\n<p>page ${i}</p>\n\`\`\`` });
+      expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+      for (let w = 0; w < 200 && (await state(a.id)).running; w++) await new Promise((r) => setTimeout(r, 20));
+    }
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const versions = await artifactsRepository.listVersions(a.id);
+    // The owner's own version, plus the newest refresh versions only.
+    expect(versions).toHaveLength(1 + KEEP_REFRESH_VERSIONS);
+    expect(versions.some((v) => v.id === a.versionId)).toBe(true);
+    expect((await artifactsRepository.getVersion((await current(a.id)).versionId!))?.htmlTemplate).toBe(`<p>page ${KEEP_REFRESH_VERSIONS + 2}</p>`);
+  });
+
+  test('a version left by a run that crashed before making it current is removed by the next run', async () => {
+    const a = await seed('crashed-version');
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    const orphan = randomUUID();
+    await artifactRefreshRepository.setPendingVersion(a.id, orphan);
+    await artifactsRepository.createVersion({ id: orphan, artifactId: a.id, htmlTemplate: '<p>half</p>', changeSummary: 'agent refresh' });
+    expect((await current(a.id)).versions).toBe(2);
+    script.steps.push({ fail: new Error('nothing new') });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    await settled(a.id);
+    expect(await artifactsRepository.getVersion(orphan)).toBeNull();
+    expect(await current(a.id)).toEqual({ versionId: a.versionId, versions: 1 });
+    expect((await artifactRefreshRepository.get(a.id))?.pendingVersionId).toBeNull();
+  });
+});
+
+describe('the instruction and its tools', () => {
+  test('one stored by create_live_artifact is marked as the agent\'s, and the tool cannot schedule it or open knowledge', async () => {
+    const { ArtifactsTool } = await import('@/tools/artifacts');
+    const tool = new ArtifactsTool();
+    await tool.initialize();
+    const create = tool.getToolHandlers().find((h) => h.name === 'artifacts__create_live_artifact')!;
+    const props = Object.keys((create.parameters as { properties: Record<string, unknown> }).properties);
+    expect(props).toContain('refresh_instruction');
+    expect(props.filter((p) => /interval|schedule|knowledge/.test(p))).toEqual([]);
+    const { workspaceId } = await seed('tool-ws-probe');
+    const ctx = {
+      space: null, trigger: 'user', funding: 'own', id: randomUUID(), sessionId: randomUUID(), userId: alice, workspaceId,
+      topic: 'test', model: 'test', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    } as unknown as import('@/core/types').AgentContext;
+    const made = await create.execute({
+      slug: 'tool-made', title: 'Tool made', type: 'html', html_template: '<p>x</p>',
+      refresh_instruction: 'Weekly Rust news', refresh_interval_minutes: 60, knowledge_access: true,
+    }, ctx) as { id: string };
+    const s = await state(made.id);
+    expect(s).toMatchObject({ instruction: 'Weekly Rust news', instructionSetBy: 'agent', intervalMinutes: null, knowledgeAccess: false });
+    // The owner saving it makes it theirs.
+    const saved = await (await call('PUT', `/api/artifacts/${made.id}/agent-refresh`, { body: { instruction: 'Weekly Rust news' } })).json();
+    expect(saved.refresh.instructionSetBy).toBe('owner');
+  });
+
+  test('knowledge access is the owner\'s opt-in and switches the run from the web to the knowledge base', async () => {
+    const a = await seed('knowledge');
+    expect((await state(a.id)).knowledgeAccess).toBe(false);
+    script.steps.push({ reply: PAGE });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    await settled(a.id);
+    expect(script.calls[0]?.knowledgeAccess).toBe(false);
+    const res = await call('PUT', `/api/artifacts/${a.id}/agent-refresh`, { body: { knowledgeAccess: true } });
+    expect((await res.json()).refresh.knowledgeAccess).toBe(true);
+    script.steps.push({ reply: PAGE });
+    expect((await call('POST', `/api/artifacts/${a.id}/agent-refresh/run`)).status).toBe(202);
+    await settled(a.id);
+    expect(script.calls[1]?.knowledgeAccess).toBe(true);
+  });
+
+  test('PUT works without an instruction only to clear a schedule, and is refused in a shared space', async () => {
+    const res = await call('POST', '/api/artifacts', { body: { slug: 'no-instruction', title: 'n', type: 'html', htmlTemplate: '<p>n</p>' } });
+    const { artifact } = await res.json();
+    const cleared = await call('PUT', `/api/artifacts/${artifact.id}/agent-refresh`, { body: { intervalMinutes: null } });
+    expect(cleared.status).toBe(200);
+    expect((await cleared.json()).refresh).toBeNull();
+    expect((await call('PUT', `/api/artifacts/${artifact.id}/agent-refresh`, { body: { intervalMinutes: 60 } })).status).toBe(400);
+
+    const { createSpace } = await import('@/core/spaces/service');
+    const space = await createSpace({ userId: alice } as unknown as import('@/core/spaces/service').SpaceActor, { name: 'Refresh space' });
+    const inSpace = (method: string, path: string, body?: unknown) => app.handle(new Request(`http://localhost${path}`, {
+      method,
+      headers: { authorization: `Bearer ${tokens[alice]}`, 'x-octipus-workspace': space.id, ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    }));
+    const created = await inSpace('POST', '/api/artifacts', { slug: 'space-page', title: 's', type: 'html', htmlTemplate: '<p>s</p>' });
+    expect(created.status).toBe(201);
+    const spaceArtifact = (await created.json()).artifact;
+    const put = await inSpace('PUT', `/api/artifacts/${spaceArtifact.id}/agent-refresh`, { instruction: 'anything' });
+    expect(put.status).toBe(400);
+    expect(await put.json()).toMatchObject({ code: 'refresh_unavailable' });
+    const { artifactRefreshRepository } = await import('@/db/repositories/artifact-refresh-repository');
+    expect(await artifactRefreshRepository.get(spaceArtifact.id)).toBeNull();
+  });
+});
+
 describe('the real runner', () => {
-  test('runs an unattended worker of the owner on read-only tools, given only the stored instruction', async () => {
-    const a = await seed('real-runner', 'Top 3 headlines from example.org');
+  async function runReal(slug: string, knowledgeAccess: boolean) {
+    const a = await seed(slug, 'Top 3 headlines');
     const spawn = vi.fn(async () => '```html\n<p>new</p>\n```');
     worker.spawn = spawn;
     const actual = await vi.importActual<typeof import('./agent-refresh-runner')>('./agent-refresh-runner');
@@ -390,8 +678,9 @@ describe('the real runner', () => {
       artifactId: a.id,
       workspaceId: a.workspaceId,
       ownerUserId: alice,
-      title: 'real-runner',
-      instruction: 'Top 3 headlines from example.org',
+      title: slug,
+      instruction: 'Top 3 headlines',
+      knowledgeAccess,
       trigger: 'schedule',
       sessionId: null,
       signal: new AbortController().signal,
@@ -403,11 +692,22 @@ describe('the real runner', () => {
     const [role, task, input, parent, opts] = spawn.mock.calls[0] as unknown as [string, string, string, import('@/core/types').AgentContext, { toolIds: string[]; exactTools: boolean }];
     expect(role).toBe('research');
     expect(input).toBe('');
-    expect(task).toBe(actual.buildRefreshTask('real-runner', 'Top 3 headlines from example.org'));
+    expect(task).toBe(actual.buildRefreshTask(slug, 'Top 3 headlines', knowledgeAccess));
     expect(task).not.toContain('<p>old</p>');
     expect(parent).toMatchObject({ userId: alice, sessionId: sessions[0], workspaceId: a.workspaceId, attended: false, trigger: 'schedule', funding: 'own' });
     expect(opts.exactTools).toBe(true);
-    expect(opts.toolIds).toEqual([...actual.REFRESH_AGENT_TOOLS]);
-    expect(opts.toolIds.some((t) => t.startsWith('artifacts'))).toBe(false);
+    return { actual, toolIds: opts.toolIds };
+  }
+
+  test('by default the run gets the web tools only: no knowledge base, no artifact tools', async () => {
+    const { actual, toolIds } = await runReal('real-web', false);
+    expect(toolIds).toEqual([...actual.REFRESH_WEB_TOOLS]);
+    expect(toolIds.some((t) => t.startsWith('knowledge') || t.startsWith('artifacts'))).toBe(false);
+  });
+
+  test('with knowledge access the run gets the knowledge tools only: no web tools', async () => {
+    const { actual, toolIds } = await runReal('real-knowledge', true);
+    expect(toolIds).toEqual([...actual.REFRESH_KNOWLEDGE_TOOLS]);
+    expect(toolIds.some((t) => t.startsWith('websearch') || t.startsWith('artifacts'))).toBe(false);
   });
 });
