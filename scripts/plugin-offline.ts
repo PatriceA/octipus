@@ -41,6 +41,7 @@ import {
 import { extractTarGz, packageRootIn, TarError } from '@/plugins/packages/tar';
 import { checkPackageTree, PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_MANIFEST_FILE, type PluginManifest } from '@/shared/plugin-package';
+import { SkillBundleError, signBundle } from '@/skills/exchange';
 
 /** What the offline commands need of the process: output, stdin, and a hidden prompt at a terminal. */
 export interface OfflineIo {
@@ -236,6 +237,32 @@ export async function signCommand(io: OfflineIo, argv: string[]): Promise<number
     return 0;
   } catch (err) {
     return failure(io, 'sign', err, `${dir || 'The package'} was not signed.`);
+  }
+}
+
+/**
+ * `octi plugin sign-skill-bundle <bundle.json> --key <file> [--passphrase-file <path|->] [--json]`:
+ * sign a skill exchange bundle (docs/SKILL-EXCHANGE.md#signing) in place. The
+ * bundle is checked as an import checks it (schema, content hash) first; an
+ * existing signature is replaced.
+ */
+export async function signSkillBundleCommand(io: OfflineIo, argv: string[]): Promise<number> {
+  let file = '';
+  try {
+    const { values, positionals } = parse(argv, { key: { type: 'string', short: 'k' }, 'passphrase-file': { type: 'string' }, json: { type: 'boolean' } });
+    if (positionals.length !== 1 || !values.key) throw new UsageError('expected <bundle.json> --key <private-key-file> [--passphrase-file <path|->]');
+    file = resolve(positionals[0]);
+    const text = await readFile(file, 'utf8');
+    const key = await loadSigningKey(io, values.key as string, values['passphrase-file'] as string | undefined);
+    const bundle = signBundle(text, key);
+    await writeFile(file, `${JSON.stringify(bundle, null, 2)}\n`);
+    const keyId = bundle.signature?.keyId ?? '';
+    if (values.json) json(io, { file, contentHash: bundle.contentHash, keyId, skills: bundle.skills.length });
+    else io.out(`✅ Signed ${file}\n   content hash: ${bundle.contentHash}\n   key id: ${keyId}\n   skills: ${bundle.skills.length}\n`);
+    return 0;
+  } catch (err) {
+    if (err instanceof SkillBundleError) return failure(io, 'sign-skill-bundle', new Refusal(err.message), `${file || 'The bundle'} was not signed.`);
+    return failure(io, 'sign-skill-bundle', err, `${file || 'The bundle'} was not signed.`);
   }
 }
 

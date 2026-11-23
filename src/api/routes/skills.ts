@@ -3,7 +3,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { adminDenied } from '@/api/admin-guard';
 import { getDb } from '@/db/postgres';
-import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
+import { skillRepository } from '@/db/repositories/skill-repository';
 import { type SkillView, skills } from '@/db/schema/skills';
 import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
 import { skillSelections } from '@/db/schema/skill-selections';
@@ -14,15 +14,25 @@ import { isInPersonWrite, updateSkill, SkillUpdateError } from '@/skills/update'
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
-import { isAdmin, isAuthenticated } from '@/security/principal';
-import {
-  markdownToSkills,
-  type PortableSkill,
-  skillsToMarkdown,
-  skillToMarkdown,
-  toPortableSkill,
-} from '@/skills/markdown';
+import { isAdmin, isAuthenticated, type Principal, requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
+import { skillsToMarkdown, skillToMarkdown, toPortableSkill } from '@/skills/markdown';
+import { buildBundle, MAX_BUNDLE_BYTES, MAX_BUNDLE_SKILLS, SkillBundleError, toBundleSkill, UNSIGNED_EXPORT_NOTE } from '@/skills/exchange';
+import { type ImportActor, installImport, previewImport } from '@/skills/exchange-import';
+import type { SkillBundleExport } from '@/shared/skill-exchange';
 import { canActInSession } from '@/core/rooms/access';
+
+/** The one source an import reads: a bundle's JSON text, a SKILL.md, or an https URL (admins). */
+const IMPORT_SOURCE_FIELDS = {
+  bundle: t.Optional(t.String({ minLength: 1, maxLength: MAX_BUNDLE_BYTES })),
+  skillMd: t.Optional(t.String({ minLength: 1, maxLength: MAX_BUNDLE_BYTES })),
+  url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
+};
+const IMPORT_SOURCE_BODY = t.Object(IMPORT_SOURCE_FIELDS);
+
+function importActor(userId: string, principal: Principal, session: { userAgent?: string } | null): ImportActor {
+  return { userId, admin: isAdmin(principal), inPerson: isInPersonWrite(principal, session), actorUserId: principal.actorUserId ?? null };
+}
 
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
@@ -104,7 +114,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     { detail: { tags: ['skills'] } }
   )
 
-  // ---- Export / Import endpoints (must be before /:id) ----
+  // ---- Plain exports (must be before /:id): JSON or markdown, unsigned. Both
+  // import through /exchange/preview and /exchange/install below
+  // (docs/SKILL-EXCHANGE.md#older-exports). ----
 
   .get(
     '/export',
@@ -156,124 +168,74 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     }
   )
 
+  // ---- Skill exchange bundles (docs/SKILL-EXCHANGE.md) ----
+
+  .get(
+    '/exchange/export',
+    async ({ user, principal, query, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      const ids: string[] = [...new Set((query.ids as string).split(',').map((s: string) => s.trim()).filter(Boolean))];
+      if (ids.length === 0) { set.status = 400; return { error: 'Name the skills to export: ids=<id>,<id>' }; }
+      if (ids.length > MAX_BUNDLE_SKILLS) { set.status = 400; return { error: `A bundle carries at most ${MAX_BUNDLE_SKILLS} skills; export fewer at a time` }; }
+      const mounted = ids.filter(isExternalSkillId);
+      if (mounted.length > 0) {
+        set.status = 400;
+        return { error: 'Mounted skills are not exported: they can carry supporting files a bundle has no room for. Copy their SKILL.md folder instead.' };
+      }
+      // Same visibility as GET /export: an admin any row, a user system, own and their orgs'.
+      const rows = isAdmin(principal) ? await skillRepository.findByIds(ids) : await skillRepository.findVisibleByIds(user.id, ids);
+      if (rows.length !== ids.length) { set.status = 404; return { error: `${ids.length - rows.length} of the requested skills were not found` }; }
+      const byId = new Map(rows.map(row => [row.id, row]));
+      const bundle = buildBundle(ids.map(id => toBundleSkill(byId.get(id) as SkillView)));
+      const result: SkillBundleExport = { bundle, signed: false, note: UNSIGNED_EXPORT_NOTE };
+      return result;
+    },
+    {
+      query: t.Object({ ids: t.String({ minLength: 1, maxLength: 20_000 }) }),
+      detail: { tags: ['skills'] },
+    }
+  )
+
   .post(
-    '/import',
+    '/exchange/preview',
     async ({ user, principal, session, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-
-      const db = getDb();
-      // Only the owner importing in person locks a skill (docs/SESSION-LEARNING.md#the-owner-edit-lock).
-      const inPerson = isInPersonWrite(principal, session);
-      const admin = isAdmin(principal);
-      const overwrite = body.overwrite ?? false;
-      let incoming: PortableSkill[] = [];
-
-      if (body.skills && body.skills.length > 0) {
-        incoming = body.skills;
-      } else if (body.markdown) {
-        incoming = markdownToSkills(body.markdown);
-      } else {
-        return { error: 'Provide either "skills" (JSON array) or "markdown" (string)' };
+      try {
+        return await previewImport(body, importActor(user.id, principal, session));
+      } catch (error) {
+        if (!(error instanceof SkillBundleError)) throw error;
+        set.status = error.status;
+        return { error: error.message };
       }
+    },
+    { body: IMPORT_SOURCE_BODY, detail: { tags: ['skills'] } }
+  )
 
-      // Validate required fields
-      for (const s of incoming) {
-        if (!s.name || !s.description) {
-          return { error: `Skill "${s.name ?? '(unnamed)'}" is missing required fields (name, description)` };
-        }
+  .post(
+    '/exchange/install',
+    async ({ user, principal, session, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      if (!requireScope(principal, API_SCOPES.WRITE)) { set.status = 403; return { error: `This token lacks the ${API_SCOPES.WRITE} scope` }; }
+      const { contentHash, decisions, ...source } = body;
+      try {
+        return await installImport(source, contentHash, decisions ?? [], importActor(user.id, principal, session));
+      } catch (error) {
+        if (!(error instanceof SkillBundleError)) throw error;
+        set.status = error.status;
+        return { error: error.message };
       }
-
-      // Look up existing skills by name for conflict detection. An admin
-      // matches every row (and may overwrite any of them); anyone else only
-      // the skills they can see, so another user's private skill neither
-      // conflicts nor leaks its name. Their own copy wins a name clash.
-      const owns = (row: SkillView) => !row.isSystem && row.userId === user.id;
-      const existingRows = admin ? await db.select().from(skills) : await skillRepository.findAll(user.id);
-      const existingByName = new Map<string, SkillView>();
-      for (const row of existingRows) {
-        const key = row.name.toLowerCase();
-        if (!existingByName.has(key) || (!admin && owns(row))) existingByName.set(key, row);
-      }
-
-      const createdIds: string[] = [];
-      const skipped: string[] = [];
-      const updated: string[] = [];
-      // Visible but not the caller's (system, org, shared): never overwritten
-      // by a non-admin, and not duplicated either — reported here instead.
-      const notOwned: string[] = [];
-
-      for (const portable of incoming) {
-        const existing = existingByName.get(portable.name.toLowerCase());
-
-        if (existing) {
-          if (!overwrite) {
-            skipped.push(portable.name);
-            continue;
-          }
-          if (!admin && !owns(existing)) {
-            skipped.push(portable.name);
-            notOwned.push(portable.name);
-            continue;
-          }
-
-          // Update existing skill — go through the repository so the
-          // description-embedding invalidation hook fires when description
-          // changes (skill-discovery Phase 2).
-          const updateData: SkillUpdate = {
-            category: portable.category ?? existing.category,
-            description: portable.description,
-            content: portable.content ?? existing.content,
-            principles: portable.principles ?? existing.principles,
-            bestPractices: portable.bestPractices ?? existing.bestPractices,
-            antiPatterns: portable.antiPatterns ?? existing.antiPatterns,
-            frameworks: portable.frameworks ?? existing.frameworks,
-            ...(inPerson && owns(existing) ? { ownerEditedAt: new Date() } : {}),
-          };
-
-          await skillRepository.update(existing.id, updateData);
-          updated.push(existing.id);
-          continue;
-        }
-
-        // Create new skill
-        const id = crypto.randomUUID();
-        await db.insert(skills).values({
-          id,
-          name: portable.name,
-          category: portable.category ?? 'general',
-          description: portable.description,
-          content: portable.content ?? '',
-          principles: portable.principles ?? [],
-          bestPractices: portable.bestPractices ?? [],
-          antiPatterns: portable.antiPatterns ?? [],
-          frameworks: portable.frameworks ?? [],
-          isSystem: false,
-          userId: user.id === 'system' ? null : user.id,
-          ownerEditedAt: inPerson ? new Date() : null,
-        });
-        createdIds.push(id);
-      }
-
-      return { created: createdIds, updated, skipped, notOwned };
     },
     {
       body: t.Object({
-        skills: t.Optional(
-          t.Array(
-            t.Object({
-              name: t.String(),
-              category: t.Optional(t.String()),
-              description: t.String(),
-              content: t.Optional(t.String()),
-              principles: t.Optional(t.Array(t.String())),
-              bestPractices: t.Optional(t.Array(t.String())),
-              antiPatterns: t.Optional(t.Array(t.String())),
-              frameworks: t.Optional(t.Array(t.String())),
-            })
-          )
-        ),
-        markdown: t.Optional(t.String()),
-        overwrite: t.Optional(t.Boolean()),
+        ...IMPORT_SOURCE_FIELDS,
+        /** The content hash the preview showed: the install refuses anything else. */
+        contentHash: t.String({ pattern: '^sha256:[0-9a-f]{64}$' }),
+        decisions: t.Optional(t.Array(t.Union([
+          t.Object({ name: t.String({ maxLength: 200 }), action: t.Literal('create') }),
+          t.Object({ name: t.String({ maxLength: 200 }), action: t.Literal('skip') }),
+          t.Object({ name: t.String({ maxLength: 200 }), action: t.Literal('rename'), newName: t.String({ maxLength: 200 }) }),
+          t.Object({ name: t.String({ maxLength: 200 }), action: t.Literal('replace'), skillId: t.String({ minLength: 1, maxLength: 512 }) }),
+        ]), { maxItems: MAX_BUNDLE_SKILLS })),
       }),
       detail: { tags: ['skills'] },
     }

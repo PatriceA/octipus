@@ -10,6 +10,7 @@ import { hydrateWalk, serializeWalk, type WalkState } from './pipeline-manager';
 const state: WalkState = {
   cursor: 'n3',
   contractRetries: { 'item:n3': 2 },
+  verdictRepairs: { 'item:n3': 1 },
   contractFeedback: 'ran 0 commands',
   previousOutput: 'the implementer wrote a parser',
   handoffChain: [{ timestamp: new Date('2026-10-15T10:00:00Z'), completedWork: 'parser', decisions: ['recursive descent'] } as never],
@@ -45,6 +46,7 @@ describe('walk state — checkpoint round trip', () => {
     expect(bare).toEqual({
       cursor: 'n0',
       contractRetries: {},
+      verdictRepairs: {},
       contractFeedback: undefined,
       previousOutput: '',
       handoffChain: [],

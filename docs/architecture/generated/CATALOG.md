@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-771 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+773 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -654,8 +654,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/skills/:id` | `src/api/routes/skills.ts` |
 | PATCH | `/api/skills/:id` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/:id/export` | `src/api/routes/skills.ts` |
+| GET | `/api/skills/exchange/export` | `src/api/routes/skills.ts` |
+| POST | `/api/skills/exchange/install` | `src/api/routes/skills.ts` |
+| POST | `/api/skills/exchange/preview` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/export` | `src/api/routes/skills.ts` |
-| POST | `/api/skills/import` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/proposals` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/approve` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/merge` | `src/api/routes/skill-proposals.ts` |
@@ -815,10 +817,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 188 |
+| `api` | `security` | 189 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 31 |
-| `api` | `skills` | 7 |
+| `api` | `skills` | 9 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 79 |
 | `api` | `voice` | 39 |
@@ -935,12 +937,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `tools` | 4 |
 | `services` | `utils` | 7 |
 | `setup` | `utils` | 1 |
-| `skills` | `config` | 1 |
+| `skills` | `config` | 2 |
 | `skills` | `core` | 8 |
-| `skills` | `db` | 17 |
+| `skills` | `db` | 22 |
 | `skills` | `models` | 2 |
+| `skills` | `plugins` | 2 |
 | `skills` | `security` | 4 |
-| `skills` | `utils` | 8 |
+| `skills` | `shared` | 1 |
+| `skills` | `utils` | 10 |
 | `test-helpers` | `config` | 1 |
 | `test-helpers` | `core` | 2 |
 | `test-helpers` | `db` | 11 |

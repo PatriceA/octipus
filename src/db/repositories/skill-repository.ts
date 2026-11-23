@@ -4,6 +4,11 @@ import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
 import { type Skill, type SkillView, skills } from '../schema/skills';
 
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+/** The database, or a transaction a caller writes several rows in (the skill exchange import). */
+export type SkillExec = Db | Tx;
+
 /**
  * Fields that affect the embedding hash (sha256(name + description)). When
  * any of these change, we must NULL out `description_embedding` and
@@ -66,6 +71,25 @@ export class SkillRepository {
       .limit(limit);
   }
 
+  /**
+   * The names among `names` (case-insensitive, trimmed) that a skill `userId`
+   * can see already has (system, own, their orgs'; `null`: the single-user
+   * owner, whose skills have no user), with ids. `visible` is built first
+   * (`visibleWhere`), so the read itself can run in the caller's transaction.
+   */
+  async findNamed(names: readonly string[], visible: SQL, db: SkillExec = this.db): Promise<Array<{ id: string; name: string }>> {
+    if (names.length === 0) return [];
+    const lower = [...new Set(names.map((n) => n.trim().toLowerCase()))];
+    return db.select({ id: skills.id, name: skills.name }).from(skills)
+      .where(and(inArray(sql`lower(trim(${skills.name}))`, lower), visible));
+  }
+
+  /** The skills `userId` sees, as a condition (`null`: the single-user owner — system skills and ownerless ones). */
+  async visibleWhere(userId: string | null): Promise<SQL> {
+    if (userId === null) return or(eq(skills.isSystem, true), isNull(skills.userId))!;
+    return visibleTo(userId);
+  }
+
   async findById(skillId: string): Promise<SkillView | undefined> {
     const [row] = await this.db.select(viewColumns).from(skills).where(eq(skills.id, skillId)).limit(1);
     return row;
@@ -99,9 +123,9 @@ export class SkillRepository {
    * Returns the updated row, or undefined if no row matched.
    *
    * Errors propagate to the caller (loud-failure principle); no swallowing.
+   * `db`: a transaction to write in, when the caller writes several rows at once.
    */
-  async update(skillId: string, data: SkillUpdate): Promise<Skill | undefined> {
-    const db = this.db;
+  async update(skillId: string, data: SkillUpdate, db: SkillExec = this.db): Promise<Skill | undefined> {
     const [existing] = await db.select().from(skills).where(eq(skills.id, skillId)).limit(1);
     if (!existing) return undefined;
 
