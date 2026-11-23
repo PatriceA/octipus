@@ -11,44 +11,65 @@ interface UndoOffer {
   key: number;
   message: string;
   undo: () => void;
+  commit?: () => void;
 }
 
 /**
- * One quiet "Done · Undo" line at the bottom of the screen, for a change that
- * has already been made and can be taken back (an archived note, a removed
- * to-do). Showing a new one replaces the previous offer, which then simply
- * stands. The change itself is never deferred: the server already has it, so
- * closing the tab loses nothing; Undo is a second request that reverses it.
+ * One quiet "Done · Undo" line at the bottom of the screen. Two shapes:
  *
- * Returns `show(message, undo)` and the element to render once in the page.
+ *  - `show(message, undo)`: the change has already been made on the server;
+ *    Undo is a second request that reverses it (an archived note).
+ *  - `show(message, undo, commit)`: the change is only shown; `commit` makes
+ *    it once the offer closes without Undo — on timeout, Dismiss, a newer
+ *    offer, leaving the page (unmount) or the tab closing (`pagehide`, best
+ *    effort: a request lost then leaves the item as it was). Undo then sends
+ *    nothing, so a change with side effects (a to-do's checkout, its
+ *    completion time, the wake-ups of what waited on it) never happens.
+ *
+ * Returns `show` and the element to render once in the page.
  */
 export function useUndoToast(timeoutMs = UNDO_TOAST_MS): {
-  show: (message: string, undo: () => void) => void;
+  show: (message: string, undo: () => void, commit?: () => void) => void;
   toast: ReactNode;
 } {
   const [offer, setOffer] = useState<UndoOffer | null>(null);
+  const offerRef = useRef<UndoOffer | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seq = useRef(0);
 
-  const clear = useCallback(() => {
+  /** Close the current offer; without `undone`, make its change. */
+  const close = useCallback((undone: boolean) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
+    const current = offerRef.current;
+    offerRef.current = null;
     setOffer(null);
+    if (!current) return;
+    if (undone) current.undo();
+    else current.commit?.();
   }, []);
 
-  const show = useCallback((message: string, undo: () => void) => {
-    if (timer.current) clearTimeout(timer.current);
+  const show = useCallback((message: string, undo: () => void, commit?: () => void) => {
+    close(false);
     seq.current += 1;
-    setOffer({ key: seq.current, message, undo });
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setOffer(null);
-    }, timeoutMs);
-  }, [timeoutMs]);
+    const next = { key: seq.current, message, undo, commit };
+    offerRef.current = next;
+    setOffer(next);
+    timer.current = setTimeout(() => close(false), timeoutMs);
+  }, [close, timeoutMs]);
 
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
+  useEffect(() => {
+    const onPageHide = () => close(false);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      // Leaving the page: what was on offer stands.
+      if (timer.current) clearTimeout(timer.current);
+      const current = offerRef.current;
+      offerRef.current = null;
+      current?.commit?.();
+    };
+  }, [close]);
 
   const toast = offer ? (
     <Portal>
@@ -61,18 +82,10 @@ export function useUndoToast(timeoutMs = UNDO_TOAST_MS): {
           className="pointer-events-auto flex max-w-full items-center gap-3 rounded-md border border-outline-variant/40 bg-surface-container-high px-4 py-2 text-sm text-on-surface shadow-lg"
         >
           <span className="min-w-0 truncate">{offer.message}</span>
-          <button
-            type="button"
-            onClick={() => {
-              const { undo } = offer;
-              clear();
-              undo();
-            }}
-            className="shrink-0 font-medium text-primary hover:underline"
-          >
+          <button type="button" onClick={() => close(true)} className="shrink-0 font-medium text-primary hover:underline">
             Undo
           </button>
-          <button type="button" onClick={clear} aria-label="Dismiss" className="shrink-0 text-on-surface-variant hover:text-on-surface">
+          <button type="button" onClick={() => close(false)} aria-label="Dismiss" className="shrink-0 text-on-surface-variant hover:text-on-surface">
             <X size={14} />
           </button>
         </div>

@@ -54,6 +54,21 @@ const VIEW_KEY = 'octipus.tasks.view';
 const REFRESH_MS = 30_000;
 /** Done tasks per page of the list: the server's default for GET /tasks; "Show more" asks for another (`doneLimit`). */
 const DONE_PAGE = 50;
+/** The most done tasks one GET /tasks returns (`doneLimit` is capped there); more come with `doneOffset`. */
+const DONE_REQUEST_MAX = 500;
+
+/**
+ * The requests that read `loaded` done tasks: the first (with the active
+ * tasks) as the plain default when it can be, then whole pages from
+ * `doneOffset` onward, since the server caps one page.
+ */
+function donePages(loaded: number): string[] {
+  const paths = [loaded === DONE_PAGE ? '/tasks' : `/tasks?doneLimit=${Math.min(loaded, DONE_REQUEST_MAX)}`];
+  for (let offset = DONE_REQUEST_MAX; offset < loaded; offset += DONE_REQUEST_MAX) {
+    paths.push(`/tasks?doneLimit=${Math.min(DONE_REQUEST_MAX, loaded - offset)}&doneOffset=${offset}`);
+  }
+  return paths;
+}
 /** A burst of `task.changed` events re-reads the board once, this long after the last. */
 const TASK_CHANGED_DEBOUNCE_MS = 400;
 
@@ -211,6 +226,8 @@ function LocalTasksPage() {
   const [doneLimit, setDoneLimit] = useState(DONE_PAGE);
   const [doneTotal, setDoneTotal] = useState<number | null>(null);
   const { show: showUndo, toast: undoToast } = useUndoToast();
+  // To-dos deleted on screen whose Undo is still on offer (not sent yet).
+  const pendingDeletes = useRef(new Set<string>());
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -254,10 +271,14 @@ function LocalTasksPage() {
       const version = writes.current.version;
       try {
         const tz = browserTimezone();
-        const [data, next] = await Promise.all([
-          api.get<{ tasks: Task[]; serverNow?: string; done?: { total: number } }>(doneLimit === DONE_PAGE ? '/tasks' : `/tasks?doneLimit=${doneLimit}`),
+        const [pages, next] = await Promise.all([
+          Promise.all(donePages(doneLimit).map((path) => api.get<{ tasks: Task[]; serverNow?: string; done?: { total: number } }>(path))),
           groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
         ]);
+        // Every page repeats the active tasks: the first page's are kept, and
+        // only the done ones of the later pages.
+        const [first, ...later] = pages;
+        const data = { ...first, tasks: [...(first.tasks || []), ...later.flatMap((p) => (p.tasks || []).filter((t) => t.status === 'done'))] };
         if (seq !== fetchSeq.current) return;
         const w = writes.current;
         if (w.pending > 0) {
@@ -273,7 +294,8 @@ function LocalTasksPage() {
         // Leases are judged on the server's clock: remember how far ours is off.
         const serverMs = data.serverNow ? Date.parse(data.serverNow) : Number.NaN;
         const serverSkewMs = Number.isNaN(serverMs) ? 0 : serverMs - Date.now();
-        let all = (data.tasks || []).map((t) => ({ ...t, serverSkewMs }));
+        // A deletion still on offer for Undo has not reached the server yet.
+        let all = data.tasks.filter((t) => !pendingDeletes.current.has(t.id)).map((t) => ({ ...t, serverSkewMs }));
         if (next) {
           const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
           all = all
@@ -445,18 +467,30 @@ function LocalTasksPage() {
   // agent holds (or left behind), and the task goes back to open.
   const releaseClaim = (task: Task) => write(null, () => api.post(`/tasks/${task.id}/release`, { force: true }));
 
-  // Deleting archives the task (out of every list, still in the database)
-  // and offers Undo, which puts the status it had back.
-  const deleteTask = async (id: string) => {
+  // Deleting hides the task and offers Undo; only when the offer closes
+  // without Undo is it archived (out of every list, still in the database).
+  // Archiving has effects Undo could not take back — it clears the completion
+  // time, frees an agent's claim and wakes what waited on the task — so
+  // nothing is sent until then (see useUndoToast).
+  const deleteTask = (id: string) => {
     const task = tasks.find((t) => t.id === id);
     if (!task) return;
-    const previous = task.status;
-    const withStatus = (status: TaskStatus) => () => setTasks((xs) => xs.map((t) => (t.id === id ? { ...t, status } : t)));
-    const archived = await write(withStatus('archived'), () => api.patch(`/tasks/${id}`, { status: 'archived' }));
-    if (!archived) return;
-    showUndo(`Deleted “${task.title}”`, () => {
-      void write(withStatus(previous), () => api.patch(`/tasks/${id}`, { status: previous }));
-    });
+    pendingDeletes.current.add(id);
+    setTasks((xs) => xs.filter((t) => t.id !== id));
+    showUndo(
+      `Deleted “${task.title}”`,
+      () => {
+        pendingDeletes.current.delete(id);
+        setTasks((xs) => (xs.some((t) => t.id === id) ? xs : [...xs, task]));
+      },
+      () => {
+        void write(null, () => api.patch(`/tasks/${id}`, { status: 'archived' })).then((archived) => {
+          pendingDeletes.current.delete(id);
+          // Not archived (the error shows): the to-do comes back.
+          if (!archived) void fetchTasks();
+        });
+      },
+    );
   };
 
   if (loading) {
