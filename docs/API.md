@@ -214,6 +214,9 @@ by an agent naming it in `spawn_child`, off its one-line `description`.
 | POST | `/api/skills` | Create custom skill |
 | PATCH | `/api/skills/:id` | Update skill |
 | DELETE | `/api/skills/:id` | Delete custom skill |
+| GET | `/api/skills/exchange/export?ids=a,b` | Export skills as one versioned JSON bundle with a content hash (unsigned: sign it offline with `octi plugin sign-skill-bundle`). See [Exchanging skills](SKILL-EXCHANGE.md#api). |
+| POST | `/api/skills/exchange/preview` | Read a bundle or the JSON of `GET /api/skills/export` (`{ bundle }`), a SKILL.md or that export's markdown (`{ skillMd }`) or, for admins, an https bundle (`{ url }`): its skills in full, signature, trust verdict and name collisions. Writes nothing. |
+| POST | `/api/skills/exchange/install` | Install a previewed source: `contentHash` from the preview and a decision (`skip`, `rename`, `replace`) for every collision; audited. `409` on an undecided collision or a changed source. |
 
 ## Persona
 

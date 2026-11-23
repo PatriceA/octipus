@@ -705,14 +705,86 @@ human asked "continue despite QA failures, or abort?" rather than a silent pass
 or a silent fail. But the budget should be spent on substance. The fix belongs
 in the prompt/verdict contract, not the gate.
 
+#### Update 2026-11-22: closed in the walker, the contract and the metric
+
+What had already landed between August and November, read from the code:
+
+- The contract is stated before the stage prompt as well as after it
+  (`QA_VERDICT_JSON_LEAD`, `withQaVerdictContract`).
+- A verdict under other field names (`verdict`/`blockers`/`summary`) is read
+  as a verdict (`aliasVerdict`, tier 1b).
+- A reply with no readable verdict is an audit-gate failure, never a silent
+  pass. The retry was a cheap **correction**: the auditor gets its own report
+  back and is asked for the block only (`qaVerdictCorrectionInput`).
+- The `audit_gate_failed` edge was already separate from `qa_fail`, so a
+  formatting miss had stopped costing the implementer a rework.
+
+Three gaps remained, and this change closes them:
+
+1. **The correction still spent the auditor's retry budget.** It took the
+   `audit_gate_failed` edge, whose `maxTraversals` is the stage's
+   `maxRetries`, the same budget a real coverage re-audit uses. Three misses
+   still stopped the run. A miss is now a **verdict repair**. It takes no edge
+   and has its own bound, `VERDICT_REPAIR_LIMIT = 2` per audit round, which
+   resets whenever the gate can read a verdict. When the repairs run out, the
+   run stops as failed at that stage (`audit_gate_failed`), as an exhausted
+   audit route always did. It is never a pass, and no verdict is read from
+   prose.
+2. **A block missing a required field got a full re-audit.** Every rejection
+   of a parsed pass was labelled `coverage`, including the ones whose only
+   fault was a missing `whatIDidNotCheck` or `confidence`. Those now carry
+   `auditGateReason: 'report'` and go to repair. These two fields are the
+   auditor's description of its own audit, so restating them from its own
+   report asks for nothing it would have to look again to know. Everything
+   else is still `coverage` and gets a real re-audit on the edge (rule in
+   `auditFault`): a skipped stage in scope or low-confidence stage, any
+   acceptance-criterion fault, and a pass whose own prose says FAIL. A repair
+   told "your findings stand" would otherwise write a missing criterion entry
+   or its evidence from a report that never checked it. When both apply,
+   coverage wins.
+3. **`rubberStampRate` counted the misses.** `run-health.ts` counted every
+   failed `audit_coverage` row, including the `source: 'unparseable'` rows,
+   which are not passing verdicts at all. That is how a 60% reading could be
+   mostly missing json blocks. Replies with no readable verdict are now set
+   aside on their own "no verdict" line, and the repaired verdict's row is the
+   one that counts. A parsed pass rejected for leaving out `whatIDidNotCheck`
+   or `confidence` still counts as a rejected pass, as it always did; it is
+   the thin artifact the gate exists for. Rows now carry `detail.fault`
+   (`report` | `coverage`), so those show as their own sub-number.
+
+The parser also accepts harmless variation it used to refuse: a
+`JSON`/`jsonc`/`json5`/`js`/untagged fence, with prose after it. It still
+fills in no missing field, and an unfenced object inside prose is still not a
+verdict: the alias tier runs before the prose tier, so a quoted payload such
+as `{"verdict":"approve","blockers":[]}` would otherwise turn the auditor's
+written FAIL into a pass. The instruction now says where the block goes
+when the stage also hands off (after the handoff block), and that a prose
+status line does not replace the block. The shipped QA template's "Report:"
+heading says the same.
+
+Structured-output mode was not used. The repo's JSON-mode seam
+(`responseFormat: { type: 'json_object' }`) exists only on direct
+`LiteLLMClient.complete` calls, not on the stage-worker path a repair runs
+through. Wiring it there would be a new provider-path feature.
+
+Not measured live: no paid model was run for this change. The next real
+pipeline run should show `verdict_repair` spawns in the run log and a
+`no verdict` line in `run-health.ts` where there were misses.
+
 ## What is actually next
 
-1. **Make the QA verdict contract stick** (finding above). Three of four
-   attempts omitted the JSON block. Until that lands, every audited pipeline
-   risks spending its retries on formatting.
+1. ~~**Make the QA verdict contract stick**~~ — see the 2026-11-22 update
+   above. What is left is a live reading of how often a repair is needed and
+   how often it succeeds.
 2. **`paidTokensPerRun` is 3× its target** and is now the worst axis. The
-   planner→executor split exists to move exactly this number and has never been
-   pointed at pipeline stages — every stage above ran on the paid lane.
+   planner→executor split exists to move exactly this number. (2026-11-22:
+   the code does route pipeline stages through it. `Implementation`,
+   `Testing` and the bug-fix stage declare `mechanical: true`, and
+   `resolveStageModel` sends such a stage to the lane's `executorModel`. A
+   lane with no `executorModel` falls through to the primary, so a run
+   with nothing bound still spends paid tokens on every stage. What
+   is open is binding and measuring an executor for the `coding`/`qa` lanes,
+   not wiring.)
 3. **`deliveredPct` 86% → ≥95%** (81 samples now, comfortably measured). It is measured now (27 samples); the remaining
    failures need reading one by one rather than assuming they are all stale.
 3. **Watch `rubberStampRate`.** 40% on five verdicts is a signal, not a

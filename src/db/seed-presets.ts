@@ -378,7 +378,7 @@ mktemp -d), never into the workspace beside the deliverable. A QA run that
 leaves qa_probe_*.py next to the product has changed the thing it was
 validating. Delete anything you did create there before reporting.
 
-Report:
+Report (prose, ABOVE the json verdict block the pipeline asks for at the end):
 - Overall status: PASS / FAIL / PASS WITH NOTES
 - Test suite results (pass/fail counts)
 - Issues found (with severity: critical/major/minor)

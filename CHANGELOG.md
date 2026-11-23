@@ -34,6 +34,106 @@ labels reflect blast radius, not contract guarantees.
   accepts `skill_nudge`. Other clients and channels get no offer. No
   migration: the offer lives in `messages.metadata`, the opt-out in
   `users.preferences`, the cool-down in `kv_store`.
+- **PDF text: columns in reading order, tables as Markdown tables**
+  ([docs](docs/DOCUMENTS.md#pdf--text-layer)).
+  - A two- or three-column page is read column by column instead of line by
+    line across the columns. A title, abstract, figure caption or footer that
+    crosses the gutter is read in its place and splits the columns into bands
+    above and below it. A gutter has to hold over at least three lines with
+    text on both sides, and both sides have to read as prose, so a wide word
+    gap on one justified line is not a gutter.
+  - A table (three or more rows whose short cells line up per column on a
+    left, right or centre edge) comes out as a Markdown table: header row,
+    `---:` for a right-aligned column, empty cells kept, `|` escaped, a
+    wrapped cell joined to its row when rows are spaced wider than lines.
+  - A page where neither reading holds comes out exactly as before. Label/value
+    forms, bullet lists, tables of contents and tables without a header row
+    keep their lines; a gutter under three glyphs wide needs six lines, not
+    three; a page of over 10,000 fragments (or a line of over 500) skips
+    detection. Not handled: merged or spanning cells, tables whose columns
+    do not line up or whose cells are long text,
+    wrapped cells in tables without row spacing, columns that never share a
+    baseline, tables continuing onto the next page (read as two tables),
+    rotated and right-to-left text.
+  - Fixed: the gap between two runs of text on a line was lost on real PDFs,
+    because pdfjs reports it as a whitespace item as wide as the gap; column
+    and cell gaps came out as one space. Whitespace-only items no longer count
+    as text, but still mark a space, so words either side of a font change
+    (bold, italic, inline code) stay apart.
+  - A Markdown table longer than one knowledge-base chunk (from a PDF or an
+    `.xlsx` sheet) is split between rows, and each piece repeats the header
+    row. It used to be cut as prose, which could split a row at a `. ` inside
+    a cell and left every piece after the first without column names. The
+    chunk size still holds: a row that does not fit under the header is cut
+    like prose, and a header over a quarter of a chunk is not repeated (that
+    table is cut like prose, as before). `.docx` tables are not affected:
+    mammoth's Markdown output has no tables, so they arrive one paragraph per
+    cell. Documents indexed before this keep their old text and chunks until
+    they are uploaded again.
+- **Skill export and import as signed JSON bundles** ([reference](docs/SKILL-EXCHANGE.md)).
+  - Skills → **Export** downloads the chosen skills as one versioned bundle
+    (`GET /api/skills/exchange/export`): content and metadata, a content hash,
+    and no ids, owners, flags, triggers or usage data. A server export is
+    unsigned and says so; `octi plugin sign-skill-bundle <file> --key <key>`
+    signs it offline with a plugin publisher key.
+  - Skills → **Import** takes an uploaded or pasted bundle, an agentskills.io
+    `SKILL.md`, or (administrators) an https URL through the SSRF-guarded
+    plugin download. `POST /api/skills/exchange/preview` shows every skill in
+    full, the signature and each name collision and writes nothing;
+    `POST /api/skills/exchange/install` writes only the previewed content
+    hash, with an explicit skip, rename or replace for each collision, in one
+    transaction, audited per skill.
+  - Imports follow the plugin package trust settings: a revoked key or an
+    invalid signature is always refused; with `plugins.requireSignature`, an
+    unsigned bundle (or SKILL.md) or an unknown key is refused; a URL import
+    needs a trusted signature. A bundle naming a privileged field
+    (`isSystem`, `userId`, `alwaysInject`, `triggers`, …) is refused.
+  - **Breaking — removed `POST /api/skills/import`.** It wrote unsigned skills
+    without a preview, a trust check or an audit row, and overwrote by name on
+    `overwrite: true`. Replaced by `POST /api/skills/exchange/preview` and
+    `/install`, which also read what the unchanged `GET /api/skills/export` and
+    `GET /api/skills/:id/export` write: their JSON (as `bundle`; unsigned,
+    fields other than a skill's content dropped and named) and their
+    multi-skill markdown (as `skillMd`). What changed: a name collision needs
+    an explicit skip, rename or replace instead of `overwrite`; collisions
+    follow the caller's own visibility, so an administrator can no longer
+    overwrite another user's private skill by name; with
+    `plugins.requireSignature` these unsigned files are refused.
+  - Text fields refuse control characters other than tab and line breaks
+    (NUL used to pass and fail at the database). Frontmatter values that are
+    lists or mappings are no longer turned into strings when a SKILL.md is
+    mounted or imported (nested YAML aliases made that exponential).
+  - Not built: a hosted registry, browsing community skills, ratings,
+    automatic updates.
+- **Pipelines: a missing QA verdict block is repaired, and the repair no longer
+  spends a retry** ([reference](docs/AGENT-ARCHITECTURE.md#qa-retry-loop),
+  [status](docs/plans/quality-loop-status.md)).
+  - A QA stage that writes its report but leaves out the `json` verdict block
+    is asked for the block alone. So is a pass that accounts for every stage
+    and every acceptance criterion but leaves out `whatIDidNotCheck` or
+    `confidence`. The auditor gets its own report back and runs nothing.
+    This takes no retry edge and has its own bound of 2 per audit round. If the
+    block is still unusable after that, the pipeline stops as failed at that
+    stage, as before.
+  - Everything else still gets a full re-audit on the stage's `maxRetries`: a
+    pass that skips a stage in scope, any acceptance-criterion fault (a
+    missing entry, a met entry with no evidence, a non-json pass on an item
+    with criteria), and a pass whose own prose says FAIL.
+  - Previously a pass missing only `whatIDidNotCheck` or `confidence` caused
+    a full re-audit, and a missing block used up the auditor's `maxRetries`.
+  - The verdict parser accepts a `JSON`/`jsonc`/`json5`/`js`/untagged fence
+    and prose after the block. An unfenced object inside prose is still not
+    read as a verdict, and no missing field is filled in.
+  - `audit_coverage` evidence rows carry `detail.fault` (`report` or
+    `coverage`) and, on a repaired reply, `detail.repairAttempt`. A repair
+    visit's `spawn` run event has a `startReason` starting with
+    `verdict_repair n/2`.
+  - `scripts/run-health.ts` no longer counts replies with no readable verdict
+    (`source: unparseable`) as rejected passes; it reports them on a separate
+    "no verdict" line. Over a window that includes such rows, the rubber-stamp
+    rate will read lower than before. A parsed pass rejected for leaving out
+    `whatIDidNotCheck` or `confidence` still counts as rejected, and is also
+    shown as its own sub-number.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),
