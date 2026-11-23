@@ -20,7 +20,7 @@
  * with `prependMessages` without moving the rows being read.
  */
 import { sanitizeStreaming, type SettledText } from './live-text';
-import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayText } from '@/tui-kit';
+import { type Component, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, displayLine, displayText } from '@/tui-kit';
 import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 import { wheelDirection } from '../terminal-actions';
@@ -244,10 +244,12 @@ export class MessagesPane implements Component {
    * The reader reached the top of what is in memory. Asks for older turns
    * when the server has them and nothing was dropped here: after a drop the
    * oldest turn in memory is no longer the one they would continue from.
+   * After a failed load only a scroll of the reader's own (`byReader`) asks
+   * again, never a redraw.
    */
-  reachedTop(): void {
+  reachedTop(byReader = false): void {
     if (this.windowStart > 0 || this.dropped > 0 || this.room() === 0) return;
-    if (this.older.state === 'more' || this.older.state === 'failed') this.onReachTop?.();
+    if (this.older.state === 'more' || (this.older.state === 'failed' && byReader)) this.onReachTop?.();
   }
   /**
    * Put older messages above everything in memory, oldest first, keeping
@@ -324,7 +326,7 @@ export class MessagesPane implements Component {
       lines = this.frozen ?? this.lines(this.width);
       max = Math.max(0, lines.length - Math.max(1, this.height - 1));
     }
-    if (this.offset + by > max) this.reachedTop();
+    if (this.offset + by > max) this.reachedTop(true);
     const next = Math.min(max, this.offset + by);
     if (next === this.offset) return false;
     if (!this.frozen) this.freeze(lines);
@@ -436,7 +438,7 @@ export class MessagesPane implements Component {
         ? '↑ Older messages are on the server — scroll up to load them'
         : `Older messages are on the server; this transcript keeps at most ${this.maxItems.toLocaleString('en-US')}`;
       case 'loading': return 'Loading older messages…';
-      case 'failed': return `Older messages could not be loaded: ${this.older.reason} — scroll up to try again`;
+      case 'failed': return `Older messages could not be loaded: ${displayLine(this.older.reason)} — scroll up to try again`;
       default: return null;
     }
   }

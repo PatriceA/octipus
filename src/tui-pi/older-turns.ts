@@ -26,8 +26,9 @@ interface HistoryPage {
 
 /** Messages per page: the route's maximum. */
 export const OLDER_PAGE = 100;
-/** After a failed load, the next reach of the top asks again no sooner than this. */
-const RETRY_MS = 3000;
+/** After a failed load, a scroll up asks again no sooner than this; it doubles with each failure in a row, up to `RETRY_MAX_MS`. */
+export const RETRY_MS = 3000;
+const RETRY_MAX_MS = 60_000;
 
 export const toChatMessage = (row: HistoryRow): ChatMessage => ({ role: row.role, content: row.content, timestamp: new Date(row.at) });
 
@@ -38,6 +39,7 @@ export class OlderTurns {
   private generation = 0;
   private loading = false;
   private failedAt = 0;
+  private failures = 0;
 
   constructor(
     private readonly pane: MessagesPane,
@@ -56,6 +58,7 @@ export class OlderTurns {
   replayed(rows: readonly HistoryRow[]): void {
     this.generation++;
     this.loading = false;
+    this.failures = 0;
     this.cursor = rows.find(row => typeof row.id === 'string')?.id ?? null;
     this.pane.setOlder({ state: this.cursor ? 'more' : 'none' });
   }
@@ -70,7 +73,7 @@ export class OlderTurns {
   /** Load the page before the cursor and put it above the transcript. */
   async load(): Promise<void> {
     if (this.loading || !this.cursor) return;
-    if (this.pane.getOlder().state === 'failed' && this.now() - this.failedAt < RETRY_MS) return;
+    if (this.pane.getOlder().state === 'failed' && this.now() - this.failedAt < Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** (this.failures - 1))) return;
     const generation = this.generation;
     const sessionId = this.sessionId();
     this.loading = true;
@@ -85,12 +88,14 @@ export class OlderTurns {
       if (generation !== this.generation) return;
       this.loading = false;
       this.failedAt = this.now();
+      this.failures++;
       this.pane.setOlder({ state: 'failed', reason: error instanceof Error ? error.message : String(error) });
       this.changed();
       return;
     }
     if (generation !== this.generation) return;
     this.loading = false;
+    this.failures = 0;
     this.cursor = page.messages[0]?.id ?? null;
     const rows = page.messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())

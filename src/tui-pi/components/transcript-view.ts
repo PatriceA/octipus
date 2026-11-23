@@ -32,6 +32,9 @@ export class TranscriptScroll extends ScrollView {
    * something else changed.
    */
   requestContent: () => void = () => {};
+  /** The reader scrolled up since the last layout (wheel, keys, a drag): not the view moving itself. */
+  private scrolledUp = false;
+  private shifting = false;
 
   constructor(readonly document: TranscriptDocument) {
     super(document, { follow: 'end', primary: true, overscroll: 'chain', scrollbar: 'auto' });
@@ -43,9 +46,27 @@ export class TranscriptScroll extends ScrollView {
     if (this.pendingShift) {
       const shift = this.pendingShift;
       this.pendingShift = 0;
-      this.scrollTo(this.scrollTop + shift);
+      this.shifting = true;
+      try { this.scrollTo(this.scrollTop + shift); } finally { this.shifting = false; }
     }
-    this.document.laidOut(this, contentHeight);
+    const byReader = this.scrolledUp;
+    this.scrolledUp = false;
+    this.document.laidOut(this, contentHeight, byReader);
+  }
+
+  override scrollTo(scrollTop: number, options?: { disableFollow?: boolean }): void {
+    if (!this.shifting && scrollTop < this.scrollTop) this.scrolledUp = true;
+    super.scrollTo(scrollTop, options);
+  }
+
+  override scrollBy(lines: number): number {
+    if (lines < 0) this.scrolledUp = true;
+    return super.scrollBy(lines);
+  }
+
+  override scrollToStart(): void {
+    this.scrolledUp = true;
+    super.scrollToStart();
   }
 }
 
@@ -67,12 +88,12 @@ export class TranscriptDocument implements Component {
    * memory (while reading history, within a screen of it; while following the
    * end, when it all fits), older turns from the server, if any.
    */
-  laidOut(scroll: TranscriptScroll, contentHeight: number): void {
+  laidOut(scroll: TranscriptScroll, contentHeight: number, byReader = false): void {
     if (scroll.viewportHeight <= 0 || this.showAll()) return;
     const nearTop = scroll.isFollowingEnd ? contentHeight <= scroll.viewportHeight : scroll.scrollTop < scroll.viewportHeight;
     if (!nearTop) return;
     if (this.pane.canGrow()) { if (!scroll.isFollowingEnd) scroll.requestContent(); return; }
-    this.pane.reachedTop();
+    this.pane.reachedTop(byReader);
   }
 
   render(width: number): string[] {

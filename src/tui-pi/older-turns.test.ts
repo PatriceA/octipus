@@ -2,7 +2,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { MessagesPane } from './components/messages-pane';
 import { createTranscriptView } from './components/transcript-view';
-import { OLDER_PAGE, OlderTurns, type HistoryRow } from './older-turns';
+import { OLDER_PAGE, OlderTurns, RETRY_MS, type HistoryRow } from './older-turns';
 
 const strip = (lines: readonly string[]) => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ''));
 const row = (n: number): HistoryRow => ({ id: `id-${n}`, role: n % 2 ? 'assistant' : 'user', content: `turn ${n}`, at: new Date(1_700_000_000_000 + n * 1000).toISOString() });
@@ -53,17 +53,35 @@ describe('the controller', () => {
     expect(t.getJson).toHaveBeenCalledTimes(2);
   });
 
-  test('a failed load is said at the top and asked again on a later reach, not in a loop', async () => {
+  test('a failed load is said at the top; only a scroll of the reader asks again, with a growing wait', async () => {
     const t = setup(10, 20);
     t.pane.reachedTop();
     t.pending[0]?.reject(new Error('HTTP 502'));
     await t.settle();
     expect(strip(t.pane.documentLines(80))[0]).toContain('Older messages could not be loaded: HTTP 502');
-    t.pane.reachedTop();
+    t.tick(10_000);
+    t.pane.reachedTop(); // a redraw with the top in view: not a retry
     expect(t.getJson).toHaveBeenCalledTimes(1);
-    t.tick(5000);
-    t.pane.reachedTop();
+    t.pane.reachedTop(true);
     expect(t.getJson).toHaveBeenCalledTimes(2);
+    t.pending[1]?.reject(new Error('HTTP 502'));
+    await t.settle();
+    t.tick(RETRY_MS + 1);
+    t.pane.reachedTop(true); // the second failure in a row waits twice as long
+    expect(t.getJson).toHaveBeenCalledTimes(2);
+    t.tick(RETRY_MS);
+    t.pane.reachedTop(true);
+    expect(t.getJson).toHaveBeenCalledTimes(3);
+  });
+
+  test('the reason a load failed is shown as text: escape sequences in it never reach the screen', async () => {
+    const t = setup(10, 20);
+    t.pane.reachedTop();
+    t.pending[0]?.reject(new Error('bad\x1b]52;c;ZXZpbA==\x07 gateway\x1b[2J\x1b]0;t\x07'));
+    await t.settle();
+    const top = t.pane.documentLines(80).join('\n');
+    expect(top.replace(/\x1b\[[0-9;]*m/g, '')).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+    expect(strip(t.pane.documentLines(80))[0]).toContain('could not be loaded: bad gateway');
   });
 
   test('a page that arrives after the transcript was replaced or cleared is dropped', async () => {
@@ -132,6 +150,21 @@ describe('where the reader is', () => {
     await t.settle();
     expect(layout().slice(1)).toEqual(reading);
     view.scrollToStart();
+    layout();
+    expect(t.getJson).toHaveBeenCalledTimes(2);
+  });
+
+  test('alternate screen: after a failure, redraws with the top in view do not ask again; the reader scrolling up does', async () => {
+    const t = setup(10, 12);
+    const view = createTranscriptView(t.pane);
+    const layout = () => { const lines = view.document.render(60); view.updateLayout(lines.length, 20, () => {}); };
+    layout();
+    t.pending[0]?.reject(new Error('HTTP 502'));
+    await t.settle();
+    t.tick(120_000);
+    for (let n = 0; n < 5; n++) layout();
+    expect(t.getJson).toHaveBeenCalledTimes(1);
+    view.scrollBy(-3);
     layout();
     expect(t.getJson).toHaveBeenCalledTimes(2);
   });
