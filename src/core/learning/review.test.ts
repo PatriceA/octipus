@@ -55,7 +55,8 @@ test('a patch must cite execution evidence; older outputs without patches still 
   const parsed = parseLearningReview(JSON.stringify({ ...review, patches: [patch] }), evidence);
   expect(parsed.patches[0].oldText).toBe('  2. Push it.');
   expect(() => parseLearningReview(JSON.stringify({ ...review, patches: [{ ...patch, sources: ['plan'] }] }), evidence)).toThrow('execution evidence');
-  expect(() => parseLearningReview(JSON.stringify({ ...review, patches: [patch, patch] }), evidence)).toThrow();
+  // One patch too many is cut off; the review is kept.
+  expect(parseLearningReview(JSON.stringify({ ...review, patches: [patch, patch] }), evidence).patches).toHaveLength(1);
   expect(parseLearningReview(JSON.stringify(review), evidence).patches).toEqual([]);
 });
 
@@ -105,11 +106,18 @@ test('a knowledge item defaults to kind fact, is at most 2, and keeps extends on
   expect(parseLearningReview(JSON.stringify({ ...review, knowledge: [knowledge] }), evidence).knowledge[0].kind).toBe('fact');
   expect(parseLearningReview(JSON.stringify({ ...review, knowledge: [{ ...knowledge, kind: 'opinion' }] }), evidence).knowledge[0].kind).toBe('fact');
   expect(parseLearningReview(JSON.stringify({ ...review, knowledge: [{ ...knowledge, kind: 'decision' }] }), evidence).knowledge[0].kind).toBe('decision');
-  expect(() => parseLearningReview(JSON.stringify({ ...review, knowledge: [knowledge, knowledge, knowledge] }), evidence)).toThrow();
+  expect(parseLearningReview(JSON.stringify({ ...review, knowledge: [knowledge, knowledge, knowledge] }), evidence).knowledge).toHaveLength(2);
   const offered = 'note:11111111-1111-4111-8111-111111111111';
   const kept = parseLearningReview(JSON.stringify({ ...review, knowledge: [{ ...knowledge, extends: offered.slice(5) }] }), evidence, { offeredNotes: [offered] });
   expect(kept.knowledge[0].extends).toBe(offered);
   const dropped = parseLearningReview(JSON.stringify({ ...review, knowledge: [{ ...knowledge, extends: 'note:other' }] }), evidence, { offeredNotes: [offered] });
   expect(dropped.knowledge[0].extends).toBeUndefined();
   expect(dropped.ignoredNoteExtends).toEqual(['note:other']);
+});
+
+test('one item too many is cut off, not a failed review', () => {
+  const item = (n: number) => ({ title: `Lesson ${n}`, content: `Fact ${n} held after the fix`, sources: ['event:1'] });
+  const parsed = parseLearningReview(JSON.stringify({ reason: 'Three lessons', knowledge: [item(1), item(2), item(3)], memories: [], skills: [] }),
+    [{ id: 'event:1', kind: 'execution', text: 'ok' }]);
+  expect(parsed.knowledge.map((k) => k.title)).toEqual(['Lesson 1', 'Lesson 2']);
 });

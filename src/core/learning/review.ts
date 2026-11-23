@@ -7,6 +7,12 @@ import type { LearningEvidence } from './evidence';
 
 const citations = z.array(z.string().max(100)).min(1).max(8);
 const content = z.string().trim().min(1).max(4000);
+/**
+ * The first `n` items. A model that returns one item too many used to fail the
+ * whole review on the array's maximum, which lost its memories, skill and
+ * patch along with the extra item.
+ */
+const firstN = (n: number) => <T>(items: T[]): T[] => items.slice(0, n);
 export const learningReviewSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
   knowledge: z.array(z.object({ title: z.string().min(1).max(150), content,
@@ -14,21 +20,21 @@ export const learningReviewSchema = z.object({
     kind: z.enum(LESSON_KINDS).catch('fact'),
     // `note:<id>` from the input's `existing.notes`; checked against what was offered in parseLearningReview.
     extends: z.string().max(200).optional().catch(undefined),
-    sources: citations })).max(2),
+    sources: citations })).transform(firstN(2)),
   memories: z.array(z.object({ factType: z.enum(['preference', 'profile', 'relationship', 'skill_observation', 'workflow_note']),
     content: z.string().min(1).max(800), confidence: z.number().min(0.8).max(1), sources: citations,
     // Checked per memory against the stored messages (`verifyOwnerQuotes`), so
     // a missing or bad quote drops that memory, not the whole review.
     quote: z.string().max(2000).optional(), kind: z.enum(MEMORY_KINDS).optional().catch(undefined),
-    expires: z.iso.date().optional().catch(undefined) })).max(3),
+    expires: z.iso.date().optional().catch(undefined) })).transform(firstN(3)),
   skills: z.array(z.object({ name: z.string().min(1).max(100), description: z.string().min(1).max(400), content, sources: citations,
     // Required by the prompt; a model that leaves it out (or garbles it) loses only the signal, not the review.
     signal: z.enum(SKILL_PROPOSAL_SIGNALS).catch('procedure'),
     // `proposal:<id>` from the input's `existing`; checked against what was offered in parseLearningReview.
-    extends: z.string().max(200).optional().catch(undefined) })).max(1),
+    extends: z.string().max(200).optional().catch(undefined) })).transform(firstN(1)),
   // Not trimmed: oldText must match the skill's text exactly (src/skills/patch.ts).
   patches: z.array(z.object({ skillId: z.string().min(1).max(200), oldText: z.string().min(1).max(MAX_PATCH_OLD_CHARS),
-    newText: z.string().max(MAX_PATCH_NEW_CHARS), reason: z.string().trim().min(1).max(400), sources: citations })).max(1).default([]),
+    newText: z.string().max(MAX_PATCH_NEW_CHARS), reason: z.string().trim().min(1).max(400), sources: citations })).default([]).transform(firstN(1)),
 });
 export type LearningReview = z.infer<typeof learningReviewSchema>;
 
