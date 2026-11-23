@@ -54,7 +54,7 @@ describe('sanitizeTemplate', () => {
 describe('renderTemplate', () => {
   test('substitutes values and escapes', () => {
     const out = renderTemplate('<p>{{data.x}}</p>', { data: { x: '<b>z</b>' } });
-    expect(out).toBe('<p>&lt;b&gt;z&lt;/b&gt;</p>');
+    expect(out).toBe('<p>&lt;b&gt;z&lt;&#47;b&gt;</p>');
   });
 
   test('each block iterates and escapes', () => {

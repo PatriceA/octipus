@@ -25,6 +25,26 @@ export function escapeHtml(value: unknown): string {
 }
 
 /**
+ * A data value as it is spliced into a template, in text or in a quoted or
+ * unquoted attribute. Besides the HTML specials it encodes every character
+ * that could end a value or start an attribute or a tag (whitespace, `/`,
+ * `=`, backtick) and the braces of a `{{…}}` expression, so a value is always
+ * one opaque run of text: it cannot add markup or attributes, cannot be
+ * expanded again, and the post-expansion sanitize pass can never match
+ * inside it. Browsers decode the character references, so the value reads
+ * (and an attribute holds) exactly the original string.
+ */
+export function escapeTemplateValue(value: unknown): string {
+  if (value == null) return '';
+  return String(value).replace(TEMPLATE_VALUE_UNSAFE_RE, (ch) => NAMED_ENTITY[ch] ?? `&#${ch.codePointAt(0)};`);
+}
+
+/** The five HTML specials keep the names `escapeHtml` gives them. */
+const NAMED_ENTITY: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+const TEMPLATE_VALUE_UNSAFE_RE = /[&<>"'`=/{}\s]/g;
+
+/**
  * Strip <script> and inline event handlers from user-supplied template HTML.
  *
  * This is the render-time backstop. Author-time, `extractInteractiveScript`
@@ -52,7 +72,10 @@ export function sanitizeTemplate(html: string): string {
   // input — a truncated template is not a reason to start executing it.
   let out = html;
   for (;;) {
-    const next = out.replace(SCRIPT_BLOCK_RE, '').replace(HANDLER_ATTR_RE, '');
+    // A whitespace separator goes with the attribute; a quote or `/` stays.
+    const next = out
+      .replace(SCRIPT_BLOCK_RE, '')
+      .replace(SANITIZE_HANDLER_RE, (_m, sep: string) => (/\s/.test(sep) ? '' : sep));
     if (next === out) return out;
     out = next;
   }
@@ -63,6 +86,16 @@ export function sanitizeTemplate(html: string): string {
  * through end-of-input when the closing tag never arrives.
  */
 const SCRIPT_BLOCK_RE = /<script\b[\s\S]*?(?:<\/script\s*>|$)/gi;
+
+/**
+ * An `on<event>=` attribute for the sanitizer: after whitespace, `/`, or the
+ * closing quote of the previous attribute (`<img src="x"onerror=…>` is an
+ * attribute too). The attribute goes; a quote or `/` before it stays. A bare
+ * value stops where an unquoted attribute value must (whitespace, `>`, a
+ * quote, `=`, `<`, backtick), so it never consumes a closing tag or the
+ * quote of the next attribute.
+ */
+const SANITIZE_HANDLER_RE = /([\s/"'])on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"'=<`]*)/gi;
 
 // ── author-time JS extraction ──────────────────────────────────────
 // A hand-authored page keeps its JS in `<script>` blocks and `onclick="…"`
@@ -201,7 +234,9 @@ const EACH_RE = /\{\{#each\s+([^}]+?)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g;
 export function renderTemplate(template: string, input: RenderInput): string {
   // Sanitized before expansion and again after: an expression can stand
   // between two halves of a tag name, and only the final HTML shows what the
-  // browser will parse.
+  // browser will parse. Expanded values (`escapeTemplateValue`) hold no
+  // character either pass can match on, so the second pass only ever acts on
+  // the template's own markup and leaves the data byte-for-byte as escaped.
   return sanitizeTemplate(expandTemplate(sanitizeTemplate(template), input));
 }
 
@@ -215,11 +250,11 @@ function expandTemplate(safeTemplate: string, input: RenderInput): string {
         return body.replace(EXPR_RE, (_m: string, e: string) => {
           const trimmed = e.trim();
           // `this.<field>` refers to the current iteration item.
-          if (trimmed === 'this') return escapeHtml(item);
+          if (trimmed === 'this') return escapeTemplateValue(item);
           if (trimmed.startsWith('this.')) {
-            return escapeHtml(resolvePath({ this: item } as Record<string, unknown>, trimmed));
+            return escapeTemplateValue(resolvePath({ this: item } as Record<string, unknown>, trimmed));
           }
-          return escapeHtml(
+          return escapeTemplateValue(
             resolvePath({ data: input.data, title: input.title } as Record<string, unknown>, trimmed),
           );
         });
@@ -228,7 +263,7 @@ function expandTemplate(safeTemplate: string, input: RenderInput): string {
   });
 
   return withEach.replace(EXPR_RE, (_m, e: string) => {
-    return escapeHtml(
+    return escapeTemplateValue(
       resolvePath({ data: input.data, title: input.title } as Record<string, unknown>, e.trim()),
     );
   });

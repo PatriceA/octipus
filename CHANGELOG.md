@@ -39,6 +39,13 @@ labels reflect blast radius, not contract guarantees.
   - Fixed: templates are sanitized again after `{{…}}` expansion, and the
     built artifact script is no longer served as a separate file
     (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).
+  - Template values (`{{…}}`) are encoded so that they are always plain text
+    or a single attribute value: besides `& < > " '` they encode whitespace,
+    `/`, `=`, backtick and braces as character references, which the browser
+    decodes back to the same text. Data can no longer add attributes, be
+    altered by the sanitizer, or be expanded as a template; widget output is
+    inserted after the template pass. An event-handler attribute right after a
+    closing quote is stripped too.
   - Fixed: `allowedEmbedOrigins` was spliced into the embed CSP unchecked, so
     an entry could add a `sandbox … allow-same-origin` directive. It now takes
     web origins only (400 otherwise).

@@ -44,7 +44,11 @@ afterEach(() => {
   hostSetting.host = '';
 });
 
-function send(method: string, url: string, opts: { host?: string; auth?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
+async function send(method: string, url: string, opts: { host?: string; auth?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
+  // The per-IP page limiter would answer 429 well within this file's request
+  // count, and a 429 would make the "refused or sandboxed" checks pass vacuously.
+  const { _resetRateLimits } = await import('@/core/artifacts/rate-limit');
+  _resetRateLimits();
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.host) headers.host = opts.host;
   if (opts.auth) headers.authorization = opts.auth;
@@ -289,6 +293,7 @@ describe('the embed viewer token: one artifact, read-only, expiring, revocable',
 describe('path spellings cannot move an artifact page off its sandbox', () => {
   /** A response for artifact bytes is either refused, or carries exactly the embed's sandboxing policy. */
   async function expectNoUnsandboxedPage(res: Response, label: string) {
+    expect(res.status, `${label}: rate-limited, so not checked`).not.toBe(429);
     if (res.status >= 300) return;
     const csp = res.headers.get('content-security-policy') ?? '';
     expect(csp.match(/default-src/g), label).toHaveLength(1);
@@ -373,5 +378,19 @@ describe('the artifact host can never shadow the app', () => {
     }
     const batch = await send('PUT', '/api/settings/batch', { auth: `Bearer ${adminSession}`, body: { settings: { 'artifacts.host': 'localhost' } } });
     expect((await batch.json()).errors?.['artifacts.host']).toMatch(/host of its own/);
+  });
+});
+
+describe('widget output is not run through the template pass', () => {
+  test('a widget cell holding "on…=" text or "{{…}}" comes out unchanged', async () => {
+    const res = await asUser('POST', '/api/artifacts', { slug: 'widget-text', title: 'W', type: 'dashboard', visibility: 'public' });
+    const { artifact } = await res.json();
+    const { artifactsRepository } = await import('@/db/repositories/artifacts-repository');
+    const source = await artifactsRepository.createSource({ artifactId: artifact.id, name: 'rows', kind: 'http', configJson: { url: 'https://example.invalid' }, refreshSeconds: 300, principalId: userId });
+    await artifactsRepository.createSnapshot({ sourceId: source.id, payloadJson: [{ name: 'Status online=yes', note: '{{title}}' }] });
+    await artifactsRepository.createWidget({ artifactId: artifact.id, slot: 'tbl', toolId: 'art_widget_table', bindJson: { rows: 'rows' }, paramsJson: { columns: ['name', 'note'] } });
+    const html = await (await send('GET', '/__artifacts__/a/widget-text/embed')).text();
+    expect(html).toContain('Status online=yes');
+    expect(html).toContain('{{title}}');
   });
 });

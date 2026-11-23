@@ -136,6 +136,7 @@ function errorBlock(slot: string, message: string): string {
  * placeholders in `template` with each widget's rendered HTML. Slots not
  * present in `bySlot` are left as-is (renderer chose to ignore them).
  */
+const WIDGET_SLOT_RE = /^[a-zA-Z0-9_-]+$/;
 const X_WIDGET_RE = /<x-widget\s+id=["']([a-zA-Z0-9_-]+)["']\s*(?:\/|><\/x-widget)>/g;
 
 export function resolveWidgetTags(template: string, bySlot: Record<string, string>): string {
@@ -160,7 +161,10 @@ export async function renderDefaultLayout(
   const cells = widgets
     .map((w) => {
       const span = Number((w.paramsJson as Record<string, unknown>)?.span ?? 1) || 1;
-      const html = bySlot[w.slot] ?? '';
+      // A placeholder, resolved after the template pass (artifact-pages.ts):
+      // widget HTML is trusted server output with its own escaping, and must
+      // not go through template expansion or the sanitizer.
+      const html = WIDGET_SLOT_RE.test(w.slot) ? `<x-widget id="${w.slot}"/>` : (bySlot[w.slot] ?? '');
       return `<div class="aw-cell" style="grid-column: span ${Math.min(Math.max(span, 1), 4)}">${html}</div>`;
     })
     .join('');

@@ -288,8 +288,9 @@ async function handleEmbed(ctx: HandlerCtx) {
 
   let body: string;
   try {
-    const withWidgets = resolveWidgetTags(template, widgetRender.bySlot);
-    body = renderTemplate(withWidgets, { data, title: auth.artifact.title });
+    // Widgets go in after the template pass: their HTML is server output,
+    // already escaped, and data inside it must not be expanded or sanitized.
+    body = resolveWidgetTags(renderTemplate(template, { data, title: auth.artifact.title }), widgetRender.bySlot);
   } catch (err) {
     coreLogger.error({ err, artifactId: auth.artifact.id }, 'artifact.render.failed');
     ctx.set.status = 500;
