@@ -15,7 +15,7 @@ interface EvidenceRecord {
   pipelineId?: string | null;
   stage?: string | null;
   nodeId?: string | null;
-  kind: 'qa_verdict' | 'schema_gate' | 'pre_verify' | 'adhoc';
+  kind: 'qa_verdict' | 'schema_gate' | 'pre_verify' | 'adhoc' | 'side_effect' | 'audit_coverage';
   passed: boolean;
   confidence?: string | null;
   detail?: Record<string, unknown> | null;
@@ -34,6 +34,8 @@ const KIND_LABEL: Record<EvidenceRecord['kind'], string> = {
   schema_gate: 'schema gate',
   pre_verify: 'pre-verify',
   adhoc: 'ad-hoc',
+  side_effect: 'side effects',
+  audit_coverage: 'audit coverage',
 };
 
 /**
