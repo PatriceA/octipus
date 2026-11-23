@@ -572,6 +572,14 @@ The built-in WebSocket chat is always available and is the primary interface thr
 
 ---
 
+## Mobile app
+
+A Flutter client for iOS and Android lives in a separate repository,
+[PatriceA/mobile-octipus](https://github.com/PatriceA/mobile-octipus). It pairs
+with an instance and talks to the same gateway protocol as the web UI. It is at
+version 0.1.0 and not yet released; its open work is tracked in that
+repository, not here.
+
 ## Environment Variable Quick Reference
 
 These are **first-boot seeds only** (see [Where settings live](#where-settings-live)) — set them before the first start, then manage everything from **Settings → Channels** afterward. Secrets seeded here are migrated into the vault on first boot.

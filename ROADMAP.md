@@ -67,20 +67,32 @@ are not an instruction to expand scope during this cycle.
   B1b verify hook per item. Plan:
   [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md).
 
-- **Provider-boundary test coverage.** The acceptance harness has a scripted
-  OpenAI-compatible provider, and conformance tests have local provider doubles.
-  The larger LiteLLM client and provider registry still need more direct tests
-  for completion, embedding, streaming, and classified failures. Prefer
-  extending those shared seams over adding one-off HTTP mocks. **Help wanted.**
+- **Provider-boundary test coverage — SHIPPED (2026-11-23), known gaps listed.**
+  A scripted HTTP provider (`src/models/testing/scripted-provider.ts`) and
+  registry/vault doubles now carry two boundary suites for the LiteLLM client
+  and the provider router (completion, embeddings, streaming, classified
+  failures), and the acceptance script uses the same server. The tests exposed
+  and fixed failure-classification bugs (Retry-After dropped, resets
+  unclassified, an aborted proxy stream returned as finished, embeddings not
+  matched by index). Still open: the behaviours pinned as "currently …" in
+  those suites, listed under "Known provider-boundary gaps" in
+  `docs/TESTING.md`. **Help wanted.**
 
 
 - **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
   `web/app/artifacts/`, and the `create_live_artifact` meta-tool are
   live behind a BETA flag in the sidebar and on the page header.
-  Outstanding work: subdomain hosting hardening (host header /
-  CSP origin sandboxing), embed-mode auth scopes, retention &
-  garbage-collection policy, slug-collision UX, agent-authored
-  refresh loop. Stays in **Now** until the BETA flag drops.
+  Shipped 2026-11-23: hosting confinement (exact host match, the artifact
+  host serves artifact pages only, every artifact response carries its own
+  sandbox policy, no artifact script served as a file), read-only
+  single-artifact viewer tokens with expiry and share-link revocation, a
+  retention policy (`artifacts.retentionDays`, off by default) that counts
+  views, and typed slug conflicts with a suggested slug. Outstanding: the
+  agent-authored refresh loop (the `skill_query` source kind is a stub with
+  no design: it needs a deliverable, a headless execution path, budgets and
+  an injection boundary), shared token revocation for multi-node
+  deployments, and a check of the forms and live refresh in a real browser.
+  Stays in **Now** until the BETA flag drops.
 
 - **Schema directory grouping.** `src/db/schema/` currently has 58 flat
   TypeScript files.
@@ -234,8 +246,10 @@ All three landed. What each actually became:
   the run. Spend is charged in a `finally` — a stage that failed is charged for
   what it burned — and `pipeline_nodes.tokens_used` accumulates across visits,
   since a node the QA loop sent back three times cost all three visits.
-  Still open: the planner→executor split still cannot reach a pipeline stage,
-  and wall clock has no per-node bound — only the pipeline-wide worker timeout.
+  Still open: wall clock has no per-node bound — only the pipeline-wide worker
+  timeout. The planner→executor split does reach pipeline stages (`mechanical`
+  stages go to the lane's `executorModel`); what is missing is a cheap model
+  bound to the `coding` / `qa` lanes and a measurement of the saving.
 - **Eval: regression gating and memory-aware assertions — SHIPPED (2026-08-20).**
   `--baseline <path|latest>` compares a run to a previous results file PER TEST
   and exits 1 on a regression — a test that passed then and fails now — whatever
@@ -264,15 +278,19 @@ All three landed. What each actually became:
   pronouns and self-facts carry over. Bindings are `arm:<role>` facts on the
   existing assistant profile, so there was no migration and `/persona reset`
   clears them.
-- **Layout-grounded parsing — PDF SHIPPED (2026-08-20), GUI still open.** The
+- **Layout-grounded parsing — PDF columns and tables SHIPPED (2026-11-23), GUI still open.** The
   text path threw the page geometry away (`items.map(i => i.str).join(' ')`),
   which is why a two-column paper arrived with its columns interleaved and a
   form arrived as one run of labels and values. `documents/pdf-layout.ts`
   rebuilds lines, column/cell gaps and paragraphs from the item transforms with
   no new dependency, and the 50-page cap now writes a truncation note instead of
-  letting a partial index read as a complete one. Deliberately NOT attempted:
-  a table recovered as a grid, true multi-column flow ordering, and
-  GUI-screenshot understanding — the last belongs to the vision/OCR path, which
+  letting a partial index read as a complete one. Since 2026-11-23 multi-column
+  bands are read column by column and aligned grids come out as Markdown tables,
+  with the old line-by-line output wherever detection is uncertain; the chunker
+  splits a long table between rows and repeats its header. Not handled: merged
+  cells, header-less data tables, tables continuing across pages, rotated and
+  right-to-left text (see `docs/DOCUMENTS.md`). Deliberately NOT attempted:
+  GUI-screenshot understanding — that belongs to the vision/OCR path, which
   never had this problem.
 - **Native mobile clients — EXISTS, out of this repo.** The entry used to say
   the web UI was "responsive but not installable" and that channel proxying
@@ -282,20 +300,21 @@ All three landed. What each actually became:
   and feature screens for chat, tasks, inbox, notes, research, agents, skills
   and settings, with fastlane and Play Store packaging. It is at `0.1.0` and
   carries its own `ISSUES.md`, so the real work here is finishing and shipping
-  that app, not starting one. Nothing in this repo references it — that is the
-  first thing to fix.
+  that app, not starting one. The README and `docs/CHANNELS.md` now point to it.
 
 ### Carried forward (unchanged, unblocked independently)
 
-- **Token-true streaming for `/v1/chat/completions`.** The OpenAI-compat
-  API (shipped 2026-07-12) streams protocol-correct SSE that chunks the
-  *final* text. True token-by-token streaming needs a token-delta path
-  that does not exist yet: `ProviderRouter.complete` returns full text
-  and the root agent emits only structured events (`status_update`,
-  `worker_spawned`, …). The work is provider streaming → root agent
-  delta events → SSE bridge keyed by the shipped WS4 `runId`, not a
-  bridge over existing events. Do it once a provider-level streaming
-  interface lands.
+- **Token-true streaming for `/v1/chat/completions` — passthrough SHIPPED
+  (2026-11-23), agent mode still open.** A request for a registry model id
+  streams token by token on providers whose stream and completion return the
+  same text (OpenAI, OpenRouter, Mistral, Grok, Moonshot, Meta, z.ai, Vertex,
+  custom OpenAI-compatible); the others are completed and sent in chunks,
+  because their two paths filter text differently. Still open: `octipus/agent`
+  sends the final answer in chunks after the turn ends. The model's deltas
+  already reach gateway clients as `chat.delta`, but the output guard, inline-UI
+  handling, child relay and scaffolding strip rewrite the whole answer after the
+  model finishes, and SSE cannot take text back. Unblocking it means those
+  passes deciding on a prefix, which changes non-streaming answers too.
 - **Inbound email channel.** A reply-drafts-only email adapter
   (**ASK-gated**: every send is a human-approved draft, per the
   gap-integration decision). Blocked on a reusable channel-adapter
@@ -344,9 +363,11 @@ All three landed. What each actually became:
   `skill_proposals`, the approve route promoting a distilled *procedure*
   into the `skills` table (not just an expert), and the **`skill_distill`
   tool** (distils from conversation / text / verified-good trajectory into
-  a pending proposal). What's still next on this item: the **post-task
-  distill nudge** (A1-M3 — surface "distil this into a skill?" after a
-  complex, successful run) and the **curator refresh half** (A1-M4 — queue
+  a pending proposal). The **post-task distill nudge** (A1-M3) shipped
+  2026-11-23: the web chat offers once to distil a complex, successful,
+  attended run, and nothing is distilled unless the user accepts
+  (`docs/SESSION-LEARNING.md`; its thresholds are untuned defaults). What's
+  still next on this item: the **curator refresh half** (A1-M4 — queue
   flagged-stale skills for a background distiller refresh pass). Plus the
   proposal review-UI polish (diff preview, rejection-timer visibility,
   user-scoped opt-out).
@@ -369,9 +390,13 @@ All three landed. What each actually became:
   gate results alongside the QA verdicts. Lands naturally as policy on the
   wave-1 waterfall. Scoped per plan item in
   [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md) (step 5).
-- **Skill marketplace.** Export/import skills as signed JSON. Discover and
-  install community skills from the web UI. (Filesystem `SKILL.md` discovery
-  per the agentskills.io spec already ships — `src/skills/external-loader.ts`.)
+- **Skill marketplace — export/import SHIPPED (2026-11-23), discovery open.**
+  Skills export as a hashed, optionally signed JSON bundle and import through a
+  write-free preview and an explicit install, under the plugin-package trust
+  settings (`docs/SKILL-EXCHANGE.md`). Still open: a registry to discover and
+  install community skills from the web UI, ratings, automatic updates.
+  (Filesystem `SKILL.md` discovery per the agentskills.io spec already ships —
+  `src/skills/external-loader.ts`.)
 - **Pipeline templates from natural language.** Describe a multi-stage workflow,
   get a pipeline definition you can run, edit, and save. Becomes more valuable
   once the target is a graph rather than a linear chain.
@@ -385,7 +410,7 @@ All three landed. What each actually became:
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
 - **Voice — remaining polish.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
 - **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker — mounted as a provider behind the wave-1 waterfall rather than branched into the tool loop.
-- **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification. The versioned `@octipus/plugin-sdk` contract (manifest `capabilities`, apiVersion gating, `validatePlugin`) shipped 2026-07-12 (WS3); this item is the remaining phase-3 work — remote install (npm/git) plus signature verification on top of that contract.
+- **Plugin signing & permissions — signing and remote install SHIPPED.** Plugin packages are pinned by content hash, signed, checked against `plugins.trustedPublishers` and `plugins.revokedKeys` (required under `plugins.requireSignature`), installable from a URL or registry, and approved by an admin before they run ([docs/PLUGIN-PACKAGES.md](docs/PLUGIN-PACKAGES.md)). Still open: files dropped into `~/.octipus/extensions` are a development path that is not pinned, signed or approved, and `extensions.trusted` for them is deprecated rather than removed.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering; the wave-3 regression gate is the headless half of the same machinery.
 - **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't. Note the wave-2 checkpoint work is the *execution* analogue and may make this cheaper.
