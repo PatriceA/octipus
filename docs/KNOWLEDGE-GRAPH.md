@@ -339,7 +339,7 @@ Exposed through the notes tool's `sync_vault` action.
 | Route | What |
 |---|---|
 | `GET /api/notes` | List (filter by `kind`, `tag`, `includeArchived`; max 500). `q` searches title, slug, tags and body on the server (every word must match); `archived=only` lists the archived notes |
-| `POST /api/notes` | Create/update via the save pipeline |
+| `POST /api/notes` | Create/update via the save pipeline. The route defers the re-index (`deferIndex`): the note is re-embedded once it has had no save for 5 seconds, so an editor's autosave does not embed on every pause. `createOnly` and, for personal notes, `ifSha256` guard against overwrites |
 | `POST /api/notes/query` | Bases-style property query (kind, tag, frontmatter, sort) |
 | `GET /api/notes/index` | Lightweight `{id,title,slug,kind}` — the source for `[[` autocomplete |
 | `GET /api/notes/tags` | Tag → count across active notes; powers the tag tree and `#tag` autocomplete |

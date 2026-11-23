@@ -314,14 +314,16 @@ active one out of the list. `?doneLimit=` sets the page size (default 50,
 0–500; `0` returns only the active tasks) and `?doneOffset=` where it starts.
 `done` is `{total, offset, limit, hasMore}`: load more by asking again with
 `doneOffset` advanced by `limit` while `hasMore` is true. Archived tasks are not
-in this list; ask for them with `?status=archived`. `?status=X` returns up to
-200 tasks of that status (done and archived most recently finished first) and
-no `done` field. Other filters (`due`, `category`, assignee) apply to both
+in this list; ask for them with `?status=archived`. `?status=X` returns one
+page of that status (done and archived most recently finished first):
+`?limit=` (default 200, at most 500) and `?offset=`, with
+`page: {total, offset, limit, hasMore}` instead of `done`. That is how an
+archived or completed view pages. Other filters (`due`, `category`, assignee) apply to both
 parts. Clients that call it without parameters (the mobile app) keep working:
 `tasks` is the same array shape as before.
 
 To show a to-do list, use the unfiltered call, not one call per status:
-`GET /api/tasks` gives **all** active to-dos (never cut at 200, unlike
+`GET /api/tasks` gives **all** active to-dos (never cut at a page, unlike
 `?status=open`) plus the 50 most recently done, and `?doneLimit=0` gives only
 the active ones. For a "Completed" view, page the done ones with
 `?doneLimit=50&doneOffset=50` and so on (each response repeats the active
@@ -602,7 +604,7 @@ in its body.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (default 100, max 500), `q`, `archived=only`. `q` searches on the server: a note matches when every word of `q` (up to 8, case-insensitive, `%`/`_` literal) appears in its title, slug, tags or body; title matches come first, then pinned, then most recently updated. Archived notes never match unless `archived=only`. `archived=only` lists only archived notes (each with `archivedAt`), most recently archived first: the archive view. |
-| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). With `id` it updates that note. Without `id`, a note already at the slug (given, or derived from the title; archived notes included) is **updated**; send `createOnly: true` to create only, which answers `409 {code: "exists", id, slug}` and writes nothing when the slug is taken. The web app sends it for every new note. |
+| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). With `id` it updates that note. Without `id`, a note already at the slug (given, or derived from the title; archived notes included) is **updated**; send `createOnly: true` to create only, which answers `409 {code: "exists", id, slug}` and writes nothing when the slug is taken. The web app sends it for every new note. Personal notes: `ifSha256` (the `bodySha256` the edit was made from) saves only while the stored body still has it, else `409 {code: "stale", currentSha256}` and nothing is written (space notes merge through `baseSha256` instead). Re-indexing for search is deferred: the answer says `indexed: false, indexQueued: true`, and the note is re-embedded once it has had no save for 5 seconds (in the server process: a restart inside that window keeps the earlier chunks until the next save). |
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
@@ -610,7 +612,7 @@ in its body.
 | GET | `/api/notes/:id` | Read a note with its backlinks. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
-| POST | `/api/notes/:id/restore` | Undo an archive: the note is back in lists, search and recall → `{ restored: true }`. `404` when the caller cannot reach the note; in a space, editors and owners only (`403` otherwise). |
+| POST | `/api/notes/:id/restore` | Undo an archive: the note is back in lists, search and recall → `{ restored: true }` (also for a note that is not archived, which is left untouched). `404` when the caller cannot reach the note; in a space, editors and owners only (`403` otherwise). |
 | DELETE | `/api/notes/:id` | Archive (soft): the note's chunks stay but no search or recall returns them. On a lesson note this is your own archive: a later learning review that finds the same lesson drops it instead of reviving the note. `?hard=true` also deletes the note's chunks and edges. |
 
 ## Graph

@@ -16,12 +16,16 @@ labels reflect blast radius, not contract guarantees.
   `?doneLimit=` (default 50, at most 500) and `?doneOffset=` page through them,
   and a new `done: {total, offset, limit, hasMore}` field says how many there
   are. Archived tasks are no longer in the unfiltered list (both clients hid
-  them); `?status=archived` lists them. The `tasks` array keeps its shape, so a
+  them); `?status=archived` lists them, and every `?status=` list now pages
+  with `?limit=` (at most 500) and `?offset=` and says `page: {total, …}`. The `tasks` array keeps its shape, so a
   client calling the endpoint with no parameters keeps working. The web list
   shows the total and a **Show more done** button.
 - **Deleting a to-do on the web can be undone.** The confirm dialog and hard
-  delete are replaced by archiving the to-do and an **Undo** toast that puts
-  its status back.
+  delete are replaced by an **Undo** toast. The to-do is only hidden while
+  Undo is on offer; when the offer closes (or the page is left) it is
+  archived. Undo sends nothing, so nothing of the to-do changes: archiving
+  would clear its completion time, free an agent's claim and wake what
+  waited on it.
 - **Notes for daily use on the web.**
   - A personal note saves itself a moment after you stop typing, with a quiet
     Saved / Saving… / Not saved (Retry) status in place of the Save button.
@@ -30,7 +34,14 @@ labels reflect blast radius, not contract guarantees.
     has them: a failed save or a closed tab never loses the draft, and opening
     the note again brings it back (asking first if the note changed since).
     Space notes are unchanged: the text saves itself, **Save details** stores
-    the rest.
+    the rest. A new note is created once its title field is left (or the
+    note is), so its slug never comes from half a title. A draft is only ever
+    sent to the workspace and account it was typed in, and the drafts kept in
+    the browser are removed on sign-out. A save made from text that was
+    changed elsewhere since is refused (`ifSha256` on `POST /api/notes`,
+    409 `stale`) and the page asks: keep my version, or load the saved one.
+    `POST /api/notes` no longer re-embeds the note inside the request: it is
+    re-indexed once the note has been quiet for 5 seconds (`indexQueued`).
   - The open note is in the address bar (`/notes?note=<id>`): reload,
     bookmarks and back/forward work.
   - Archiving a note shows **Undo**, and the navigator has an **archive** view
