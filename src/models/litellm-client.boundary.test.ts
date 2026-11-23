@@ -501,7 +501,7 @@ describe('streaming over the wire', () => {
     expect(proxy.requests[0].clientClosed).toBe(true);
   });
 
-  test('stream() on a direct provider that fails before its first chunk is sent to the proxy under the same model id', async () => {
+  test('currently stream() re-sends a direct provider failing before its first chunk to the proxy under the same model id; see docs/TESTING.md known gaps', async () => {
     registryDouble.add(modelRow({
       provider: 'custom-openai', modelId: 'gateway-only', endpoint: proxy.url, apiKeyRef: 'env:BOUNDARY_GATEWAY_KEY',
       metadata: { customProvider: { auth: { type: 'bearer' } } },

@@ -166,7 +166,7 @@ describe('resolution', () => {
     expect(router.getProviderByName('no-such-provider')).toBeUndefined();
   });
 
-  test('without a proxy URL there is no LiteLLM provider, and the last registered provider is the catch-all', () => {
+  test('currently, without a proxy URL, the last registered provider (custom-gemini) is the catch-all; see docs/TESTING.md known gaps', () => {
     getConfig();
     refreshConfigKey('litellm.proxyUrl', '');
     const bare = new ProviderRouter();
@@ -449,7 +449,7 @@ describe('failure policy', () => {
     expect(upstream.requests).toHaveLength(3);
   });
 
-  test('a rate-limited proxy model is sent once more through the proxy fallback after the limiter backoff, not the Retry-After', async () => {
+  test('currently a rate-limited proxy model is re-sent to the same proxy after the limiter backoff, ignoring Retry-After; see docs/TESTING.md known gaps', async () => {
     fakeClock();
     registryDouble.add(modelRow({ provider: 'litellm', modelId: 'proxy-model' }));
     proxy.enqueue(openAIError(429, 'rate limit', { headers: { 'retry-after': '20' } }), json(chatCompletion({ content: 'second try' })));
@@ -462,7 +462,7 @@ describe('failure policy', () => {
     expect(waited).toBeLessThan(20_000);
   });
 
-  test('a proxy model whose fallback is rate limited too fails as a rate limit after two sends', async () => {
+  test('currently a proxy model whose re-send is rate limited too fails after two sends; see docs/TESTING.md known gaps', async () => {
     fakeClock();
     registryDouble.add(modelRow({ provider: 'litellm', modelId: 'proxy-model' }));
     proxy.enqueue(openAIError(429, 'rate limit'), openAIError(429, 'rate limit again'));
@@ -473,7 +473,7 @@ describe('failure policy', () => {
     expect(proxy.requests).toHaveLength(2);
   });
 
-  test('an open proxy breaker still sends a proxy model to the proxy, through the fallback', async () => {
+  test('currently an open proxy breaker still sends proxy models to the proxy through the fallback; see docs/TESTING.md known gaps', async () => {
     registryDouble.add(modelRow({ provider: 'litellm', modelId: 'proxy-model' }));
     for (let i = 0; i < 5; i++) getCircuitBreakerRegistry().recordFailure('litellm');
     proxy.enqueue(json(chatCompletion({ content: 'sent anyway' })), sse([chatChunk({ content: 'streamed anyway' }), chatChunk({ finishReason: 'stop' })]));
@@ -546,7 +546,7 @@ describe('failure policy', () => {
     expect(getCircuitBreakerRegistry().getStatus('custom-openai').failures).toBe(1);
   });
 
-  test('router.embed picks the provider by model name and refuses one without embeddings', async () => {
+  test('currently router.embed picks the provider by model name only and refuses the proxy; see docs/TESTING.md known gaps', async () => {
     await expect(router.embed(['x'], 'claude-sonnet-4-6')).rejects.toThrow('does not support embeddings');
     await expect(router.embed(['x'], 'zz-unheard-of')).rejects.toThrow('Provider litellm does not support embeddings');
     expect(proxy.requests).toHaveLength(0);
