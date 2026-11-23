@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const settings = vi.hoisted(() => new Map<string, unknown>());
 vi.mock('@/config/settings-service', () => ({ getSettingsService: () => ({ getSync: (key: string) => settings.get(key) }) }));
-import { artifactHostSettingRefusal, resetArtifactSettingsCache, resolveArtifactRetention, resolveArtifactSettings } from './settings';
+import { artifactHostSettingRefusal, artifactSettingsDependOn, resetArtifactSettingsCache, resolveArtifactRetention, resolveArtifactSettings } from './settings';
 import { buildArtifactOuterUrl, isArtifactHostRequest } from './host';
 afterEach(() => { settings.clear(); resetArtifactSettingsCache(); });
 describe('artifact host settings', () => {
@@ -60,5 +60,15 @@ describe('artifact host settings', () => {
     expect(artifactHostSettingRefusal('artifacts.example.org', 'octi.example.org')).toBeNull();
     expect(artifactHostSettingRefusal('', 'octi.example.org')).toBeNull();
     expect(artifactHostSettingRefusal('not a host', 'octi.example.org')).toMatch(/not a host name/);
+  });
+  it('a change of the public URL resets the artifact settings, and is picked up without a restart', () => {
+    expect(artifactSettingsDependOn('oauth.publicUrl')).toBe(true);
+    expect(artifactSettingsDependOn('artifacts.host')).toBe(true);
+    expect(artifactSettingsDependOn('oauth.callbackBase')).toBe(false);
+    settings.set('artifacts.host', 'artifacts.example.org');
+    expect(resolveArtifactSettings().host).toBe('');
+    settings.set('oauth.publicUrl', 'https://octi.example.org');
+    resetArtifactSettingsCache();
+    expect(resolveArtifactSettings().host).toBe('artifacts.example.org');
   });
 });

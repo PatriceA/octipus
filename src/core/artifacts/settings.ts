@@ -167,6 +167,15 @@ export function resolveArtifactSettings(): ArtifactSettings {
   return cached;
 }
 
+/**
+ * Settings whose change must reset the resolved artifact settings: the
+ * `artifacts.*` keys and the app's public URL, which decides whether
+ * `artifacts.host` is honoured (`resolveArtifactSettings`).
+ */
+export function artifactSettingsDependOn(key: string): boolean {
+  return key.startsWith('artifacts.') || key === 'oauth.publicUrl';
+}
+
 /** Test-only / settings-change reset. */
 export function resetArtifactSettingsCache(): void {
   cached = null;
