@@ -7,6 +7,33 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Offer to distil a finished task into a skill** (A1-M3,
+  [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
+  complex, successful turn the web chat offers, once and above the composer,
+  to distil it into a skill proposal: **Distil into a skill**, **Not now**,
+  **Don't ask again**. It is decided after the answer is delivered, from
+  what the run recorded, without a model call: a person asked (no hook,
+  cron, heartbeat, monitor, webhook, voice, room or space turn), it answered
+  without a refusal and its checks passed, it used at least 3 different
+  tools and either 8 tool calls or a delegation, no skill was used, and no
+  open or suppressed proposal came from the session. At most one offer per
+  user per 24 hours; the new gateway event `session.skill_nudge` announces
+  one. Accepting dispatches `distill_skill` through the tool middleware
+  (`tool:before` hooks, the permission check, the `permission_granted`
+  audit row; the click answers only a plain ASK) on the run's own messages
+  and tools, bounded to 30 messages and 40,000 characters, and files a
+  pending proposal, still approved on Skills → Proposals; nothing is
+  distilled otherwise. A cut-off reply, or three failed attempts, closes the
+  offer. Each decision is stored on the answer. Operators:
+  `learning.distillNudge` (on), `learning.distillNudgeMinToolCalls` (8),
+  `learning.distillNudgeMinDistinctTools` (3),
+  `learning.distillNudgeCooldownHours` (24). Users: Settings → Profile, or
+  `PUT /api/auth/distill-nudge`. New routes
+  `GET /api/sessions/:id/distill-nudge` and
+  `POST /api/sessions/:id/distill-nudge/:messageId`; `chat.send` `renders`
+  accepts `skill_nudge`. Other clients and channels get no offer. No
+  migration: the offer lives in `messages.metadata`, the opt-out in
+  `users.preferences`, the cool-down in `kv_store`.
 - **Live artifacts (BETA): hosting hardening, scoped viewer tokens, retention, slug conflicts**
   ([docs](docs/ARTIFACTS.md#sandboxing), [hosting](docs/CONFIGURATION.md#artifacts-hosting)).
   - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages

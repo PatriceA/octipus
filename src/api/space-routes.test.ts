@@ -172,6 +172,8 @@ const SPACE_ACTING = [
   // Interactive answers: the session read of the chat routes (`contentRepos`), or `roomAccess` for a room.
   // Saving one as an artifact: the caller's own session, into the space's artifact store (`write`).
   'GET /api/sessions/:id/inline-ui/:blockId', 'POST /api/sessions/:id/inline-ui/:blockId/promote',
+  // The distil offer: the session owner only (`contentRepos`, then the owner check); a space session never carries one.
+  'GET /api/sessions/:id/distill-nudge', 'POST /api/sessions/:id/distill-nudge/:messageId',
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',

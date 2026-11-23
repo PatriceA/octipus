@@ -275,7 +275,7 @@ test.describe('declarative views in the chat', () => {
     await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send')).toBeTruthy();
     const send = gateway.sent.find((m) => m.type === 'chat.send')!;
     expect(send.content).toBe('I take pro for 5 seats');
-    expect(send.renders).toEqual(['inline_ui']);
+    expect(send.renders).toEqual(['inline_ui', 'skill_nudge']);
     expect(send.inlineUi).toEqual({
       provenance: { inlineUiId: PLAN },
       action: {

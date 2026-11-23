@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-773 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
+776 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -97,6 +97,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/auth/channel-bindings` | `src/api/routes/channel-bindings.ts` |
 | DELETE | `/api/auth/channel-bindings/:channelType/:externalId` | `src/api/routes/channel-bindings.ts` |
 | POST | `/api/auth/channel-bindings/redeem` | `src/api/routes/channel-bindings.ts` |
+| PUT | `/api/auth/distill-nudge` | `src/api/routes/distill-nudge.ts` |
 | POST | `/api/auth/link` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/login` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/login-mobile` | `src/api/routes/auth.ts` |
@@ -609,6 +610,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/sessions/:id/changes/diff` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/complete` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/context` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/:id/distill-nudge` | `src/api/routes/distill-nudge.ts` |
+| POST | `/api/sessions/:id/distill-nudge/:messageId` | `src/api/routes/distill-nudge.ts` |
 | GET | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
 | PUT | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/files` | `src/api/routes/sessions.ts` |
@@ -810,19 +813,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 30 |
-| `api` | `core` | 260 |
-| `api` | `db` | 152 |
+| `api` | `core` | 262 |
+| `api` | `db` | 155 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 189 |
+| `api` | `security` | 191 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 31 |
+| `api` | `shared` | 32 |
 | `api` | `skills` | 9 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 80 |
+| `api` | `utils` | 81 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
@@ -848,21 +851,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 77 |
-| `core` | `db` | 553 |
+| `core` | `config` | 78 |
+| `core` | `db` | 563 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 250 |
+| `core` | `security` | 252 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 90 |
-| `core` | `skills` | 19 |
-| `core` | `tools` | 36 |
-| `core` | `utils` | 267 |
+| `core` | `shared` | 92 |
+| `core` | `skills` | 20 |
+| `core` | `tools` | 37 |
+| `core` | `utils` | 268 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -938,7 +941,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `utils` | 7 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 2 |
-| `skills` | `core` | 9 |
+| `skills` | `core` | 10 |
 | `skills` | `db` | 22 |
 | `skills` | `models` | 2 |
 | `skills` | `plugins` | 2 |
@@ -952,7 +955,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 158 |
+| `tools` | `core` | 159 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -1073,6 +1076,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `rootAgent.status` | yes | — | `*` |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | `*` |
 | `session.plan_updated` | yes | `src/core/agent/work-plan-store.ts` | `*` |
+| `session.skill_nudge` | yes | `src/core/learning/distill-nudge-service.ts` | `*` |
 | `session.stats` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `session.stopped` | yes | `src/core/gateway/message-handler.ts` | `*` |
 | `space.presence` | yes | — | `*` |

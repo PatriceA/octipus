@@ -14,7 +14,7 @@ describe('learning settings', () => {
 
   it.each(Object.entries(defaults))('learning.%s is registered with the schema default', (key, value) => {
     const entry = SETTINGS_REGISTRY.find((s) => s.key === `learning.${key}`);
-    expect(entry).toMatchObject({ category: 'learning', valueType: 'number', defaultValue: value, isSecret: false });
+    expect(entry).toMatchObject({ category: 'learning', valueType: typeof value === 'boolean' ? 'boolean' : 'number', defaultValue: value, isSecret: false });
   });
 
   it('writes are held to the schema bounds', () => {
@@ -23,5 +23,8 @@ describe('learning settings', () => {
     expect(validateSettingValue('learning.reviewEveryToolCalls', 2.5).ok).toBe(false);
     expect(validateSettingValue('learning.candidateTtlDays', 7).ok).toBe(true);
     expect(validateSettingValue('learning.maxSkillProposalsPerDay', 0).ok).toBe(true);
+    expect(validateSettingValue('learning.distillNudgeMinToolCalls', 0).ok).toBe(false);
+    expect(validateSettingValue('learning.distillNudgeCooldownHours', 0).ok).toBe(true);
+    expect(validateSettingValue('learning.distillNudge', false).ok).toBe(true);
   });
 });

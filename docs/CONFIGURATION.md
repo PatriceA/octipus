@@ -208,6 +208,10 @@ Session learning checks, skill proposals and lesson notes ([SESSION-LEARNING.md]
 | `learning.candidateTtlDays` | 30 | A candidate not seen again for this many days, and never seen in `recurrenceSessions` sessions or backed by a correction, is deleted by consolidation. One that qualified and only waits for room under a cap is kept. Min 1. |
 | `learning.lessonTtlDays` | 90 | A lesson note that is not pinned and was neither updated (edited, pinned or unpinned, merged into, seen again by a review) nor shown to an agent (a search or recall returned one of its chunks) for this many days is archived by the daily consolidation. A later review that sees the lesson again revives it. Min 0; 0 never archives one. |
 | `learning.maxLessonsPerReview` | 2 | Lesson notes one learning review may write or merge into. 0 to 2; 0 writes none (the review is told to return none), 1 tells the review to return at most one. |
+| `learning.distillNudge` | true | After a complex, successful turn, offer in the web chat to distil it into a skill proposal ([the offer](SESSION-LEARNING.md#offer-to-distil-a-finished-task)). Nothing is distilled until the user accepts; each user can also turn it off under Settings → Profile. |
+| `learning.distillNudgeMinToolCalls` | 8 | Tool calls, child agents' included, a turn needs to be offered, unless it delegated (to a child agent or a pipeline). Min 1. |
+| `learning.distillNudgeMinDistinctTools` | 3 | Different tools a turn needs to be offered, whether or not it delegated. Min 1. |
+| `learning.distillNudgeCooldownHours` | 24 | At most one offer per user in this many hours. Only an offer that is made starts it. 0: no cool-down. |
 
 ## Gateway Config
 

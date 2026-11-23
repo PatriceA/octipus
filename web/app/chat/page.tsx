@@ -31,6 +31,7 @@ import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
 import LearningPanel from '@/components/chat/learning-panel';
+import DistillNudge from '@/components/chat/distill-nudge';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
 import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
@@ -224,6 +225,11 @@ export default function ChatPage() {
   /** Why the voice conversation could not start (shown under the composer). */
   const [voiceStartError, setVoiceStartError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  /** Per session, bumped when it answers or announces a distil offer: that session's offer is read again. */
+  const [distillNudgeRefresh, setDistillNudgeRefresh] = useState<Record<string, number>>({});
+  const refreshDistillNudge = (sessionId: string | undefined | null) => {
+    if (sessionId) setDistillNudgeRefresh((prev) => ({ ...prev, [sessionId]: (prev[sessionId] ?? 0) + 1 }));
+  };
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
   const [showSidePanel, setShowSidePanel] = useState(true);
@@ -1043,11 +1049,17 @@ export default function ChatPage() {
       case 'chat.response': {
         const result = (payload.response ?? {}) as Record<string, any>;
         handleChatResponse({ ...result, sessionId: eventSessionId ?? result.sessionId }, { id: event.id, timestamp: event.timestamp });
+        refreshDistillNudge(eventSessionId ?? result.sessionId);
         // The turn set the session's title and counts; the list isn't polled
         // as often while the gateway is live.
         void loadSessions();
         break;
       }
+
+      // A finished turn's answer now carries the offer to distil it (published after the answer).
+      case 'session.skill_nudge':
+        refreshDistillNudge(eventSessionId);
+        break;
 
       case 'chat.error':
         if (concernsThisTab(eventSessionId)) {
@@ -1773,8 +1785,9 @@ export default function ChatPage() {
       // Said aloud in a voice conversation: the server speaks the reply, and
       // the turn answers the way it would be said.
       ...(options?.spoken ? { spoken: true } : {}),
-      // This client renders interactive answers (D14).
-      renders: ['inline_ui'],
+      // This client renders interactive answers (D14) and the offer to
+      // distil a finished run into a skill.
+      renders: ['inline_ui', 'skill_nudge'],
       ...(inlineUiReports.length || options?.inlineUiProvenance || inlineUiAction
         ? { inlineUi: {
           ...(inlineUiReports.length ? { reports: inlineUiReports } : {}),
@@ -2231,6 +2244,10 @@ export default function ChatPage() {
             for /chat; other pages still use the floating version via
             app-shell. */}
         <GlobalPermissionBanner inline />
+
+        {/* After a complex, successful run: the offer to distil it into a skill. */}
+        <DistillNudge key={activeSessionId ?? 'none'} sessionId={activeSessionId}
+          refreshKey={activeSessionId ? distillNudgeRefresh[activeSessionId] ?? 0 : 0} hidden={isLoading} />
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">

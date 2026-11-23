@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { getRunId } from '@/core/run-context';
 import { getDb } from '../postgres';
+import { notInSharedWorkspace } from './personal-workspace';
 import { type AgentEventRecord, agentEvents, type NewAgentEventRecord } from '../schema/agent-events';
 
 export class AgentEventRepository {
@@ -62,6 +63,30 @@ export class AgentEventRepository {
       .where(eq(agentEvents.sessionId, sessionId))
       .orderBy(agentEvents.id)
       .limit(1000);
+  }
+
+  /**
+   * The tool calls of one orchestrated turn (`run_<uuid>`, children
+   * included) of `userId`, by name only — never their arguments or results —
+   * for the distil offer (src/core/learning/distill-nudge-service.ts). Only
+   * events written in a personal workspace (or none): the offer is personal.
+   */
+  async findRunToolCalls(runId: string, userId: string, limit: number): Promise<Array<{
+    agentId: string; kind: string | null; toolName: string | null; toolCalls: unknown;
+  }>> {
+    return this.db
+      .select({
+        agentId: agentEvents.agentId,
+        kind: sql<string | null>`${agentEvents.data}->>'type'`,
+        toolName: sql<string | null>`${agentEvents.data}->>'toolName'`,
+        toolCalls: sql<unknown>`jsonb_path_query_array(${agentEvents.data}, '$.toolCalls[*].name')`,
+      })
+      // i2: by run id and its user, and only rows of a personal workspace (the predicate below)
+      .from(agentEvents)
+      .where(and(eq(agentEvents.runId, runId), eq(agentEvents.userId, userId), eq(agentEvents.type, 'action'),
+        notInSharedWorkspace(agentEvents.workspaceId)))
+      .orderBy(agentEvents.id)
+      .limit(limit);
   }
 
   /** Delete events older than the given date. Returns number of deleted rows. */

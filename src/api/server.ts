@@ -85,6 +85,7 @@ import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
 import { inlineUiRoutes } from './routes/inline-ui';
+import { distillNudgeRoutes } from './routes/distill-nudge';
 import { capabilitiesRoutes } from './routes/capabilities';
 import { roleRoutes } from './routes/roles';
 import { topicRoutes } from './routes/topics';
@@ -502,6 +503,7 @@ export function createServer() {
         .use(agentRoutes)
         .use(sessionRoutes)
         .use(inlineUiRoutes)
+        .use(distillNudgeRoutes)
         .use(modelRoutes)
         .use(hookRoutes)
         .use(taskRoutes)
