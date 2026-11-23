@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { build } from 'esbuild';
 import { buildEmbedCsp, embedCspHeader } from '../../src/core/artifacts/csp';
@@ -6,8 +7,10 @@ import { promotedPage } from '../../src/core/inline-ui/promote';
 /**
  * An interactive answer saved as an artifact, in a real browser (spec §7):
  * the page the server would serve — sanitized template, bundle built the
- * bundler's way (one IIFE: the `octi` shim, then the answer's script), the
- * closed embed CSP as a header — opened directly, as a link would open it.
+ * bundler's way (one IIFE: the `octi` shim, then the answer's script) and
+ * inlined under its CSP hash as the embed route does (no bundle file is
+ * served), the closed embed CSP as a header — opened directly, as a link
+ * would open it.
  * Every request to a `.test` host is recorded, so "reaches no network" is
  * checked, not assumed.
  */
@@ -24,12 +27,14 @@ const JS = [
 test('a saved answer runs after the shim, says what is not available, and reaches no network', async ({ page }) => {
   const saved = promotedPage({ html: HTML, css: 'p { font-weight: 600; }', js: JS, scripts: true });
   const bundle = await build({ stdin: { contents: saved.script, loader: 'js' }, bundle: true, format: 'iife', minify: true, write: false, platform: 'browser' });
-  const csp = buildEmbedCsp({ scriptSha256s: [], network: 'none' });
+  // As artifact-pages.ts: the bundle inline, a `</script` inside it escaped, pinned by its hash.
+  const script = bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
+  const csp = buildEmbedCsp({ scriptSha256s: [createHash('sha256').update(script).digest('hex')], network: 'none' });
   const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Saved</title>
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>${saved.css}</style></head><body>
 ${saved.template}
-<script src="/a/tips/bundle.js"></script>
+<script>${script}</script>
 </body></html>`;
 
   const requests: string[] = [];
@@ -37,9 +42,6 @@ ${saved.template}
     const url = route.request().url();
     if (url === 'https://art.test/a/tips/embed') {
       return route.fulfill({ status: 200, contentType: 'text/html', headers: { 'content-security-policy': embedCspHeader(csp) }, body: doc });
-    }
-    if (url === 'https://art.test/a/tips/bundle.js') {
-      return route.fulfill({ status: 200, contentType: 'application/javascript', body: bundle.outputFiles[0].text });
     }
     requests.push(url);
     return route.fulfill({ status: 200, body: 'x' });
