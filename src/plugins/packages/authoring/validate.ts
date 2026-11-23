@@ -153,7 +153,10 @@ export async function validatePluginDirectory(
 
   problems.push(...await companionFilesProblems(manifest, dir));
   if (manifest.server) problems.push(...await serverProblems(dir, manifest.server, warnings));
-  problems.push(...await contributionInstallProblems(manifest, dir, installed));
+  // The package against `installed` only: no role registry, no database —
+  // this runs offline (`octi plugin validate`). Install checks the host's
+  // roles too (service.ts).
+  problems.push(...await contributionInstallProblems(manifest, dir, installed, { host: false }));
   // model.trustedInput: it grants nothing until an admin approves it, and what else the package reads reaches its prompts.
   warnings.push(...modelTrustWarnings(manifest));
   const current = installed.find((p) => p.name === manifest.name);

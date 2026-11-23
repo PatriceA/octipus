@@ -36,6 +36,7 @@ export {
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL as MODEL_CLI_TOOLS_APPROVAL,
+  pluginRoleTerms,
 } from '../../src/shared/plugin-package';
 
 export type {

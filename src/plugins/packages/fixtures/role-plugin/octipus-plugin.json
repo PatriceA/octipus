@@ -1,0 +1,24 @@
+{
+  "name": "role-plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.3.0",
+  "title": "Roles (test fixture)",
+  "description": "A plugin package for the role contribution tests: one agent role.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "hello": { "effect": "read", "description": "Greet" }
+  },
+  "roles": [
+    {
+      "id": "translator",
+      "displayName": "Translator",
+      "description": "translate documents between languages",
+      "prompt": "roles/translator.md",
+      "tools": ["notes", "knowledge"],
+      "coreTools": ["notes"],
+      "lane": "everyday",
+      "spawns": [],
+      "limits": { "maxTokens": 20000 }
+    }
+  ]
+}

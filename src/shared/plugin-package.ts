@@ -14,7 +14,7 @@ export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
 export const MAX_PLUGIN_SECRET_LENGTH = 10_000;
 
 /** The manifest contract this host reads (`apiVersion`, same MAJOR, MINOR not newer). */
-export const PLUGIN_PACKAGE_API_VERSION = '1.2.0';
+export const PLUGIN_PACKAGE_API_VERSION = '1.3.0';
 
 /**
  * What a tool does, as its package declares it. The host decides the
@@ -416,12 +416,73 @@ export interface PluginContextDecl {
   roles?: string[];
 }
 
+/**
+ * An agent role the package adds (docs/PLUGIN-PACKAGES.md#roles), registered
+ * in the role registry while the package is enabled and its contributions
+ * approved. Declarative only: an id, a prompt file, tools the host already
+ * gives some built-in role, a text lane and optional spawn rules and limits.
+ * Needs apiVersion 1.3.0.
+ */
+export interface PluginRoleDecl {
+  /** The role id agents name in `spawn_child`: a fresh id, not a built-in or reserved one. */
+  id: string;
+  displayName: string;
+  /** The one line the delegating model reads when choosing a role. */
+  description: string;
+  /** A `.md` file in the package with the role's instructions. */
+  prompt: string;
+  /** Host tool ids (as `GET /api/tools` lists them); `mcp` reaches MCP tools, the package's own included. */
+  tools: string[];
+  /** The subset of `tools` advertised with full schemas (lazy discovery). */
+  coreTools?: string[];
+  /** The model lane, a text lane such as `everyday` or `coding`. */
+  lane: string;
+  /** The roles an agent of this role may spawn; omitted: any, `[]`: none. */
+  spawns?: string[];
+  /** The roles that may spawn this one; omitted: any. */
+  spawnedBy?: string[];
+  criticalRules?: string[];
+  readOnly?: boolean;
+  limits?: { maxTokens?: number; maxWallClockMs?: number };
+}
+
+/** A declared role as the admin reviews it: every field of the declaration, its prompt text and whether it is registered. */
+export interface PluginRoleView {
+  id: string;
+  displayName: string;
+  description: string;
+  lane: string;
+  tools: string[];
+  coreTools: string[] | null;
+  spawns: string[] | null;
+  spawnedBy: string[] | null;
+  criticalRules: string[];
+  readOnly: boolean;
+  limits: { maxTokens?: number; maxWallClockMs?: number } | null;
+  prompt: string;
+  text: string | null;
+  bound: boolean;
+}
+
+/** A role's terms in one line (lane, tools, spawn rules, limits), for the admin page and the CLI. */
+export function pluginRoleTerms(r: Pick<PluginRoleView, 'lane' | 'tools' | 'coreTools' | 'spawns' | 'spawnedBy' | 'readOnly' | 'limits'>): string {
+  const parts = [`lane ${r.lane}`, `tools ${r.tools.join(', ')}`];
+  if (r.coreTools?.length) parts.push(`core tools ${r.coreTools.join(', ')}`);
+  parts.push(r.spawns === null ? 'may spawn any role that accepts it' : r.spawns.length ? `may spawn ${r.spawns.join(', ')}` : 'may spawn no agents');
+  parts.push(r.spawnedBy === null ? 'spawned by any role' : `spawned only by ${r.spawnedBy.join(', ')}`);
+  if (r.readOnly) parts.push('read-only');
+  if (r.limits?.maxTokens) parts.push(`at most ${r.limits.maxTokens} tokens`);
+  if (r.limits?.maxWallClockMs) parts.push(`at most ${Math.round(r.limits.maxWallClockMs / 1000)} s`);
+  return parts.join('; ');
+}
+
 export interface PluginManifestContributions {
   commands?: PluginCommandDecl[];
   schedules?: PluginScheduleDecl[];
   events?: PluginEventDecl[];
   prompt?: PluginPromptDecl;
   context?: PluginContextDecl;
+  roles?: PluginRoleDecl[];
 }
 
 /** The last run of a schedule, event or context contribution (on the plugin's row). */
@@ -449,6 +510,8 @@ export interface PluginContributionsView {
   /** `text`: the whole prompt file, for review (null when it cannot be read). */
   prompt: { file: string; roles: string[] | null; text: string | null; bound: boolean; chars: number | null } | null;
   context: { tool: string; effect: PluginToolEffect | null; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
+  /** Its agent roles, every declared field; `text` is the whole prompt file, for review (null when it cannot be read). */
+  roles: PluginRoleView[];
   /** Why a declared contribution is not bound right now (not approved, a name taken since install, content not approved). */
   problems: string[];
 }
@@ -861,6 +924,28 @@ export interface PluginPermissionsContributions {
   events: Array<{ on: string; tool: string }>;
   prompt: { file: string; sha256: string | null; roles?: string[] } | null;
   context: { tool: string; roles?: string[] } | null;
+  /**
+   * Its agent roles, sorted by id, each with its tools sorted and the hex
+   * sha256 of its prompt file. Left out when it adds none, so a summary from
+   * before roles reads the same.
+   */
+  roles?: PluginPermissionsRole[];
+}
+
+/** A role in a permissions summary: every field of the declaration, the prompt by its hash. */
+export interface PluginPermissionsRole {
+  id: string;
+  displayName: string;
+  description: string;
+  lane: string;
+  tools: string[];
+  coreTools?: string[];
+  promptSha256: string | null;
+  spawns?: string[];
+  spawnedBy?: string[];
+  criticalRules?: string[];
+  readOnly?: boolean;
+  limits?: { maxTokens?: number; maxWallClockMs?: number };
 }
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */
