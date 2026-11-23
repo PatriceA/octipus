@@ -285,9 +285,9 @@ test.describe('role-aware pages', () => {
     await expect(page.getByTestId('task-row')).toContainText('Ship it');
     await expect(page.getByTestId('task-quick-add')).toHaveCount(0);
     await expect(page.getByRole('checkbox', { name: 'Mark done' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Mark as important' })).toBeDisabled();
-    // A space has no My Day (it is a personal pick list).
-    await expect(page.getByTestId('todo-list-my-day')).toHaveCount(0);
+    // The star and My Day are each member's own, so a viewer may set theirs.
+    await expect(page.getByRole('button', { name: 'Mark as important' })).toBeEnabled();
+    await expect(page.getByTestId('todo-list-my-day')).toBeVisible();
     // The detail panel reads, without delete or field pickers.
     await page.getByTestId('task-row').click();
     const detail = page.getByTestId('todo-detail');

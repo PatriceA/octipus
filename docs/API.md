@@ -340,42 +340,82 @@ inert and stays in the array.
 ### To-do fields (star, order, My Day, repeat, due time, steps)
 
 Every task row carries these (all present on every row; older clients may
-ignore them):
+ignore them). `important`, `myDayOn` and `sortOrder` are **the caller's own**
+(per user, also in a space: each member has their own star, My Day and
+order); the other fields belong to the task.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `important` | boolean | The star (the Important list). Default `false` |
-| `sortOrder` | number | Manual order within a list, **ascending**. A new task gets minus its creation time in ms, so the newest is first until the user reorders. To move a task between two neighbours, PATCH the midpoint of their `sortOrder`s; to the top, the first one's minus 1. Any finite number |
-| `myDayOn` | `YYYY-MM-DD` \| null | The day (in the user's zone) it was put in My Day. It **is** in My Day only while that equals today's date in the user's zone, so My Day empties itself at midnight; no write happens |
-| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6]}` (0 = Sunday, `weekdays` only with `"week"`). Presets as written by the server: daily `{day,1}`, weekdays `{week,1,[1,2,3,4,5]}`, weekly `{week,1}`, monthly `{month,1}`, yearly `{year,1}` |
-| `repeatNextId` | uuid \| null | Set on a completed repeating task: the occurrence its completion created |
+| `important` | boolean | The caller's star (the Important list). Default `false` |
+| `sortOrder` | number | The caller's manual order within a list, **ascending**; until they reorder, the task's default (minus its creation time in ms, so the newest is first). To move a task between two neighbours, PATCH the midpoint of their `sortOrder`s; to the top, the first one's minus 1. Any finite number |
+| `myDayOn` | `YYYY-MM-DD` \| null | The day (in the caller's zone) they put it in My Day. It **is** in My Day only while that equals today's date there, so My Day empties itself at midnight; no write happens |
+| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6], tz, anchorDay?}` (0 = Sunday, `weekdays` only with `"week"`). The server stamps `tz` (the IANA zone the series runs in) and, for month and year rules, `anchorDay` (the day of the month the series keeps: the 31st comes back on the 31st whenever a month has one). Read-only for clients: send a rule without them (or echoed back unchanged) |
+| `repeatNextId` | uuid \| null | On a finished (done, or skipped = archived) repeating task: the occurrence that made |
 | `dueAt` | ISO \| null | As before. **Due time:** a due *day* is stored as the last millisecond of that day in the user's zone (seconds `59`, ms `999`); any other value is a due *time*. Send a bare `YYYY-MM-DD` for a day, a full ISO instant for a time |
 | `remindAt` | ISO \| null | As before: when the reminder fires (notification); a changed value re-arms it |
 | `parentId` | uuid \| null | As before. A to-do's **steps** are its children (`parentId` = the to-do); create one with `POST /api/tasks {title, parentId}` and tick it with `PATCH {status: "done"}` |
 
 Writing them (`POST` and `PATCH /api/tasks`, JSON):
 
-- `important: boolean`
-- `sortOrder: number`
-- `myDay: true` puts it in today's My Day (today in `tz`, else the user's saved
-  zone, else UTC); `myDay: false` (or `null` on PATCH) takes it out. Clients
-  send `myDay`, never `myDayOn`.
+- `important: boolean`, `sortOrder: number`, `myDay: true|false` (`null` on
+  PATCH = false) set the **caller's own** layer. Any reader of the task may
+  send them, a space viewer too; a PATCH with only these fields needs no
+  write access and changes nothing anyone else sees. Clients send `myDay`,
+  never `myDayOn`.
 - `repeat`: a preset name (`"daily"`, `"weekdays"`, `"weekly"`, `"monthly"`,
-  `"yearly"`), a rule object as above, or `null` to stop repeating. A bad rule
-  is a `400` naming the problem.
-- `tz`: the client's IANA zone, for `myDay` and for a bare `dueAt` day.
+  `"yearly"`), a rule object, or `null` to stop repeating. A bad rule is a
+  `400` naming the problem. Writing `repeat` or `dueAt` re-stamps the anchor.
+- `tz`: the client's zone, for `myDay` and a bare `dueAt` day in this request.
 
-**Completing a repeating to-do** (by `PATCH {status: "done"}`, by an agent's
-`complete_task`/`update_task`, or any other path) creates the next occurrence
+**Time zones.** "Today" in one request (My Day, a bare due day, capture) uses
+the request's `tz` as given. Anything long-lived uses the user's stored zone
+(`preferences.timezone`): a repeat series' `tz`, agent work, `/todo`,
+reminders. Every `tz` a client sends on these routes is offered to the stored
+zone by these rules (also `PUT /api/auth/timezone {timezone, source: "device"}`):
+
+- never over a zone the user chose in Settings (`source: "user"`);
+- **a fixed-offset zone (`Etc/GMT-1`, `Etc/UTC`, `UTC`, `GMT`) never replaces a
+  named zone** (`Europe/Berlin` stays when a phone reports `Etc/GMT-1`); a
+  named zone does replace a fixed one;
+- otherwise a different zone replaces the stored one.
+
+A series is stamped with the stored named zone first, then a named request
+zone, and only then a fixed offset (which ignores DST). `PUT /api/auth/timezone`
+with `source: "user"` fixes the zone (devices stop changing it); `"follow"` sets
+it and lets devices update it again. The answer is `{timezone, timezoneSource}`.
+The mobile app, which can only send an offset, should send `tz` as it does and
+read the stored zone from `GET /api/auth/me` `preferences.timezone`.
+
+**Repeating to-dos.** When an occurrence of a series leaves the active set —
+completed (`PATCH {status: "done"}`, an agent's `complete_task`/`update_task`)
+or **skipped** (archived, or deleted: deleting an occurrence does not end the
+series; to end it, set `repeat: null`) — the next occurrence is created
 **exactly once**: a new open task with the same title, notes, list, priority,
-star, assignee and rule, its steps copied open, not in My Day, due one step on
-from the old due date at the same local time (repeated until it is today or
-later, so a late daily to-do comes back today), with `remindAt` moved by the
-same amount. No due date counts from today. The completed row's
-`repeatNextId` names it; completing again, or two completions at once, never
-makes a second one. Setting the completed task back to `open` (an Undo) deletes
-the next occurrence again if it is untouched (still open, never edited, steps
-untouched) and clears `repeatNextId`; an occurrence already edited stays.
+assignee and rule, its steps copied open (deleted steps are not), each user's
+star and order copied (not My Day), due one step on in the series' zone at the
+same local time (repeated until it is today or later), `remindAt` moved by the
+same amount. The finished row's `repeatNextId` names it. Completing again, or
+two completions at once, never makes a second one; if the server fails to make
+it at once, a sweep makes it within minutes. Setting the finished task back to
+`open` (an Undo) deletes the next occurrence only while it is provably
+untouched — still open, unclaimed, never edited, no comment, no step added or
+ticked, nobody's star or order changed, and made less than 10 minutes ago —
+and then clears `repeatNextId`; otherwise it stays.
+
+**Agents and future occurrences.** An occurrence is not work before the start
+of its due day in the series' zone: `POST /api/tasks/:id/checkout` answers
+`409 {reason: "not_due", dueAt}`, the role heartbeat skips it and the tasks
+tool's next view leaves it out. The user can still edit or complete it.
+
+**Lists.** A list is the `category` of its to-dos, plus lists made empty.
+`GET /api/tasks/lists` → `{lists: [{name, open}]}` (`open`: open top-level
+to-dos). `POST /api/tasks/lists {name}` makes an empty list (`409` if one of
+that name exists in any case). `PATCH /api/tasks/lists {name, newName}` renames
+it (every to-do in it moves; onto an existing name the lists merge) →
+`{name, taskIds}`. `DELETE /api/tasks/lists?name=…` deletes it; its to-dos stay,
+in no list → `{taskIds}`. `POST /api/tasks/lists/move {taskIds, name|null}`
+puts to-dos in a list (the Undo of a delete). In a space these are the space's
+lists, written by editors.
 
 **Capture.** `POST /api/tasks` with `quick: "call dentist tomorrow 3pm !high
 #personal"` (and `tz`) parses the line on the server and creates "call
@@ -384,13 +424,36 @@ sent explicitly wins (`title` too). `POST /api/tasks/parse {text, tz?}` returns
 the same parse without creating anything — `{title, due: {date, time} | null,
 dueAt, priority, important, category, repeat, tokens: [{kind, text, start, end,
 label}], timezone}` (`kind`: `due` `time` `repeat` `priority` `important`
-`list`; `start`/`end` index the text) — for showing chips. `#name` is matched
-to an existing list ignoring case and `-`/`_`. The grammar (English) is
-documented in `src/core/tasks/quick-add.ts`: today, tonight, tomorrow, weekday
-names, next week/month, in N days, ISO and "dec 5" dates; 3pm, 15:00, at 9,
-noon/morning/evening; daily, weekdays, weekly, every 2 weeks, every monday;
-`!high`/`!!!`, `!medium`/`!!`, `!low`/`!`; `*` or `!important`; `#list`. A line
-that would leave no title is taken literally.
+`list`; `start`/`end` index the text) — for showing chips. The web, these two
+routes and `/todo` share one parser (`src/core/tasks/quick-add.ts`).
+
+**Capture grammar** (English; conservative, so ordinary words stay words):
+
+- **Marks**, read anywhere as whole words: `#list` (a letter first; matched to
+  an existing list ignoring case and `-`/`_`), `!high` `!medium` `!low` `!1`–`!3`,
+  `!!` (medium), `!!!` (high), `*` or `!important` (star). A lone `!` is text.
+- **Dates**: today, tonight (20:00 unless a time is given), tomorrow (tmrw),
+  day after tomorrow, a weekday name (the next one; today excluded), on/by/due
+  + weekday (also short: fri), next + weekday (that day of next week), next
+  week (Monday), (this) weekend, next month (the 1st), in 3 days / 2 weeks /
+  a month, 2026-12-01, dec 5, 5th december (a past day this year means next
+  year).
+- **Times**: 3pm, 3:30 pm, 15:00, optionally after "at"; at noon, at midday,
+  in the morning (09:00) / afternoon (14:00) / evening (18:00). A bare number
+  ("at 7", "3 options") is never a time. A time alone is today while it is
+  still ahead, else tomorrow.
+- **Repeats** only with "every": every day / weekday / week / month / year,
+  every 2 weeks, every other day, every mon and wed (first due on the next of
+  those days still ahead, counting today until its time has passed). "Daily",
+  "weekly" and the like are words.
+- Dates, times and repeats are read only as a **clause at the end or the start
+  of the line** (only spaces, commas, semicolons, colons or dashes between its
+  parts and the edge): "Buy Sunday paper" and "Plan next week with Anna" stay
+  titles. Nothing is read inside a URL, an e-mail address, a domain or a word
+  ("Monday.com", "Today's").
+- **Literal text**: "double quotes" or a backslash before a word keep it as
+  text; the quotes or backslash leave the title. Clients take a chip back by
+  quoting its text. A line that would leave no title is taken literally.
 
 **My Day.** `GET /api/tasks/my-day?tz=Europe/Berlin` →
 `{timezone, date, tasks, suggestions}`: `tasks` are those picked today, active
@@ -401,9 +464,11 @@ ranking's pressing ones (`doing`, `overdue`, `today`, `high`, `inbound`,
 `upcoming`), at most 12.
 
 **Live updates.** Every write to one of your personal tasks (yours, an agent's,
-a repeat's) sends the gateway event `tasks.changed` with payload `{taskId}` to
-your connections; refetch on it (debounced) instead of polling. Space tasks
-send `task.changed` to the space's subscribers as before.
+a repeat's), and every change to your own star / My Day / order (in a space
+too), sends the gateway event `tasks.changed` with payload `{taskId}` to your
+connections (subscribe to the pattern `tasks.changed`); refetch on it
+(debounced) instead of polling. Space tasks send `task.changed` to the space's
+subscribers as before.
 
 ## Recurring Tasks
 

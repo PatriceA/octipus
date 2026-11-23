@@ -59,6 +59,8 @@ export function useTodos({ withArchived = false }: { withArchived?: boolean } = 
   const gatewayStatus = useGatewayStatus();
   const [tasks, setTasks] = useState<Todo[]>([]);
   const [archived, setArchived] = useState<Todo[]>([]);
+  // The lists the server knows, empty ones included (GET /tasks/lists).
+  const [savedLists, setSavedLists] = useState<string[]>([]);
   const [doneLimit, setDoneLimit] = useState(DONE_PAGE);
   const [doneTotal, setDoneTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,9 +84,10 @@ export function useTodos({ withArchived = false }: { withArchived?: boolean } = 
       const seq = ++fetchSeq.current;
       const version = writes.current.version;
       try {
-        const [pages, archivedPage] = await Promise.all([
+        const [pages, archivedPage, listsPage] = await Promise.all([
           Promise.all(donePages(doneLimit).map((path) => api.get<{ tasks: Todo[]; serverNow?: string; done?: { total: number } }>(path))),
           withArchived ? api.get<{ tasks: Todo[] }>('/tasks?status=archived&limit=200') : Promise.resolve(null),
+          api.get<{ lists?: { name: string }[] }>('/tasks/lists'),
         ]);
         // Every page repeats the active to-dos: the first page's are kept, and
         // only the done ones of the later pages.
@@ -106,6 +109,7 @@ export function useTodos({ withArchived = false }: { withArchived?: boolean } = 
         // A deletion still on offer for Undo has not reached the server yet.
         setTasks(all.filter((t) => !pendingDeletes.current.has(t.id)).map((t) => ({ ...t, serverSkewMs })));
         if (archivedPage) setArchived(archivedPage.tasks ?? []);
+        setSavedLists((listsPage.lists ?? []).map((l) => l.name));
         setDoneTotal(first.done?.total ?? null);
         setError('');
       } catch (err) {
@@ -135,8 +139,10 @@ export function useTodos({ withArchived = false }: { withArchived?: boolean } = 
   useGatewayMessages((message) => {
     if (message.type !== 'event') return;
     const type = message.event.type;
-    if (spaceId) {
-      if (type !== 'task.changed' || (message.event.payload as { workspaceId?: string }).workspaceId !== spaceId) return;
+    // `tasks.changed` is the caller's own (their personal to-dos, or their
+    // star / My Day / order in a space); `task.changed` is the space's.
+    if (type === 'task.changed') {
+      if (!spaceId || (message.event.payload as { workspaceId?: string }).workspaceId !== spaceId) return;
     } else if (type !== 'tasks.changed') {
       return;
     }
@@ -272,9 +278,55 @@ export function useTodos({ withArchived = false }: { withArchived?: boolean } = 
   // agent holds (or left behind), and the task goes back to open.
   const release = useCallback((task: Todo) => write(null, () => api.post(`/tasks/${task.id}/release`, { force: true })), [write]);
 
+  /** Make an empty list (kept on the server until it holds a to-do). */
+  const createList = useCallback((name: string) => write(
+    () => setSavedLists((xs) => [...new Set([...xs, name])]),
+    () => api.post('/tasks/lists', { name }),
+  ), [write]);
+
+  /** Rename a list (every to-do in it moves), with Undo. */
+  const renameList = useCallback((name: string, newName: string) => {
+    const move = (from: string, to: string) => write(
+      () => {
+        setSavedLists((xs) => [...new Set(xs.map((x) => (x === from ? to : x)))]);
+        setTasks((xs) => xs.map((t) => (t.category === from ? { ...t, category: to } : t)));
+      },
+      () => api.patch('/tasks/lists', { name: from, newName: to }),
+    );
+    void move(name, newName).then((done) => {
+      if (done !== undefined) showUndo(`Renamed “${name}” to “${newName}”`, () => { void move(newName, name); });
+    });
+  }, [showUndo, write]);
+
+  /**
+   * Delete a list: its to-dos stay, in no list. Undo puts them back
+   * (POST /tasks/lists/move with the ids the delete answered).
+   */
+  const deleteList = useCallback((name: string) => {
+    void write(
+      () => {
+        setSavedLists((xs) => xs.filter((x) => x !== name));
+        setTasks((xs) => xs.map((t) => (t.category === name ? { ...t, category: null } : t)));
+      },
+      () => api.delete<{ taskIds: string[] }>(`/tasks/lists?name=${encodeURIComponent(name)}`),
+    ).then((res) => {
+      if (!res) return;
+      showUndo(`Deleted the list “${name}”; its to-dos are in no list`, () => {
+        void write(null, async () => {
+          if (res.taskIds.length > 0) await api.post('/tasks/lists/move', { taskIds: res.taskIds, name });
+          else await api.post('/tasks/lists', { name });
+        });
+      });
+    });
+  }, [showUndo, write]);
+
   return {
     tasks,
     archived,
+    savedLists,
+    createList,
+    renameList,
+    deleteList,
     loading,
     error,
     setError,

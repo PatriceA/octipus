@@ -7,6 +7,17 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **To-dos, after review** ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).
+  The star, My Day and order are now each user's own (also in a space;
+  migration `0206`), and the API returns the caller's values under the same
+  field names. Lists can be made empty, renamed and deleted (with Undo) on the
+  server (`/api/tasks/lists`). Repeating to-dos run in a stored zone and keep
+  their day of the month; deleting an occurrence skips it; an agent never
+  works a future occurrence early (`checkout` answers `409 not_due`). The user's
+  time zone is remembered from the browser (a phone's fixed offset never
+  replaces a named zone) and can be set under Settings → Profile. The capture
+  line reads dates only as a trailing or leading clause, repeats only with
+  "every", never inside URLs; quotes keep words literal.
 - **To-dos: star, manual order, My Day, repeat, capture, live updates**
   ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).
   Migration `0205` adds `important`, `sortOrder`, `myDayOn`, `repeat` and

@@ -86,7 +86,9 @@ export const CaptureBar = forwardRef<HTMLInputElement, {
       setBusy(false);
     }
   };
-  const removeToken = (start: number, end: number) => setText((t) => `${t.slice(0, start)}${t.slice(end)}`.replace(/\s+/g, ' ').trimStart());
+  // Taking a chip back keeps its words in the title: they are quoted, which
+  // the parser reads as literal text (and drops the quotes from the title).
+  const removeToken = (start: number, end: number) => setText((t) => `${t.slice(0, start)}"${t.slice(start, end)}"${t.slice(end)}`);
   return (
     <div className="todo-capture" data-testid="task-quick-add">
       <div className="flex items-center gap-3 px-4">

@@ -168,7 +168,7 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
               maxLength={500}
               className={cn('mt-[7px] min-w-0 flex-1 resize-none bg-transparent text-[17px] font-semibold leading-snug text-on-surface [field-sizing:content] focus:outline-none', task.status === 'done' && 'text-on-surface-variant line-through')}
             />
-            <StarButton important={!!task.important} onToggle={() => void patch({ important: !task.important })} disabled={!canWrite} />
+            <StarButton important={!!task.important} onToggle={() => void patch({ important: !task.important })} disabled={archived} />
           </div>
           {title.failed && <p role="alert" className="px-4 pb-2 text-xs text-error">Title not saved. Your text is still here; click away to try again.</p>}
           {steps.length > 0 && (
@@ -192,9 +192,8 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
           )}
         </section>
 
-        {canWrite && !archived && (
-          <>
-            {!isSpace && (
+        {/* My Day is the reader's own, in a space too: any reader may pick it. */}
+        {!archived && (
               <section className="todo-card">
                 <div className="flex items-center pr-2">
                   <button type="button" onClick={() => void patch({ myDay: !inMyDay })} className={cn('todo-card-row', inMyDay && 'is-set')}>
@@ -203,7 +202,9 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
                   {inMyDay && <button type="button" className="todo-clear" aria-label="Remove from My Day" onClick={() => void patch({ myDay: false })}><X className="h-4 w-4" /></button>}
                 </div>
               </section>
-            )}
+        )}
+        {canWrite && !archived && (
+          <>
 
             <section className="todo-card" aria-label="Dates">
               <PickRow icon={Bell} testId="todo-remind" label={task.remindAt ? `Remind me ${remindText(task.remindAt)}` : 'Remind me'} set={!!task.remindAt}
@@ -239,8 +240,8 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
             <section className="todo-card" aria-label="List and priority">
               <label className="todo-card-row cursor-default">
                 <List aria-hidden />
-                <span className="sr-only">List</span>
-                <select aria-label="List" value={task.category ?? ''} onChange={(e) => void patch({ category: e.target.value || null })}
+                <span className="sr-only">Move to list</span>
+                <select aria-label="Move to list" value={task.category ?? ''} onChange={(e) => void patch({ category: e.target.value || null })}
                   className="min-w-0 flex-1 cursor-pointer rounded-md border-0 bg-transparent py-1 text-sm text-on-surface">
                   <option value="">No list</option>
                   {[...new Set([...lists, ...(task.category ? [task.category] : [])])].map((l) => <option key={l} value={l}>{l}</option>)}

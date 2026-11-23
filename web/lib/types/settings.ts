@@ -15,11 +15,13 @@ export interface UserProfile {
     autoApproveRecovery?: boolean;
     /** The offer to distil a finished task into a skill; unset = on. */
     distillNudge?: boolean;
+    /** The zone of the user's day (to-dos, My Day, repeats); `timezoneSource: 'user'` when chosen here. */
+    timezone?: string;
+    timezoneSource?: 'device' | 'user';
     theme?: string;
     language?: string;
     notifications?: boolean;
     defaultModel?: string;
-    timezone?: string;
   };
 }
 

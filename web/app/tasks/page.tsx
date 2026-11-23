@@ -1,6 +1,6 @@
 'use client';
 
-import { CalendarDays, CircleCheck, Columns3, Home, Lightbulb, List, Menu, RefreshCw, RotateCcw, Search, Star, Sun, X } from 'lucide-react';
+import { CalendarDays, CircleCheck, Columns3, Home, Lightbulb, List, Menu, Pencil, RefreshCw, RotateCcw, Search, Star, Sun, Trash2, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { blockedText, subtaskProgress, TaskBoard } from '@/components/tasks/task-board';
@@ -26,8 +26,6 @@ import { toLookup } from '../../../src/core/tasks/structure';
 type View = 'list' | 'board';
 const VIEW_KEY = 'octipus.tasks.view';
 const LIST_KEY = 'octipus.todos.list';
-/** Lists made here that hold no to-do yet (a list is a `category`, which exists only on a to-do). */
-const LOCAL_LISTS_KEY = 'octipus.todos.lists';
 /** Completed row is shown for a beat before it moves to the done part. */
 const COMPLETE_MS = 420;
 const DRAG_TYPE = 'application/x-octipus-todo';
@@ -65,18 +63,17 @@ function TodosPage() {
   // Commenters and viewers in a space (and everyone in an archived one) read
   // without create, edit or drag; commenters still comment.
   const { canWrite, canComment } = useWorkspaceAccess();
-  const smartLists: readonly SmartList[] = isSpace ? SMART_LISTS.filter((k) => k !== 'my-day') : SMART_LISTS;
-  const localListsKey = `${LOCAL_LISTS_KEY}.${workspaceId ?? 'personal'}`;
+  // My Day, the star and the order are each member's own, so a space has them too.
+  const smartLists: readonly SmartList[] = SMART_LISTS;
 
   const requested = params.get('list');
-  const current: ListKey = isListKey(requested) && (!isSpace || requested !== 'my-day')
+  const current: ListKey = isListKey(requested)
     ? requested
-    : readLocal<ListKey>(`${LIST_KEY}.${workspaceId ?? 'personal'}`, isSpace ? 'all' : 'my-day', (raw) => (isListKey(raw) && (!isSpace || raw !== 'my-day') ? raw : isSpace ? 'all' : 'my-day'));
+    : readLocal<ListKey>(`${LIST_KEY}.${workspaceId ?? 'personal'}`, isSpace ? 'all' : 'my-day', (raw) => (isListKey(raw) ? raw : isSpace ? 'all' : 'my-day'));
   const selectedId = params.get('task');
   const [view, setView] = useState<View>(() => readLocal(VIEW_KEY, 'list', (raw) => (raw === 'board' ? 'board' : 'list')));
   const todos = useTodos({ withArchived: current === 'archived' });
   const { tasks, archived } = todos;
-  const [localLists, setLocalLists] = useState<string[]>(() => readLocal(localListsKey, [], (raw) => (JSON.parse(raw) as unknown[]).filter((x): x is string => typeof x === 'string')));
   const [query, setQuery] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -120,10 +117,10 @@ function TodosPage() {
 
   const lists = useMemo(() => {
     const named = new Set(tasks.filter((t) => t.category && t.status !== 'archived').map((t) => t.category as string));
-    for (const l of localLists) named.add(l);
+    for (const l of todos.savedLists) named.add(l);
     if (current.startsWith('list:')) named.add(current.slice(5));
     return [...named].sort((a, b) => a.localeCompare(b));
-  }, [tasks, localLists, current]);
+  }, [tasks, todos.savedLists, current]);
   const counts = useMemo(() => listCounts(tasks, today), [tasks, today]);
   const lookup = useMemo(() => toLookup(tasks), [tasks]);
   const pickableRoles = useMemo(() => {
@@ -131,9 +128,7 @@ function TodosPage() {
     return [...new Set([...roleNames, ...assigned])].sort((a, b) => a.localeCompare(b));
   }, [tasks, roleNames]);
   const createList = (name: string) => {
-    const next = [...new Set([...localLists, name])];
-    setLocalLists(next);
-    writeLocal(localListsKey, JSON.stringify(next));
+    void todos.createList(name);
     selectList(`list:${name}`);
   };
 
@@ -239,6 +234,15 @@ function TodosPage() {
   const rowKeys = (task: Todo) => (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     const i = visible.findIndex((t) => t.id === task.id);
+    // Alt+Up / Alt+Down move the to-do itself (the keyboard's drag).
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const neighbour = visible[e.key === 'ArrowUp' ? i - 1 : i + 1];
+      if (manualOrder && isActiveStatus(task.status) && neighbour && isActiveStatus(neighbour.status)) {
+        void reorder(task.id, neighbour.id, e.key === 'ArrowUp' ? 'before' : 'after');
+      }
+      return;
+    }
     if (e.key === 'ArrowDown') { e.preventDefault(); focusRow(visible[i + 1]?.id); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); focusRow(visible[i - 1]?.id); }
     else if (e.key === 'Home') { e.preventDefault(); focusRow(visible[0]?.id); }
@@ -260,7 +264,15 @@ function TodosPage() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const typing = !!target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
-      if (e.key === 'Escape' && keyState.current.selectedId && !document.querySelector('dialog[open]')) { keyState.current.open(null); return; }
+      if (e.key === 'Escape' && keyState.current.selectedId && !document.querySelector('dialog[open]')) {
+        // Typing: Escape leaves the field first (a detail field), or is the field's own (capture, search).
+        if (typing) {
+          if (target?.closest('[data-testid="todo-detail"]')) target.blur();
+          return;
+        }
+        keyState.current.open(null);
+        return;
+      }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 'n' && captureRef.current) { e.preventDefault(); captureRef.current.focus(); }
       else if (e.key === '/' && searchRef.current) { e.preventDefault(); searchRef.current.focus(); }
@@ -293,6 +305,7 @@ function TodosPage() {
         selected={selectedId === task.id}
         completing={completing.has(task.id)}
         canWrite={canWrite && task.status !== 'archived'}
+        canStar={task.status !== 'archived'}
         draggable={draggable}
         dropEdge={dropAt?.id === task.id ? dropAt.edge : null}
         tabIndex={tabbable === task.id ? 0 : -1}
@@ -363,6 +376,11 @@ function TodosPage() {
                 </h1>
                 {subtitle && view === 'list' && <p>{subtitle}</p>}
               </div>
+              {view === 'list' && current.startsWith('list:') && canWrite && !searching && (
+                <ListActions name={current.slice(5)} lists={lists}
+                  onRename={(to) => { todos.renameList(current.slice(5), to); router.replace(href(`list:${to}`, selectedId)); }}
+                  onDelete={() => { todos.deleteList(current.slice(5)); selectList('all'); }} />
+              )}
             </div>
             <div className="todo-toolbar">
               <button type="button" className="todo-tool todo-rail-toggle" aria-label="Show lists" onClick={() => setRailOpen(true)}><Menu className="h-5 w-5" /></button>
@@ -447,6 +465,34 @@ function TodosPage() {
         />
       )}
       {todos.undoToast}
+    </div>
+  );
+}
+
+/** Rename or delete the list on screen (its to-dos stay; Undo is offered). */
+function ListActions({ name, lists, onRename, onDelete }: { name: string; lists: readonly string[]; onRename: (to: string) => void; onDelete: () => void }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const commit = () => {
+    const to = draft.trim();
+    setRenaming(false);
+    if (to && to !== name) onRename(to);
+  };
+  if (renaming) {
+    return (
+      <input autoFocus aria-label="List name" value={draft} maxLength={100} className="todo-field"
+        onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(name); setRenaming(false); } }} />
+    );
+  }
+  return (
+    <div className="flex shrink-0 gap-1">
+      <button type="button" className="todo-tool" onClick={() => { setDraft(name); setRenaming(true); }} aria-label="Rename list" title="Rename list">
+        <Pencil className="h-4 w-4" /><span className="todo-tool-label">Rename</span>
+      </button>
+      <button type="button" className="todo-tool" onClick={onDelete} aria-label="Delete list" title="Delete list (its to-dos stay, in no list)">
+        <Trash2 className="h-4 w-4" /><span className="todo-tool-label">Delete list</span>
+      </button>
     </div>
   );
 }

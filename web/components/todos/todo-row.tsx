@@ -61,7 +61,7 @@ export interface RowContext {
 }
 
 /** One quiet line under the title: list, My Day, steps, due, reminder, repeat, notes. */
-function MetaLine({ task, ctx, steps, waiting }: { task: Todo; ctx: RowContext; steps: { done: number; total: number } | null; waiting: string | null }) {
+function MetaLine({ id, task, ctx, steps, waiting }: { id: string; task: Todo; ctx: RowContext; steps: { done: number; total: number } | null; waiting: string | null }) {
   const parts: ReactNode[] = [];
   const active = isActiveStatus(task.status);
   if (ctx.showMyDay && task.myDayOn === ctx.today) parts.push(<span key="md" className="inline-flex items-center gap-1"><Sun className="h-3.5 w-3.5" aria-hidden />My Day</span>);
@@ -75,9 +75,11 @@ function MetaLine({ task, ctx, steps, waiting }: { task: Todo; ctx: RowContext; 
       </span>,
     );
   }
-  if (task.remindAt && active) parts.push(<Bell key="remind" className="h-3.5 w-3.5" aria-label="Has a reminder" />);
-  if (task.repeat) parts.push(<Repeat key="repeat" className="h-3.5 w-3.5" aria-label="Repeats" />);
-  if (task.notes?.trim()) parts.push(<NotebookPen key="notes" className="h-3.5 w-3.5" aria-label="Has notes" />);
+  // Icons carry their meaning as text for screen readers (the row's description reads it).
+  if (task.remindAt && active) parts.push(<span key="remind" aria-label="Has a reminder" role="img"><Bell className="h-3.5 w-3.5" aria-hidden /></span>);
+  if (task.repeat) parts.push(<span key="repeat" aria-label="Repeats" role="img"><Repeat className="h-3.5 w-3.5" aria-hidden /></span>);
+  if (task.notes?.trim()) parts.push(<span key="notes" aria-label="Has notes" role="img"><NotebookPen className="h-3.5 w-3.5" aria-hidden /></span>);
+  if (task.important) parts.push(<span key="star" className="sr-only">Important</span>);
   if (waiting && active) parts.push(<span key="wait" className="inline-flex items-center gap-1 text-error/80" title="cannot start yet"><Lock className="h-3 w-3" aria-hidden />{waiting}</span>);
   if (ctx.showAssignee || task.assigneeKind === 'role' || task.assigneeKind === 'node') {
     if (task.assigneeKind && task.assigneeRef) parts.push(<AssigneeChip key="who" task={task} />);
@@ -85,8 +87,9 @@ function MetaLine({ task, ctx, steps, waiting }: { task: Todo; ctx: RowContext; 
   if (task.source !== 'user' && task.source !== 'agent') parts.push(<span key="src">from {task.source}</span>);
   if (parts.length === 0) return null;
   return (
-    <div className="todo-meta">
+    <div className="todo-meta" id={id}>
       {parts.map((p, i) => <span key={i} className="inline-flex items-center">{i > 0 && <span aria-hidden className="todo-meta-dot">·</span>}{p}</span>)}
+      {task.dueAt && active && dueText(task.dueAt).tone === 'overdue' && <span className="sr-only">, overdue</span>}
     </div>
   );
 }
@@ -103,6 +106,8 @@ export const TodoRow = forwardRef<HTMLDivElement, {
   selected: boolean;
   completing: boolean;
   canWrite: boolean;
+  /** The star is the viewer's own: anyone who can read the to-do may set it. */
+  canStar: boolean;
   draggable: boolean;
   dropEdge?: 'before' | 'after' | null;
   onToggle: () => void;
@@ -112,15 +117,21 @@ export const TodoRow = forwardRef<HTMLDivElement, {
   onFocus: () => void;
   tabIndex: number;
   dragProps?: React.HTMLAttributes<HTMLDivElement>;
-}>(function TodoRow({ task, ctx, steps, waiting, selected, completing, canWrite, draggable, dropEdge, onToggle, onToggleImportant, onOpen, onKeyDown, onFocus, tabIndex, dragProps }, ref) {
+}>(function TodoRow({ task, ctx, steps, waiting, selected, completing, canWrite, canStar, draggable, dropEdge, onToggle, onToggleImportant, onOpen, onKeyDown, onFocus, tabIndex, dragProps }, ref) {
   const done = task.status === 'done';
+  // Named by its title and described by its metadata line (due, overdue, My
+  // Day, steps, list…), so a screen reader hears both, not the title alone.
+  const titleId = `todo-title-${task.id}`;
+  const metaId = `todo-meta-${task.id}`;
   return (
     <div
       ref={ref}
       role="listitem"
       tabIndex={tabIndex}
       aria-current={selected ? 'true' : undefined}
-      aria-label={task.title}
+      aria-labelledby={titleId}
+      aria-describedby={done ? `todo-state-${task.id} ${metaId}` : metaId}
+      aria-keyshortcuts={draggable ? 'Space Enter Delete Alt+ArrowUp Alt+ArrowDown' : 'Space Enter Delete'}
       data-testid="task-row"
       data-task-id={task.id}
       draggable={draggable}
@@ -133,10 +144,11 @@ export const TodoRow = forwardRef<HTMLDivElement, {
       {draggable && <GripVertical className="todo-grip" aria-hidden />}
       <TodoCheck task={task} onToggle={onToggle} disabled={!canWrite} completing={completing} />
       <div className="min-w-0 flex-1 py-2.5">
-        <p className={cn('todo-title', (done || completing) && 'is-done')}>{task.title}</p>
-        <MetaLine task={task} ctx={ctx} steps={steps} waiting={waiting} />
+        <p id={titleId} className={cn('todo-title', (done || completing) && 'is-done')}>{task.title}</p>
+        {done && <span id={`todo-state-${task.id}`} className="sr-only">Completed</span>}
+        <MetaLine id={metaId} task={task} ctx={ctx} steps={steps} waiting={waiting} />
       </div>
-      <StarButton important={!!task.important} onToggle={onToggleImportant} disabled={!canWrite} />
+      <StarButton important={!!task.important} onToggle={onToggleImportant} disabled={!canStar} />
     </div>
   );
 });

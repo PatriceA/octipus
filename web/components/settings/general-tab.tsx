@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { HealthStatus, UserProfile } from '@/lib/types/settings';
+import { TimezoneSetting } from './timezone-setting';
 
 export function GeneralTab({ section = 'profile' }: { section?: 'profile' | 'health' }) {
   const { data: profile } = useQuery({
@@ -127,6 +128,8 @@ export function GeneralTab({ section = 'profile' }: { section?: 'profile' | 'hea
           </div>
         </div>
       </div>
+
+      <TimezoneSetting profile={profile} />
 
       {/* The offer to distil a finished task into a skill (docs/SESSION-LEARNING.md). */}
       <div className="space-y-2 rounded-lg bg-surface-container-low p-4">

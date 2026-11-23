@@ -180,6 +180,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
       const body = req.postData() ? req.postDataJSON() : undefined;
       calls.push({ method, path, body });
 
+      if (path === '/lists') return json(route, 200, { lists: [] });
       if (path === '/role-agents') {
         if (method === 'PUT') {
           const r = roleAgents.roles.find((x) => x.role === body.role)!;

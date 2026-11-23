@@ -20,7 +20,17 @@ export function openQuickAddTodo(text = ''): void {
 /** True while the user is typing somewhere: a key there is text, not a shortcut. */
 function typingIn(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+  return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || !!el.closest('[contenteditable="true"], .cm-editor'));
+}
+
+/**
+ * Something modal or a menu is open (a native dialog, the app's div-based
+ * modals and portals, a file viewer, a menu or listbox): a Q there belongs
+ * to it, so the quick-add stays shut.
+ */
+function overlayOpen(): boolean {
+  // `.fixed.inset-0`: the app's own full-screen overlays that carry no role (viewers, pickers).
+  return !!document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]:not([hidden]), .fixed.inset-0');
 }
 
 /**
@@ -59,7 +69,7 @@ export function QuickAddTodo() {
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'q' || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;
+      if (e.key.toLowerCase() !== 'q' || e.metaKey || e.ctrlKey || e.altKey || e.repeat || typingIn(e.target) || typingIn(document.activeElement) || overlayOpen()) return;
       e.preventDefault();
       start('');
     };

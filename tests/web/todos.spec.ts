@@ -26,6 +26,7 @@ interface Server { rows: Row[]; calls: { method: string; path: string; body: any
 
 async function serve(page: Page, rows: Row[]): Promise<Server> {
   const calls: Server['calls'] = [];
+  let lists: string[] = [];
   await page.route('**/api/roles', (route) => json(route, 200, { roles: [] }));
   await page.route(/\/api\/tasks(\/|\?|$)/, async (route) => {
     const req = route.request();
@@ -40,6 +41,28 @@ async function serve(page: Page, rows: Row[]): Promise<Server> {
       });
     }
     if (path.endsWith('/comments')) return json(route, 200, { comments: [], truncated: false });
+    if (path === '/lists') {
+      const names = () => [...new Set([...lists, ...rows.filter((t) => t.category && t.status !== 'archived').map((t) => t.category)])].sort();
+      if (req.method() === 'POST') { lists.push(body.name); return json(route, 200, { name: body.name }); }
+      if (req.method() === 'PATCH') {
+        const moved = rows.filter((t) => t.category === body.name);
+        for (const t of moved) t.category = body.newName;
+        lists = lists.map((l) => (l === body.name ? body.newName : l));
+        return json(route, 200, { name: body.newName, taskIds: moved.map((t) => t.id) });
+      }
+      if (req.method() === 'DELETE') {
+        const name = url.searchParams.get('name');
+        const moved = rows.filter((t) => t.category === name);
+        for (const t of moved) t.category = null;
+        lists = lists.filter((l) => l !== name);
+        return json(route, 200, { taskIds: moved.map((t) => t.id) });
+      }
+      return json(route, 200, { lists: names().map((name) => ({ name, open: rows.filter((t) => t.category === name && t.status === 'open').length })) });
+    }
+    if (path === '/lists/move') {
+      for (const t of rows) if (body.taskIds.includes(t.id)) t.category = body.name;
+      return json(route, 200, { taskIds: body.taskIds });
+    }
     if (req.method() === 'POST' && path === '/') {
       const { myDay, tz, ...rest } = body;
       const row = T(`new-${rows.length}`, rest.title, { ...rest, myDayOn: myDay ? TODAY : null });
@@ -73,16 +96,21 @@ test.describe('to-dos', () => {
     await capture.fill('call dentist tomorrow 3pm !high #personal');
     const chips = page.getByTestId('capture-chips').getByRole('listitem');
     await expect(chips).toHaveText(['Tomorrow', '15:00', 'High', 'Personal']);
-    // A chip can be taken back out of the line.
-    await page.getByRole('button', { name: 'Remove High' }).click();
-    await expect(capture).toHaveValue('call dentist tomorrow 3pm #personal');
     await capture.press('Enter');
     await expect.poll(() => server.calls.find((c) => c.method === 'POST')?.body).toMatchObject({
-      title: 'call dentist', category: 'Personal', myDay: true, tz: expect.any(String),
+      title: 'call dentist', category: 'Personal', priority: 3, myDay: true, tz: expect.any(String),
       dueAt: new Date(`${dayFromToday(1)}T15:00:00`).toISOString(),
     });
     await expect(row(page, 'call dentist')).toBeVisible();
     await expect(capture).toBeFocused();
+
+    // Taking a chip back keeps its words in the title (they are quoted, so read literally).
+    await capture.fill('Watch the film tomorrow !high');
+    await page.getByRole('button', { name: 'Remove Tomorrow' }).click();
+    await expect(capture).toHaveValue('Watch the film "tomorrow" !high');
+    await expect(chips).toHaveText(['High']);
+    await capture.press('Enter');
+    await expect.poll(() => server.calls.filter((c) => c.method === 'POST').at(-1)?.body).toMatchObject({ title: 'Watch the film tomorrow', priority: 3, dueAt: null });
 
     // In a list, a to-do lands in that list; a bare day is sent as a day.
     await page.getByTestId('todo-list-list:Personal').click();
@@ -312,5 +340,105 @@ test.describe('to-dos', () => {
     await detail.getByRole('button', { name: 'Back to list' }).click();
     await expect(detail).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
+  test('Alt+Up and Alt+Down move a to-do from the keyboard; its row reads its due date and state', async ({ authenticatedPage: page }) => {
+    const server = await serve(page, [T('a', 'Alpha', { sortOrder: 10, dueAt: endOfDay(-1) }), T('b', 'Bravo', { sortOrder: 20 }), T('c', 'Charlie', { sortOrder: 30 })]);
+    await page.goto('/tasks?list=all');
+    // The row is named by its title and described by its metadata.
+    const alpha = page.getByRole('listitem', { name: 'Alpha', exact: true });
+    await expect(alpha).toHaveAccessibleDescription(/Yesterday.*overdue/);
+    await page.getByRole('listitem', { name: 'Charlie', exact: true }).focus();
+    await page.keyboard.press('Alt+ArrowUp');
+    await expect.poll(() => server.patches()).toEqual([{ id: 'c', body: { sortOrder: 15 } }]);
+    await expect(page.getByTestId('todo-list').getByTestId('task-row')).toHaveText([/Alpha/, /Charlie/, /Bravo/]);
+    await expect(page.getByRole('listitem', { name: 'Charlie', exact: true })).toBeFocused();
+    await page.keyboard.press('Alt+ArrowDown');
+    await expect.poll(() => server.patches().at(-1)).toEqual({ id: 'c', body: { sortOrder: 21 } });
+  });
+
+  test('Escape while typing does not close the detail panel; the next Escape does', async ({ authenticatedPage: page }) => {
+    await serve(page, [T('a', 'Alpha')]);
+    await page.goto('/tasks?list=all&task=a');
+    const detail = page.getByTestId('todo-detail');
+    await page.getByRole('textbox', { name: 'Add a to-do' }).fill('half typed');
+    await page.keyboard.press('Escape');
+    await expect(detail).toBeVisible();
+    await detail.getByLabel('Notes').fill('a note');
+    await page.keyboard.press('Escape');
+    await expect(detail).toBeVisible();
+    await expect(detail.getByLabel('Notes')).not.toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(detail).toHaveCount(0);
+  });
+
+  test('Q does not open the quick-add over an open dialog or while an editor has focus', async ({ authenticatedPage: page }) => {
+    await serve(page, []);
+    await page.goto('/notifications');
+    await page.evaluate(() => {
+      const modal = document.createElement('div');
+      modal.setAttribute('role', 'dialog');
+      modal.id = 'stub-modal';
+      document.body.appendChild(modal);
+      const editor = document.createElement('div');
+      editor.className = 'cm-editor';
+      editor.innerHTML = '<div class="cm-content" contenteditable="true" tabindex="0">x</div>';
+      document.body.appendChild(editor);
+    });
+    await page.locator('body').click();
+    await page.keyboard.press('q');
+    await expect(page.getByTestId('quick-add-todo')).toBeHidden();
+    await page.evaluate(() => document.getElementById('stub-modal')?.remove());
+    await page.locator('.cm-content').focus();
+    await page.keyboard.press('q');
+    await expect(page.getByTestId('quick-add-todo')).toBeHidden();
+    await page.locator('body').click();
+    await page.keyboard.press('q');
+    await expect(page.getByTestId('quick-add-todo')).toBeVisible();
+  });
+
+  test('a list is made empty, renamed and deleted with an undo, all on the server', async ({ authenticatedPage: page }) => {
+    const server = await serve(page, [T('a', 'Mow the lawn', { category: 'Home' })]);
+    await page.goto('/tasks?list=all');
+    await page.getByRole('button', { name: 'New list' }).click();
+    await page.getByLabel('New list name').fill('Garden');
+    await page.getByLabel('New list name').press('Enter');
+    await expect.poll(() => server.calls.find((c) => c.method === 'POST' && c.path === '/lists')?.body).toEqual({ name: 'Garden' });
+    await expect(page).toHaveURL(/list=list%3AGarden/);
+    await page.reload();
+    await expect(page.getByTestId('todo-list-list:Garden')).toBeVisible();
+
+    await page.getByTestId('todo-list-list:Home').click();
+    await page.getByRole('button', { name: 'Rename list' }).click();
+    await page.getByLabel('List name').fill('House');
+    await page.getByLabel('List name').press('Enter');
+    await expect.poll(() => server.calls.find((c) => c.method === 'PATCH' && c.path === '/lists')?.body).toEqual({ name: 'Home', newName: 'House' });
+    await expect(page.getByTestId('todo-list-list:House')).toBeVisible();
+    await expect(row(page, 'Mow the lawn')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Delete list' }).click();
+    await expect.poll(() => server.calls.some((c) => c.method === 'DELETE' && c.path === '/lists')).toBe(true);
+    await expect(page.getByTestId('undo-toast')).toContainText('Deleted the list “House”');
+    await page.getByTestId('undo-toast').getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(() => server.calls.find((c) => c.path === '/lists/move')?.body).toEqual({ taskIds: ['a'], name: 'House' });
+    await expect(page.getByTestId('todo-list-list:House')).toBeVisible();
+  });
+
+  test('the browser reports its zone, and Settings sets one that devices then leave alone', async ({ authenticatedPage: page }) => {
+    const puts: any[] = [];
+    let preferences: Record<string, string> = {};
+    await page.route('**/api/auth/timezone', async (route) => {
+      const body = route.request().postDataJSON();
+      puts.push(body);
+      if (body.source !== 'device' || !preferences.timezone) preferences = { timezone: body.timezone, timezoneSource: body.source === 'user' ? 'user' : 'device' };
+      return json(route, 200, preferences);
+    });
+    await page.route('**/api/auth/me', (route) => json(route, 200, { id: 'e2e-user-id', username: 'e2etest', isAdmin: true, totpEnabled: false, preferences }));
+    await page.goto('/settings?tab=general');
+    await expect.poll(() => puts[0]).toEqual({ timezone: expect.any(String), source: 'device' });
+    const setting = page.getByTestId('timezone-setting');
+    await setting.getByLabel('Time zone').selectOption('Asia/Tokyo');
+    await expect.poll(() => puts.at(-1)).toEqual({ timezone: 'Asia/Tokyo', source: 'user' });
+    await expect(setting.getByRole('checkbox')).not.toBeChecked();
   });
 });
