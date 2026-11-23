@@ -23,6 +23,7 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 
 const TEST_MODEL = 'zzz-test-cache-model';
+const streamScript = vi.hoisted(() => ({ chunks: [] as Array<Record<string, unknown>> }));
 
 // Only AnthropicProvider is faked — every other constituent provider is the
 // real class (constructors here do no I/O), it just won't claim this model.
@@ -46,8 +47,8 @@ vi.mock('./anthropic-provider', async () => {
         finishReason: 'stop',
       };
     }
-    async *stream(): AsyncGenerator<never> {
-      // Not exercised by this test — complete() is the path under test.
+    async *stream() {
+      yield* streamScript.chunks;
     }
   }
   return { ...actual, AnthropicProvider: FakeAnthropicProvider };
@@ -81,5 +82,47 @@ describe('ProviderRouter.complete — LLM completion log', () => {
     expect(completionCall).toBeDefined();
     const logObj = completionCall![0];
     expect(logObj).toMatchObject({ cacheReadTokens: 42, cacheCreationTokens: 7 });
+  });
+});
+
+const { getRateLimitManager } = await import('../rate-limiter');
+
+describe('ProviderRouter.stream — rate-limit accounting', () => {
+  const messages = [{ role: 'user' as const, content: 'x'.repeat(400), timestamp: new Date() }];
+
+  function spyToken() {
+    const seen = { success: [] as Array<number | undefined>, tokens: [] as number[], released: 0 };
+    const manager = getRateLimitManager();
+    const acquire = manager.acquire.bind(manager);
+    const spy = vi.spyOn(manager, 'acquire').mockImplementation(async (...args) => {
+      const token = await acquire(...args);
+      return {
+        ...token,
+        reportSuccess: (latency: number, tokens?: number) => { seen.success.push(tokens); token.reportSuccess(latency, tokens); },
+        reportTokens: (tokens: number) => { seen.tokens.push(tokens); token.reportTokens(tokens); },
+        release: () => { seen.released++; token.release(); },
+      };
+    });
+    return { seen, spy };
+  }
+
+  test('a finished stream reports the usage it carried, as complete() does', async () => {
+    streamScript.chunks = [{ content: 'ok' }, { finishReason: 'stop' }, { usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }];
+    const { seen, spy } = spyToken();
+    for await (const _ of new ProviderRouter().stream({ model: TEST_MODEL, messages } as never)) { /* drain */ }
+    spy.mockRestore();
+    expect(seen.success).toEqual([110]);
+    expect(seen.released).toBe(1);
+  });
+
+  test('a stream its reader drops before the usage chunk reports an estimate', async () => {
+    streamScript.chunks = [{ content: 'abcd' }, { content: 'efgh' }, { usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }];
+    const { seen, spy } = spyToken();
+    for await (const _ of new ProviderRouter().stream({ model: TEST_MODEL, messages } as never)) break;
+    spy.mockRestore();
+    expect(seen.success).toEqual([]);
+    // 400 prompt chars ≈ 100 tokens, the 4 output chars seen ≈ 1.
+    expect(seen.tokens).toEqual([101]);
+    expect(seen.released).toBe(1);
   });
 });

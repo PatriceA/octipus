@@ -7,6 +7,7 @@ import { type Pseudonyms, StreamRestorer } from '@/core/protection/pseudonymize'
 import { getLocalModelGate, localRunnerKey } from '../local-gate';
 import { recordLlmRequest } from '@/core/telemetry';
 import { requestPriority } from '../rate-limiter';
+import { estimateStreamUsage } from './usage';
 
 export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata' | 'workspaceId' | 'funding'>;
 const usageContext = new AsyncLocalStorage<ProviderUsageContext>();
@@ -207,7 +208,8 @@ export async function recordProviderUsage(options: CompletionOptions, provider: 
         cachedInputTokens: result.usage.cacheReadTokens, cacheCreationTokens: result.usage.cacheCreationTokens,
         reportedCost: result.usage.reportedCost, usageAvailable: result.usage.available !== false,
         provider, lookupByModelId: !options.modelConfigName, metadata: { ...options.accountingMetadata, provider, actualModel: result.model, requestId: result.requestId,
-          reasoningTokens: result.usage.reasoningTokens, incomplete, unattributed: !attributed } },
+          reasoningTokens: result.usage.reasoningTokens, incomplete, unattributed: !attributed,
+          ...(result.usage.estimated ? { usageEstimated: true } : {}) } },
     );
   } catch (err) {
     // A database outage must not replay a billable request or lose its answer.
@@ -275,11 +277,16 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   let model = options.model;
   let requestId: string | undefined;
   let completed = false;
+  // What the provider generated, for an estimate when it never reports usage.
+  let chunks = 0;
+  let outputChars = 0;
   const restorer = streamRestorerFor(pseudonymized.get(prepared));
   const leave = await enterLocalRunner(prepared, provider);
   const started = Date.now();
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {
+      chunks++;
+      outputChars += (chunk.content?.length ?? 0) + (chunk.toolCallDelta?.arguments?.length ?? 0) + (chunk.reasoningContent?.length ?? 0);
       if (chunk.usage) usage = chunk.usage;
       if (chunk.model) model = chunk.model;
       if (chunk.requestId) requestId = chunk.requestId;
@@ -293,6 +300,11 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   } finally {
     leave();
     recordRequestMetrics(provider, model, completed ? 'success' : 'error', started, completed ? usage : undefined);
+    // A stream cut off after the provider started answering (its reader went
+    // away, it failed midway) was billed, but most providers report usage only
+    // in their last chunk: record an estimate rather than nothing. One that
+    // produced no chunk was never answered and stays unknown.
+    if (!completed && usage.available === false && chunks > 0) usage = estimateStreamUsage(prepared, outputChars);
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
   }
 }

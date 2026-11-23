@@ -175,3 +175,24 @@ describe('hook scoping', () => {
     expect(seen).toEqual(['/only/here']);
   });
 });
+
+describe('App — streamed responses', () => {
+  test('a reader that goes away returns the generator, so its finally runs', async () => {
+    let released = false;
+    const root = new App().get('/sse', () => (async function* () {
+      try {
+        yield 'data: 1\n\n';
+        yield 'data: 2\n\n';
+        yield 'data: 3\n\n';
+      } finally {
+        released = true;
+      }
+    })());
+    const res = await root.handle(new Request('http://x/sse'));
+    const reader = res.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 1\n\n');
+    expect(released).toBe(false);
+    await reader.cancel();
+    expect(released).toBe(true);
+  });
+});

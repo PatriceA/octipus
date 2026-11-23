@@ -52,6 +52,8 @@ export function classifyMetaError(err: unknown): ClassifiedError {
 export class MetaProvider implements ModelProvider {
   readonly name = 'meta';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   private baseUrl: string;
 

@@ -30,6 +30,8 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export class OpenRouterProvider implements ModelProvider {
   readonly name = 'openrouter';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   supportsModel(modelName: string): boolean {
     // OpenRouter model IDs contain a slash (e.g., "openai/gpt-4o").

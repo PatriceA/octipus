@@ -31,6 +31,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 export class VertexProvider implements ModelProvider {
   readonly name = 'vertex';
   readonly type = 'direct' as const;
+  /** stream() yields `delta.content` and complete() `message.content`, both unaltered. */
+  readonly streamIsComplete = true;
 
   private tokenManager: VertexTokenManager | null = null;
 

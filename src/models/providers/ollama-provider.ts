@@ -1,6 +1,6 @@
 import { ollamaImages, openAiRoleContent } from './media-content';
 import { recordProviderUsage } from './instrumented';
-import { normalizeUsage } from './usage';
+import { estimatePromptTokens, normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -129,12 +129,7 @@ function useNativeApi(options: CompletionOptions): boolean {
   return nativeModeRequested(options) || configuredNumCtx() !== undefined;
 }
 
-/** Rough prompt size of a request, the codebase's chars/4 budget, tool schemas included. */
-export function estimatePromptTokens(options: Pick<CompletionOptions, 'messages' | 'tools'>): number {
-  const chars = options.messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length)
-    + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0), 0) + (options.tools ? JSON.stringify(options.tools).length : 0);
-  return Math.ceil(chars / 4);
-}
+export { estimatePromptTokens };
 
 /**
  * Fail loud before sending a prompt the pinned window cannot hold: Ollama
