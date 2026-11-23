@@ -1,7 +1,8 @@
 /**
  * onlyOnChange through HookManager, on embedded PGlite: a skipped check
- * delivery uses neither the cooldown nor the execution count, and the merged
- * turn goes back through triggerHook (re-read, re-checked, logged).
+ * delivery uses neither the cooldown nor the execution count, the merged
+ * turn goes back through triggerHook (re-read, re-checked, logged), and a
+ * turn refused at the agent cap gives back the check failures it carried.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
@@ -9,11 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriggerContext, TriggerEvent } from './triggers';
 
-const turns = vi.hoisted(() => ({ messages: [] as string[] }));
+const turns = vi.hoisted(() => ({ messages: [] as string[], refuse: false }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
     handleMessage: async (_s: string, _u: string, message: string) => {
       turns.messages.push(message);
+      // The root agent's spawn refused at the concurrent-agent cap (core/agent/service.ts).
+      if (turns.refuse) return { response: 'Maximum concurrent agents (3) reached', outcome: 'failed', notStarted: true };
       return { agentId: 'agent-1', response: '' };
     },
   }),
@@ -50,6 +53,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   turns.messages = [];
+  turns.refuse = false;
   changes.resetPendingCheckChanges();
   await executeRaw('DELETE FROM hooks');
   await executeRaw(
@@ -97,5 +101,30 @@ describe('onlyOnChange in HookManager', () => {
     await new Promise((r) => setTimeout(r, 1_500));
     expect(turns.messages).toHaveLength(0);
     expect((await hookRow()).execution_count).toBe(0);
+  });
+
+  test('no window: a turn refused at the agent cap does not store its failure, so a redelivery runs', async () => {
+    await executeRaw(`UPDATE hooks SET action_config = action_config || '{"changeMergeWindowSeconds":0}'::jsonb WHERE id = '${hookId}'`);
+    turns.refuse = true;
+    await manager.triggerHook(hookId, event, checkRun('lint', 'failure', 5));
+    expect(turns.messages).toHaveLength(1);
+    turns.refuse = false;
+    // The sender's redelivery of the same red result is still a change.
+    const [redelivered] = await manager.triggerHook(hookId, event, checkRun('lint', 'failure', 5));
+    expect(redelivered.triggered).toBe(true);
+    expect(turns.messages).toHaveLength(2);
+  });
+
+  test('a merged turn refused at the agent cap is logged as lost, and the next red result is a change again', async () => {
+    turns.refuse = true;
+    await manager.triggerHook(hookId, event, checkRun('lint', 'failure', 6));
+    await vi.waitFor(async () => {
+      const logged = await rows<{ status: string; error: string | null }>(`SELECT status, error FROM hook_executions WHERE hook_id = '${hookId}' AND status = 'error'`);
+      expect(logged).toEqual([{ status: 'error', error: 'Maximum concurrent agents (3) reached' }]);
+    }, { timeout: 5_000 });
+    expect((await hookRow()).execution_count).toBe(0);
+    turns.refuse = false;
+    await manager.triggerHook(hookId, event, checkRun('lint', 'failure', 6));
+    await vi.waitFor(() => expect(turns.messages).toHaveLength(2), { timeout: 5_000 });
   });
 });

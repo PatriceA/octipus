@@ -8,7 +8,7 @@ import { type Hook, hooks, type NewHook, SERVER_TRIGGER_CONFIG_KEYS } from '@/db
 import { users } from '@/db/schema/users';
 import { coreLogger } from '@/utils/logger';
 import { type ActionResult, executeAction } from './actions';
-import { gateCheckChange } from './event-changes';
+import { forgetCheckStates, gateCheckChange } from './event-changes';
 import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
 
 export interface HookExecutionResult {
@@ -214,6 +214,12 @@ export class HookManager extends EventEmitter {
       // by the cooldown or maxExecutions this run never used.
       // A run a user's /stop dropped from the session queue never started either.
       if ((result.notStarted || result.droppedByStop) && reservedAt) await this.unreserveRun(hook, reservedAt, previousLastExecutedAt);
+      // An `onlyOnChange` turn refused before it started: the check failures
+      // it carried were stored as seen, so give them back (hooks/event-changes.ts).
+      if (result.notStarted && context.checkChanges?.length) {
+        await forgetCheckStates(hook.id, context.checkChanges)
+          .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Could not forget the check states of a turn that never started'));
+      }
 
       // Log execution
       await this.logExecution({

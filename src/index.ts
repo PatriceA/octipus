@@ -31,6 +31,7 @@ import { initializeVault } from '@/security/vault';
 import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
 import { runKBSelfCheck } from '@/core/rag/health';
+import { initTracing, shutdownTracing } from '@/core/tracing';
 
 /** How long the boot KB self-check waits on its embedding call. */
 const BOOT_KB_EMBED_TIMEOUT_MS = 20_000;
@@ -50,6 +51,11 @@ async function main() {
   process.env.OCTIPUS_INSIDE_PID ??= String(process.pid);
 
   try {
+    // Tracing before anything that could start a span. Off unless the OTEL_*
+    // variables configure an exporter; a configuration it cannot honour is
+    // logged and leaves it off.
+    await initTracing();
+
     // Initialize vault first — providers resolve API keys through it. If the
     // vault is not initialized yet, getByName throws and providers fall back
     // with a misleading "API key not configured" error.
@@ -668,6 +674,11 @@ async function main() {
       } catch {
         // Module may not have loaded; nothing to close.
       }
+
+      // The spans of the requests and turns that just ended. After the audit
+      // rows and the LISTEN close, and capped (SHUTDOWN_FLUSH_MS) well inside
+      // the 4 s watchdog: a collector that is down must not cost them.
+      await shutdownTracing();
 
       // The engine was asked to stop at the start; it has had the whole shutdown to exit.
       await engineStopped;
