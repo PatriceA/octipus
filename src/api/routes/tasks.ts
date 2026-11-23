@@ -4,8 +4,11 @@ import { Elysia, t } from '@/api/http';
 import { disableRoleHeartbeatHook, ensureRoleHeartbeatHook } from '@/core/heartbeat';
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
+import { myDay, myDayDate } from '@/core/tasks/my-day';
 import { nextActions } from '@/core/tasks/next';
+import { parseQuickAdd, quickAddDueAt } from '@/core/tasks/quick-add';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { normalizeRepeat } from '@/core/tasks/repeat';
 import { listRoleAgents, roleAgentToggleError, setRolePipelineTemplate } from '@/core/tasks/role-agents';
 import { resolveRoleTemplate } from '@/core/tasks/role-pipelines';
 import { ACTIVE_TASK_STATUSES, assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
@@ -111,6 +114,27 @@ function idList(values: string[]): string[] {
   return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
 }
 
+/**
+ * A repeat rule in a body: a preset name ("daily", "weekdays", "weekly",
+ * "monthly", "yearly") or `{ unit, interval?, weekdays? }`; null clears it.
+ * Checked by `normalizeRepeat` (a 400 names what is wrong).
+ */
+const REPEAT = t.Union([
+  t.Null(),
+  t.String({ maxLength: 20 }),
+  t.Object({
+    unit: t.String({ maxLength: 10 }),
+    interval: t.Optional(t.Integer()),
+    weekdays: t.Optional(t.Union([t.Array(t.Integer(), { maxItems: 7 }), t.Null()])),
+  }),
+]);
+
+/** A manual sort position: any finite number. */
+function sortOrderValue(value: number): number {
+  if (!Number.isFinite(value)) throw new Error('sortOrder must be a finite number');
+  return value;
+}
+
 /** Trim a category; empty string → null (uncategorized). */
 function normalizeCategory(value: string | null | undefined): string | null {
   if (value == null) return null;
@@ -198,6 +222,54 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         doneOffset: t.Optional(t.String({ pattern: '^[0-9]+$' })),
         /** With `status`: rows to skip (and `limit` the page size, default 200, at most 500). */
         offset: t.Optional(t.String({ pattern: '^[0-9]+$' })),
+      }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // My Day (core/tasks/my-day.ts): today's picks (active and done) and
+  // suggestions for it, "today" being the user's day (`?tz=` is the
+  // browser's zone). Static path, declared before `/:id`.
+  .get(
+    '/my-day',
+    async ({ user, principal, query, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const day = await myDay(principal, query?.tz);
+      return {
+        timezone: day.timezone,
+        date: day.date,
+        tasks: day.tasks,
+        suggestions: day.suggestions.map((s) => ({ ...s.task, bucket: s.bucket, reason: s.reason })),
+      };
+    },
+    {
+      query: t.Object({ tz: t.Optional(t.String({ maxLength: 64 })) }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // Parse a capture line without creating anything (core/tasks/quick-add.ts),
+  // so a client can show the chips the server would read: the parse, plus the
+  // `dueAt` it would store and the lists `#name` is matched against.
+  .post(
+    '/parse',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const timezone = await resolveUserTimezone(user.id, body.tz);
+      const lists = await contentRepos(principal).tasks.categories();
+      const parsed = parseQuickAdd(body.text, { timezone, lists });
+      return { ...parsed, dueAt: quickAddDueAt(parsed.due, timezone), timezone };
+    },
+    {
+      body: t.Object({
+        text: t.String({ minLength: 1, maxLength: 500 }),
+        tz: t.Optional(t.String({ maxLength: 64 })),
       }),
       detail: { tags: ['tasks'] },
     }
@@ -311,12 +383,27 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       try {
+        // `quick`: a capture line read by the shared parser; any field given
+        // explicitly wins over what the line said.
+        let quick: { title: string; dueAt: string | null; priority: number | null; important: boolean; category: string | null; repeat: unknown } | null = null;
+        if (body.quick !== undefined) {
+          const timezone = await resolveUserTimezone(user.id, body.tz);
+          const parsed = parseQuickAdd(body.quick, { timezone, lists: await contentRepos(principal).tasks.categories() });
+          quick = { ...parsed, dueAt: quickAddDueAt(parsed.due, timezone) };
+        }
+        const title = (body.title ?? quick?.title ?? '').trim();
+        if (!title) throw new Error('title or quick is required');
+        const dueAt = body.dueAt ?? quick?.dueAt ?? null;
         const values: Omit<NewTask, 'userId'> = {
-          title: body.title,
+          title,
           notes: body.notes ?? null,
-          priority: body.priority ?? 0,
-          category: normalizeCategory(body.category),
-          dueAt: body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null,
+          priority: body.priority ?? quick?.priority ?? 0,
+          category: normalizeCategory(body.category ?? quick?.category),
+          important: body.important ?? quick?.important ?? false,
+          repeat: normalizeRepeat(body.repeat !== undefined ? body.repeat : quick?.repeat),
+          ...(body.sortOrder !== undefined ? { sortOrder: sortOrderValue(body.sortOrder) } : {}),
+          myDayOn: body.myDay ? (await myDayDate(user.id, body.tz)).date : null,
+          dueAt: dueAt ? await parseDueAt(dueAt, user.id, body.tz) : null,
           remindAt: body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null,
           estimate: normalizeEstimate(body.estimate),
           parentId: body.parentId || null,
@@ -336,10 +423,20 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     },
     {
       body: t.Object({
-        title: t.String({ minLength: 1, maxLength: 500 }),
+        /** Required unless `quick` gives one. */
+        title: t.Optional(t.String({ minLength: 1, maxLength: 500 })),
+        /** A capture line ("call dentist tomorrow 3pm !high #personal"), parsed on the server; explicit fields win. */
+        quick: t.Optional(t.String({ minLength: 1, maxLength: 500 })),
         notes: t.Optional(t.String({ maxLength: 10_000 })),
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.String({ maxLength: 100 })),
+        /** The star. */
+        important: t.Optional(t.Boolean()),
+        /** Manual position, ascending; default minus the creation time in ms (newest first). */
+        sortOrder: t.Optional(t.Number()),
+        /** Put it in today's My Day (today in `tz`). */
+        myDay: t.Optional(t.Boolean()),
+        repeat: t.Optional(REPEAT),
         dueAt: t.Optional(t.String()),
         /** Follow-up: when the task comes back to the assignee (ISO 8601; a bare date is the start of that day). */
         remindAt: t.Optional(t.String()),
@@ -356,8 +453,10 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
   )
 
   // Update a task (title/notes/status/priority/due/category/estimate/parent/
-  // blockers/assignee; a null assigneeKind or assigneeRef unassigns). Manages
-  // completedAt. A parent or blocker the caller cannot see, a self-link, or a
+  // blockers/assignee, star/sort order/My Day/repeat; a null assigneeKind or
+  // assigneeRef unassigns). Manages completedAt. Completing a repeating to-do
+  // creates its next occurrence once (the response's `repeatNextId` names it);
+  // reopening it takes an untouched next occurrence back (TaskRepo.update). A parent or blocker the caller cannot see, a self-link, or a
   // parent loop is a 400 from the scoped repo. The user is the boss here: a
   // PATCH goes through even while an agent holds the checkout, and moving the
   // task to open, done or archived ends that checkout (the tasks tool, by
@@ -387,6 +486,10 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           status: body.status,
           priority: body.priority,
           category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
+          important: body.important,
+          sortOrder: body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined,
+          myDayOn: body.myDay !== undefined ? (body.myDay ? (await myDayDate(user.id, body.tz)).date : null) : undefined,
+          repeat: body.repeat !== undefined ? normalizeRepeat(body.repeat) : undefined,
           dueAt: body.dueAt !== undefined ? (body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null) : undefined,
           remindAt: body.remindAt !== undefined ? (body.remindAt ? await parseTaskDate(body.remindAt, 'remindAt', user.id, body.tz) : null) : undefined,
           estimate: body.estimate !== undefined ? normalizeEstimate(body.estimate) : undefined,
@@ -421,6 +524,12 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         status: t.Optional(t.String()),
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Null()])),
+        important: t.Optional(t.Boolean()),
+        sortOrder: t.Optional(t.Number()),
+        /** true puts it in today's My Day (today in `tz`); false or null takes it out. */
+        myDay: t.Optional(t.Union([t.Boolean(), t.Null()])),
+        /** null stops the repeat. */
+        repeat: t.Optional(REPEAT),
         dueAt: t.Optional(t.Union([t.String(), t.Null()])),
         remindAt: t.Optional(t.Union([t.String(), t.Null()])),
         estimate: t.Optional(t.Union([t.String({ maxLength: 40 }), t.Null()])),

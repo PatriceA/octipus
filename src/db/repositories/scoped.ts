@@ -32,13 +32,18 @@ import { visibleMessages } from './message-visibility';
  *      can't bypass it by accident.
  */
 
-import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
+import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, isNull, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
+import { publishPersonalTaskChanged } from '@/core/tasks/live';
+import { nextOccurrence, normalizeRepeat, type TaskRepeat } from '@/core/tasks/repeat';
+import { resolveUserTimezone } from '@/core/tasks/timezone';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { type GuestScope, type SpaceAction, SpaceError } from '@/security/space-access';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
+import { randomUUID } from 'node:crypto';
+import { dbLogger } from '@/utils/logger';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
@@ -1223,6 +1228,8 @@ export interface TaskListFilter {
   /** Restrict to an assignee kind ('user' | 'role' | 'node'); with `assigneeRef`, to one assignee. */
   assigneeKind?: string;
   assigneeRef?: string;
+  /** Only tasks put in My Day on this calendar day (`YYYY-MM-DD`, the user's zone). */
+  myDayOn?: string;
   limit?: number;
   /** Rows to skip, for paging through one status set (e.g. the finished ones). */
   offset?: number;
@@ -1342,6 +1349,7 @@ export class TaskRepo {
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
+    if (filter.myDayOn) filters.push(eq(tasks.myDayOn, filter.myDayOn));
     if (filter.category !== undefined) {
       const c = filter.category.trim();
       // '' / 'none' selects the uncategorized bucket; otherwise exact match.
@@ -1379,6 +1387,19 @@ export class TaskRepo {
   async countOwn(filter: Omit<TaskListFilter, 'limit' | 'offset'> = {}): Promise<number> {
     const [row] = await this.db.select({ n: count() }).from(tasks).where(and(...this.listFilters(filter)));
     return Number(row?.n ?? 0);
+  }
+
+  /**
+   * The user's lists: every distinct category on the scope's tasks that are
+   * not archived, alphabetical. What `#list` in a quick capture is matched to.
+   */
+  async categories(): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ category: tasks.category })
+      .from(tasks)
+      .where(and(...this.rows(tasks), sql`${tasks.category} IS NOT NULL`, ne(tasks.status, 'archived')))
+      .limit(1000);
+    return rows.map((r) => r.category as string).sort((a, b) => a.localeCompare(b));
   }
 
   /**
@@ -1490,18 +1511,25 @@ export class TaskRepo {
   }
 
   /**
-   * A space task changed (§9.3): the board's subscribers hear of it, and a
-   * new assignee is notified. Nothing for personal tasks.
+   * A task changed. In a space (§9.3) the board's subscribers hear of it,
+   * and a new assignee is notified; a personal task's owner hears
+   * `tasks.changed` on their own connections (core/tasks/live.ts).
    */
   private afterWrite(task: Task, previous: Task | null): void {
-    if (this.taskScope.kind !== 'space') return;
+    if (this.taskScope.kind !== 'space') {
+      publishPersonalTaskChanged(task.userId, task.id);
+      return;
+    }
     afterSpaceTaskWrite(this.taskScope.spaceId as string, task, this.taskScope.stamp().userId, previous);
   }
 
   /** The event alone, for a write that cannot change the assignee (claim, comment, delete). */
-  private changed(taskId: string, deleted?: Pick<Task, 'sourceRef'>): void {
-    if (this.taskScope.kind !== 'space') return;
-    publishTaskChanged(this.taskScope.spaceId as string, taskId, deleted);
+  private changed(task: Pick<Task, 'id' | 'userId' | 'sourceRef'>, deleted = false): void {
+    if (this.taskScope.kind !== 'space') {
+      publishPersonalTaskChanged(task.userId, task.id);
+      return;
+    }
+    publishTaskChanged(this.taskScope.spaceId as string, task.id, deleted ? { sourceRef: task.sourceRef } : undefined);
   }
 
   /**
@@ -1556,14 +1584,125 @@ export class TaskRepo {
   async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     this.taskScope.can('write');
+    // Going back to an active status may take back a repeat's next occurrence.
+    const reopening = patch.status !== undefined && isActiveStatus(patch.status);
     // In a space the row before the write tells whether the assignee changed.
-    const previous = this.taskScope.kind === 'space' ? await this.findById(id) : null;
-    const row = await this.updateRow(id, patch, opts);
-    if (row) this.afterWrite(row, previous);
+    const previous = this.taskScope.kind === 'space' || reopening ? await this.findById(id) : null;
+    const result = await this.updateRow(id, patch, opts);
+    if (!result) return null;
+    let row = result.row;
+    if (result.closedFromActive && row.status === 'done' && row.repeat && !row.repeatNextId) {
+      row = await this.spawnNextOccurrence(row);
+    } else if (reopening && previous && previous.status === 'done' && previous.repeatNextId) {
+      row = await this.retractNextOccurrence(row, previous.repeatNextId);
+    }
+    this.afterWrite(row, previous);
     return row;
   }
 
-  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<Task | null> {
+  /**
+   * Completing a repeating to-do creates its next occurrence (core/tasks/repeat.ts):
+   * same title, notes, list, priority, star, assignee and rule, its steps
+   * copied open, due one step on (from the due date, in the owner's zone), a
+   * follow-up shifted by the same amount; not in My Day. Exactly once per
+   * completion: `update` calls this only for a real active → done transition,
+   * and the next id is claimed on the completed row (`repeat_next_id IS NULL`)
+   * in the same transaction as the insert, so two racing completions, a retry
+   * or done → done never make a second one. Returns the completed row with
+   * `repeatNextId` set.
+   */
+  private async spawnNextOccurrence(done: Task): Promise<Task> {
+    let rule: TaskRepeat | null;
+    try {
+      rule = normalizeRepeat(done.repeat);
+    } catch (err) {
+      // Only raw SQL could store a bad rule; the to-do stays done, without a next one.
+      dbLogger.error({ err, taskId: done.id }, 'Repeating to-do has an invalid rule; no next occurrence');
+      return done;
+    }
+    if (!rule) return done;
+    const tz = await resolveUserTimezone(done.userId);
+    const now = new Date();
+    const dueAt = nextOccurrence(rule, done.dueAt, now, tz);
+    const remindAt = !done.remindAt
+      ? null
+      : done.dueAt
+        ? new Date(done.remindAt.getTime() + (dueAt.getTime() - done.dueAt.getTime()))
+        : nextOccurrence(rule, done.remindAt, now, tz);
+    const nextId = randomUUID();
+    const created = await this.db.transaction(async (tx) => {
+      const [claimed] = await tx
+        .update(tasks)
+        .set({ repeatNextId: nextId })
+        .where(and(eq(tasks.id, done.id), isNull(tasks.repeatNextId)))
+        .returning();
+      if (!claimed) return null;
+      const [next] = await tx.insert(tasks).values({
+        id: nextId,
+        userId: done.userId,
+        workspaceId: done.workspaceId,
+        title: done.title,
+        notes: done.notes,
+        priority: done.priority,
+        category: done.category,
+        important: done.important,
+        repeat: rule,
+        sortOrder: done.sortOrder,
+        dueAt,
+        remindAt,
+        estimate: done.estimate,
+        parentId: done.parentId,
+        assigneeKind: done.assigneeKind,
+        assigneeRef: done.assigneeRef,
+        source: done.source,
+        sourceRef: done.sourceRef,
+      }).returning();
+      const steps = await tx.select().from(tasks).where(and(eq(tasks.parentId, done.id), ...this.scope()));
+      if (steps.length > 0) {
+        await tx.insert(tasks).values(steps.map((step) => ({
+          userId: step.userId,
+          workspaceId: step.workspaceId,
+          title: step.title,
+          parentId: nextId,
+          sortOrder: step.sortOrder,
+          source: step.source,
+        })));
+      }
+      return { claimed, next };
+    });
+    if (!created) return (await this.findById(done.id)) ?? done;
+    this.afterWrite(created.next, null);
+    return created.claimed;
+  }
+
+  /**
+   * A completed repeating to-do went back to open (an Undo, a mis-click):
+   * its next occurrence goes away again if nobody has touched it yet (still
+   * open, never edited — `updated_at = created_at`), with its copied steps,
+   * and the link clears so completing it again makes a fresh one. An
+   * occurrence already edited, ticked or moved stays, and so does the link:
+   * completing again then makes no second one.
+   */
+  private async retractNextOccurrence(row: Task, nextId: string): Promise<Task> {
+    const untouched = sql`${tasks.updatedAt} = ${tasks.createdAt}`;
+    const gone = await this.db.transaction(async (tx) => {
+      const [next] = await tx.select().from(tasks)
+        .where(and(eq(tasks.id, nextId), inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), untouched, ...this.scope()))
+        .for('update');
+      if (!next) return null;
+      const steps = await tx.select({ id: tasks.id, untouched: sql<boolean>`${untouched}` }).from(tasks).where(eq(tasks.parentId, nextId));
+      if (steps.some((step) => !step.untouched)) return null;
+      if (steps.length > 0) await tx.delete(tasks).where(eq(tasks.parentId, nextId));
+      await tx.delete(tasks).where(eq(tasks.id, nextId));
+      await tx.update(tasks).set({ repeatNextId: null }).where(and(eq(tasks.id, row.id), eq(tasks.repeatNextId, nextId)));
+      return next;
+    });
+    if (!gone) return row;
+    this.changed(gone, true);
+    return { ...row, repeatNextId: null };
+  }
+
+  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<{ row: Task; closedFromActive: boolean } | null> {
     // Neither the author nor the workspace changes on an edit.
     const { userId: _drop, workspaceId: _ws, ...safe } = patch;
     void _drop;
@@ -1599,19 +1738,19 @@ export class TaskRepo {
     };
     if (!(isTaskStatus(safe.status) && !isActiveStatus(safe.status))) {
       const result = await this.db.update(tasks).set(values).where(where()).returning();
-      return result[0] ?? null;
+      return result[0] ? { row: result[0], closedFromActive: false } : null;
     }
     const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
     const [won] = await this.db.update(tasks).set(values).where(where(active)).returning(withPrevious);
-    if (won) return this.closedBy(won);
+    if (won) return { row: this.closedBy(won), closedFromActive: true };
     const [stillClosed] = await this.db
       .update(tasks)
       .set(values)
       .where(where(notInArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
       .returning();
-    if (stillClosed) return stillClosed;
+    if (stillClosed) return { row: stillClosed, closedFromActive: false };
     const [last] = await this.db.update(tasks).set(values).where(where()).returning(withPrevious);
-    return last ? this.closedBy(last) : null;
+    return last ? { row: this.closedBy(last), closedFromActive: isActiveStatus(last.previousStatus) } : null;
   }
 
   /**
@@ -1687,7 +1826,7 @@ export class TaskRepo {
       ))
       .returning();
     if (claimed) {
-      this.changed(claimed.id);
+      this.changed(claimed);
       return { ok: true, task: claimed };
     }
     const current = await this.findById(id);
@@ -1719,7 +1858,7 @@ export class TaskRepo {
       .where(this.scopeWhere(id, sql`${tasks.checkedOutBy} IS NOT NULL`, ...holderCheck))
       .returning();
     if (released) {
-      this.changed(released.id);
+      this.changed(released);
       return { ok: true, task: released };
     }
     const current = await this.findById(id);
@@ -1742,7 +1881,7 @@ export class TaskRepo {
       .insert(taskComments)
       .values({ ...comment, taskId: task.id, userId })
       .returning();
-    this.changed(task.id);
+    this.changed(task);
     return row;
   }
 
@@ -1852,7 +1991,7 @@ export class TaskRepo {
     if (gone) {
       this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
       // The row is gone: guests are matched on the deleted row's source.
-      this.changed(gone.id, { sourceRef: gone.sourceRef });
+      this.changed(gone, true);
     }
     return result.length > 0;
   }

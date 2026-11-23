@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-777 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+779 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -729,6 +729,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/release` | `src/api/routes/tasks.ts` |
+| GET | `/api/tasks/my-day` | `src/api/routes/tasks.ts` |
+| POST | `/api/tasks/parse` | `src/api/routes/tasks.ts` |
 | GET | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | PUT | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | GET | `/api/tools` | `src/api/routes/tools.ts` |
@@ -814,7 +816,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 30 |
-| `api` | `core` | 262 |
+| `api` | `core` | 265 |
 | `api` | `db` | 155 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -853,29 +855,29 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 78 |
-| `core` | `db` | 563 |
+| `core` | `db` | 565 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 252 |
+| `core` | `security` | 253 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 92 |
 | `core` | `skills` | 20 |
 | `core` | `tools` | 37 |
-| `core` | `utils` | 268 |
+| `core` | `utils` | 269 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
-| `db` | `core` | 22 |
+| `db` | `core` | 25 |
 | `db` | `models` | 1 |
 | `db` | `plugins` | 1 |
 | `db` | `security` | 27 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 10 |
-| `db` | `utils` | 20 |
+| `db` | `utils` | 21 |
 | `eval` | `config` | 4 |
 | `eval` | `core` | 7 |
 | `eval` | `db` | 31 |
@@ -956,7 +958,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 159 |
+| `tools` | `core` | 161 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -1087,6 +1089,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_completed` |
 | `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_spawned` |
 | `task.changed` | yes | — | `*` |
+| `tasks.changed` | yes | `src/core/tasks/live.ts` | `*` |
 | `team.completed` | yes | — | `*` |
 | `team.started` | yes | — | `*` |
 | `test.event` | yes | — | `*` |

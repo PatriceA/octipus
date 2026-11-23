@@ -7,6 +7,18 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **To-dos: star, manual order, My Day, repeat, capture, live updates**
+  ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).
+  Migration `0205` adds `important`, `sortOrder`, `myDayOn`, `repeat` and
+  `repeatNextId` to every task row. Completing a repeating to-do — on the web,
+  through the API or by an agent's tasks tool — creates the next occurrence
+  exactly once; reopening it takes an untouched next occurrence back. My Day is
+  per calendar day in the user's zone and empties itself at midnight;
+  `GET /api/tasks/my-day` returns today's picks and suggestions. A capture
+  line ("call dentist tomorrow 3pm !high #personal") is parsed by one shared
+  function: `POST /api/tasks` with `quick`, `POST /api/tasks/parse` for a
+  preview, and the new `/todo <text>` chat command. Personal to-do writes now
+  send `tasks.changed` to the owner's connections, so lists update at once.
 - **Open to-dos no longer disappear behind finished ones**
   ([API](docs/API.md#tasks)). `GET /api/tasks` sorted by the status text
   (`archived`, `done`, `in_progress`, `open`) and stopped at 200 rows, so after

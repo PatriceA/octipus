@@ -177,6 +177,8 @@ const SPACE_ACTING = [
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
+  // My Day and the capture preview read through `contentRepos` too (the space's tasks and lists in a space).
+  'GET /api/tasks/my-day', 'POST /api/tasks/parse',
   // Cases and contacts (docs/CASES.md): `contentRepos`, by the member's role.
   'GET /api/cases', 'GET /api/cases/linked', 'POST /api/cases', 'GET /api/cases/:id', 'PATCH /api/cases/:id', 'DELETE /api/cases/:id',
   'POST /api/cases/:id/links', 'DELETE /api/cases/:id/links/:linkId', 'POST /api/cases/:id/follow-ups',

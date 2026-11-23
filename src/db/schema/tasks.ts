@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { TaskRepeat } from '@/core/tasks/repeat';
 import { users } from './users';
 import { workspaces } from './organizations';
 
@@ -67,6 +68,22 @@ export const tasks = pgTable('tasks', {
   remindAt: timestamp('remind_at', { withTimezone: true }),
   remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  /**
+   * The personal layer (to-do redesign, migration 0205). `important` is the
+   * star. `sortOrder` is the manual order within a list, ascending; a new row
+   * gets minus its creation time in ms, so the newest comes first until the
+   * user drags, and a drag writes a value between its neighbours. `myDayOn`
+   * is the calendar day (in the user's zone) the to-do was put in My Day; it
+   * is in My Day only while that day is today, so the list empties itself at
+   * midnight without a job. `repeat` is the rule of core/tasks/repeat.ts;
+   * completing a repeating to-do creates the next occurrence and records it
+   * in `repeatNextId`, which is what makes that happen once (TaskRepo.update).
+   */
+  important: boolean('important').default(false).notNull(),
+  sortOrder: doublePrecision('sort_order').default(sql`(-(extract(epoch from now()) * 1000))`).notNull(),
+  myDayOn: date('my_day_on', { mode: 'string' }),
+  repeat: jsonb('repeat').$type<TaskRepeat>(),
+  repeatNextId: uuid('repeat_next_id'),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. 'reader' and 'research' are kept for existing tasks (the core reader and research module are removed; their example plugins write 'agent' or no task). */
   source: text('source').default('user').notNull(),
   /** Optional link back to the origin (sessionId, url, messageId, …). */

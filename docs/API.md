@@ -300,8 +300,10 @@ tools, and which runs through the plugin host API scopes `agent:run` and
 |--------|----------|-------------|
 | GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?assigneeKind=`/`?assigneeRef=`, `?view=next` for next-action order with a `bucket` and `reason` each). Without `status`: every active task, then a page of done ones (see below) |
 | GET | `/api/tasks/:id` | Get one task |
-| POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional) |
-| PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links |
+| POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional; the to-do fields below; `quick` instead of `title` for a capture line) |
+| PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links; the to-do fields below |
+| GET | `/api/tasks/my-day` | Today's My Day (`?tz=`): `{timezone, date, tasks, suggestions}` (see below) |
+| POST | `/api/tasks/parse` | Preview a capture line without creating anything: `{text, tz?}` → the parse (see below) |
 | DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
 | GET | `/api/tasks/role-agents` | The caller's role agents: task counts, on/off, `pipelineTemplate` (the template each task runs through, or null) |
 | PUT | `/api/tasks/role-agents` | Turn a role agent on or off (`{role, enabled}`); with `enabled: true`, `pipelineTemplate` (an id or name) makes it run each task through that pipeline and `null` makes it work tasks itself. A template with a required parameter is refused |
@@ -334,6 +336,74 @@ label.
 A parent or blocker the caller cannot see, a self-link, or a parent loop is a
 `400`. Only an active (open or in-progress) blocker blocks; a done one is
 inert and stays in the array.
+
+### To-do fields (star, order, My Day, repeat, due time, steps)
+
+Every task row carries these (all present on every row; older clients may
+ignore them):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `important` | boolean | The star (the Important list). Default `false` |
+| `sortOrder` | number | Manual order within a list, **ascending**. A new task gets minus its creation time in ms, so the newest is first until the user reorders. To move a task between two neighbours, PATCH the midpoint of their `sortOrder`s; to the top, the first one's minus 1. Any finite number |
+| `myDayOn` | `YYYY-MM-DD` \| null | The day (in the user's zone) it was put in My Day. It **is** in My Day only while that equals today's date in the user's zone, so My Day empties itself at midnight; no write happens |
+| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6]}` (0 = Sunday, `weekdays` only with `"week"`). Presets as written by the server: daily `{day,1}`, weekdays `{week,1,[1,2,3,4,5]}`, weekly `{week,1}`, monthly `{month,1}`, yearly `{year,1}` |
+| `repeatNextId` | uuid \| null | Set on a completed repeating task: the occurrence its completion created |
+| `dueAt` | ISO \| null | As before. **Due time:** a due *day* is stored as the last millisecond of that day in the user's zone (seconds `59`, ms `999`); any other value is a due *time*. Send a bare `YYYY-MM-DD` for a day, a full ISO instant for a time |
+| `remindAt` | ISO \| null | As before: when the reminder fires (notification); a changed value re-arms it |
+| `parentId` | uuid \| null | As before. A to-do's **steps** are its children (`parentId` = the to-do); create one with `POST /api/tasks {title, parentId}` and tick it with `PATCH {status: "done"}` |
+
+Writing them (`POST` and `PATCH /api/tasks`, JSON):
+
+- `important: boolean`
+- `sortOrder: number`
+- `myDay: true` puts it in today's My Day (today in `tz`, else the user's saved
+  zone, else UTC); `myDay: false` (or `null` on PATCH) takes it out. Clients
+  send `myDay`, never `myDayOn`.
+- `repeat`: a preset name (`"daily"`, `"weekdays"`, `"weekly"`, `"monthly"`,
+  `"yearly"`), a rule object as above, or `null` to stop repeating. A bad rule
+  is a `400` naming the problem.
+- `tz`: the client's IANA zone, for `myDay` and for a bare `dueAt` day.
+
+**Completing a repeating to-do** (by `PATCH {status: "done"}`, by an agent's
+`complete_task`/`update_task`, or any other path) creates the next occurrence
+**exactly once**: a new open task with the same title, notes, list, priority,
+star, assignee and rule, its steps copied open, not in My Day, due one step on
+from the old due date at the same local time (repeated until it is today or
+later, so a late daily to-do comes back today), with `remindAt` moved by the
+same amount. No due date counts from today. The completed row's
+`repeatNextId` names it; completing again, or two completions at once, never
+makes a second one. Setting the completed task back to `open` (an Undo) deletes
+the next occurrence again if it is untouched (still open, never edited, steps
+untouched) and clears `repeatNextId`; an occurrence already edited stays.
+
+**Capture.** `POST /api/tasks` with `quick: "call dentist tomorrow 3pm !high
+#personal"` (and `tz`) parses the line on the server and creates "call
+dentist", due tomorrow 15:00 in `tz`, priority 3, list `personal`; any field
+sent explicitly wins (`title` too). `POST /api/tasks/parse {text, tz?}` returns
+the same parse without creating anything — `{title, due: {date, time} | null,
+dueAt, priority, important, category, repeat, tokens: [{kind, text, start, end,
+label}], timezone}` (`kind`: `due` `time` `repeat` `priority` `important`
+`list`; `start`/`end` index the text) — for showing chips. `#name` is matched
+to an existing list ignoring case and `-`/`_`. The grammar (English) is
+documented in `src/core/tasks/quick-add.ts`: today, tonight, tomorrow, weekday
+names, next week/month, in N days, ISO and "dec 5" dates; 3pm, 15:00, at 9,
+noon/morning/evening; daily, weekdays, weekly, every 2 weeks, every monday;
+`!high`/`!!!`, `!medium`/`!!`, `!low`/`!`; `*` or `!important`; `#list`. A line
+that would leave no title is taken literally.
+
+**My Day.** `GET /api/tasks/my-day?tz=Europe/Berlin` →
+`{timezone, date, tasks, suggestions}`: `tasks` are those picked today, active
+and done; `suggestions` are active top-level tasks not picked today, each a
+task row plus `bucket` and `reason` — first those left in My Day on an earlier
+day (`bucket: "earlier"`, reason "in My Day yesterday"), then the next-action
+ranking's pressing ones (`doing`, `overdue`, `today`, `high`, `inbound`,
+`upcoming`), at most 12.
+
+**Live updates.** Every write to one of your personal tasks (yours, an agent's,
+a repeat's) sends the gateway event `tasks.changed` with payload `{taskId}` to
+your connections; refetch on it (debounced) instead of polling. Space tasks
+send `task.changed` to the space's subscribers as before.
 
 ## Recurring Tasks
 
@@ -952,7 +1022,8 @@ Events of note for clients (`event.type`): `chat.response`, `chat.delta`,
 `chat.message` (`injected` steer, `sideChannel` answer, or `proactive` in-app
 delivery to `webchat:<your id>`), `permission.request` / `permission.resolved`,
 `agent.approval_required` / `approval.resolved`, `document.*`,
-`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`. A refused
+`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`,
+`tasks.changed` (one of your personal to-dos changed: `{taskId}`). A refused
 `approval.respond` answers `error` `APPROVAL_NOT_FOUND` (unknown, someone
 else's, or already answered) or `APPROVAL_EXPIRED`.
 

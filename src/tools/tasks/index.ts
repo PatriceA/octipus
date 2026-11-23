@@ -2,7 +2,9 @@ import {taskSourceRef,taskProvenance,observeTaskProvenance} from '@/core/tasks/p
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
+import { myDayDate } from '@/core/tasks/my-day';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { normalizeRepeat, REPEAT_UNITS } from '@/core/tasks/repeat';
 import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
@@ -107,6 +109,9 @@ export class TasksTool extends BaseTool {
         estimate: { type: 'string', description: 'Effort estimate in the user\'s unit, e.g. "S", "M", "L", "XL" or "3h"' },
         parentId: { type: 'string', description: 'Id of the task this is a sub-task of (a phase, an epic)' },
         blockedBy: { type: 'array', description: 'Ids of tasks that must be done before this one can start', items: { type: 'string' } },
+        important: { type: 'boolean', description: 'Star it (the user\'s Important list)' },
+        repeat: REPEAT_PARAM,
+        myDay: { type: 'boolean', description: 'Put it in the user\'s My Day for today' },
         assigneeKind: { type: 'string', description: 'Assign to a user, a role (any agent of it) or a swarm node', enum: [...TASK_ASSIGNEE_KINDS] },
         assigneeRef: { type: 'string', description: 'The user / role / node id the task is assigned to (with assigneeKind)' },
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
@@ -124,6 +129,9 @@ export class TasksTool extends BaseTool {
             estimate: normalizeEstimate(args.estimate),
             parentId: idOrNull(args.parentId),
             blockedBy: idList(args.blockedBy),
+            important: args.important === true,
+            repeat: normalizeRepeat(repeatArg(args.repeat)),
+            myDayOn: args.myDay === true ? (await myDayDate(principal.userId)).date : null,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
@@ -174,7 +182,7 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'update_task',
-      'Update a task\'s title, notes, status, priority, category, due date, estimate, parent, blockers, or assignee. Set status "in_progress" when work on it starts.',
+      'Update a task\'s title, notes, status, priority, category, due date, estimate, parent, blockers, assignee, star, repeat or My Day. Set status "in_progress" when work on it starts. Completing a repeating task (status "done") creates its next occurrence.',
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
         title: { type: 'string', description: 'New title' },
@@ -187,6 +195,9 @@ export class TasksTool extends BaseTool {
         estimate: { type: 'string', description: 'Effort estimate; empty string clears it' },
         parentId: { type: 'string', description: 'Id of the parent task; empty string makes it top-level' },
         blockedBy: { type: 'array', description: 'Ids of tasks that block this one (replaces the list; empty clears it)', items: { type: 'string' } },
+        important: { type: 'boolean', description: 'Star or unstar it' },
+        repeat: { ...REPEAT_PARAM, description: `${REPEAT_PARAM.description}; "none" stops it` },
+        myDay: { type: 'boolean', description: 'true puts it in today\'s My Day, false takes it out' },
         assigneeKind: { type: 'string', description: 'user|role|node; empty string unassigns', enum: [...TASK_ASSIGNEE_KINDS, ''] },
         assigneeRef: { type: 'string', description: 'The user / role / node id (with assigneeKind)' },
       }),
@@ -210,6 +221,9 @@ export class TasksTool extends BaseTool {
             estimate: args.estimate !== undefined ? normalizeEstimate(args.estimate) : undefined,
             parentId: args.parentId !== undefined ? idOrNull(args.parentId) : undefined,
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
+            important: typeof args.important === 'boolean' ? args.important : undefined,
+            repeat: args.repeat !== undefined ? normalizeRepeat(repeatArg(args.repeat)) : undefined,
+            myDayOn: typeof args.myDay === 'boolean' ? (args.myDay ? (await myDayDate(principal.userId)).date : null) : undefined,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
           };
@@ -230,7 +244,7 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'complete_task',
-      'Mark a task as done.',
+      'Mark a task as done. A repeating task gets its next occurrence (returned as `next`).',
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
       }),
@@ -247,7 +261,8 @@ export class TasksTool extends BaseTool {
         if (existing.status !== 'done') {
           await auditAgentTaskMutation(context, task.id, 'complete', changedTaskFields(patch, existing));
         }
-        return { completed: true, task: summarize(task) };
+        const next = task.repeatNextId && task.repeatNextId !== existing.repeatNextId ? await repo.findById(task.repeatNextId) : null;
+        return { completed: true, task: summarize(task), ...(next ? { next: summarize(next) } : {}) };
       },
       { requiresPermission: true, permissionAction: 'write' },
     );
@@ -301,6 +316,25 @@ export class TasksTool extends BaseTool {
       { requiresPermission: true, permissionAction: 'write' },
     );
   }
+}
+
+/** The repeat argument of create_task / update_task. */
+const REPEAT_PARAM = {
+  type: 'string',
+  description: 'Repeat when completed: daily, weekdays, weekly, monthly, yearly, or "every N day|week|month|year"; the next occurrence is created when this one is done',
+};
+
+/**
+ * The repeat argument as `normalizeRepeat` reads it: a preset, "every 2
+ * weeks", or "none" / "" for no repeat.
+ */
+function repeatArg(v: unknown): unknown {
+  if (typeof v !== 'string') return v ?? null;
+  const text = v.trim().toLowerCase();
+  if (text === '' || text === 'none' || text === 'never') return null;
+  const every = /^every\s+(\d{1,3})\s+(day|week|month|year)s?$/.exec(text);
+  if (every && (REPEAT_UNITS as readonly string[]).includes(every[2])) return { unit: every[2], interval: Number(every[1]) };
+  return text;
 }
 
 /**
@@ -413,6 +447,7 @@ interface SummarizableTask {
   remindAt?: Date | null;
   estimate?: string | null; parentId?: string | null; blockedBy?: string[] | null;
   assigneeKind?: string | null; assigneeRef?: string | null; checkedOutBy?: string | null;
+  important?: boolean; repeat?: unknown; myDayOn?: string | null; repeatNextId?: string | null;
 }
 
 function summarize(t: SummarizableTask) {
@@ -433,6 +468,10 @@ function summarize(t: SummarizableTask) {
     assigneeKind: t.assigneeKind ?? null,
     assigneeRef: t.assigneeRef ?? null,
     checkedOutBy: t.checkedOutBy ?? null,
+    important: t.important ?? false,
+    repeat: t.repeat ?? null,
+    myDayOn: t.myDayOn ?? null,
+    repeatNextId: t.repeatNextId ?? null,
   };
 }
 

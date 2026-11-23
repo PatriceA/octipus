@@ -88,7 +88,7 @@ function toMs(v: Date | string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-interface WallClock { year: number; month: number; day: number; hour: number; minute: number; second: number }
+export interface WallClock { year: number; month: number; day: number; hour: number; minute: number; second: number }
 
 /** The wall-clock reading of instant `ms` in `tz`. */
 function wallClockIn(ms: number, tz: string): WallClock {
@@ -116,6 +116,28 @@ function localMidnightIn(year: number, month: number, day: number, tz: string): 
   const naive = Date.UTC(year, month - 1, day);
   const candidate = naive - offsetAt(naive, tz);
   return naive - offsetAt(candidate, tz);
+}
+
+/**
+ * The instant at wall-clock (y, m, d, h, min) in `tz`. Month and day may run
+ * past their range (day 32 is the 1st of the next month), as with Date.UTC.
+ * Two passes for the same reason as `localMidnightIn`.
+ */
+export function localDateTimeIn(year: number, month: number, day: number, hour: number, minute: number, tz: string): Date {
+  const naive = Date.UTC(year, month - 1, day, hour, minute);
+  const candidate = naive - offsetAt(naive, tz);
+  return new Date(naive - offsetAt(candidate, tz));
+}
+
+/** The calendar date (`YYYY-MM-DD`) instant `ms` falls on in `tz`. */
+export function localDateIn(ms: number, tz: string): string {
+  const w = wallClockIn(ms, isValidTimezone(tz) ? tz : 'UTC');
+  return `${w.year}-${String(w.month).padStart(2, '0')}-${String(w.day).padStart(2, '0')}`;
+}
+
+/** The wall-clock reading of `ms` in `tz` (a valid zone, else UTC). */
+export function localWallClock(ms: number, tz: string): WallClock {
+  return wallClockIn(ms, isValidTimezone(tz) ? tz : 'UTC');
 }
 
 /** Start of the calendar day containing `ms` in `tz`, as an epoch. */

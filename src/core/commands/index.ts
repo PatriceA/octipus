@@ -11,6 +11,7 @@ import './plan-mode-command';
 import './eval';
 import './cost';
 import './capture';
+import './todo';
 import './docs';
 import './skills';
 
