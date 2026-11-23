@@ -22,15 +22,22 @@ export function cors(options: CorsOptions): App {
     return options.origin.includes(origin) ? origin : null;
   };
 
+  const allowOrigin = (ctx: any) => {
+    const origin = ctx.request.headers.get('origin') ?? undefined;
+    const allowed = allow(origin);
+    if (allowed) {
+      ctx.set.headers['Access-Control-Allow-Origin'] = allowed;
+      ctx.set.headers.Vary = 'Origin';
+      if (options.credentials) ctx.set.headers['Access-Control-Allow-Credentials'] = 'true';
+    }
+  };
+
   return new App({ name: 'cors' })
+    // Also after: a response refused before the before-hooks run (a
+    // non-canonical path, app.ts) must still be readable by an allowed origin.
+    .onAfterHandle(allowOrigin)
     .onBeforeHandle((ctx: any) => {
-      const origin = ctx.request.headers.get('origin') ?? undefined;
-      const allowed = allow(origin);
-      if (allowed) {
-        ctx.set.headers['Access-Control-Allow-Origin'] = allowed;
-        ctx.set.headers.Vary = 'Origin';
-        if (options.credentials) ctx.set.headers['Access-Control-Allow-Credentials'] = 'true';
-      }
+      allowOrigin(ctx);
       if (ctx.request.method !== 'OPTIONS') return;
       // Preflight: answer here, before the auth guard, which would 401 it.
       ctx.set.headers['Access-Control-Allow-Methods'] = ALLOWED_METHODS;

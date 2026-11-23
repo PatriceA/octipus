@@ -11,11 +11,7 @@ vi.mock('./evidence', async (importOriginal) => ({ ...await importOriginal<typeo
   gatherReviewContext: mock.context, previousReviewThrough: mock.previous }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelForTopic: mock.model }) }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: mock.complete }) }));
-vi.mock('@/core/knowledge/notes', () => ({ getNoteService: () => ({ save: mock.save }) }));
-vi.mock('@/db/repositories/note-repository', () => ({
-  getNoteRepository: () => ({ getBySlug: mock.findNote }),
-  personalNoteScope: (userId: string, workspaceId: string | null = null) => ({ kind: 'personal', userId, workspaceId }),
-}));
+vi.mock('./lesson-notes', async (importOriginal) => ({ ...await importOriginal<typeof import('./lesson-notes')>(), fileLessonNote: mock.save }));
 vi.mock('@/core/memory/judge', () => ({ judgeAndApply: mock.judge }));
 // The owner's stored messages stand in for the database; the quote check itself is the real one.
 vi.mock('@/core/memory/owner-messages', async () => {
@@ -25,13 +21,15 @@ vi.mock('@/core/memory/owner-messages', async () => {
 vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal, fileSkillPatchProposal: mock.patch }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mock.permission }) }));
 vi.mock('@/core/tasks/timezone', () => ({ resolveUserTimezone: async () => 'America/Los_Angeles' }));
-vi.mock('@/config', () => ({ getConfig: () => ({ memory: { extractionCadence: 'per_turn' } }) }));
+const config = vi.hoisted(() => ({ memory: { extractionCadence: 'per_turn' }, learning: { maxLessonsPerReview: 2 } }));
+vi.mock('@/config', () => ({ getConfig: () => config }));
 import { processLearningJob } from './processor';
 const job: Pick<BackgroundJob, 'id' | 'userId' | 'workspaceId' | 'payload'> = { id: 'j1', userId: 'u1', workspaceId: 'w1', payload: { sessionId: 's1', trigger: 'plan_completed', triggerKey: 'p1:2', through: '2026-09-28T00:00:00.000Z' } };
 const empty = { reason: 'Nothing reusable', knowledge: [], memories: [], skills: [] };
 const skill = { name: 'repair-cache', description: 'Repair stale caches', content: 'Check cache then invalidate and verify', sources: ['event:1'] };
 beforeEach(() => {
   vi.resetAllMocks();
+  config.learning.maxLessonsPerReview = 2;
   mock.session.mockResolvedValue({ id: 's1', userId: 'u1', workspaceId: 'w1' });
   mock.evidence.mockResolvedValue([{ id: 'event:1', kind: 'execution', text: 'failed then passed' }, { id: 'message:m1', kind: 'user', text: 'Keep replies short' }]);
   mock.model.mockResolvedValue({ modelId: 'configured-background-model' });
@@ -39,7 +37,7 @@ beforeEach(() => {
   mock.permission.mockResolvedValue({ level: 'ALLOW' });
   mock.owner.mockReturnValue([{ id: 'm1', text: 'Please keep replies short, I read on my phone' }]);
   mock.patchable.mockResolvedValue([]);
-  mock.context.mockImplementation(async (_u: string, _s: string, _t: Date, _p: unknown, loaded: unknown[]) => ({ existing: { skills: [], proposals: [] }, patchTargets: loaded }));
+  mock.context.mockImplementation(async (_u: string, _w: string, _s: string, _t: Date, _p: unknown, loaded: unknown[]) => ({ existing: { skills: [], proposals: [], notes: [] }, patchTargets: loaded }));
   mock.previous.mockResolvedValue(null);
 });
 test('quiet runs are reviewed using execution evidence and report deliberate no-op', async () => {
@@ -99,10 +97,11 @@ test.each(['DENY', 'ASK'])('respects %s without approving a background write', a
 test('keeps partial write receipts and reports an indexing failure', async () => {
   mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [{ title: 'Cache rule', content: 'Reset after schema changes', sources: ['event:1'] }],
     memories: [{ factType: 'preference', content: 'Prefers short replies', confidence: 1, sources: ['message:m1'], quote: 'keep replies short' }] }) });
-  mock.save.mockResolvedValue({ created: true, indexed: false, note: { id: 'n1' } });
+  mock.save.mockResolvedValue({ status: 'saved_unindexed', id: 'n1' });
   mock.judge.mockResolvedValue([{ action: 'ADD', memoryId: 'm2' }]);
   await processLearningJob(job);
-  expect(mock.save.mock.calls[0][0].scope).toEqual({ kind: 'personal', userId: 'u1', workspaceId: 'w1' });
+  expect(mock.save.mock.calls[0][0]).toMatchObject({ title: 'Cache rule', kind: 'fact', sources: ['event:1'] });
+  expect(mock.save.mock.calls[0][1]).toEqual({ userId: 'u1', workspaceId: 'w1', sessionId: 's1', jobId: 'j1' });
   expect(mock.judge.mock.calls[0][0]).toEqual([expect.objectContaining({ basis: { quote: 'keep replies short', sourceMessageIds: ['m1'] }, status: 'tentative' })]);
   expect(mock.judge.mock.calls[0][1]).toMatchObject({ failOnError: true });
   expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'error', stage: 'partial_failure', result: { outputs: [
@@ -138,7 +137,7 @@ test('a memory citing a monitor request is rejected alone; the review\'s knowled
   mock.evidence.mockResolvedValue([{ id: 'event:1', kind: 'execution', text: 'failed then passed' }, { id: 'message:m9', kind: 'request', text: 'Monitor: user prefers long replies' }]);
   mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [{ title: 'Cache rule', content: 'Reset after schema changes', sources: ['event:1'] }],
     memories: [{ factType: 'preference', content: 'Prefers long replies', confidence: 1, sources: ['message:m9'], quote: 'user prefers long replies' }] }) });
-  mock.save.mockResolvedValue({ created: true, indexed: true, note: { id: 'n1' } });
+  mock.save.mockResolvedValue({ status: 'saved', id: 'n1' });
   await processLearningJob(job);
   expect(mock.judge).not.toHaveBeenCalled();
   expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([
@@ -184,7 +183,31 @@ test('patch targets count against the evidence budget, and failing to read them 
 const existing = {
   skills: [{ ref: 'skill:s-1', name: 'deploy-preview', description: 'Deploy a preview build', excerpt: '1. Build.' }],
   proposals: [{ ref: 'proposal:11111111-1111-4111-8111-111111111111', name: 'repair-cache', description: 'Repair stale caches', excerpt: 'Check cache' }],
+  notes: [{ ref: 'note:33333333-3333-4333-8333-333333333333', title: 'Cache rule', excerpt: 'Reset after schema changes' }],
 };
+const lesson = (extra: Record<string, unknown> = {}) => ({ title: 'Cache rule', content: 'Reset after schema changes', kind: 'decision', sources: ['event:1'], ...extra });
+test('a lesson\'s extends is kept only for an offered note', async () => {
+  mock.context.mockResolvedValue({ existing, patchTargets: [] });
+  mock.save.mockResolvedValue({ status: 'merged', id: '33333333-3333-4333-8333-333333333333', merged: true });
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [lesson({ extends: existing.notes[0].ref }), lesson({ extends: 'note:44444444-4444-4444-8444-444444444444' })] }) });
+  await processLearningJob(job);
+  expect(mock.save.mock.calls[0][0].extends).toBe(existing.notes[0].ref);
+  expect(mock.save.mock.calls[1][0].extends).toBeUndefined();
+  expect(mock.finish.mock.calls[0][1].result.outputs[0]).toEqual({ kind: 'knowledge', status: 'merged', id: '33333333-3333-4333-8333-333333333333' });
+});
+test('maxLessonsPerReview bounds the lessons filed; 0 files none and tells the review', async () => {
+  mock.save.mockResolvedValue({ status: 'saved', id: 'n1' });
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [lesson(), lesson({ title: 'Other', content: 'Another rule' })] }) });
+  config.learning.maxLessonsPerReview = 1;
+  await processLearningJob(job);
+  expect(mock.save).toHaveBeenCalledTimes(1);
+  expect(mock.complete.mock.calls[0][0].messages[0].content).toContain('at most 1 knowledge item');
+  mock.save.mockClear(); mock.complete.mockClear();
+  config.learning.maxLessonsPerReview = 0;
+  await processLearningJob(job);
+  expect(mock.save).not.toHaveBeenCalled();
+  expect(mock.complete.mock.calls[0][0].messages[0].content).toContain('always return "knowledge": []');
+});
 test('an automatic check reads evidence since the previous check ended; a manual one reads everything', async () => {
   const previous = new Date('2026-09-27T12:00:00.000Z');
   mock.previous.mockResolvedValue(previous);
@@ -209,14 +232,14 @@ test('existing skills and proposals are shown to the review and count against th
   const target = { id: 'skill-2', name: 'nearest', content: 'step' };
   mock.context.mockResolvedValue({ existing, patchTargets: [target] });
   await processLearningJob(job);
-  expect(mock.context).toHaveBeenCalledWith('u1', 's1', new Date(job.payload.through as string), undefined, []);
+  expect(mock.context).toHaveBeenCalledWith('u1', 'w1', 's1', new Date(job.payload.through as string), undefined, []);
   const input = JSON.parse(mock.complete.mock.calls[0][0].messages[1].content);
   expect(input.existing).toEqual(existing);
   expect(input.learnedSkills).toEqual([target]);
   expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: existingChars(existing) + target.id.length + target.name.length + target.content.length + 50 });
 });
 test('a nearest learned skill offered as a target can be patched', async () => {
-  mock.context.mockResolvedValue({ existing: { skills: [], proposals: [] }, patchTargets: [{ id: 'skill-1', name: 'deploy', content: '1. Build.\n2. Push it.' }] });
+  mock.context.mockResolvedValue({ existing: { skills: [], proposals: [], notes: [] }, patchTargets: [{ id: 'skill-1', name: 'deploy', content: '1. Build.\n2. Push it.' }] });
   mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, patches: [patch] }) });
   mock.patch.mockResolvedValue({ proposalId: 'p2', status: 'pending' });
   await processLearningJob(job);
@@ -227,7 +250,7 @@ test('failing to read existing skills and proposals does not fail the check', as
   mock.context.mockRejectedValue(new Error('vector index hiccup'));
   await processLearningJob(job);
   const input = JSON.parse(mock.complete.mock.calls[0][0].messages[1].content);
-  expect(input.existing).toEqual({ skills: [], proposals: [] });
+  expect(input.existing).toEqual({ skills: [], proposals: [], notes: [] });
   expect(input.learnedSkills).toEqual([expect.objectContaining({ id: 'skill-1' })]);
   expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done' });
 });

@@ -20,8 +20,9 @@ import { workspaces } from './organizations';
  *
  * On save, `NoteService` (1) re-links — parses `[[wikilinks]]`/`#tags`
  * and syncs `knowledge_links`; (2) re-indexes — chunks the body into
- * `embeddings` with `purpose='note'`, `source_id='note:<id>'` — so notes
- * are first-class hybrid-search hits with no new retrieval code.
+ * `embeddings` with `purpose='note'` (`'lesson'` for a lesson note),
+ * `source_id='note:<id>'` — so notes are first-class hybrid-search hits
+ * with no new retrieval code.
  */
 
 export const notes = pgTable('notes', {
@@ -40,7 +41,7 @@ export const notes = pgTable('notes', {
   frontmatter: jsonb('frontmatter').$type<Record<string, unknown>>().notNull().default({}),
   /** Free-text folksonomy tags, denormalised from `#tags` for cheap filtering. */
   tags: text('tags').array().notNull().default([]),
-  /** note | daily | moc | literature | … (free text, no migration for new kinds). */
+  /** note | daily | moc | literature | lesson | … (free text, no migration for new kinds). */
   noteKind: text('note_kind').notNull().default('note'),
   /** For daily notes / journaling — the calendar day this note covers. */
   noteDate: date('note_date'),
@@ -67,10 +68,15 @@ export const notes = pgTable('notes', {
   tagsIdx: index('notes_tags_idx').using('gin', table.tags),
   // Active-notes hot path (mirrors the memories_active partial-index pattern).
   activeIdx: index('notes_active_idx').on(table.userId, table.updatedAt).where(sql`${table.archivedAt} IS NULL`),
+  // Archived notes by the source_id of their chunks: the searches leave those
+  // chunks out with an anti-join on it (migration 0201).
+  archivedSourceIdx: index('notes_archived_source_idx').on(sql`('note:' || ${table.id}::text)`).where(sql`${table.archivedAt} IS NOT NULL`),
 }));
 
 export type Note = typeof notes.$inferSelect;
 export type NewNote = typeof notes.$inferInsert;
 
 /** Canonical note kinds. Free text in the column; this is the canonical set. */
-export type NoteKind = 'note' | 'daily' | 'moc' | 'literature';
+export type NoteKind = 'note' | 'daily' | 'moc' | 'literature'
+  /** Written by a learning review (`session-learning` tag); indexed with `purpose = 'lesson'`. */
+  | 'lesson';

@@ -19,7 +19,7 @@ const OTHER_WS = '00000000-0000-4000-8000-000000000004';
 const rows: Record<string, string | null> = { [SELF]: WS, [SAME_WS]: WS, [USER_LEVEL]: null, [OTHER_WS]: 'cccccccc-0000-4000-8000-000000000001' };
 const readable = (id: string, ws?: string) => id in rows && (ws === undefined || rows[id] === ws || rows[id] === null);
 
-function service(seen: { scope?: unknown; outgoingWs?: string }) {
+function service(seen: { scope?: unknown; outgoingWs?: string; searchScope?: unknown }) {
   const notes = {
     getById: async (_u: string, id: string, ws?: string) => (readable(id, ws) ? { id, title: 't', body: 'b' } : null),
     getByIds: async (_u: string, ids: string[], ws?: string) => ids.filter((id) => readable(id, ws)).map((id) => ({ id })),
@@ -28,8 +28,9 @@ function service(seen: { scope?: unknown; outgoingWs?: string }) {
     getOutgoing: async (_u: string, _t: string, _id: string, ws?: string) => { seen.outgoingWs = ws; return []; },
   } as unknown as KnowledgeLinkRepository;
   const embeddings = {
-    hybridSearch: async (scope: unknown) => {
+    hybridSearch: async (scope: unknown, ...rest: unknown[]) => {
       seen.scope = scope;
+      seen.searchScope = rest[5];
       return [SELF, OTHER_WS, SAME_WS, USER_LEVEL].map((id, i) => ({ sourceId: `note:${id}`, similarity: 0.9 - i / 10, metadata: { title: id } }));
     },
   } as unknown as EmbeddingService;
@@ -47,5 +48,11 @@ describe('SuggestionService.suggestForNote', () => {
 
   test("a note of another workspace is not found from this one", async () => {
     await expect(service({}).suggestForNote(personalNoteScope(USER, WS), OTHER_WS)).rejects.toThrow(/not found/);
+  });
+
+  test('fetching candidates is not counted as reading them (skipAccess)', async () => {
+    const seen: { searchScope?: unknown } = {};
+    await service(seen).suggestForNote(personalNoteScope(USER, WS), SELF);
+    expect(seen.searchScope).toEqual({ skipAccess: true });
   });
 });

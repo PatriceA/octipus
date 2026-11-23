@@ -44,6 +44,14 @@ describe('parseKindConfig', () => {
     expect(parseKindConfig('note', {}).ok).toBe(false);
     expect(parseKindConfig('note', { slug: 'about-me' }).ok).toBe(true);
   });
+
+  test('the default purposes include lessons; a stored list is kept as it is', () => {
+    expect(KIND_CONFIG.recall.parse({}).purposes).toEqual(['note', 'lesson', 'document', 'knowledge_artifact', 'image_description']);
+    // A hook that stored its list before lessons existed keeps it: lessons stay off until ticked.
+    const stored = ['note', 'document', 'knowledge_artifact', 'image_description'];
+    expect(KIND_CONFIG.recall.parse({ purposes: stored }).purposes).toEqual(stored);
+    expect(KIND_CONFIG.recall.parse({ purposes: ['lesson'] }).purposes).toEqual(['lesson']);
+  });
 });
 
 describe('recall defaults fit each other', () => {

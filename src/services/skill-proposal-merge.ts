@@ -178,23 +178,33 @@ export type MergeReply =
   | { kind: 'malformed'; reason: string };
 
 /**
+ * The JSON object of a merge model's reply, or why there is none: cut off at
+ * the output limit (`truncated`), or no parseable object (`malformed`). Shared
+ * by the skill-proposal and lesson-note merges.
+ */
+export function readMergeJson(raw: string, finishReason: string | undefined):
+  | { kind: 'json'; value: unknown } | { kind: 'truncated' } | { kind: 'malformed'; reason: string } {
+  if (finishReason === 'length') return { kind: 'truncated' };
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end <= start) return { kind: 'malformed', reason: 'no JSON object in the response' };
+  try {
+    return { kind: 'json', value: JSON.parse(raw.slice(start, end + 1)) };
+  } catch {
+    // Fixed reason: JSON.parse messages quote the input.
+    return { kind: 'malformed', reason: 'invalid JSON' };
+  }
+}
+
+/**
  * Classify the merge model's reply. `distinct` without `allowDistinct` is read
  * as `unchanged`: the proposals are the same skill by similarity. A `merged`
  * reply is PII-filtered and its content capped.
  */
 export function interpretMergeReply(raw: string, finishReason: string | undefined, allowDistinct: boolean): MergeReply {
-  if (finishReason === 'length') return { kind: 'truncated' };
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start === -1 || end <= start) return { kind: 'malformed', reason: 'no JSON object in the response' };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    // Fixed reason: JSON.parse messages quote the input.
-    return { kind: 'malformed', reason: 'invalid JSON' };
-  }
-  const reply = mergeReplySchema.safeParse(parsed);
+  const json = readMergeJson(raw, finishReason);
+  if (json.kind !== 'json') return json;
+  const reply = mergeReplySchema.safeParse(json.value);
   if (!reply.success) return { kind: 'malformed', reason: 'verdict, description and content are required' };
   if (reply.data.verdict === 'distinct') return allowDistinct ? { kind: 'distinct' } : { kind: 'unchanged' };
   if (reply.data.verdict === 'unchanged') return { kind: 'unchanged' };
@@ -204,31 +214,49 @@ export function interpretMergeReply(raw: string, finishReason: string | undefine
   return { kind: 'merged', description, content };
 }
 
-async function askMergeModel(target: SkillProposalRecord, incoming: MergeIncoming, allowDistinct: boolean): Promise<MergeReply | { kind: 'no_model' } | { kind: 'model_error' }> {
+export type MergeModelCall =
+  | { kind: 'reply'; content: string; finishReason: string | undefined }
+  | { kind: 'no_model' }
+  | { kind: 'model_error' };
+
+/**
+ * One JSON call to the background model with `prompt` (after the
+ * SECURITY_PREAMBLE) and `input`, stamped as install usage. `no_model` when
+ * the topic is unbound; `model_error` (logged with `log`) when the call
+ * throws. Shared by the skill-proposal and lesson-note merges.
+ */
+export async function callMergeModel(prompt: string, input: string, ctx: { userId: string; requestType: string; log: Record<string, unknown>; failure: string }): Promise<MergeModelCall> {
   const model = await getModelRegistry().getModelForTopic('background');
   if (!model) return { kind: 'no_model' };
+  try {
+    // Learning is install work: stamped `install` (coworking spec §9.1).
+    const response = await withInstallUsage(() => getLiteLLMClient().complete({
+      model: model.modelId, modelConfigName: model.name, userId: ctx.userId,
+      requestType: ctx.requestType, temperature: 0,
+      maxTokens: Math.min(model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, model.maxTokens ?? Infinity),
+      responseFormat: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: `${SECURITY_PREAMBLE}\n\n${prompt}`, timestamp: new Date() },
+        { role: 'user', content: input, timestamp: new Date() },
+      ],
+    }));
+    return { kind: 'reply', content: response.content ?? '', finishReason: response.finishReason };
+  } catch (err) {
+    toolLogger.warn({ err, ...ctx.log, model: model.modelId }, ctx.failure);
+    return { kind: 'model_error' };
+  }
+}
+
+async function askMergeModel(target: SkillProposalRecord, incoming: MergeIncoming, allowDistinct: boolean): Promise<MergeReply | { kind: 'no_model' } | { kind: 'model_error' }> {
   const input = JSON.stringify({
     allowDistinct,
     existing: { name: target.name, description: target.description, content: target.draftPromptTemplate },
     incoming: { name: incoming.name, description: incoming.description, content: incoming.content },
   });
-  try {
-    // Learning is install work: stamped `install` (coworking spec §9.1).
-    const response = await withInstallUsage(() => getLiteLLMClient().complete({
-      model: model.modelId, modelConfigName: model.name, userId: target.userId,
-      requestType: 'skill-proposal-merge', temperature: 0,
-      maxTokens: Math.min(model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, model.maxTokens ?? Infinity),
-      responseFormat: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: `${SECURITY_PREAMBLE}\n\n${MERGE_PROMPT}`, timestamp: new Date() },
-        { role: 'user', content: input, timestamp: new Date() },
-      ],
-    }));
-    return interpretMergeReply(response.content ?? '', response.finishReason, allowDistinct);
-  } catch (err) {
-    toolLogger.warn({ err, proposalId: target.id, model: model.modelId }, 'Skill proposal merge: the model call failed');
-    return { kind: 'model_error' };
-  }
+  const call = await callMergeModel(MERGE_PROMPT, input, { userId: target.userId, requestType: 'skill-proposal-merge',
+    log: { proposalId: target.id }, failure: 'Skill proposal merge: the model call failed' });
+  if (call.kind !== 'reply') return call;
+  return interpretMergeReply(call.content, call.finishReason, allowDistinct);
 }
 
 /** The new embedding of a merged text; null (refilled later by ensureProposalEmbeddings) when it cannot be computed. */

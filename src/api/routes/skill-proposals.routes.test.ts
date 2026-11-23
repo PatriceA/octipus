@@ -227,7 +227,7 @@ describe('POST /api/skills/proposals/consolidate', () => {
     const b2 = await seed({ name: 'rotate-credentials', userId: bobId });
 
     const admin = await call(adminId, 'POST', '/consolidate');
-    expect(admin).toMatchObject({ status: 200, body: { merged: 0, expired: 0, promoted: 0, degraded: 0 } });
+    expect(admin).toMatchObject({ status: 200, body: { merged: 0, expired: 0, promoted: 0, degraded: 0, notesMerged: 0, notesArchived: 0 } });
     expect([(await read(a1)).status, (await read(a2)).status]).toEqual(['pending', 'pending']);
 
     const bob = await call(bobId, 'POST', '/consolidate');

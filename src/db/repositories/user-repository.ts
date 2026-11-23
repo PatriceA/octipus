@@ -83,6 +83,15 @@ export class UserRepository {
     return user ?? null;
   }
 
+  /** Turn the post-task distil offer on or off for this user (`preferences.distillNudge`). */
+  async setDistillNudge(id: string, enabled: boolean): Promise<User | null> {
+    const [user] = await this.db.update(users).set({
+      preferences: sql`jsonb_set(COALESCE(${users.preferences}, '{}'::jsonb), '{distillNudge}', ${JSON.stringify(enabled)}::jsonb)`,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id)).returning();
+    return user ?? null;
+  }
+
   /**
    * Every user deletion goes through `assertDeletable`; see security/user-deletion.ts.
    * The user's sessions are reported to `sessionsRemoved` once the user is

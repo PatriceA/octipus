@@ -211,6 +211,42 @@ async function remoteRoomOfSession(ctx: unknown) {
   return remoteRoomOf(ctx);
 }
 
+/**
+ * The requester's learned skills that fit this message, as an index (bodies
+ * via `get_skill`). The root does not run role discovery — its own tools came
+ * later than the worker spawner's skill injection — so a learned skill, which
+ * no assignment puts in front of any role, reaches it here, by the rule
+ * workers apply (`discoverLearnedSkillIds`). Turn tier: it follows the
+ * message. Its heading is not the role index's, which a CLI root still loads
+ * for its assignments (`cliSkillIndex`). '' in a shared space, as personal
+ * notes are not recalled there. Never throws: '' on failure.
+ *
+ * Bounded like the context hooks (`START_DEADLINE_MS` from its start): a slow
+ * embedding provider costs the turn its block, logged, not its start. A user
+ * with no learned skill is answered by one existence query, with no embedding.
+ */
+export async function learnedSkillsBlock(userId: string, message: string, inSpace: boolean): Promise<string> {
+  try {
+    const [{ discoverLearnedSkillIds }, { START_DEADLINE_MS }, { withDeadline }] = await Promise.all([
+      import('@/skills/discovery'), import('@/core/context-hooks/run'), import('@/utils/concurrency')]);
+    return await withDeadline(async () => {
+      const ids = await discoverLearnedSkillIds({ userId, message, inSpace });
+      if (ids.length === 0) return '';
+      const { getSkillRegistry } = await import('@/skills/registry');
+      const index = await getSkillRegistry().buildPromptSummary(ids, userId,
+        'Skills you learned in earlier sessions that may fit this request (load one with `get_skill` before following it):');
+      return index ? `\n\n# Learned Skills\n${index}` : '';
+    }, START_DEADLINE_MS);
+  } catch (err) {
+    if ((err as Error)?.message === 'timeout') {
+      coreLogger.warn({ userId }, 'Learned skills for the root turn were not ready in time (slow embedding provider?) — the turn runs without them');
+      return '';
+    }
+    coreLogger.error({ err, userId }, 'Learned skills for the root turn failed — the turn runs without them');
+    return '';
+  }
+}
+
 /** Per-turn additions to the root agent's own tools. */
 export interface RootRunExtras {
   attachedFiles?: AttachedFileRef[];
@@ -473,6 +509,9 @@ export async function runRootAgent(
   // no meta-tools (no delegation, no memory), no personal tool, no file
   // writer, and no child that could be granted more.
   const remoteRoom = await remoteRoomOfSession(planSessionCtx);
+  // Started here, read when the turn tier is assembled. Not for a room on
+  // another install, or a supervisor or briefing turn, which run on scoped tools.
+  const learnedSkills = remoteRoom || supervisor || isBriefing ? Promise.resolve('') : learnedSkillsBlock(userId, message, !!space);
   if (remoteRoom) {
     const [{ remoteSpaceTools, REMOTE_SPACE_EXTRA_TOOL_IDS, REMOTE_SPACE_EXTRA_TOOL_NAMES, REMOTE_SPACE_TOOL_NAMES }, { getToolRegistry }] = await Promise.all([
       import('@/core/federation/visitor-agent'), import('@/tools/registry'),
@@ -919,6 +958,7 @@ export async function runRootAgent(
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
   for (const part of volatileParts) prompt.add('turn', 'turn-context', part);
+  prompt.add('turn', 'learned-skills', await learnedSkills);
   prompt.add('turn', 'dropped-tool-groups', droppedGroupsNote);
   systemPrompt = prompt.build();
 

@@ -13,6 +13,8 @@ export interface UserProfile {
   channelBindings?: ChannelBinding[];
   preferences?: {
     autoApproveRecovery?: boolean;
+    /** The offer to distil a finished task into a skill; unset = on. */
+    distillNudge?: boolean;
     theme?: string;
     language?: string;
     notifications?: boolean;

@@ -25,8 +25,8 @@ Every user starts with two built-in hooks, both on:
 
 | Hook | Kind | Runs before | What it injects |
 |---|---|---|---|
-| Knowledge recall | `recall` | each message, each agent started on a task | The passages of the user's knowledge base and notes that qualify for the message (or the specialist's brief): at most 4, one per source, within 1200 tokens. Nothing when no passage qualifies. |
-| Notes index | `notes_index` | each message | The number of notes, the titles of the pinned ones, then the most recently changed (15 titles, 150 tokens). Tells the agent what there is to look up. |
+| Knowledge recall | `recall` | each message, each agent started on a task | The passages of the user's knowledge base, notes and lessons that qualify for the message (or the specialist's brief): at most 4, one per source, within 1200 tokens. Nothing when no passage qualifies. |
+| Notes index | `notes_index` | each message | The number of the user's own notes, the titles of the pinned ones, then the most recently changed (15 titles, 150 tokens). Lessons (notes a learning review wrote) are neither listed nor counted. Tells the agent what there is to look up. |
 
 A user can add hooks of their own on the **Recall** page (`/recall`):
 
@@ -172,8 +172,10 @@ over 1000 characters. A chunk is then shown whole and keeps the same bytes
 whichever question found it. A longer chunk (indexed before long paragraphs
 were split, until it is reindexed) shows the window that holds the most
 words of the query, not its first characters. A cut is marked with "…". The
-label line gives the kind (note or document), the title, the section and the
-age of a passage over a month old; never a score or a position, so the same
+label line gives the kind, the title, the section and the age of a passage
+over a month old. The kind is `Note` for the user's own notes, `Lesson` for a
+lesson note a learning review wrote ([SESSION-LEARNING.md](SESSION-LEARNING.md#lesson-notes)),
+and `Document` for everything else; never a score or a position, so the same
 passage keeps the same bytes from turn to turn.
 
 ## A passage is not sent twice
@@ -206,7 +208,9 @@ was sent or left out as still in view (see [Measurement](#measurement)).
 ## Side effects only for what is shown
 
 Showing a passage raises the session's protection level to the passage's
-document's level and counts an access on the passage. Both happen only for a
+document's level and counts an access on the passage (`last_accessed_at`
+and `access_count`; for a lesson note this is what "shown to an agent" means
+for its expiry). Both happen only for a
 block that is actually shown: after the deadline and the shared budget, and
 before the agent starts (the session must hold the level of what it was given
 before it can pass it on). A block dropped for the budget, or a hook that
@@ -252,8 +256,19 @@ saved when ticked.
 | `limit` | 4 | Most passages (one per source). |
 | `excerptChars` | 1000 | Characters per passage: the largest chunk the indexers write, so a chunk is shown whole. |
 | `tokenBudget` | 1200 | Most tokens for the block: the default four passages of 1000 characters of prose fit, with their labels; with the notes index (150) and a context note (600) it stays within `contextHooks.maxTokens` (2000). |
-| `purposes` | note, document, knowledge_artifact, image_description | Which knowledge-base rows count. |
+| `purposes` | note, lesson, document, knowledge_artifact, image_description | Which knowledge-base rows count (below). |
 | `includeProductDocs` | false | Octipus's own manual. Agents are already told to search it for setup questions. |
+
+The `purposes` checkboxes on the Recall page are **notes** (the user's own
+notes), **lessons** (notes written by learning reviews of the user's sessions:
+decisions, constraints and facts; the checkbox's tooltip says so),
+**documents**, **saved knowledge** and **image descriptions**. A hook with no
+stored list uses the default, all five. A hook that stored its own list before
+lessons were a purpose of their own had `lesson` added by migration 0202 when
+its list held `note`, because the learning notes it recalled were moved from
+`note` to `lesson`; a stored list without `note` did not get it, and searches
+lessons only once **lessons** is ticked. The migration runs once: unticking
+**lessons** afterwards stays unticked.
 
 ## What the agent is told
 
@@ -276,7 +291,14 @@ or their company is still to be searched.
   guest's folders only), plus product docs when switched on. Repository
   artefacts are left out.
 - The notes index and context notes read personal notes only (the turn's
-  workspace and user-level notes), and never run in a space.
+  workspace and user-level notes), and never run in a space. The notes index
+  lists and counts only notes whose `note_kind` is not `lesson`: lessons reach
+  an agent through recall, and listed there they would crowd out the user's
+  own notes, which they can outnumber.
+- An archived note or lesson is never recalled: every knowledge search leaves
+  out a chunk whose source is an archived note, in SQL, before its limit
+  ([RAG.md](RAG.md#archived-notes)). So is the Recall page's check for whether
+  the user has any row of a purpose.
 - No hook runs where other people read the reply (a group-channel thread, a
   room), or in a session whose text may not be copied anywhere (asking your
   agent in a space on another install).

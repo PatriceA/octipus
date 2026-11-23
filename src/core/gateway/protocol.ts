@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CHAT_INLINE_ATTACHMENT_MAX_CHARS, CHAT_MESSAGE_MAX_CHARS } from '../../shared/chat-gateway';
+import { DISTILL_NUDGE_RENDER } from '../../shared/distill-nudge';
 import { INLINE_UI_ERROR_CLASSES, INLINE_UI_OUTCOMES } from '../../shared/inline-ui/bridge';
 import { INLINE_UI_LIMITS } from '../../shared/inline-ui/limits';
 
@@ -176,6 +177,11 @@ export type GatewayEventType =
   // feedback): payload `{ revision }`, envelope `sessionId`. Clients refresh
   // their plan summary on it instead of polling (`saveWorkPlan`).
   | 'session.plan_updated'
+  // A finished turn's answer now carries the offer to distil it into a skill
+  // (docs/SESSION-LEARNING.md): payload `{ messageId }`, envelope `sessionId`.
+  // Published after the answer, once the run's records were read; the web
+  // chat reads the offer on it (`GET /api/sessions/:id/distill-nudge`).
+  | 'session.skill_nudge'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'
@@ -386,9 +392,11 @@ export const ChatSendSchema = z.object({
   /**
    * What this client can render beyond text. `inline_ui`: interactive answers
    * (docs/plans/inline-ui-spec.md D14) — the root agent is told it can write
-   * them only when the client says so.
+   * them only when the client says so. `skill_nudge`: the offer to distil a
+   * finished run into a skill (docs/SESSION-LEARNING.md) — made only to a
+   * client that can show it.
    */
-  renders: z.array(z.enum(['inline_ui'])).max(4).optional(),
+  renders: z.array(z.enum(['inline_ui', DISTILL_NUDGE_RENDER])).max(4).optional(),
   /** Interactive answers: what happened to them in this client since the last message (G3), and where this message came from. */
   inlineUi: InlineUiSendSchema.optional(),
   /** What to do when a turn is running (`SEND_MODES`); `auto` when omitted. */

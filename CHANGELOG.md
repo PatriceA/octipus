@@ -7,6 +7,171 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Offer to distil a finished task into a skill** (A1-M3,
+  [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
+  complex, successful turn the web chat offers, once and above the composer,
+  to distil it into a skill proposal: **Distil into a skill**, **Not now**,
+  **Don't ask again**. It is decided after the answer is delivered, from
+  what the run recorded, without a model call: a person asked (no hook,
+  cron, heartbeat, monitor, webhook, voice, room or space turn), it answered
+  without a refusal and its checks passed, it used at least 3 different
+  tools and either 8 tool calls or a delegation, no skill was used, and no
+  open or suppressed proposal came from the session. At most one offer per
+  user per 24 hours; the new gateway event `session.skill_nudge` announces
+  one. Accepting dispatches `distill_skill` through the tool middleware
+  (`tool:before` hooks, the permission check, the `permission_granted`
+  audit row; the click answers only a plain ASK) on the run's own messages
+  and tools, bounded to 30 messages and 40,000 characters, and files a
+  pending proposal, still approved on Skills → Proposals; nothing is
+  distilled otherwise. A cut-off reply, or three failed attempts, closes the
+  offer. Each decision is stored on the answer. Operators:
+  `learning.distillNudge` (on), `learning.distillNudgeMinToolCalls` (8),
+  `learning.distillNudgeMinDistinctTools` (3),
+  `learning.distillNudgeCooldownHours` (24). Users: Settings → Profile, or
+  `PUT /api/auth/distill-nudge`. New routes
+  `GET /api/sessions/:id/distill-nudge` and
+  `POST /api/sessions/:id/distill-nudge/:messageId`; `chat.send` `renders`
+  accepts `skill_nudge`. Other clients and channels get no offer. No
+  migration: the offer lives in `messages.metadata`, the opt-out in
+  `users.preferences`, the cool-down in `kv_store`.
+- **Live artifacts (BETA): hosting hardening, scoped viewer tokens, retention, slug conflicts**
+  ([docs](docs/ARTIFACTS.md#sandboxing), [hosting](docs/CONFIGURATION.md#artifacts-hosting)).
+  - With `ARTIFACTS_HOST` set, the artifact host serves only the hosted pages
+    and the SDK (`GET`/`HEAD`): `/api`, `/v1`, sign-in and the
+    `/__artifacts__` mount answer 404 there, credentials sent to it are
+    ignored, no response from it sets a cookie, and of its WebSocket
+    endpoints only the gateway upgrades, admitting artifact viewer tokens
+    only (voice, browser-bridge and federation sockets are refused there). The root `/a/<slug>` pages are no longer
+    served on the app's own host in that mode. **Operators:** the reverse
+    proxy must pass the original `Host` header (matched exactly), and
+    `ARTIFACTS_HOST` is honoured only with `PUBLIC_URL` set to a different
+    host (otherwise it is ignored with an error and the `/__artifacts__`
+    fallback serves). Settings refuses to save the app's own address as the
+    artifact host.
+  - The outer page gets a no-script CSP and `Cross-Origin-Opener-Policy`;
+    embeds, exports and data reads send no referrer and are not cached;
+    exports are inert (`sandbox` CSP) if opened.
+  - **Behaviour change:** the outer page (`/a/<slug>`) can now be framed only
+    by the app itself and the artifact's `allowedEmbedOrigins` (before, it
+    sent no framing policy). A site that frames the outer page rather than
+    `/embed` must be added to the artifact's allowed embed origins.
+  - **Behaviour change for API clients (all routes, not only artifacts):** a
+    request whose *path* percent-encodes an unreserved character (a letter,
+    digit, `-`, `.`, `_` or `~`, e.g. `%61` for `a` or `%7E` for `~`), or
+    holds a malformed `%` escape, is refused with `400`
+    `{"code": "non_canonical_path"}` (with the usual CORS and security
+    headers). Clients must send unreserved characters unencoded, as
+    `encodeURIComponent` does. Other escapes (`%20`, `%2F`, …) and query
+    strings are unaffected. This keeps request checks and routing on the same
+    path.
+  - Fixed: response headers are keyed case-insensitively, and a header a
+    handler set (on `set.headers` or on a `Response` it returns) is never
+    replaced or duplicated by a default; an embed always carries only its own
+    sandboxing policy.
+  - The debug request log no longer records share-link, viewer-token or
+    OAuth-code query values, nor the token segment of public media, invite
+    and form links; the bundled web server's error log omits the query and
+    those tokens too.
+  - Fixed: templates are sanitized again after `{{…}}` expansion, and the
+    built artifact script is no longer served as a separate file
+    (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).
+  - Template values (`{{…}}`) are encoded so that they are always plain text
+    or a single attribute value: besides `& < > " '` they encode whitespace,
+    `/`, `=`, backtick and braces as character references, which the browser
+    decodes back to the same text. Data can no longer add attributes, be
+    altered by the sanitizer, or be expanded as a template; widget output is
+    inserted after the template pass. An event-handler attribute right after a
+    closing quote is stripped too.
+  - Fixed: `allowedEmbedOrigins` was spliced into the embed CSP unchecked, so
+    an entry could add a `sandbox … allow-same-origin` directive. It now takes
+    web origins only (400 otherwise).
+  - Fixed: live refresh in embeds never loaded new data — the SDK read a
+    session-only `/api` route the sandboxed page cannot authenticate to. It
+    reads the embed's own `…/data/<source>` route with its viewer token,
+    which is read-only, for one artifact, expires after 5 minutes, and is
+    refused once the artifact is deleted, its visibility changes, or the
+    share link it came from is revoked. No `/api` route accepts it.
+  - Fixed: the embed CSP kept pinning the SDK hash stored by an earlier
+    release, so after an SDK change browsers refused the new client.
+  - **Retention:** `artifacts.retentionDays` (`ARTIFACTS_RETENTION_DAYS`)
+    moves artifacts with no edit, no view and no data refresh for that many
+    days to the trash (views are recorded in a new `last_viewed_at` column,
+    migration `0204`, at most hourly per artifact); `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
+    the trash keeps them before they are removed with their versions, data
+    and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
+    no existing artifact is deleted by upgrading.
+  - **Slug collisions:** a taken slug is a `409` with `code: "slug_taken"`
+    and a free `suggestedSlug`, from the API, the agent tool and the chat's
+    save dialog; the web forms offer the suggestion. Concurrent creates are
+    decided by the unique index (one `201`, the rest `409`). A deleted
+    artifact frees its slug at once (migration `0203` makes the index cover
+    live artifacts only). Publishing a slug another workspace already has
+    public is a `409` `public_slug_taken`; an ambiguous public slug now
+    resolves to the oldest artifact instead of an arbitrary one.
+- **Approved skills now reach your agents, and learning notes became lessons
+  that merge and expire** ([plan](docs/plans/learning-notes-and-skill-discovery.md),
+  [reference](docs/SESSION-LEARNING.md#where-a-lesson-goes)). A skill you
+  approve from a proposal is found for every role and for the root turn, with
+  no assignment. A learning review writes at most two lesson notes, each a
+  decision, constraint or fact, merged into the one that already says it; the
+  Notes page shows how often a review saw it (`×N`), recall labels it
+  `Lesson`, and the notes index no longer lists it.
+
+  **Behaviour changes:**
+  - **Lessons replace learning notes.** A note a learning review writes has
+    `note_kind = 'lesson'`, is indexed under the purpose `lesson` and keeps its
+    evidence in the frontmatter, not the body. The review is told to put a
+    lesson in exactly one of memory, lesson note, skill or patch, and is shown
+    up to 5 nearby lesson notes (`existing.notes`) to extend. A lesson that
+    matches one is merged into it (`extends`, the same text, or by meaning at
+    `learning.duplicateSimilarity` as a note; in the related band only if the
+    background model agrees). A match the user archived drops the lesson; one
+    expiry archived is revived; one consolidation merged away counts on the
+    note it went into.
+  - **Lessons are consolidated and expire.** The daily consolidation and
+    **Consolidate now** merge near-duplicate lesson notes (a pinned one is
+    never absorbed; at most 20 merge-model calls per run for lessons, and 20
+    for proposals) and archive lessons that are not pinned and were neither
+    updated nor shown to an agent for `learning.lessonTtlDays` (90). The first
+    daily run after upgrading can archive old learning notes this way.
+  - **Archived notes are no longer recalled or found by search.** Every
+    knowledge search (`search_notes`, `search_knowledge`, the knowledge
+    search API, link suggestions, recall) and the Recall page's has-rows check
+    leave out an archived note's chunks; unarchiving needs no re-index.
+    Browsing the knowledge base and reading an entry by id still show them.
+  - **What counts as a read.** Re-indexing identical content no longer stamps
+    `last_accessed_at`; the semantic-only search honours `skipAccess`; link
+    suggestions and ghost-link resolution no longer count their candidates
+    as read.
+  - **Learned skills reach agents, including the root.** A user's own,
+    non-system, non-archived skill with no `skill_topic_assignments` row is a
+    candidate for every role of that user's specialists and swarm children:
+    by trigger, or among the 5 nearest by meaning (cosine 0.35 or more),
+    shared with assigned skills; never always-injected; not in a shared space.
+    Without a query embedding the 10 most recently used are listed. The root
+    turn gets a `# Learned Skills` index by the same rule. Approval embeds the
+    skill at once. The query embedding is waited for at most 4.5 s.
+  - **Discovery fixes for assigned skills.** Archived skills are no longer
+    discovered; an assignment stored under a lane name (`build`) now matches
+    by trigger, meaning and always-inject too; the result is ranked best
+    first (triggers, then similarity), which changes the 8 candidates the
+    decision model judges.
+  - **Recall:** `lesson` is a recall purpose with a **lessons** checkbox on the
+    Recall page, in the default. The notes index lists and counts only your
+    own notes.
+  - **Migrations.** `0200_lesson_notes` turns the notes learning reviews wrote
+    (tag, `learning-` slug and `learningJobId`, personal or user level) into
+    lessons and moves their embedding rows to `lesson`; bodies are not
+    rewritten. `0201_archived_note_sources` adds a partial index over archived
+    notes for the search filter. `0202_recall_lesson_purpose` adds `lesson` to
+    every stored recall-hook `purposes` list that has `note`.
+
+  **New settings:** `learning.lessonTtlDays` (90; 0 never archives) and
+  `learning.maxLessonsPerReview` (2; 0 to 2). **API:**
+  `POST /api/skills/proposals/consolidate` returns `notesMerged` and
+  `notesArchived` as well; a learning receipt's `knowledge` output can have
+  the status `merged`. The thresholds are not calibrated against real data,
+  and the learning evals, which need a live model, were not run.
 - **Provider failures are classified by what the provider said.**
   - A 429's `Retry-After` now reaches the retry backoff for providers on the
     OpenAI SDK (the proxy, custom OpenAI-compatible endpoints and others); it

@@ -172,6 +172,8 @@ const SPACE_ACTING = [
   // Interactive answers: the session read of the chat routes (`contentRepos`), or `roomAccess` for a room.
   // Saving one as an artifact: the caller's own session, into the space's artifact store (`write`).
   'GET /api/sessions/:id/inline-ui/:blockId', 'POST /api/sessions/:id/inline-ui/:blockId/promote',
+  // The distil offer: the session owner only (`contentRepos`, then the owner check); a space session never carries one.
+  'GET /api/sessions/:id/distill-nudge', 'POST /api/sessions/:id/distill-nudge/:messageId',
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
@@ -213,9 +215,11 @@ const SPACE_ACTING = [
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
   // A live editor's text the server never got, merged through the hub (S3).
   'POST /api/notes/:id/merge',
-  'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/bundle.js', 'GET /a/:slug/export/:exportId',
-  'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed', 'GET /__artifacts__/a/:slug/bundle.js',
+  'GET /a/:slug', 'GET /a/:slug/embed', 'GET /a/:slug/export/:exportId',
+  'GET /__artifacts__/a/:slug', 'GET /__artifacts__/a/:slug/embed',
   'GET /__artifacts__/a/:slug/export/:exportId',
+  // The embed's live data read: authorized by its viewer token alone (one artifact, read-only).
+  'GET /a/:slug/data/:sourceName', 'GET /__artifacts__/a/:slug/data/:sourceName',
   // Personal routes kept in the space by the row they address: reads and stops only.
   'GET /api/agents/activity (by target)', 'GET /api/agents (by target)', 'GET /api/agents/:id (by target)', 'POST /api/agents/:id/stop (by target)',
   'DELETE /api/agents/:id (by target)', 'GET /api/agents/:id/events (by target)',

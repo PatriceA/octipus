@@ -90,6 +90,8 @@ export interface MessageMetadata {
   requesterId?: string;
   /** A room post the agent made unprompted, in a listen room (coworking §9.3); members rate it. */
   unprompted?: boolean;
+  /** An answer after which its owner was offered to distil the run into a skill (src/core/learning/distill-nudge-service.ts). */
+  skillNudge?: import('@/shared/distill-nudge').DistillNudgeRecord;
 }
 
 export interface AttachmentData {

@@ -1,6 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   ArrowRight,
   KeyRound,
@@ -38,6 +39,15 @@ export function GeneralTab({ section = 'profile' }: { section?: 'profile' | 'hea
   });
 
   const services = Object.entries(health?.health ?? {});
+  const queryClient = useQueryClient();
+  const [nudgeError, setNudgeError] = useState('');
+  const setDistillNudge = async (enabled: boolean) => {
+    const previous = queryClient.getQueryData<UserProfile>(['profile']);
+    queryClient.setQueryData<UserProfile>(['profile'], current => current ? { ...current, preferences: { ...current.preferences, distillNudge: enabled } } : current);
+    setNudgeError('');
+    try { await api.put('/auth/distill-nudge', { enabled }); await queryClient.invalidateQueries({ queryKey: ['profile'] }); }
+    catch (err) { queryClient.setQueryData(['profile'], previous); setNudgeError((err as Error).message); }
+  };
 
   return (
     <div className="space-y-6">
@@ -116,6 +126,17 @@ export function GeneralTab({ section = 'profile' }: { section?: 'profile' | 'hea
             </span>
           </div>
         </div>
+      </div>
+
+      {/* The offer to distil a finished task into a skill (docs/SESSION-LEARNING.md). */}
+      <div className="space-y-2 rounded-lg bg-surface-container-low p-4">
+        <label className="flex items-center justify-between gap-4">
+          <span className="font-medium text-on-surface">Offer to save finished tasks as skills</span>
+          <input type="checkbox" role="switch" aria-label="Offer to save finished tasks as skills" disabled={!profile}
+            checked={profile?.preferences?.distillNudge !== false} onChange={event => void setDistillNudge(event.target.checked)} />
+        </label>
+        <p className="text-sm text-on-surface-variant">After a task that took many steps and succeeded, the chat offers to distil it into a skill proposal. Nothing is distilled unless you accept, and a proposal is still reviewed on Skills → Proposals.</p>
+        {nudgeError && <p role="alert" className="text-sm text-error">{nudgeError}</p>}
       </div>
 
       {/* Secrets redirect */}

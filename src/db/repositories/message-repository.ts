@@ -5,6 +5,7 @@ import { getDb } from '../postgres';
 import { sessions, sessionGeneration } from '../schema/sessions';
 import { type Message, messages, type NewMessage } from '../schema/messages';
 import { assertRoomAuthor, messageEvents } from './message-events';
+import { notInSharedWorkspace } from './personal-workspace';
 
 /**
  * Backstop for {@link MessageRepository.findContextMessages}. High enough that
@@ -317,6 +318,65 @@ export class MessageRepository {
 
     return result;
   }
+
+  // ── The distil offer (src/core/learning/distill-nudge-service.ts) ─────
+  // Personal chats only: every read below also requires the message's
+  // session to be a chat (not a room) in no workspace or a personal one, so
+  // it cannot return a space's or a room member's rows whatever id it is given.
+
+  /** The session's latest shown answer (not a progress update), when the session is a personal chat. */
+  async findLatestPersonalAnswer(sessionId: string): Promise<Pick<Message, 'id' | 'metadata'> | undefined> {
+    const [latest] = await this.db.select({ id: messages.id, metadata: messages.metadata })
+      // i2: by session id, and only a personal chat (personalChatOf)
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'assistant'), visibleMessages,
+        sql`coalesce(${messages.metadata}->>'kind', '') <> 'progress'`, personalChatOf(messages.sessionId)))
+      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+    return latest;
+  }
+
+  /** One message of a personal chat, by id and session. */
+  async findPersonalInSession(id: string, sessionId: string): Promise<Pick<Message, 'metadata' | 'createdAt'> | undefined> {
+    const [row] = await this.db.select({ metadata: messages.metadata, createdAt: messages.createdAt })
+      // i2: by message and session id, and only a personal chat (personalChatOf)
+      .from(messages)
+      .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), personalChatOf(messages.sessionId))).limit(1);
+    return row;
+  }
+
+  /** The shown user and assistant messages of a personal chat written from `from` to `to`, oldest first. */
+  async findPersonalBetween(sessionId: string, from: Date, to: Date): Promise<Array<Pick<Message, 'role' | 'content'>>> {
+    return this.db.select({ role: messages.role, content: messages.content })
+      // i2: by session id within a time window, and only a personal chat (personalChatOf)
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant']), visibleMessages,
+        gte(messages.createdAt, from), lte(messages.createdAt, to), personalChatOf(messages.sessionId)))
+      .orderBy(asc(messages.createdAt), asc(messages.id));
+  }
+
+  /** Put an offer on an answer of a personal chat. False when no such answer is there. */
+  async putSkillNudge(id: string, sessionId: string, record: import('@/shared/distill-nudge').DistillNudgeRecord): Promise<boolean> {
+    const rows = await this.db.update(messages)
+      .set({ metadata: sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify({ skillNudge: record })}::jsonb` })
+      .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), personalChatOf(messages.sessionId)))
+      .returning({ id: messages.id });
+    return rows.length > 0;
+  }
+
+  /** Replace the offer on `id` while it is in state `from` (one statement: of two decisions, one wins). */
+  async moveSkillNudge(id: string, from: import('@/shared/distill-nudge').DistillNudgeState, next: import('@/shared/distill-nudge').DistillNudgeRecord): Promise<boolean> {
+    const rows = await this.db.update(messages)
+      .set({ metadata: sql`jsonb_set(${messages.metadata}, '{skillNudge}', ${JSON.stringify(next)}::jsonb)` })
+      .where(and(eq(messages.id, id), sql`${messages.metadata}->'skillNudge'->>'state' = ${from}`))
+      .returning({ id: messages.id });
+    return rows.length > 0;
+  }
+}
+
+/** The session `sessionColumn` names is a chat (not a room) in no workspace or a personal one. */
+function personalChatOf(sessionColumn: typeof messages.sessionId) {
+  // i2: the predicate itself: the session's kind and workspace, never its content
+  return sql`EXISTS (SELECT 1 FROM ${sessions} ps WHERE ps.id = ${sessionColumn} AND ps.kind <> 'room' AND ${notInSharedWorkspace(sql`ps.workspace_id`)})`;
 }
 
 export const messageRepository = new MessageRepository();

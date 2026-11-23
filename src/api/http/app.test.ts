@@ -176,6 +176,35 @@ describe('hook scoping', () => {
   });
 });
 
+describe('response headers are keyed case-insensitively', () => {
+  const headersApp = new App()
+    .onAfterHandle(({ set }) => {
+      set.headers['Content-Security-Policy'] ??= "default-src 'self'";
+      set.headers['X-Frame-Options'] ??= 'DENY';
+    })
+    .get('/own', ({ set }) => {
+      set.headers['content-security-policy'] = "default-src 'none'; sandbox";
+      return 'x';
+    })
+    .get('/default', () => 'y');
+
+  test("a default does not replace a handler's lower-case header, and only one copy is sent", async () => {
+    const own = await headersApp.handle(new Request('http://x/own'));
+    expect(own.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(own.headers.get('x-frame-options')).toBe('DENY');
+    const plain = await headersApp.handle(new Request('http://x/default'));
+    expect(plain.headers.get('content-security-policy')).toBe("default-src 'self'");
+  });
+
+  test('a path spelling an unreserved character in percent-encoding is refused before routing', async () => {
+    const strict = new App().get('/api/thing', () => 'ok');
+    expect((await strict.handle(new Request('http://x/api/thing'))).status).toBe(200);
+    for (const p of ['/%61pi/thing', '/api/%54hing', '/api/thing%', '/api/thing%G1']) {
+      expect((await strict.handle(new Request(`http://x${p}`))).status, p).toBe(400);
+    }
+  });
+});
+
 describe('App — streamed responses', () => {
   test('a reader that goes away returns the generator, so its finally runs', async () => {
     let released = false;
@@ -194,5 +223,49 @@ describe('App — streamed responses', () => {
     expect(released).toBe(false);
     await reader.cancel();
     expect(released).toBe(true);
+  });
+});
+
+describe('a default header never replaces one the handler set', () => {
+  const withDefaults = new App()
+    .onAfterHandle(({ set }) => {
+      set.headers['Content-Security-Policy'] ??= "default-src 'self'";
+      set.headers['cache-control'] ??= 'no-cache';
+      set.headers['X-Content-Type-Options'] = 'nosniff';
+    })
+    .get('/own-response', () => new Response('page', { headers: { 'Content-Security-Policy': "default-src 'none'; sandbox" } }))
+    .get('/own-response-status', ({ set }) => {
+      set.status = 202;
+      return new Response('page', { status: 200, headers: { 'content-security-policy': "default-src 'none'; sandbox" } });
+    })
+    .get('/assigned', ({ set }) => {
+      Object.assign(set.headers, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      return 'data: x\n\n';
+    });
+
+  test('on a Response the handler returned, its own headers stay; defaults only add', async () => {
+    for (const path of ['/own-response', '/own-response-status']) {
+      const res = await withDefaults.handle(new Request(`http://x${path}`));
+      expect(res.headers.get('content-security-policy'), path).toBe("default-src 'none'; sandbox");
+      expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      expect(res.headers.get('cache-control'), path).toBe('no-cache');
+    }
+  });
+
+  test('headers merged into set.headers stay case-insensitive', async () => {
+    const res = await withDefaults.handle(new Request('http://x/assigned'));
+    expect(res.headers.get('content-type')).toBe('text/event-stream');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+});
+
+describe('a non-canonical path is refused with the usual response headers', () => {
+  test('the 400 carries CORS for an allowed origin and the after-hook headers', async () => {
+    const res = await app.handle(new Request('http://x/%61pi/health', { headers: { origin: 'https://desk.test' } }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Bad request path', code: 'non_canonical_path' });
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://desk.test');
+    expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    expect(res.headers.get('x-test')).toBe('1');
   });
 });

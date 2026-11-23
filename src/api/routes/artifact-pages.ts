@@ -21,7 +21,7 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { findViewableArtifactBySlug } from '@/db/repositories/space';
 import { artifactEntryPage } from '@/core/artifacts/entry-page';
 import { publicLinkBase } from '@/core/public-url';
-import { buildEmbedCsp, embedCspHeader } from '@/core/artifacts/csp';
+import { buildEmbedCsp, embedCspHeader, embedOriginSources } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
 import {
@@ -34,6 +34,7 @@ import {
 } from '@/core/artifacts/widget-render';
 import { signArtifactToken } from '@/core/artifacts/token';
 import { verifyShareLinkToken } from '@/core/artifacts/share-link';
+import { authorizeArtifactViewerToken } from '@/core/artifacts/viewer-access';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
 import { bundleFilePath } from '@/core/artifacts/bundler';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
@@ -48,7 +49,8 @@ const TOKEN_TTL_SECONDS = 5 * 60;
 
 interface AuthResult {
   artifact: Artifact;
-  scope: 'view' | 'view+refresh';
+  /** The signed share link the request was admitted by, if that is how. */
+  shareLinkId?: string;
 }
 
 async function authorizeForRequest(opts: {
@@ -64,12 +66,7 @@ async function authorizeForRequest(opts: {
     // owner alone, which a space (no owning user) would not match and a raw
     // `workspaces.user_id` read would. `private` is the creator's only.
     artifact = await findViewableArtifactBySlug(opts.user.id, opts.slug);
-    if (artifact && (artifact.visibility === 'workspace' || artifact.visibility === 'private' || artifact.visibility === 'signed')) {
-      return { artifact, scope: 'view+refresh' };
-    }
-    if (artifact && artifact.visibility === 'public') {
-      return { artifact, scope: 'view' };
-    }
+    if (artifact) return { artifact };
   }
 
   if (opts.shareToken) {
@@ -77,13 +74,13 @@ async function authorizeForRequest(opts: {
     if (!verified) return null;
     const a = await artifactsRepository.getById(verified.artifactId);
     if (!a || a.slug !== opts.slug) return null;
-    return { artifact: a, scope: 'view' };
+    return { artifact: a, shareLinkId: verified.shareLinkId };
   }
 
   if (!artifact) {
     // One query, not a slug lookup per workspace on the install.
     const a = await artifactsRepository.findPublicBySlug(opts.slug);
-    if (a) return { artifact: a, scope: 'view' };
+    if (a) return { artifact: a };
   }
 
   return null;
@@ -162,6 +159,30 @@ ${script ? `<script>${script}</script>` : ''}
   return { html, csp };
 }
 
+/** For responses that are data, not pages: nothing loads, nothing runs, and the document has an opaque origin. */
+const INERT_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
+/**
+ * Headers every artifact response that carries artifact content gets. No
+ * referrer: an embed URL can carry a share token (`?t=`), and the page loads
+ * images from anywhere. Never cached: an embed carries a freshly minted
+ * viewer token, and a private artifact's page must not outlive its access.
+ */
+function setArtifactDocumentHeaders(ctx: HandlerCtx): void {
+  ctx.set.headers['referrer-policy'] = 'no-referrer';
+  ctx.set.headers['cache-control'] = 'private, no-store';
+}
+
+/**
+ * The outer page's policy. It is server-written (an escaped title and one
+ * frame), so it runs no script and loads nothing but its own embed; it may be
+ * framed where the embed may.
+ */
+function outerCsp(artifact: Artifact): string {
+  const ancestors = ["'self'", ...embedOriginSources(artifact.allowedEmbedOrigins)].join(' ');
+  return `default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; frame-ancestors ${ancestors}; base-uri 'none'; form-action 'none'`;
+}
+
 function buildOuterHtml(artifact: Artifact, embedSrc: string): string {
   return `<!doctype html>
 <html><head>
@@ -214,8 +235,12 @@ async function handleOuter(ctx: HandlerCtx) {
   }
   const url = new URL(ctx.request.url);
   const embedQs = typeof ctx.query.t === 'string' ? `?t=${encodeURIComponent(ctx.query.t)}` : '';
-  const embedSrc = `${url.pathname}/embed${embedQs}`;
+  const embedSrc = `${url.pathname.replace(/\/$/, '')}/embed${embedQs}`;
   ctx.set.headers['content-type'] = 'text/html; charset=utf-8';
+  ctx.set.headers['content-security-policy'] = outerCsp(auth.artifact);
+  // The outer page is a top-level document: keep openers out of it.
+  ctx.set.headers['cross-origin-opener-policy'] = 'same-origin';
+  setArtifactDocumentHeaders(ctx);
   return buildOuterHtml(auth.artifact, embedSrc);
 }
 
@@ -263,8 +288,9 @@ async function handleEmbed(ctx: HandlerCtx) {
 
   let body: string;
   try {
-    const withWidgets = resolveWidgetTags(template, widgetRender.bySlot);
-    body = renderTemplate(withWidgets, { data, title: auth.artifact.title });
+    // Widgets go in after the template pass: their HTML is server output,
+    // already escaped, and data inside it must not be expanded or sanitized.
+    body = resolveWidgetTags(renderTemplate(template, { data, title: auth.artifact.title }), widgetRender.bySlot);
   } catch (err) {
     coreLogger.error({ err, artifactId: auth.artifact.id }, 'artifact.render.failed');
     ctx.set.status = 500;
@@ -275,9 +301,10 @@ async function handleEmbed(ctx: HandlerCtx) {
   const token = signArtifactToken({
     aid: auth.artifact.id,
     wid: auth.artifact.workspaceId,
-    scope: auth.scope,
+    scope: 'view',
     iat: now,
     exp: now + TOKEN_TTL_SECONDS,
+    ...(auth.shareLinkId ? { slid: auth.shareLinkId } : {}),
   });
 
   recordArtifactView(auth.artifact.id);
@@ -303,38 +330,8 @@ async function handleEmbed(ctx: HandlerCtx) {
   // for the rest of the policy. The header also sandboxes the page, so the
   // embed never runs with the app's origin when opened directly.
   ctx.set.headers['content-security-policy'] = embedCspHeader(page.csp);
+  setArtifactDocumentHeaders(ctx);
   return page.html;
-}
-
-/** Serve the current version's built JS bundle. Same auth as the embed. */
-async function handleBundle(ctx: HandlerCtx) {
-  const rl = checkRateLimit(`bundle:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 30, refillPerSecond: 1 });
-  if (!rl.allowed) {
-    ctx.set.status = 429;
-    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
-    return 'Too many requests';
-  }
-  const auth = await authorizeForRequest({
-    slug: ctx.params.slug,
-    user: ctx.user ?? null,
-    shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
-  });
-  if (!auth || !auth.artifact.currentVersionId) {
-    ctx.set.status = 404;
-    return 'Not found';
-  }
-
-  const file = fileAt(bundleFilePath(auth.artifact.id, auth.artifact.currentVersionId));
-  if (!(await file.exists())) {
-    ctx.set.status = 404;
-    return 'Not found';
-  }
-  ctx.set.headers['content-type'] = 'application/javascript; charset=utf-8';
-  // The URL is slug-keyed, not version-keyed — publishing a new version reuses
-  // it. Caching would serve stale JS whose hash no longer matches the embed's
-  // `integrity`, i.e. a page that silently stops working.
-  ctx.set.headers['cache-control'] = 'no-cache';
-  return file.text();
 }
 
 async function handleExport(ctx: HandlerCtx) {
@@ -402,8 +399,72 @@ async function handleExport(ctx: HandlerCtx) {
   ctx.set.headers['content-type'] = payload.contentType;
   ctx.set.headers['content-disposition'] =
     `attachment; filename="${payload.filename.replace(/"/g, '')}"`;
+  // A download, never a page: whatever type the export names, opened in the
+  // browser it runs nothing and has no origin.
+  ctx.set.headers['content-security-policy'] = INERT_CSP;
+  setArtifactDocumentHeaders(ctx);
   return payload.body;
 }
+
+/**
+ * The embed's live data read (`GET /a/:slug/data/:sourceName?vt=<token>`):
+ * the latest snapshot of one source, for the SDK to patch the page with. The
+ * viewer token minted into the embed is the only credential — never a session
+ * cookie or API token, which an opaque-origin page does not carry anyway — and
+ * it opens exactly this: one artifact (the one the slug names), read-only, for
+ * the token's few minutes, until revoked (`authorizeArtifactViewerToken`). It
+ * is not accepted by any `/api` route.
+ *
+ * The page is a sandboxed (opaque-origin) document, so this is a cross-origin
+ * read: the token travels in the query (a header would need a CORS preflight)
+ * and the answer allows any origin without credentials.
+ */
+async function handleData(ctx: HandlerCtx) {
+  ctx.set.headers['access-control-allow-origin'] = '*';
+  ctx.set.headers['content-security-policy'] = INERT_CSP;
+  setArtifactDocumentHeaders(ctx);
+  const rl = checkRateLimit(`data:${clientIp(ctx.request, ctx.socketAddress)}`, { capacity: 60, refillPerSecond: 2 });
+  if (!rl.allowed) {
+    ctx.set.status = 429;
+    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
+    return { error: 'Too many requests' };
+  }
+  const token = typeof ctx.query.vt === 'string' ? ctx.query.vt : '';
+  const denied = () => {
+    ctx.set.status = 401;
+    return { error: 'invalid or expired viewer token' };
+  };
+  if (!token) return denied();
+  // The slug names the artifact; the token must be for that one. A token
+  // carries its artifact id, so read it only to find the candidate.
+  const claimed = artifactIdClaimedBy(token);
+  if (!claimed) return denied();
+  const authorized = await authorizeArtifactViewerToken(token, claimed);
+  if (!authorized || authorized.artifact.slug !== ctx.params.slug) return denied();
+
+  const src = await artifactsRepository.getSourceByName(authorized.artifact.id, ctx.params.sourceName);
+  if (!src) {
+    ctx.set.status = 404;
+    return { error: 'source not found' };
+  }
+  const snap = await artifactsRepository.getLatestSnapshot(src.id);
+  if (!snap) return { payload: null, capturedAt: null };
+  return { payload: snap.payloadJson, capturedAt: snap.capturedAt, snapshotId: snap.id };
+}
+
+/** The `aid` a token claims, unverified — `authorizeArtifactViewerToken` checks it. */
+function artifactIdClaimedBy(token: string): string | null {
+  const body = token.split('.')[1];
+  if (!body) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { aid?: unknown };
+    return typeof parsed.aid === 'string' && UUID_RE.test(parsed.aid) ? parsed.aid : null;
+  } catch {
+    return null;
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function resolveBusPath(root: Record<string, unknown>, expr: string): unknown {
   if (!expr) return root;
@@ -424,13 +485,13 @@ export const artifactPageRoutes = new Elysia()
   .get('/octipus-artifact-client.js', handleSdk)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
-  .get('/a/:slug/bundle.js', handleBundle)
-  .get('/a/:slug/export/:exportId', handleExport);
+  .get('/a/:slug/export/:exportId', handleExport)
+  .get('/a/:slug/data/:sourceName', handleData);
 
 /** Path-prefix fallback — works without any DNS configuration. */
 export const artifactPageRoutesFallback = new Elysia({ prefix: '/__artifacts__' })
   .use(apiContext)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
-  .get('/a/:slug/bundle.js', handleBundle)
-  .get('/a/:slug/export/:exportId', handleExport);
+  .get('/a/:slug/export/:exportId', handleExport)
+  .get('/a/:slug/data/:sourceName', handleData);

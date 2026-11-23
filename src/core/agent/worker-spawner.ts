@@ -513,9 +513,13 @@ async function spawnWorkerRecorded(
     // Skill assignments stay ROLE-keyed ('coding', 'research', …) after the
     // topic consolidation — the model lane ('agents') says nothing about which
     // domain skills fit, the role does.
+    // The user's learned skills are candidates too, except in a space
+    // (docs/plans/learning-notes-and-skill-discovery.md).
     const discoveredIds = await discoverSkillIds({
       topic: agentRole,
       message: task,
+      userId: context.userId,
+      inSpace: !!context.space,
     });
     if (overrides?.decideSkills) {
       const candidates = (await getSkillRegistry().getByIds(discoveredIds.filter((id) => !requiredIds.has(id)), context.userId))

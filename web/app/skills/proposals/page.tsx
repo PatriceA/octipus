@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { computeLineDiff } from '../../../../src/shared/diff';
+import type { ConsolidationReport } from '../../../../src/shared/learning';
 import type { SkillProposalView as SkillProposal } from '../../../../src/shared/skill-proposals';
 
 const KIND_TITLE: Record<SkillProposal['kind'], string> = {
@@ -20,14 +21,6 @@ const KIND_TITLE: Record<SkillProposal['kind'], string> = {
 interface ProposalList {
   proposals: SkillProposal[];
   candidateCount: number;
-}
-
-interface ConsolidationReport {
-  merged: number;
-  expired: number;
-  promoted: number;
-  embedded: number;
-  degraded: number;
 }
 
 const BADGE = 'px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-mono leading-none border rounded-xs whitespace-nowrap';
@@ -54,6 +47,8 @@ function reportSentence(r: ConsolidationReport): string {
   if (r.merged > 0) parts.push(`merged ${plural(r.merged, 'proposal')}`);
   if (r.expired > 0) parts.push(`removed ${plural(r.expired, 'unseen candidate')}`);
   if (r.promoted > 0) parts.push(`showed ${plural(r.promoted, 'candidate')} that had recurred`);
+  if (r.notesMerged > 0) parts.push(`merged ${plural(r.notesMerged, 'duplicate lesson note')}`);
+  if (r.notesArchived > 0) parts.push(`archived ${plural(r.notesArchived, 'unused lesson note')}`);
   if (parts.length === 0) return 'Nothing to consolidate.';
   const text = joinClauses(parts);
   const degraded = r.degraded > 0

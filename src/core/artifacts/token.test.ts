@@ -45,6 +45,11 @@ describe('artifact token', () => {
     expect(verifyArtifactToken(`${h}.${tampered}.${s}`, { aid: 'art-1' })).toBeNull();
   });
 
+  test('rejects a validly signed token claiming anything but read-only view', () => {
+    const tok = signArtifactToken({ ...base, scope: 'view+refresh' as unknown as 'view' });
+    expect(verifyArtifactToken(tok, { aid: 'art-1' })).toBeNull();
+  });
+
   test('rejects malformed', () => {
     expect(verifyArtifactToken('garbage', { aid: 'art-1' })).toBeNull();
     expect(verifyArtifactToken('a.b', { aid: 'art-1' })).toBeNull();

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildEmbedCsp, embedCspHeader } from './csp';
+import { buildEmbedCsp, embedCspHeader, isEmbedOrigin } from './csp';
 
 describe('buildEmbedCsp', () => {
   test('emits locked-down policy with sha256 script hashes', () => {
@@ -38,5 +38,22 @@ describe('buildEmbedCsp', () => {
     expect(csp).not.toContain('wss://gw.example.com');
     expect(csp).toContain('img-src data: blob:');
     expect(csp).not.toMatch(/img-src[^;]*https:/);
+  });
+
+  test('frame-ancestors takes origins only: an entry that would add a directive is dropped', () => {
+    const csp = buildEmbedCsp({
+      scriptSha256s: [],
+      frameAncestors: ['https://ok.example', 'https://x.example; sandbox allow-scripts allow-same-origin', "'unsafe-inline'", '*'],
+    });
+    expect(csp).toMatch(/frame-ancestors 'self' https:\/\/ok\.example;/);
+    expect(embedCspHeader(csp).match(/sandbox/g)).toHaveLength(1);
+    expect(csp).not.toContain('allow-same-origin');
+  });
+
+  test('isEmbedOrigin accepts web origins and rejects anything else', () => {
+    for (const ok of ['https://a.example', 'http://localhost:3007', 'https://*.example.com']) expect(isEmbedOrigin(ok)).toBe(true);
+    for (const bad of ['a.example', 'https://a.example/path', 'https://a.example x', "'self'", 'javascript:x', 'https://a.example;']) {
+      expect(isEmbedOrigin(bad)).toBe(false);
+    }
   });
 });

@@ -487,3 +487,50 @@ test('topic skill ids and the skill rows a prompt is built from come back in a s
   const { skillRepository } = await import('@/db/repositories/skill-repository');
   expect((await skillRepository.findByIds(['order-c', 'order-a', 'order-b'])).map(row => row.id)).toEqual(['order-a', 'order-b', 'order-c']);
 });
+
+// An archived skill is "hidden from discovery" (skills.archived_at), but the
+// hybrid sets never filtered on it: a curator-archived assigned skill kept
+// being listed in every worker's index for its role.
+test('an archived assigned skill is not discovered by any set', async () => {
+  await seedSkill({ id: 'archived-always', alwaysInject: true, triggers: ['deploy'], embedding: VEC_A });
+  await seedSkill({ id: 'archived-stale', embedding: null });
+  await getDb().update(skills).set({ archivedAt: new Date() }).where(eq(skills.id, 'archived-always'));
+  await getDb().update(skills).set({ archivedAt: new Date() }).where(eq(skills.id, 'archived-stale'));
+  currentEmbedding = VEC_A;
+  const { discoverSkillIds } = await import('./discovery');
+  const ids = await discoverSkillIds({ topic: TEST_TOPIC, message: 'deploy it', minSimilarity: 0.5 });
+  expect(ids).not.toContain('archived-always');
+  expect(ids).not.toContain('archived-stale');
+});
+
+// An assignment made under a LANE name ('build', what the assignment UI
+// lists) is matched for the roles resolving to it — fetchActiveSkillIdsForTopic
+// did, but the hybrid sets matched the role name only, so a database skill
+// assigned to 'build' never reached a 'coding' worker.
+test('a skill assigned under the lane name is discovered for a role of that lane', async () => {
+  const db = getDb();
+  await db.insert(skills).values({ id: 'lane-assigned', name: 'lane-assigned', description: 'd', triggers: ['lanetrigger'], isSystem: true, descriptionEmbedding: VEC_B });
+  await db.insert(skillTopicAssignments).values({ skillId: 'lane-assigned', topic: 'build', isActive: true });
+  try {
+    currentEmbedding = VEC_C;
+    const { discoverSkillIds } = await import('./discovery');
+    expect(await discoverSkillIds({ topic: 'coding', message: 'use the lanetrigger', minSimilarity: 0.5 })).toContain('lane-assigned');
+  } finally {
+    await db.delete(skillTopicAssignments).where(eq(skillTopicAssignments.skillId, 'lane-assigned'));
+    await db.delete(skills).where(eq(skills.id, 'lane-assigned'));
+  }
+});
+
+// decideTaskSkills judges discovery's first few as a ranking; the ids came
+// back sorted by name, so a strong vector hit named "z…" lost its place to
+// any stale or always-inject skill named "a…".
+test('the result is ranked: trigger hits, vector hits by similarity, then always-inject and stale rows', async () => {
+  await seedSkill({ id: 'a-always', alwaysInject: true, embedding: VEC_C });
+  await seedSkill({ id: 'b-stale', embedding: null });
+  await seedSkill({ id: 'y-vector', embedding: VEC_A });
+  await seedSkill({ id: 'z-trigger', triggers: ['ranking'], embedding: VEC_C });
+  currentEmbedding = VEC_A;
+  const { discoverSkillIds } = await import('./discovery');
+  expect(await discoverSkillIds({ topic: TEST_TOPIC, message: 'check the ranking', minSimilarity: 0.5 }))
+    .toEqual(['z-trigger', 'y-vector', 'a-always', 'b-stale']);
+});

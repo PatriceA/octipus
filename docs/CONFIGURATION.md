@@ -193,7 +193,7 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 
 ## Learning Config
 
-Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARNING.md)). An admin sets them under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` (body `{"value": …}`). They apply to the whole install and take effect without a restart; a value outside the bounds below is refused. There is no environment variable for them. The thresholds are defaults chosen when the feature was written, not calibrated against real proposals.
+Session learning checks, skill proposals and lesson notes ([SESSION-LEARNING.md](SESSION-LEARNING.md)). An admin sets them under **Settings → Configuration → Agent & Root agent → Learning**, or with `PUT /api/settings/learning.<name>` (body `{"value": …}`). They apply to the whole install and take effect without a restart; a value outside the bounds below is refused. There is no environment variable for them. The thresholds are defaults chosen when the feature was written, not calibrated against real proposals or lesson notes.
 
 | Key | Default | Purpose |
 |---|---|---|
@@ -203,9 +203,15 @@ Session learning checks and skill proposals ([SESSION-LEARNING.md](SESSION-LEARN
 | `learning.recurrenceSessions` | 2 | Sessions a learned skill proposal must be seen in before it is shown; until then it waits as a candidate. A user correction, `distill_skill` and patches are shown at once. 1 turns the gate off. |
 | `learning.maxSkillProposalsPerDay` | 2 | Learned skill proposals that become pending per user per rolling 24 hours; the rest wait as candidates. 0: none appear on their own. |
 | `learning.maxPendingSkillProposals` | 10 | At this many pending non-patch proposals of a user, learned ones wait as candidates. |
-| `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. |
-| `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals are one skill; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
+| `learning.duplicateSimilarity` | 0.85 | Cosine similarity (0–1) of name and description at or above which two proposals, or a proposal and a live skill, are the same skill. For lesson notes, compared chunk by chunk: two lessons are the same lesson when every chunk of the shorter has a chunk of the other at or above it. |
+| `learning.relatedSimilarity` | 0.70 | From here (0–1) up to `duplicateSimilarity`, the merge model decides whether two proposals (or two lesson notes) are one; without a usable model they stay separate. Also the lowest similarity at which a card says "similar to skill X". |
 | `learning.candidateTtlDays` | 30 | A candidate not seen again for this many days, and never seen in `recurrenceSessions` sessions or backed by a correction, is deleted by consolidation. One that qualified and only waits for room under a cap is kept. Min 1. |
+| `learning.lessonTtlDays` | 90 | A lesson note that is not pinned and was neither updated (edited, pinned or unpinned, merged into, seen again by a review) nor shown to an agent (a search or recall returned one of its chunks) for this many days is archived by the daily consolidation. A later review that sees the lesson again revives it. Min 0; 0 never archives one. |
+| `learning.maxLessonsPerReview` | 2 | Lesson notes one learning review may write or merge into. 0 to 2; 0 writes none (the review is told to return none), 1 tells the review to return at most one. |
+| `learning.distillNudge` | true | After a complex, successful turn, offer in the web chat to distil it into a skill proposal ([the offer](SESSION-LEARNING.md#offer-to-distil-a-finished-task)). Nothing is distilled until the user accepts; each user can also turn it off under Settings → Profile. |
+| `learning.distillNudgeMinToolCalls` | 8 | Tool calls, child agents' included, a turn needs to be offered, unless it delegated (to a child agent or a pipeline). Min 1. |
+| `learning.distillNudgeMinDistinctTools` | 3 | Different tools a turn needs to be offered, whether or not it delegated. Min 1. |
+| `learning.distillNudgeCooldownHours` | 24 | At most one offer per user in this many hours. Only an offer that is made starts it. 0: no cool-down. |
 
 ## Gateway Config
 
@@ -348,9 +354,35 @@ Live artifacts (`docs/ARTIFACTS.md`) ship hosted HTML pages. Two modes:
    the same origin as your main app. Cloudflare users: orange-cloud is
    fine; Universal SSL covers it. If you already have `*.<host>` wildcard
    DNS, no new record is needed.
-2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env.
+2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env, and set
+   `PUBLIC_URL` to the address the app itself is used at. The artifact host
+   serves no app page or API, so it must never be the app's own address:
+   - `ARTIFACTS_HOST` is honoured only while `PUBLIC_URL` (or
+     `oauth.publicUrl`) is set to a different host. Without it, or equal to
+     it, `ARTIFACTS_HOST` is ignored with an error in the log and artifacts
+     are served on the no-DNS fallback below, so a wrong value can never lock
+     you out of the app.
+   - Settings refuses to save as `artifacts.host` the host you are using the
+     app at, or the `PUBLIC_URL` host.
 3. Reverse-proxy any `Host: artifacts.<your-host>` traffic to the same
-   octipus backend; the in-process router matches the host header.
+   octipus backend (or to the bundled web server, which forwards `/a/` with
+   the `Host` header intact). The proxy must pass the original `Host` header
+   through (nginx: `proxy_set_header Host $host;`): the backend compares it,
+   exactly and case-insensitively, with `ARTIFACTS_HOST`. `X-Forwarded-Host`
+   is not read.
+
+On the artifact host the backend serves the hosted pages (`/a/<slug>`,
+`/embed`, `/export/<id>`, `/data/<source>`) and the browser SDK, `GET` and
+`HEAD` only. Everything else answers 404 there: `/api/*`, `/v1/*`, sign-in,
+CORS preflights and the `/__artifacts__` fallback mount. A session cookie or
+token sent to the artifact host is ignored (only public artifacts and
+share links open there), no response from it sets a cookie, and of the
+WebSocket endpoints only the gateway (`/gateway`) upgrades there, admitting
+artifact viewer tokens only; `/voice`, `/ws/browser-bridge` and
+`/federation` are refused. In this mode the
+root `/a/<slug>` pages are not served on the app's host; the web app's own
+frame keeps using `/__artifacts__/a/<slug>/embed` on the app host, sandboxed
+as below.
 
 This puts hosted user-influenced HTML on a different origin so it cannot
 read app cookies, ride `localStorage`, or hit `/api/*` directly with
@@ -359,9 +391,14 @@ session credentials.
 ### No-DNS fallback
 
 Leave `ARTIFACTS_HOST` unset. Artifacts are served at
-`/__artifacts__/a/:slug` on the main host. The iframe still uses
-`sandbox` (no `allow-same-origin`) but a CSP-escape bug becomes a
-same-origin XSS against the app.
+`/__artifacts__/a/:slug` on the main host. The iframe uses
+`sandbox="allow-scripts"` (no `allow-same-origin`), and the embed response
+itself carries `Content-Security-Policy: …; sandbox allow-scripts`, so an
+embed URL opened directly as a page also runs with an opaque origin: it
+cannot read the app's cookies or storage, and the browser does not attach the
+`SameSite=Strict` session cookie to its requests. A browser bug that escapes
+the sandbox becomes a same-origin XSS against the app, which the subdomain
+mode does not.
 
 Acceptable for single-user / trusted-tenant deploys; **not recommended**
 when untrusted users can author artifacts in your workspace.
@@ -376,6 +413,12 @@ when untrusted users can author artifacts in your workspace.
 | `ARTIFACT_SDK_SHA256`     | sha256 of `octipus-artifact-client.js` — pinned in CSP.   |
 | `ARTIFACT_TOKEN_SECRET`   | HMAC key for artifact-scoped JWT. Falls back to JWT_SECRET HKDF. |
 | `ARTIFACT_BUNDLES_DIR`    | Filesystem root for custom JS bundles. Default `data/artifacts/`. |
+| `ARTIFACTS_RETENTION_DAYS`| Move artifacts with no edit, no view and no data refresh for this many days to the trash. `0` (default) = never expire. |
+| `ARTIFACTS_TRASH_DAYS`    | Days a deleted or expired artifact stays in the trash before it is removed with its versions, data, share links and bundle files. Default `30`, minimum `1`. |
+
+Both retention settings are also in Settings → Artifacts
+(`artifacts.retentionDays`, `artifacts.trashDays`) and take effect at the next
+hourly cleanup pass; see [ARTIFACTS.md](./ARTIFACTS.md#cleanup-and-retention).
 
 ## Backend build freshness
 

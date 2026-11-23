@@ -183,7 +183,7 @@ new artifacts with these; use `kind: "toolbox"` + `tool_id` instead.
 | `http`       | `{ url, method, headers?, body?, jsonpath? }`                 | `headers` may use `${vault.<key>}` placeholders. |
 | `rss`        | `{ url }`                                                     | Normalized to `{ items: [{title, link, pubDate, summary}] }`. |
 | `mcp`        | `{ server, tool, params }`                                    | Routed through the MCP bridge. |
-| `skill_query`| `{ skill, prompt }`                                           | Spends model tokens. Gated by workspace rate-limit. |
+| `skill_query`| `{ skill, prompt }`                                           | **Not enabled.** Accepted when a source is added, but every refresh fails with "skill_query refresh not yet enabled": there is no budgeted, permission-checked way yet to run a model on a schedule for an artifact. |
 
 ## Templates
 
@@ -194,6 +194,33 @@ ship custom JS, pass it as a bundle (see "Custom JS" below).
 
 Three built-in templates are available out of the box for the `dashboard`,
 `news`, and `table` artifact types.
+
+## Slugs
+
+A slug (lowercase letters, digits and dashes, 1–64 characters) is unique per
+workspace among live artifacts; deleting an artifact frees its slug at once.
+A slug that is taken is a `409` from `POST /api/artifacts` (and the same
+result from `create_live_artifact` and "save as artifact" in the chat):
+
+```json
+{ "error": "slug \"report\" is already used in this workspace",
+  "code": "slug_taken", "slug": "report", "suggestedSlug": "report-2" }
+```
+
+`suggestedSlug` is the first free `<slug>-<n>` (null when none up to `-99`
+is free). It is advice only: nothing is reserved, and the retry goes through
+the same unique index. Two creates racing for one slug are decided by that
+index, so exactly one succeeds and the other gets this `409`, never a server
+error. The web app's "new artifact" form and the chat's save dialog show the
+conflict with a button to take the suggestion; the agent tool returns
+`code` and `suggested_slug`.
+
+Public links (`/a/<slug>`) name no workspace, so a public artifact needs a
+slug no other workspace has public: creating or switching an artifact to
+`public` under such a slug is a `409` with `code: "public_slug_taken"`. This
+is a check before the write, not an index (installs may already hold such a
+pair); if two workspaces publish one slug at the same moment, or held a pair
+from before the check, the oldest artifact keeps the public link.
 
 ## Visibility
 
@@ -210,10 +237,32 @@ read.
 
 ## Real-time updates
 
-The embed page mints an artifact-scoped JWT (5-minute TTL, signed with a
-key separate from session JWT) and injects it into a `<meta>` tag. The SDK
-opens a WebSocket to the gateway and subscribes to `artifact.*` events.
-On `artifact.data_updated`, it re-fetches via REST and patches the DOM.
+The embed page mints a viewer token (5-minute TTL, HMAC-signed with a key
+separate from session JWTs) and injects it into a `<meta>` tag. The SDK
+opens a WebSocket to the gateway, signs in with it (`artifact_token`) and
+subscribes to `artifact:<id>`. On `artifact.data_updated` it reads the new
+snapshot from the embed's own data route, `GET <embed URL>/../data/<source>?vt=<token>`
+(`/a/<slug>/data/<source>`, or under `/__artifacts__` in path-prefix mode),
+and patches the DOM.
+
+The viewer token is the embed's only credential, and it is scoped:
+
+- **One artifact.** It is signed for one artifact id (`aud: artifact:<id>`)
+  and the workspace it was minted in; the data route also checks that the
+  slug in the URL names that artifact. It opens no other artifact's
+  events or data.
+- **Read-only.** Its scope is always `view`; a token claiming anything else
+  is refused. On the gateway it may only ping and subscribe to its own
+  artifact; the data route is `GET` only. No `/api` route accepts it — not as
+  `Bearer`, not as `ArtifactToken`, not in the query — so it cannot refresh,
+  edit, list or read anything through the app API.
+- **Expiring.** 5 minutes; an open gateway connection is closed when it
+  expires. Reloading the page re-checks access and mints a new one.
+- **Revocable.** Deleting the artifact, changing its visibility, or revoking
+  the share link a page was opened with closes its live viewer connections
+  and refuses the tokens issued before that moment (process-local cutoff).
+  A token minted from a share link records the link (`slid`) and stops
+  working as soon as the link is revoked or expires.
 
 If the WS disconnects, the SDK attempts exponential-backoff reconnect and
 flips the embed's `data-octipus-stale` attribute after 30s.
@@ -237,7 +286,9 @@ the bundles directory (`<artifactId>/<versionId>/bundle.js`). Handlers become
 `data-octi-h` markers bound by `addEventListener` in the bundle, so neither
 `'unsafe-inline'` nor `'unsafe-eval'` is needed. The embed includes the built bundle inline under its exact SHA-256 CSP hash.
 This keeps private artifacts functional inside an opaque sandbox, where a
-separate bundle request would lose SameSite login cookies.
+separate bundle request would lose SameSite login cookies. The bundle is not
+served as a file on any route: artifact-authored JavaScript only ever runs
+inside the sandboxed embed.
 
 A script that does not build does not fail the write: the version is saved,
 renders without behaviour, and the caller gets the compiler message as a
@@ -249,8 +300,26 @@ a restore copies the restored version's bundle.
 
 The outer page and the web app frame the embed with `sandbox="allow-scripts"`
 (an opaque origin). The embed's CSP header also carries `sandbox
-allow-scripts`, so an embed URL opened directly — in path-prefix mode it is on
-the app's own origin — still runs without the app's cookies and storage.
+allow-scripts` (never `allow-same-origin`), so an embed URL opened directly — in
+path-prefix mode it is on the app's own origin — still runs without the app's
+cookies and storage.
+
+Response headers on hosted artifact responses:
+
+| Response | Headers |
+|----------|---------|
+| Embed (`/embed`) | `Content-Security-Policy` (`default-src 'none'`, script hashes only, `frame-ancestors 'self'` plus `allowedEmbedOrigins`, `sandbox allow-scripts`), `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` |
+| Outer page | CSP `default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; frame-ancestors …` (no script), `Cross-Origin-Opener-Policy: same-origin`, `Referrer-Policy: no-referrer` |
+| Export, data | CSP `default-src 'none'; frame-ancestors 'none'; sandbox` (inert if opened), `nosniff`, `no-store`; the data route adds `Access-Control-Allow-Origin: *` without credentials |
+
+`allowedEmbedOrigins` takes web origins only (`https://host[:port]` or
+`https://*.host`); anything else is refused with a 400, and invalid stored
+entries are dropped from the policy, so an entry cannot add a CSP directive.
+No artifact response reflects the request's `Host` header; links are built
+from configuration (`ARTIFACTS_HOST`, `PUBLIC_URL`).
+
+Which host serves what, and why the artifact host serves nothing but these
+pages, is in [CONFIGURATION.md](./CONFIGURATION.md#artifacts-hosting).
 
 ## Saved interactive answers
 
@@ -285,10 +354,35 @@ fired:
 DB-backed user hook bindings will arrive in a follow-up `trigger_type`
 enum migration.
 
-## Cleanup
+## Cleanup and retention
 
-A recurring `artifact:cleanup` task runs hourly and:
+A recurring `artifact:cleanup` task runs hourly (the `artifacts-cleanup` job
+of the `artifacts` module; off, it deletes nothing) and:
 
-- Prunes snapshots beyond the newest 50 per source
-- Deletes soft-deleted artifacts older than 30 days (cascade)
-- Removes expired share links
+- **Expires inactive artifacts — only when configured.** With
+  `artifacts.retentionDays` (env `ARTIFACTS_RETENTION_DAYS`) above 0, an
+  artifact that has not been edited, viewed, or had a data refresh for that
+  many days is moved to the trash, as if its owner had deleted it: it
+  disappears from lists and its pages and viewer tokens stop working, but
+  nothing is removed yet. A view is any render of its embed (the web app's
+  frame, the outer page, a share link), recorded in `last_viewed_at` at most
+  once an hour per artifact, so a viewed artifact does not expire, even a
+  static one or one whose refreshes fail. Artifacts not viewed since the
+  upgrade that added the column fall back to their edit and refresh times. At most 500 expire per pass; each is
+  logged (`artifact.cleanup.expired`, with workspace and slug). The default is
+  `0`: nothing expires, which is how every install behaved before the setting
+  existed.
+- **Empties the trash** after `artifacts.trashDays` (env
+  `ARTIFACTS_TRASH_DAYS`, default 30 — the window that was always used):
+  the row goes with its versions, sources, snapshots, transforms, widgets,
+  exports and share links (database cascade), and its bundle directory is
+  removed from disk (`artifact.cleanup.purged`).
+- Prunes snapshots beyond the newest 50 per source.
+- Keeps the bundles of the current version and the 5 newest versions of each
+  artifact, removing older ones from disk.
+- Removes expired share links.
+
+These removals are written to the server log, not the audit log: they are
+unattended sweeps like session retention (`sessions.retentionDays`), which
+is not audited either. A deletion a user makes goes through the API and is
+recorded by the request audit like any other change.
