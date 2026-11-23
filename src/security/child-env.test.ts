@@ -63,6 +63,11 @@ describe('buildChildEnv', () => {
     expect(env.SLACK_BOT_TOKEN).toBeUndefined();
   });
 
+  test('git environment configuration is dropped as a unit, never a count without its keys', () => {
+    const env = withEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: Bearer x' }, () => buildChildEnv());
+    expect(Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG'))).toEqual([]);
+  });
+
   test('an explicit value wins over the filter', () => {
     const env = withEnv({ MASTER_KEY: 'inherited' }, () =>
       buildChildEnv({ MASTER_KEY: 'passed-on-purpose' }),

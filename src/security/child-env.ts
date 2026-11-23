@@ -53,6 +53,18 @@ export function isSensitiveEnvName(name: string): boolean {
   return SENSITIVE_ENV_EXACT.has(name) || SENSITIVE_ENV_PATTERN.test(name);
 }
 
+/**
+ * Git's environment configuration: `GIT_CONFIG_COUNT` with its
+ * `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pairs. One unit, passed on or
+ * dropped together. The KEY names match the credential pattern above, so they
+ * alone used to be dropped: every git command in a child then died with
+ * "missing config key GIT_CONFIG_KEY_0", and the VALUEs — which can be an
+ * `http.extraHeader` carrying a token — went through without their keys.
+ */
+function isGitConfigEnvName(name: string): boolean {
+  return name === 'GIT_CONFIG_COUNT' || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name);
+}
+
 /** Build the environment for a spawned child. */
 export function buildChildEnv(
   extra?: Record<string, string>,
@@ -62,7 +74,7 @@ export function buildChildEnv(
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
-    if (!keep.has(k) && isSensitiveEnvName(k)) continue;
+    if (!keep.has(k) && (isSensitiveEnvName(k) || isGitConfigEnvName(k))) continue;
     out[k] = v;
   }
   return { ...out, ...extra };
