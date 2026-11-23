@@ -34,6 +34,8 @@ vi.mock('@/core/artifacts/settings', async (importOriginal) => {
 
 const ARTIFACT_HOST = 'artifacts.test';
 const userId = randomUUID();
+const adminId = randomUUID();
+let adminSession: string;
 type App = { handle(request: Request): Promise<Response> };
 let app: App;
 let session: string;
@@ -84,9 +86,10 @@ beforeAll(async () => {
   const { initializeStorage } = await import('@/db/storage');
   initializeStorage({ mode: 'external' });
   const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
-  await seedUsers([{ id: userId, username: 'hosting-user' }]);
+  await seedUsers([{ id: userId, username: 'hosting-user' }, { id: adminId, username: 'hosting-admin', isAdmin: true }]);
   const { getSessionManager } = await import('@/security/auth/session');
   session = (await getSessionManager().create(userId)).token;
+  adminSession = (await getSessionManager().create(adminId)).token;
   const { createServer } = await import('@/api/server');
   app = createServer();
   pub = await createArtifact('pub-board', 'public');
@@ -356,5 +359,19 @@ describe('path spellings cannot move an artifact page off its sandbox', () => {
     const html = await (await send('GET', '/__artifacts__/a/split-tag/embed')).text();
     expect(html).not.toMatch(/<script src="(?!\/octipus-artifact-client\.js")/);
     expect(html).not.toMatch(/onerror/i);
+  });
+});
+
+describe('the artifact host can never shadow the app', () => {
+  test('saving the host the app is used at as artifacts.host is refused', async () => {
+    for (const [path, body] of [
+      ['/api/settings/artifacts.host', { value: 'localhost' }],
+      ['/api/settings/artifacts.host', { value: 'https://LOCALHOST/' }],
+    ] as const) {
+      const res = await send('PUT', path, { auth: `Bearer ${adminSession}`, body });
+      expect((await res.json()).error, JSON.stringify(body)).toMatch(/host of its own/);
+    }
+    const batch = await send('PUT', '/api/settings/batch', { auth: `Bearer ${adminSession}`, body: { settings: { 'artifacts.host': 'localhost' } } });
+    expect((await batch.json()).errors?.['artifacts.host']).toMatch(/host of its own/);
   });
 });

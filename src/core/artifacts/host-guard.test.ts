@@ -42,6 +42,7 @@ describe('isArtifactHostRequest', () => {
   });
 
   it('matches the configured host exactly, from the Host header', () => {
+    settings.set('oauth.publicUrl', 'https://app.example.com');
     settings.set('artifacts.host', 'artifacts.example.com');
     expect(isSubdomainMode()).toBe(true);
     expect(isArtifactHostRequest(req('http://backend:3005/a/x', 'artifacts.example.com'))).toBe(true);
@@ -53,6 +54,7 @@ describe('isArtifactHostRequest', () => {
   });
 
   it('ignores forwarded host headers a client could set', () => {
+    settings.set('oauth.publicUrl', 'https://app.example.com');
     settings.set('artifacts.host', 'artifacts.example.com');
     const r = new Request('http://app.example.com/api/me', { headers: { host: 'app.example.com', 'x-forwarded-host': 'artifacts.example.com' } });
     expect(isArtifactHostRequest(r)).toBe(false);

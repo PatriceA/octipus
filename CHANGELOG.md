@@ -15,9 +15,11 @@ labels reflect blast radius, not contract guarantees.
     ignored, no response from it sets a cookie, and its gateway socket admits
     artifact viewer tokens only. The root `/a/<slug>` pages are no longer
     served on the app's own host in that mode. **Operators:** the reverse
-    proxy must pass the original `Host` header (matched exactly; an
-    `ARTIFACTS_HOST` equal to the app's `PUBLIC_URL` host is ignored with an
-    error).
+    proxy must pass the original `Host` header (matched exactly), and
+    `ARTIFACTS_HOST` is honoured only with `PUBLIC_URL` set to a different
+    host (otherwise it is ignored with an error and the `/__artifacts__`
+    fallback serves). Settings refuses to save the app's own address as the
+    artifact host.
   - The outer page gets a no-script CSP and `Cross-Origin-Opener-Policy`;
     embeds, exports and data reads send no referrer and are not cached;
     exports are inert (`sandbox` CSP) if opened.

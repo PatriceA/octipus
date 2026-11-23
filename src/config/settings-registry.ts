@@ -1232,7 +1232,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'artifacts',
     valueType: 'string',
     defaultValue: '',
-    description: 'Subdomain that serves hosted artifact pages (e.g. "artifacts.octipus.cc"). Empty → fall back to /__artifacts__/* on the main host with weaker isolation. Add the DNS record in your provider before setting this.',
+    description: 'Subdomain that serves hosted artifact pages (e.g. "artifacts.octipus.cc"). Empty → fall back to /__artifacts__/* on the main host with weaker isolation. Add the DNS record in your provider before setting this. Honoured only when the public URL (oauth.publicUrl / PUBLIC_URL) is set to a different host; it can never be the address the app is used at.',
     isSecret: false,
     envVar: 'ARTIFACTS_HOST',
   },

@@ -52,6 +52,59 @@ function pickStr(svc: ReturnType<typeof getSettingsService>, key: string): strin
   return typeof v === 'string' ? v : '';
 }
 
+/** A `Host` value: a DNS name or a bracketed IPv6 literal, with an optional port. */
+const HOST_HEADER_RE =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/;
+
+/**
+ * A `Host` header (or a configured host) in the one spelling two hosts are
+ * compared in: lower case, the default ports (80, 443) dropped. Null for a
+ * value that is not a host at all — such a request is never the artifact host.
+ */
+export function normalizeHost(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  const match = HOST_HEADER_RE.exec(value);
+  if (!match) return null;
+  const port = match[1];
+  if (port === '80' || port === '443') return value.slice(0, -(port.length + 1));
+  return value;
+}
+
+/** The configured `artifacts.host` value as a host (`artifacts.example.com[:port]`), '' when unset. */
+function parseArtifactHost(value: string): { host: string; url: URL | null } {
+  const trimmed = value.trim();
+  if (!trimmed) return { host: '', url: null };
+  const url = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+  return { host: url.host, url };
+}
+
+/**
+ * Why `value` cannot be saved as `artifacts.host`, or null when it can. The
+ * artifact host serves nothing of the app (no API, no sign-in), so naming the
+ * host the app is being used on would lock everyone out of it, the Settings
+ * page that could undo it included. Refused: the host of the request saving
+ * it, and the app's public host (`oauth.publicUrl` / `PUBLIC_URL`).
+ */
+export function artifactHostSettingRefusal(value: unknown, requestHost: string | null): string | null {
+  if (value === '' || value === null || value === undefined) return null;
+  if (typeof value !== 'string') return 'artifacts.host must be a host name';
+  let host: string;
+  try {
+    host = parseArtifactHost(value).host;
+  } catch {
+    return `artifacts.host: "${value}" is not a host name`;
+  }
+  const candidate = normalizeHost(host);
+  if (!candidate) return `artifacts.host: "${value}" is not a host name`;
+  const svc = getSettingsService();
+  const appHosts = [normalizeHost(requestHost), normalizeHost(appPublicHost(svc))].filter(Boolean);
+  if (appHosts.includes(candidate)) {
+    return `artifacts.host must be a host of its own: "${host}" is the address this app is used at, and the artifact host serves no app pages or API`;
+  }
+  return null;
+}
+
 /** The host of the app's public URL (`oauth.publicUrl`, env `PUBLIC_URL`), or '' when none or unparsable. */
 function appPublicHost(svc: ReturnType<typeof getSettingsService>): string {
   const raw = pickStr(svc, 'oauth.publicUrl').trim() || process.env.PUBLIC_URL?.trim() || '';
@@ -77,15 +130,20 @@ export function resolveArtifactSettings(): ArtifactSettings {
   const hostUrl = hostSetting ? new URL(hostSetting.includes('://') ? hostSetting : `https://${hostSetting}`) : null;
   if (hostUrl && !['http:', 'https:'].includes(hostUrl.protocol)) throw new Error('Artifact host must use HTTP or HTTPS');
   let host = hostUrl?.host ?? '';
-  // The artifact host must be an origin of its own. Set to the app's own host,
-  // every request to the app would be treated as one for an artifact page
-  // (isArtifactHostRequest) and artifacts would share the app's origin. Refuse
-  // it and serve the sandboxed path-prefix fallback instead.
-  const appHost = appPublicHost(svc);
-  if (host && appHost && host === appHost) {
+  // The artifact host must be an origin of its own, and the app's own host
+  // must be known to tell them apart. Every request for the artifact host is
+  // refused everything but artifact pages, so an artifact host that is (or
+  // might be) the address the app is used at would lock everyone out of the
+  // app, Settings included. Hence subdomain mode needs the app's public URL
+  // (`oauth.publicUrl` / `PUBLIC_URL`) on a different host; otherwise the
+  // setting is ignored, loudly, and the sandboxed path-prefix fallback serves.
+  const appHost = normalizeHost(appPublicHost(svc));
+  if (host && (!appHost || normalizeHost(host) === appHost)) {
     coreLogger.error(
-      { host },
-      'artifacts.host is the app\'s own host (oauth.publicUrl / PUBLIC_URL) — ignored; artifacts are served at /__artifacts__/* until it names a separate host',
+      { host, appHost: appHost || null },
+      appHost
+        ? 'artifacts.host is the app\'s own host (oauth.publicUrl / PUBLIC_URL) — ignored; artifacts are served at /__artifacts__/* until it names a separate host'
+        : 'artifacts.host is set but the app\'s public URL (oauth.publicUrl / PUBLIC_URL) is not — ignored, so it cannot shadow the app; artifacts are served at /__artifacts__/*',
     );
     host = '';
   }

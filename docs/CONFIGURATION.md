@@ -348,9 +348,16 @@ Live artifacts (`docs/ARTIFACTS.md`) ship hosted HTML pages. Two modes:
    the same origin as your main app. Cloudflare users: orange-cloud is
    fine; Universal SSL covers it. If you already have `*.<host>` wildcard
    DNS, no new record is needed.
-2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env. It must not be
-   the app's own host (`PUBLIC_URL`); if it is, it is ignored with an error
-   in the log and artifacts are served on the no-DNS fallback below.
+2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env, and set
+   `PUBLIC_URL` to the address the app itself is used at. The artifact host
+   serves no app page or API, so it must never be the app's own address:
+   - `ARTIFACTS_HOST` is honoured only while `PUBLIC_URL` (or
+     `oauth.publicUrl`) is set to a different host. Without it, or equal to
+     it, `ARTIFACTS_HOST` is ignored with an error in the log and artifacts
+     are served on the no-DNS fallback below, so a wrong value can never lock
+     you out of the app.
+   - Settings refuses to save as `artifacts.host` the host you are using the
+     app at, or the `PUBLIC_URL` host.
 3. Reverse-proxy any `Host: artifacts.<your-host>` traffic to the same
    octipus backend (or to the bundled web server, which forwards `/a/` with
    the `Host` header intact). The proxy must pass the original `Host` header

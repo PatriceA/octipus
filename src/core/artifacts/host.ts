@@ -6,7 +6,7 @@
 
 import { publicLinkBase } from '@/core/public-url';
 import { coreLogger } from '@/utils/logger';
-import { resolveArtifactSettings } from './settings';
+import { normalizeHost, resolveArtifactSettings } from './settings';
 
 export type ArtifactsHostMode =
   | { mode: 'subdomain'; host: string; proto: 'http' | 'https' }
@@ -18,24 +18,7 @@ export function getArtifactsHostMode(): ArtifactsHostMode {
   return { mode: 'path-prefix', pathPrefix: '/__artifacts__' };
 }
 
-/** A `Host` value: a DNS name or a bracketed IPv6 literal, with an optional port. */
-const HOST_HEADER_RE =
-  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/;
-
-/**
- * A `Host` header (or a configured host) in the one spelling two hosts are
- * compared in: lower case, the default ports (80, 443) dropped. Null for a
- * value that is not a host at all — such a request is never the artifact host.
- */
-export function normalizeHost(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const value = raw.trim().toLowerCase();
-  const match = HOST_HEADER_RE.exec(value);
-  if (!match) return null;
-  const port = match[1];
-  if (port === '80' || port === '443') return value.slice(0, -(port.length + 1));
-  return value;
-}
+export { normalizeHost } from './settings';
 
 /**
  * Did this request arrive for the configured artifact host? Only in
