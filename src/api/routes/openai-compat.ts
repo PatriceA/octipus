@@ -262,6 +262,12 @@ export const openaiCompatRoutes = new Elysia()
         if (wantStream && getConfig().agent?.streaming !== false
           && (await getProviderRouter().resolveProvider(options.model, options)).streamIsComplete === true) {
           const streamed = await openPassthroughStream(id, model, options, request.signal);
+          if (!streamed) {
+            // The client left during the lookups above: no provider call was made.
+            apiLogger.info({ model }, '/v1/chat/completions: client gone before the provider call — not sent');
+            set.status = 499;
+            return oaiError('The client closed the request', 'invalid_request_error', 'client_closed');
+          }
           set.headers = { ...set.headers, ...SSE_HEADERS };
           return streamed;
         }
@@ -326,9 +332,11 @@ export const openaiCompatRoutes = new Elysia()
  * Start a token-true passthrough stream. The provider is read up to its first
  * chunk before any byte is sent, so a request it refuses (unknown model, quota,
  * an open circuit, a provider error) gets its HTTP status and error envelope
- * from that one attempt: it is not retried without streaming.
+ * from that one attempt: it is not retried without streaming. Null when the
+ * client has already gone: the provider is not called at all.
  */
 async function openPassthroughStream(id: string, model: string, options: CompletionOptions, client: AbortSignal) {
+  if (client.aborted) return null;
   const provider = new AbortController();
   const stopEarly = () => provider.abort(client.reason);
   client.addEventListener('abort', stopEarly, { once: true });

@@ -1054,16 +1054,20 @@ curl https://your-host/v1/chat/completions \
     trimming, a leaked JSON thinking wrapper, DeepSeek template recovery), so
     its reply is completed and the finished text chunked, as before: streaming
     it would show text the non-streamed answer filters.
-  - A refusal or provider error before the first chunk (unknown model, quota,
-    an open circuit, an upstream error) returns its HTTP status and error
-    envelope from that one attempt; it is not retried without streaming. A
+  - An error before the first chunk is answered from that one attempt, as the
+    non-streamed path answers it: 429 `rate_limit_exceeded` for a budget or
+    quota refusal, 400 `model_not_found` for an unknown model, 500
+    `server_error` for anything else (an open circuit, an upstream error); it
+    is not retried without streaming. A client that is already gone when the
+    provider would be called gets 499 `client_closed` and no call is made. A
     provider that fails midway ends the stream with an OpenAI error frame
     (`data: {"error": …}`) and `[DONE]`, not a finish chunk.
   - A client that disconnects mid-reply aborts the provider call. One that
     disconnects after the reply's text is complete lets the provider's usage
     chunk be read (up to 2 s) so the call is accounted for; a stream cut off
     before its usage is recorded with an estimate (prompt plus output so far,
-    `usageEstimated` in `cost_log` metadata). A client that stays connected
+    `usageEstimated` in `cost_log` metadata; see
+    [SPEND-BUDGETS.md](SPEND-BUDGETS.md) for its limits). A client that stays connected
     but stops reading is dropped after `api.streamStallTimeoutMs` (default
     60 s): the provider call and its rate-limit slot are freed and the stream
     ends without `[DONE]`.

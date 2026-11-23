@@ -15,8 +15,10 @@ labels reflect blast radius, not contract guarantees.
   non-streamed `message.content`. Other providers (LiteLLM, Anthropic,
   Gemini, DeepSeek, Ollama, CLI, custom Anthropic/Gemini-compatible) filter
   their streamed and completed text differently, so they still answer with
-  the finished text in chunks. A refusal before the first chunk keeps its
-  HTTP status and is not retried; a disconnecting client aborts the provider
+  the finished text in chunks. An error before the first chunk is answered
+  as the non-streamed path answers it (429 for a budget refusal, 400 for an
+  unknown model, 500 otherwise) and is not retried; a client gone before the
+  provider call gets 499 and no call is made; a disconnecting client aborts the provider
   call, except after the text is complete, when the usage chunk is still read
   (up to 2 s). A client that stops reading is dropped after the new
   `api.streamStallTimeoutMs` (default 60 s). `agent.streaming: false` turns
@@ -28,8 +30,10 @@ labels reflect blast radius, not contract guarantees.
   that ended after it had started answering but before its usage chunk (its
   reader went away, it failed midway) recorded 0 tokens and unknown cost; it
   now records an estimate (prompt plus output so far, chars/4), marked
-  `usageEstimated` in `cost_log` metadata. Routed streams also count their
-  tokens in the provider's TPM window, as completions did.
+  `usageEstimated` in `cost_log` metadata ([limits](docs/SPEND-BUDGETS.md)).
+  Routed streams also record their tokens in the provider's TPM window, as
+  completions did; nothing enforces that window yet, and it is now pruned on
+  every write so it no longer grows without bound.
 
 - **Recall: shown when it qualifies, everywhere an agent starts, and measured
   by whether it was used** ([plan](docs/plans/recall-hardening.md),

@@ -621,6 +621,17 @@ describe('POST /v1/chat/completions — token-true passthrough streaming', () =>
     expect(completeCalls).toHaveLength(0);
   });
 
+  test('a client gone before the provider call is never sent to the provider', async () => {
+    useProvider(scriptedProvider({ pieces: ['unbilled'] }).provider);
+    const client = new AbortController();
+    client.abort();
+    const res = await postStream({}, client.signal);
+    expect(res.status).toBe(499);
+    expect((await res.json()).error.code).toBe('client_closed');
+    expect(streamCalls).toHaveLength(0);
+    expect(completeCalls).toHaveLength(0);
+  });
+
   test('a refusal before the first chunk keeps its HTTP status and envelope', async () => {
     resolvedProvider = { name: 'openai', streamIsComplete: true };
     streamImpl = async function* () { throw new Error('No provider for model bogus'); };
