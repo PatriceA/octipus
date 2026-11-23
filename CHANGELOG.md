@@ -22,7 +22,7 @@ labels reflect blast radius, not contract guarantees.
   any plugin text put in front of a model (role, prompt section, context) are
   neutralised: every angle-bracket form and the fence tag names. Operator roles (`POST /api/roles`) now also take
   `displayName`, `spawns`, `spawnedBy` and `limits` (migration
-  `0205_runtime_role_fields`, four nullable columns on `roles`). Plugin roles are
+  `0208_runtime_role_fields`, four nullable columns on `roles`). Plugin roles are
   listed on the Topics page and in `GET /api/roles` (`source: "plugin"`),
   read-only. A stored operator role that cannot load is listed with
   `loaded: false` and its problems, and can be edited or deleted.
