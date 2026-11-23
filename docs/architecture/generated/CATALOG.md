@@ -837,13 +837,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 4 |
 | `capabilities` | `utils` | 11 |
-| `channels` | `config` | 7 |
-| `channels` | `core` | 52 |
-| `channels` | `db` | 44 |
+| `channels` | `config` | 8 |
+| `channels` | `core` | 58 |
+| `channels` | `db` | 48 |
 | `channels` | `models` | 8 |
-| `channels` | `security` | 24 |
+| `channels` | `security` | 26 |
 | `channels` | `shared` | 5 |
-| `channels` | `utils` | 24 |
+| `channels` | `utils` | 25 |
 | `channels` | `voice` | 5 |
 | `config` | `channels` | 2 |
 | `config` | `core` | 5 |
@@ -855,7 +855,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 78 |
+| `core` | `config` | 79 |
 | `core` | `db` | 569 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
@@ -868,7 +868,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `setup` | 1 |
 | `core` | `shared` | 92 |
 | `core` | `skills` | 20 |
-| `core` | `tools` | 37 |
+| `core` | `tools` | 38 |
 | `core` | `utils` | 274 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
@@ -914,7 +914,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `shared` | 5 |
 | `models` | `utils` | 47 |
 | `plugins` | `config` | 12 |
-| `plugins` | `core` | 58 |
+| `plugins` | `core` | 59 |
 | `plugins` | `db` | 69 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
@@ -925,7 +925,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 39 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
-| `security` | `core` | 41 |
+| `security` | `core` | 42 |
 | `security` | `db` | 88 |
 | `security` | `mcp` | 2 |
 | `security` | `plugins` | 2 |
@@ -959,7 +959,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 160 |
+| `tools` | `core` | 161 |
 | `tools` | `db` | 44 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

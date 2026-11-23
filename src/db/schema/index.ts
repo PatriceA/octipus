@@ -18,6 +18,7 @@ export * from './cleanup-log';
 export * from './compaction-entries';
 export * from './contacts';
 export * from './documents';
+export * from './email-channel';
 export * from './email-handled';
 export * from './email-index';
 export * from './email-triage-labels';
