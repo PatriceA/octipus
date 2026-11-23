@@ -87,7 +87,7 @@
     "jszip": "3.10.2",
     "mailparser": "3.14.3",
     "mammoth": "1.13.0",
-    "node-diff3": "^3.2.1",
+    "node-diff3": "^4.0.0",
     "node-pptx-parser": "1.0.1",
     "nodemailer": "10.5.0",
     "openai": "^7.56.0",
