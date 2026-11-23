@@ -11,6 +11,7 @@ import {
 } from './roles';
 import { getToolRegistry } from '@/tools/registry';
 import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
+import { UnknownRoleError } from './role-registry';
 import type { AgentRole, RoleConfig } from './types';
 import { meta as generalMeta } from './roles/general/config';
 
@@ -57,9 +58,11 @@ describe('getRoleConfig', () => {
     expect(cfg.systemPromptTemplate.startsWith(SECURITY_PREAMBLE)).toBe(true);
   });
 
-  test('falls back to general for unknown role', () => {
-    const cfg = getRoleConfig('does-not-exist' as never);
-    expect(cfg.role).toBe(ROLE_CONFIGS.general.role);
+  test('an unknown role fails by name instead of running as general', () => {
+    // It used to return `general`: a stage naming a removed role ran with the
+    // general prompt and the general (wider) toolset, and nothing said so.
+    expect(() => getRoleConfig('does-not-exist' as never)).toThrow(UnknownRoleError);
+    expect(() => getToolsForRole('does-not-exist' as never)).toThrow(/Role 'does-not-exist' is not registered/);
   });
 
   test('round-trip: getRoleConfig then strip yields original template', () => {

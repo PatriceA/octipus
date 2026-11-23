@@ -62,11 +62,18 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
     // don't leak into later unit suites.
     if (roleConfigsBackup) {
       const { ROLE_CONFIGS } = await import('@/core/agent/roles');
-      // Delete first: this suite CREATES roles, and a key the snapshot never
-      // had would otherwise survive into unit suites that count the registry.
+      const { listRegisteredRoles, roleSource, unregisterRuntimeRole } = await import('@/core/agent/role-registry');
+      // Unregister first: this suite CREATES roles, and a role the snapshot
+      // never had would otherwise survive into unit suites that count the
+      // registry — in ROLE_CONFIGS and in the registry's record of who owns
+      // the id, which would refuse a later suite's role of the same name.
+      for (const { config, source } of listRegisteredRoles()) {
+        if (!(config.role in roleConfigsBackup) && source.kind !== 'builtin') unregisterRuntimeRole(config.role, source);
+      }
       for (const key of Object.keys(ROLE_CONFIGS)) {
         if (!(key in roleConfigsBackup)) delete (ROLE_CONFIGS as Record<string, unknown>)[key];
       }
+      expect(roleSource('translator')).toBeNull();
       for (const key of Object.keys(roleConfigsBackup)) {
         (ROLE_CONFIGS as Record<string, unknown>)[key] = roleConfigsBackup[key];
       }

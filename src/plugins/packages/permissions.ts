@@ -50,6 +50,8 @@ const sorted = (values: readonly string[] | undefined) => [...(values ?? [])].so
 export interface PermissionFileHashes {
   promptSha256: string | null;
   uiSha256: string | null;
+  /** Each role's prompt file's sha256, by role id. */
+  rolePromptSha256?: Record<string, string | null>;
 }
 
 const rolesOf = (roles: readonly string[] | undefined) => (roles === undefined ? {} : { roles: sorted(roles) });
@@ -92,6 +94,28 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
         .sort((a, b) => byCodeUnit(a.on, b.on) || byCodeUnit(a.tool, b.tool)),
       prompt: manifest.prompt ? { file: manifest.prompt.file, sha256: files.promptSha256, ...rolesOf(manifest.prompt.roles) } : null,
       context: manifest.context ? { tool: manifest.context.tool, ...rolesOf(manifest.context.roles) } : null,
+      // Only when it adds roles: a summary pinned before roles existed must read the same.
+      ...(manifest.roles?.length
+        ? {
+            roles: manifest.roles
+              .map((r) => ({
+                id: r.id,
+                displayName: r.displayName,
+                description: r.description,
+                lane: r.lane,
+                tools: sorted(r.tools),
+                ...(r.coreTools ? { coreTools: sorted(r.coreTools) } : {}),
+                promptSha256: files.rolePromptSha256?.[r.id] ?? null,
+                ...(r.spawns ? { spawns: sorted(r.spawns) } : {}),
+                ...(r.spawnedBy ? { spawnedBy: sorted(r.spawnedBy) } : {}),
+                // In their declared order: the order they are rendered in.
+                ...(r.criticalRules?.length ? { criticalRules: [...r.criticalRules] } : {}),
+                ...(r.readOnly ? { readOnly: true } : {}),
+                ...(r.limits ? { limits: { ...r.limits } } : {}),
+              }))
+              .sort((a, b) => byCodeUnit(a.id, b.id)),
+          }
+        : {}),
     },
     pages,
     ui: pages.length > 0 ? { dir: uiDirOf(manifest.ui), sha256: files.uiSha256 } : null,
@@ -117,5 +141,7 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
 export async function packagePermissions(manifest: PluginManifest, dir: string): Promise<PluginPermissions> {
   const promptSha256 = manifest.prompt ? await fileSha256(join(dir, ...manifest.prompt.file.split('/'))) : null;
   const uiSha256 = (manifest.ui?.pages ?? []).length > 0 ? await uiTreeHash(join(dir, ...uiDirOf(manifest.ui).split('/'))) : null;
-  return computePermissions(manifest, { promptSha256, uiSha256 });
+  const rolePromptSha256: Record<string, string | null> = {};
+  for (const r of manifest.roles ?? []) rolePromptSha256[r.id] = await fileSha256(join(dir, ...r.prompt.split('/')));
+  return computePermissions(manifest, { promptSha256, uiSha256, rolePromptSha256 });
 }

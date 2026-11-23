@@ -162,7 +162,8 @@ describe('plugin contributions', () => {
     const outcome = await runPluginContexts({ userId: admin, sessionId: '', role: 'general', query: 'what is up', scope: SCOPE });
     expect(outcome.labelledBlocks.map((b) => b.label)).toEqual([`Plugin context: ${PKG}`]);
     expect(outcome.text).toContain(`<plugin-context plugin="${PKG}">`);
-    expect(outcome.text).toContain('Notes for ‹what is up› ‹/plugin-context›');
+    // Not even the look of a closing tag survives: the tag name is rewritten too.
+    expect(outcome.text).toContain('Notes for ‹what is up› ‹/plugin_context›');
     expect(outcome.text.match(/<\/plugin-context>/g)).toHaveLength(1);
     expect(await calls()).toEqual([{ name: 'ctx', args: { query: 'what is up', role: 'general' } }]);
     // Never in a space.

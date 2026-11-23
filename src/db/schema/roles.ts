@@ -26,6 +26,17 @@ export const roles = pgTable('roles', {
    * role gets picked at all; without one it is invisible to delegation.
    */
   description: text('description'),
+  /** A human name for role pickers; the id when null. Operator roles only. */
+  displayName: text('display_name'),
+  /**
+   * The roles an agent of this role may spawn. NULL: any role that accepts it;
+   * `[]`: none. Operator roles only — a built-in has no spawn rules.
+   */
+  spawns: jsonb('spawns').$type<string[]>(),
+  /** The roles that may spawn this one. NULL: any. Operator roles only. */
+  spawnedBy: jsonb('spawned_by').$type<string[]>(),
+  /** `{ maxTokens?, maxWallClockMs? }`: ceilings below the depth defaults. Operator roles only. */
+  limits: jsonb('limits').$type<{ maxTokens?: number; maxWallClockMs?: number }>(),
   defaultTopic: text('default_topic').notNull().default('general'),
   systemPromptTemplate: text('system_prompt_template').notNull(),
   isSystem: boolean('is_system').default(true).notNull(),

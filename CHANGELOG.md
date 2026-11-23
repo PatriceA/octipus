@@ -7,6 +7,41 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Agent roles can be installed at runtime.** A plugin package can contribute
+  agent roles (`roles` in the manifest, apiVersion 1.3.0): an id, a prompt file,
+  tools, a lane, spawn rules and limits, registered while the package is enabled
+  and its contributions approved. The role prompts are part of the contributions
+  hash (length-prefixed); the prompt and the package's standing rules are fenced
+  together as third-party text, and the role's description is quoted as such in
+  the delegation menu. Every field of a role is shown for review (web and
+  `octi plugin approve-contributions`) and in the permissions summary and update
+  diff. A plugin role cannot reuse a built-in, reserved or lane-name id or
+  another source's id, may only hold tools some built-in role already holds, and
+  never `plugin_dev`, `mcp_admin`, `protection`, `scheduling`, `tasks`,
+  `skill-distill`, `monitor`, `companion` or `browser-ext`. Fence look-alikes in
+  any plugin text put in front of a model (role, prompt section, context) are
+  neutralised: every angle-bracket form and the fence tag names. Operator roles (`POST /api/roles`) now also take
+  `displayName`, `spawns`, `spawnedBy` and `limits` (migration
+  `0208_runtime_role_fields`, four nullable columns on `roles`). Plugin roles are
+  listed on the Topics page and in `GET /api/roles` (`source: "plugin"`),
+  read-only. A stored operator role that cannot load is listed with
+  `loaded: false` and its problems, and can be edited or deleted.
+- **Breaking — a role that is not registered fails by name instead of running as
+  `general`.** A pipeline stage, hook or spawn naming a deleted role (or one
+  whose plugin was disabled) used to run with the general prompt and toolset; it
+  now fails with "Role '<id>' is not registered" (a pipeline pauses at that
+  stage). A stored recipe whose step `topic` names a model lane (`everyday`,
+  `build`, …) still runs as `general`, with a warning in the log.
+- **Breaking — saving a recipe checks its step topics against the roles.** A step
+  whose topic is a lane name or not a registered role is refused at save
+  (`POST /api/pipelines/templates`, `PUT /api/pipelines/templates/:id`) and at
+  import (`POST /api/pipelines/templates/import`); pick the role that does the
+  step.
+- **Breaking — new operator role ids.** `POST /api/roles` refuses a reserved id
+  (`root`, `system`, `agent`, `admin`, `user`, `default`, …) or a lane name.
+  Stored roles with such ids keep loading.
+- **Breaking — plugin package apiVersion 1.3.0.** A package that declares
+  `roles` must say `apiVersion: "1.3.0"`; older hosts refuse it.
 - **Agent refresh for Live Artifacts** (BETA,
   [docs](docs/ARTIFACTS.md#agent-refresh)). An artifact can now stay current
   by having an agent regenerate it. The agent that creates a page may store a

@@ -14,6 +14,7 @@ import { providerResetAt } from '@/core/errors/provider-recovery';
 import { getAgentManager } from '@/core/agent-manager';
 import { workPlanStateSchema } from '@/shared/work-plan';
 import { getRoleConfig } from './roles';
+import { UnknownRoleError } from './role-registry';
 import { withExecutionSignal } from '@/core/execution-scope';
 import { can, SpaceError } from '@/security/space-access';
 import { buildAgentContext, resolveAgentScope, withAgentUsage } from './context';
@@ -3515,6 +3516,14 @@ export class PipelineManager {
         return { output: '', raw: '', stopped: await this.pauseForEnvironment(pipeline, node, errorMsg, attemptId, itemId) };
       }
       if (isApprovalWaitEnded(errorMsg)) return this.awaitStageApproval(args, { since: stageStartedAt, reason: errorMsg, workerIds, partialText });
+      // The stage's role is gone (an operator deleted it, its plugin package
+      // was disabled or uninstalled). Paused, not failed and never run as
+      // another role: re-enabling the package and resuming picks up here.
+      if (error instanceof UnknownRoleError) {
+        await this.updateNode(node.id, { status: 'pending', error: errorMsg });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Paused at "${node.name}": ${errorMsg}` });
+        return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: errorMsg } };
+      }
       if (error instanceof WorkerInterruptedError) {
         const current = await this.getPipeline(pipeline.id);
         await this.updateNode(node.id, { status: 'pending', error: errorMsg });
