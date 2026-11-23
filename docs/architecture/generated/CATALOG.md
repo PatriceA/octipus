@@ -839,7 +839,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `utils` | 24 |
 | `channels` | `voice` | 5 |
 | `config` | `channels` | 2 |
-| `config` | `core` | 4 |
+| `config` | `core` | 5 |
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
