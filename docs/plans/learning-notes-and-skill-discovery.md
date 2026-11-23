@@ -4,6 +4,11 @@ Status: implemented. "As built" notes below say where the code differs from
 this plan; the code and docs/SESSION-LEARNING.md are the reference. Follows `self-learning-consolidation.md` and
 `recall-hardening.md`.
 
+"Skill discovery" here is choosing which of a user's skills reach a prompt.
+Browsing skills others published (skill registries) is separate and lives in
+[SKILL-EXCHANGE.md#registries](../SKILL-EXCHANGE.md#registries); a skill
+installed from a registry is an ordinary personal skill to this discovery.
+
 ## Problem
 
 1. **Approved learned skills are not discovered.** Approval inserts a skill

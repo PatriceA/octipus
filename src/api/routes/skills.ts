@@ -19,14 +19,20 @@ import { API_SCOPES } from '@/security/scopes';
 import { skillsToMarkdown, skillToMarkdown, toPortableSkill } from '@/skills/markdown';
 import { buildBundle, MAX_BUNDLE_BYTES, MAX_BUNDLE_SKILLS, SkillBundleError, toBundleSkill, UNSIGNED_EXPORT_NOTE } from '@/skills/exchange';
 import { type ImportActor, installImport, previewImport } from '@/skills/exchange-import';
+import { listSkillRegistries } from '@/skills/registries';
 import type { SkillBundleExport } from '@/shared/skill-exchange';
 import { canActInSession } from '@/core/rooms/access';
 
-/** The one source an import reads: a bundle's JSON text, a SKILL.md, or an https URL (admins). */
+/** The one source an import reads: a bundle's JSON text, a SKILL.md, an https URL (admins), or a skill registry listing. */
 const IMPORT_SOURCE_FIELDS = {
   bundle: t.Optional(t.String({ minLength: 1, maxLength: MAX_BUNDLE_BYTES })),
   skillMd: t.Optional(t.String({ minLength: 1, maxLength: MAX_BUNDLE_BYTES })),
   url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
+  registry: t.Optional(t.Object({
+    registry: t.String({ minLength: 1, maxLength: 100 }),
+    name: t.String({ minLength: 1, maxLength: 100 }),
+    version: t.String({ minLength: 1, maxLength: 100 }),
+  })),
 };
 const IMPORT_SOURCE_BODY = t.Object(IMPORT_SOURCE_FIELDS);
 
@@ -196,10 +202,29 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     }
   )
 
+  // The configured skill registries' listings (docs/SKILL-EXCHANGE.md#registries):
+  // browsing only. Installing one is a preview and an install like any import.
+  .get(
+    '/exchange/registry',
+    async ({ user, principal, query, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return listSkillRegistries(user.id, { q: query.q, tag: query.tag });
+    },
+    {
+      query: t.Object({ q: t.Optional(t.String({ maxLength: 200 })), tag: t.Optional(t.String({ maxLength: 32 })) }),
+      detail: { tags: ['skills'] },
+    }
+  )
+
   .post(
     '/exchange/preview',
     async ({ user, principal, session, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      // A URL or registry preview makes the server download: not for a read-only token.
+      if ((body.url !== undefined || body.registry !== undefined) && !requireScope(principal, API_SCOPES.WRITE)) {
+        set.status = 403;
+        return { error: `This token lacks the ${API_SCOPES.WRITE} scope a download needs` };
+      }
       try {
         return await previewImport(body, importActor(user.id, principal, session));
       } catch (error) {

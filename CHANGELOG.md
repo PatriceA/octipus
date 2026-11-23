@@ -19,6 +19,33 @@ labels reflect blast radius, not contract guarantees.
   up in an idle session stopped under "N earlier messages above"; `/history`
   replayed a companion's internal check-ins; the editor's Up/Down skipped
   the rows of a soft-wrapped line.
+- **Browse skill registries**
+  ([docs](docs/SKILL-EXCHANGE.md#registries)). Skills → Import → **Browse
+  registries** lists and searches the skills of static JSON indexes an
+  administrator lists in `skills.registries` (`[{ name, url, publishers }]`,
+  **empty by default: no registry is contacted until one is added**), with
+  the newest version, the signature status for that registry's publishers,
+  and an "update available" mark against the version you installed. A
+  listing installs only through the existing preview and install: the bundle
+  is downloaded through the SSRF-guarded fetch (https, public addresses,
+  1 MiB, 15 s), must hash to the index digest, match the listing, and carry a
+  valid signature by a key of one of the registry's `publishers` in
+  `plugins.trustedPublishers` (unsigned or other-key bundles are shown, not
+  installable). Nothing is ever updated automatically. New:
+  `GET /api/skills/exchange/registry`, a `registry` source on
+  `/api/skills/exchange/preview` and `/install`,
+  `octi plugin build-skill-index <dir> --base-url <https://…/>` to build an
+  index (`octipus-skill-index` v1) from a folder of signed bundles, and
+  migration `0205_skill_registry_installs` (which listing version each person
+  installed, keyed by registry URL hash, with the history of content hashes
+  so a relabelled old bundle is flagged as a possible rollback and never
+  shown as an update). Index URLs, which may carry a token, are never shown
+  to callers; registry and URL previews need `api:write`, and registry
+  previews and installs are limited to 30 a minute per person.
+- **Fix:** an https download (plugin package, skill bundle, registry index)
+  now has one deadline for every redirect hop and the body together; each
+  hop used to get a fresh timeout, so the stated limits could be exceeded
+  several times over.
 - **OpenTelemetry tracing**
   ([docs](docs/OBSERVABILITY.md#tracing-opentelemetry)). Off by default;
   set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
