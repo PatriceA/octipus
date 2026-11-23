@@ -1389,7 +1389,9 @@ export class EmbeddingService {
   }> {
     const db = getDb();
     const visible = scopePredicate(scope, 'read');
-    const conditions = purpose ? and(visible, eq(embeddings.purpose, purpose)) : visible;
+    // An archived note is out of the knowledge base until it is unarchived: not searched, not listed.
+    const live = and(visible, notArchivedNoteSql(embeddings.sourceId));
+    const conditions = purpose ? and(live, eq(embeddings.purpose, purpose)) : live;
 
     const [entries, countResult] = await Promise.all([
       db.select({

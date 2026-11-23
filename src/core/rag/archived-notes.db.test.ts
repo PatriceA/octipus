@@ -140,6 +140,8 @@ describe('the chunks of an archived note', () => {
     expect(await service.search(scope, query, 10, ['note', 'lesson'], 0)).toEqual([]);
     expect((await service.hybridSearchAnyTerm(scope, query, 10, { purposes: ['note', 'lesson'] })).candidates).toEqual([]);
     expect((await service.hybridSearchAnyTerm(scope, query, 10, { purposes: ['note', 'lesson'], perSource: 3 })).candidates).toEqual([]);
+    // Browsing the knowledge base does not list them either.
+    expect((await service.listAll(scope, 50, 0)).entries.map((e) => e.sourceId).filter((id) => id === `note:${noteId}` || id === `note:${lessonId}`)).toEqual([]);
     // The Recall page's "has rows to recall" check does not count them either.
     expect(await service.hasReadableRows(scope, { purposes: ['note', 'lesson'], excludeProductDocs: true })).toBe(false);
 
@@ -147,6 +149,7 @@ describe('the chunks of an archived note', () => {
     expect(await getNoteRepository().unarchive(userId, noteId)).toBe(true);
     expect(sources(await service.hybridSearch(scope, query, 10, ['note', 'lesson'], 0.6, 0, skip))).toEqual([`note:${noteId}`]);
     expect(sources((await service.hybridSearchAnyTerm(scope, query, 10, { purposes: ['note', 'lesson'] })).candidates)).toEqual([`note:${noteId}`]);
+    expect((await service.listAll(scope, 50, 0)).entries.some((e) => e.sourceId === `note:${noteId}`)).toBe(true);
     expect(await service.hasReadableRows(scope, { purposes: ['note', 'lesson'], excludeProductDocs: true })).toBe(true);
   });
 

@@ -239,10 +239,10 @@ an archived lesson so it can tell a duplicate of it
 ([SESSION-LEARNING.md](SESSION-LEARNING.md#lesson-notes)). Migration 0201 adds
 a partial expression index over archived notes only
 (`notes_archived_source_idx`), so the anti-join reads that set instead of
-scanning `notes`. Rows whose source is not a note are not affected. Not
-searches, and so not filtered: browsing the knowledge base
-(`GET /api/knowledge`) and reading one entry by id (`read_knowledge`,
-`GET /api/knowledge/:id`) still show an archived note's chunks.
+scanning `notes`. Rows whose source is not a note are not affected. Browsing
+the knowledge base (`GET /api/knowledge`) leaves them out as well. Reading
+one entry by id (`read_knowledge`, `GET /api/knowledge/:id`) still returns an
+archived note's chunk to a caller that already holds its id.
 
 ### What counts as a read
 
