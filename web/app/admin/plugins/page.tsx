@@ -33,6 +33,7 @@ import {
   type PluginRunItem,
   type PluginSignatureStatus,
   type PluginUsageView,
+  pluginRoleTerms,
 } from '@/lib/plugin-packages';
 import { PLUGIN_PAGES_KEY } from '@/lib/plugin-pages';
 import { cn } from '@/lib/utils';
@@ -523,13 +524,16 @@ function Contributions({ pkg }: { pkg: PluginPackageView }) {
         )}
         {(c.roles ?? []).map((r) => (
           <li key={`r-${r.id}`} data-testid="plugin-contribution-role">
-            role <code className="font-mono">{r.id}</code> ({r.displayName}, lane {r.lane}{r.bound ? '' : ', not registered'}) with the tools{' '}
-            {r.tools.join(', ')}, offered to every user's agents to delegate to: {r.description}. Its instructions, fenced as third-party text:
+            role <code className="font-mono">{r.id}</code> ({r.displayName}{r.bound ? '' : ', not registered'}), offered to every user's
+            agents to delegate to: {r.description}
+            <div className="mt-0.5" data-testid="plugin-role-terms">{pluginRoleTerms(r)}</div>
+            Its instructions and standing rules, fenced together as third-party text:
             <pre
               className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-xs border border-outline-variant bg-surface-container p-2 font-mono text-on-surface"
               data-testid="plugin-role-prompt-text"
             >
               {r.text ?? '(the file cannot be read)'}
+              {r.criticalRules.length > 0 && `\n\nStanding rules:\n${r.criticalRules.map((x) => `- ${x}`).join('\n')}`}
             </pre>
           </li>
         ))}

@@ -110,12 +110,19 @@ export function childRoles(parentRole?: string): AgentRole[] {
   return parentRole === undefined ? all : all.filter((r) => spawnRefusal(parentRole, r) === null);
 }
 
-/** One line of the menu: a runtime role's description is operator or plugin text, so it stays one line and says where it came from. */
+/**
+ * One line of the menu. A runtime role's description is operator or plugin
+ * text, so it stays one line; a plugin's is also quoted as third-party text
+ * with its angle brackets and quotes neutralised, so it cannot open a fence,
+ * close its quote or pose as instructions to the delegating agent.
+ */
 function catalogLine(role: AgentRole): string {
   const config = ROLE_CONFIGS[role];
   const description = (config?.description || 'user-defined role').replace(/\s+/g, ' ').trim();
   const source = roleSource(role);
-  return `- ${role} — ${description}${source?.kind === 'plugin' ? ` (from the plugin ${source.plugin})` : ''}`;
+  if (source?.kind !== 'plugin') return `- ${role} — ${description}`;
+  const quoted = description.replace(/</g, '‹').replace(/>/g, '›').replace(/"/g, '\u201d');
+  return `- ${role} — (a role from the plugin ${source.plugin}; its description, third-party text: "${quoted}")`;
 }
 
 /**

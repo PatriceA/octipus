@@ -100,12 +100,18 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
             roles: manifest.roles
               .map((r) => ({
                 id: r.id,
+                displayName: r.displayName,
+                description: r.description,
                 lane: r.lane,
                 tools: sorted(r.tools),
+                ...(r.coreTools ? { coreTools: sorted(r.coreTools) } : {}),
                 promptSha256: files.rolePromptSha256?.[r.id] ?? null,
                 ...(r.spawns ? { spawns: sorted(r.spawns) } : {}),
                 ...(r.spawnedBy ? { spawnedBy: sorted(r.spawnedBy) } : {}),
+                // In their declared order: the order they are rendered in.
+                ...(r.criticalRules?.length ? { criticalRules: [...r.criticalRules] } : {}),
                 ...(r.readOnly ? { readOnly: true } : {}),
+                ...(r.limits ? { limits: { ...r.limits } } : {}),
               }))
               .sort((a, b) => byCodeUnit(a.id, b.id)),
           }

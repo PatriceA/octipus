@@ -474,6 +474,21 @@ describe('octi plugin approve-contributions', () => {
     expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
   });
 
+  test('a role is shown in full for review: every term, its instructions and its standing rules', async () => {
+    const role = {
+      id: 'translator', displayName: 'Translator', description: 'translate documents', lane: 'everyday', tools: ['filesystem', 'knowledge'],
+      coreTools: ['filesystem'], spawns: [], spawnedBy: ['general'], criticalRules: ['Keep the structure'], readOnly: true,
+      limits: { maxTokens: 20000, maxWallClockMs: 600000 }, prompt: 'roles/translator.md', text: 'You translate.', bound: false,
+    };
+    const h = harness({ packages: [contributed({ roles: [role] })], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(h.io, 'greeter', undefined)).toBe(0);
+    const shown = h.out.join('');
+    expect(shown).toContain('role     translator ("Translator"), offered to EVERY user\'s agents to delegate to: translate documents');
+    expect(shown).toContain('lane everyday; tools filesystem, knowledge; core tools filesystem; may spawn no agents; spawned only by general; read-only; at most 20000 tokens; at most 600 s');
+    expect(shown).toContain('    | You translate.');
+    expect(shown).toContain('    | standing rule: Keep the structure');
+  });
+
   test('with --hash: sends it; a refusal names the hash to review', async () => {
     const ok = harness({ respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
     expect(await approveContributionsCommand(ok.io, 'greeter', CONTRIB)).toBe(0);

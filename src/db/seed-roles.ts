@@ -145,51 +145,59 @@ function dbOwnedFields(row: Role, toolIds: string[]): Partial<RoleConfig> {
 
 export async function loadRolesFromDb(): Promise<void> {
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
-  const { isBuiltinRole, registerRuntimeRole } = await import('@/core/agent/role-registry');
+  const { isBuiltinRole, registerRuntimeRole, RoleDefinitionError, setUnloadedRole } = await import('@/core/agent/role-registry');
   const db = getDb();
 
   const dbRoles = await db.select().from(roles);
 
+  // Two passes, in a fixed order: every built-in row first, then the
+  // operator rows by id. One unordered pass made an operator role's outcome
+  // depend on whether the built-in edits it was checked against had been
+  // applied yet, which is the row order of the table.
   for (const dbRole of dbRoles) {
-    if (!isBuiltinRole(dbRole.role)) {
-      // No folder. `isSystem` says which kind of orphan this is: a row the
-      // seeder wrote for a role that has since been RETIRED (`orchestrator`,
-      // removed in Phase 9, is still sitting in every existing database), or a
-      // role the user created. Admitting the first kind would resurrect a
-      // deleted role into the spawn menu, so only the second is registered.
-      if (dbRole.isSystem) continue;
-      // Through the registry, so a stored row is held to the rules a new one
-      // is: a fresh id, tools a built-in role holds, a text lane. The tool
-      // REGISTRY is not consulted — it is empty this early in boot, and the row
-      // was checked against it when it was written. A row that fails is
-      // skipped, loudly, rather than registered as something wider.
-      try {
-        registerRuntimeRole(roleDefinitionOfRow(dbRole), { kind: 'admin' }, { checkRegisteredTools: false });
-      } catch (err) {
-        logger.warn({ role: dbRole.role, err: (err as Error).message }, 'Skipping stored role that is not a valid runtime role');
-      }
-      continue;
-    }
+    if (!isBuiltinRole(dbRole.role)) continue;
     const existing = ROLE_CONFIGS[dbRole.role];
     if (!existing) continue;
-    {
-      // Overlay the three columns the DB owns onto the registry entry. It used
-      // to REBUILD the object from those columns, which silently dropped every
-      // field the `roles` table has no column for — `readOnly` (the only
-      // per-handler write filter in the system), `coreToolIds` (the whole lazy
-      // tool-discovery gate) and `liteSystemPromptTemplate`. All three were
-      // present in tests and absent in a booted server, which is why nothing
-      // caught it.
-      // A customized row can still name a removed tool; it is dropped here.
-      const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
-      ROLE_CONFIGS[dbRole.role] = {
-        ...existing,
-        role: dbRole.role,
-        toolIds,
-        defaultTopic: dbRole.defaultTopic,
-        systemPromptTemplate: dbRole.systemPromptTemplate,
-        ...dbOwnedFields(dbRole, toolIds),
-      };
+    // Overlay the three columns the DB owns onto the registry entry. It used
+    // to REBUILD the object from those columns, which silently dropped every
+    // field the `roles` table has no column for — `readOnly` (the only
+    // per-handler write filter in the system), `coreToolIds` (the whole lazy
+    // tool-discovery gate) and `liteSystemPromptTemplate`. All three were
+    // present in tests and absent in a booted server, which is why nothing
+    // caught it.
+    // A customized row can still name a removed tool; it is dropped here.
+    const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
+    ROLE_CONFIGS[dbRole.role] = {
+      ...existing,
+      role: dbRole.role,
+      toolIds,
+      defaultTopic: dbRole.defaultTopic,
+      systemPromptTemplate: dbRole.systemPromptTemplate,
+      ...dbOwnedFields(dbRole, toolIds),
+    };
+  }
+
+  const operatorRows = dbRoles
+    .filter((r) => !isBuiltinRole(r.role))
+    .sort((a, b) => (a.role < b.role ? -1 : a.role > b.role ? 1 : 0));
+  for (const dbRole of operatorRows) {
+    // No folder. `isSystem` says which kind of orphan this is: a row the
+    // seeder wrote for a role that has since been RETIRED (`orchestrator`,
+    // removed in Phase 9, is still sitting in every existing database), or a
+    // role the user created. Admitting the first kind would resurrect a
+    // deleted role into the spawn menu, so only the second is registered.
+    if (dbRole.isSystem) continue;
+    // Through the registry. The tool REGISTRY is not consulted — it is empty
+    // this early in boot, and the row was checked against it when it was
+    // written. A row that still fails (an empty prompt, a lane that is no
+    // longer a text lane, an id a plugin took) is not registered, and is
+    // listed with its problems by GET /api/roles so it can be fixed or deleted.
+    try {
+      registerRuntimeRole(roleDefinitionOfRow(dbRole), { kind: 'admin' }, { checkRegisteredTools: false });
+    } catch (err) {
+      const problems = err instanceof RoleDefinitionError ? err.problems : [(err as Error).message];
+      setUnloadedRole(dbRole.role, problems);
+      logger.warn({ role: dbRole.role, problems }, 'Stored role not registered; it is listed with its problems on the Topics page');
     }
   }
 

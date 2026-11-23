@@ -446,6 +446,36 @@ export interface PluginRoleDecl {
   limits?: { maxTokens?: number; maxWallClockMs?: number };
 }
 
+/** A declared role as the admin reviews it: every field of the declaration, its prompt text and whether it is registered. */
+export interface PluginRoleView {
+  id: string;
+  displayName: string;
+  description: string;
+  lane: string;
+  tools: string[];
+  coreTools: string[] | null;
+  spawns: string[] | null;
+  spawnedBy: string[] | null;
+  criticalRules: string[];
+  readOnly: boolean;
+  limits: { maxTokens?: number; maxWallClockMs?: number } | null;
+  prompt: string;
+  text: string | null;
+  bound: boolean;
+}
+
+/** A role's terms in one line (lane, tools, spawn rules, limits), for the admin page and the CLI. */
+export function pluginRoleTerms(r: Pick<PluginRoleView, 'lane' | 'tools' | 'coreTools' | 'spawns' | 'spawnedBy' | 'readOnly' | 'limits'>): string {
+  const parts = [`lane ${r.lane}`, `tools ${r.tools.join(', ')}`];
+  if (r.coreTools?.length) parts.push(`core tools ${r.coreTools.join(', ')}`);
+  parts.push(r.spawns === null ? 'may spawn any role that accepts it' : r.spawns.length ? `may spawn ${r.spawns.join(', ')}` : 'may spawn no agents');
+  parts.push(r.spawnedBy === null ? 'spawned by any role' : `spawned only by ${r.spawnedBy.join(', ')}`);
+  if (r.readOnly) parts.push('read-only');
+  if (r.limits?.maxTokens) parts.push(`at most ${r.limits.maxTokens} tokens`);
+  if (r.limits?.maxWallClockMs) parts.push(`at most ${Math.round(r.limits.maxWallClockMs / 1000)} s`);
+  return parts.join('; ');
+}
+
 export interface PluginManifestContributions {
   commands?: PluginCommandDecl[];
   schedules?: PluginScheduleDecl[];
@@ -480,8 +510,8 @@ export interface PluginContributionsView {
   /** `text`: the whole prompt file, for review (null when it cannot be read). */
   prompt: { file: string; roles: string[] | null; text: string | null; bound: boolean; chars: number | null } | null;
   context: { tool: string; effect: PluginToolEffect | null; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
-  /** Its agent roles; `text` is the whole prompt file, for review (null when it cannot be read). */
-  roles: Array<{ id: string; displayName: string; description: string; lane: string; tools: string[]; prompt: string; text: string | null; bound: boolean }>;
+  /** Its agent roles, every declared field; `text` is the whole prompt file, for review (null when it cannot be read). */
+  roles: PluginRoleView[];
   /** Why a declared contribution is not bound right now (not approved, a name taken since install, content not approved). */
   problems: string[];
 }
@@ -902,15 +932,20 @@ export interface PluginPermissionsContributions {
   roles?: PluginPermissionsRole[];
 }
 
-/** A role in a permissions summary. */
+/** A role in a permissions summary: every field of the declaration, the prompt by its hash. */
 export interface PluginPermissionsRole {
   id: string;
+  displayName: string;
+  description: string;
   lane: string;
   tools: string[];
+  coreTools?: string[];
   promptSha256: string | null;
   spawns?: string[];
   spawnedBy?: string[];
+  criticalRules?: string[];
   readOnly?: boolean;
+  limits?: { maxTokens?: number; maxWallClockMs?: number };
 }
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */

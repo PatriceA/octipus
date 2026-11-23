@@ -426,31 +426,48 @@ at all.
 
 A runtime role is declarative data (`roleDefinitionSchema`, zod): id, display
 name, description, prompt, tools, core tools, lane, `spawns`, `spawnedBy`,
-critical rules, read-only, `limits { maxTokens, maxWallClockMs }`. The same
-policy applies to both runtime sources:
+critical rules, read-only, `limits { maxTokens, maxWallClockMs }`.
 
-- the id is fresh: the charset rule, not a built-in (no shadowing or
-  redefinition), not reserved (`root`, `system`, `orchestrator`, …), not a
-  role another source registered;
-- the tools exist and are each held by some built-in role
-  (`runtimeRoleToolCeiling`), so the root's `allowedToolIds` — the union of
-  every role's tools — is the same with or without runtime roles; a plugin
-  role is also refused `plugin_dev`, `mcp_admin` and `protection`;
-- the lane is a text lane; limits only lower the depth defaults
-  (`clampToRoleLimits`, applied in both spawn paths);
-- nothing in a definition can make it the root: the root runs as `ROOT_ROLE`,
-  a constant.
+Every runtime role: the id meets the charset rule, is not a built-in (no
+shadowing or redefinition) and is not a role another source registered; the
+tools are registered; the lane is a text lane; limits only lower the depth
+defaults (`clampToRoleLimits`, applied in both spawn paths); and nothing in a
+definition can make it the root — the root runs as `ROOT_ROLE`, a constant.
+
+A plugin role, besides: its id is not reserved (`root`, `system`,
+`orchestrator`, …) or a lane name; each tool is already held by some
+built-in role (`runtimeRoleToolCeiling`), so the root's `allowedToolIds` —
+the union of every role's tools — is the same with or without it; it holds
+none of `PLUGIN_ROLE_DENIED_TOOLS` (host-changing tools, and tools that make
+another agent act later under another role); and its critical rules are
+refused as such — they live inside its fenced prompt.
+
+An operator's role is not held to the ceiling or the reserved list: an admin
+can give a built-in role any registered tool anyway, so neither bought
+anything, and both would strand rows that worked before. A NEW operator id is
+refused a reserved word or a lane name by `POST /api/roles`. A stored row that
+still cannot load (an empty prompt, a lane that is not a text lane, an id a
+plugin took) is not registered: `GET /api/roles` lists it with `loaded: false`
+and its `problems`, PATCH repairs it, DELETE removes it. The boot load applies
+every built-in row first, then the operator rows by id.
 
 Spawn rules are enforced in `SwarmSpawner.spawnChild` (`spawnRefusal`), and the
 `spawn_child` menu and enum are narrowed to what the parent may spawn.
 Execution is unchanged: every tool call is authorized against the permissions
 of the user the agent works for.
 
-There is no fallback to `general`. `getRoleConfig` of a role that is not
-registered — deleted, or its plugin disabled or uninstalled while a session,
-stage or hook still names it — throws `UnknownRoleError`; `spawnWorker`
-resolves its role first, a pipeline stage pauses on it, the spawner returns a
-denial naming it, and `stageContractErrors` reports it before a template runs.
+There is no fallback to `general` for a role. `getRoleConfig` of a role that
+is not registered — deleted, or its plugin disabled or uninstalled while a
+session, stage or hook still names it — throws `UnknownRoleError`;
+`spawnWorker` resolves its role first, a pipeline stage pauses on it, the
+spawner returns a denial naming it, and a pipeline built from a template
+naming it fails at create or resume with that name.
+
+The one exception is a recipe step whose `topic` names a model LANE
+(`everyday`, `build`, …) rather than a role: stored recipes were saved like
+that and always ran as `general`, and still do (`stageRoleOf`, with a logged
+warning). Saving a recipe now refuses a step whose topic is not a registered
+role (`recipeStepRoleErrors`).
 
 ## Knowledge Base (RAG)
 

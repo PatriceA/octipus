@@ -3,8 +3,8 @@ import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { ROLE_CONFIGS, setRoleInMemory, unknownToolIds } from '@/core/agent/roles';
 import {
-  describeSource, isBuiltinRole, isRegisteredRole, isRoleLane, listRegisteredRoles, RoleDefinitionError,
-  registerRuntimeRole, roleSource, unregisterRuntimeRole,
+  describeSource, isBuiltinRole, isRegisteredRole, isRoleLane, listRegisteredRoles, newRoleIdProblem, RoleDefinitionError,
+  registerRuntimeRole, roleSource, setUnloadedRole, unloadedRoleProblems, unregisterRuntimeRole,
 } from '@/core/agent/role-registry';
 import type { RoleConfig } from '@/core/agent/types';
 import { getDb } from '@/db/postgres';
@@ -88,6 +88,30 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       }
       const db = getDb();
       const rows = new Map((await db.select().from(roles)).map((r) => [r.role, r]));
+      // An operator's row the boot load could not register: listed with why,
+      // so it can be edited back into shape or deleted rather than vanish.
+      const unloadedRows = [...rows.values()]
+        .filter((r) => !r.isSystem && !isRegisteredRole(r.role))
+        .map((r) => ({
+          role: r.role,
+          displayName: r.displayName ?? null,
+          description: r.description ?? '',
+          defaultTopic: r.defaultTopic,
+          lane: laneOf(r.defaultTopic),
+          toolIds: withoutRetiredToolIds((r.toolIds as string[]) ?? []),
+          coreToolIds: withoutRetiredToolIds((r.coreToolIds as string[]) ?? []),
+          readOnly: r.readOnly,
+          customized: r.customized,
+          isSystem: false,
+          source: 'admin' as const,
+          plugin: null,
+          spawns: r.spawns ?? null,
+          spawnedBy: r.spawnedBy ?? null,
+          limits: r.limits ?? null,
+          loaded: false,
+          problems: unloadedRoleProblems(r.role) ?? ['not registered'],
+          ...(user.isAdmin ? { systemPromptTemplate: r.systemPromptTemplate, criticalRules: (r.criticalRules as string[]) ?? [] } : {}),
+        }));
       return {
         // The registry is what a spawn can actually reach: a role whose folder
         // was removed leaves its row behind, and listing it offers an edit
@@ -97,7 +121,7 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
           .map(({ config, source }) => {
             const r = rows.get(config.role);
             return {
-              role: config.role,
+              role: config.role as string,
               displayName: config.displayName ?? null,
               description: (r ? r.description : config.description) ?? '',
               defaultTopic: config.defaultTopic,
@@ -115,6 +139,8 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
               spawns: config.spawns ?? null,
               spawnedBy: config.spawnedBy ?? null,
               limits: config.limits ?? null,
+              loaded: true,
+              problems: [] as string[],
               // The prompt and the standing rules are what an operator (or an
               // approved plugin) WROTE, and only an operator may read them back.
               // Non-admins reach this route for the role NAMES alone (the skills
@@ -128,7 +154,9 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
                   }
                 : {}),
             };
-          }),
+          })
+          .concat(unloadedRows)
+          .sort((a, b) => a.role.localeCompare(b.role)),
       };
     },
     { detail: { tags: ['roles'] } },
@@ -149,6 +177,21 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       if (isRegisteredRole(name)) {
         set.status = 409;
         return { error: `Role already exists: ${name} (registered by ${describeSource(roleSource(name) ?? { kind: 'builtin' })})` };
+      }
+      const db = getDb();
+      // A stored row that is not registered (it did not load) still owns its
+      // id: edit or delete it. Checked here so this is a 409, not the table's
+      // unique-constraint error.
+      const [stored] = await db.select({ role: roles.role }).from(roles).where(eq(roles.role, name)).limit(1);
+      if (stored) {
+        set.status = 409;
+        return { error: `A stored role already has the id ${name}; edit or delete it` };
+      }
+      // A new id only: a stored row that predates the reserved list keeps loading.
+      const reserved = /^[a-z][a-z0-9_-]{1,31}$/.test(name) ? newRoleIdProblem(name) : null;
+      if (reserved) {
+        set.status = 400;
+        return { error: reserved, problems: [reserved] };
       }
 
       const toolIds = trimmedList(body.toolIds);
@@ -192,7 +235,6 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       } catch (err) {
         return refusal(set, err);
       }
-      const db = getDb();
       let created: Role;
       try {
         [created] = await db.insert(roles).values(row).returning();
@@ -233,16 +275,27 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       }
 
       const roleName = params.role;
-      if (!isRegisteredRole(roleName)) {
-        set.status = 404;
-        return { error: `Unknown role: ${roleName}` };
-      }
       const owned = pluginOwned(roleName);
       if (owned) {
         set.status = 409;
         return { error: owned };
       }
-      const current = ROLE_CONFIGS[roleName];
+      const db = getDb();
+      const [row] = await db.select().from(roles).where(eq(roles.role, roleName)).limit(1);
+      // A registered role, or an operator's row that did not load (an edit is
+      // how it is repaired).
+      const repairable = !!row && !row.isSystem && unloadedRoleProblems(roleName) !== null;
+      if (!isRegisteredRole(roleName) && !repairable) {
+        set.status = 404;
+        return { error: `Unknown role: ${roleName}` };
+      }
+      if (!row) {
+        set.status = 404;
+        return { error: `Role row not found: ${roleName}` };
+      }
+      const current: Pick<RoleConfig, 'toolIds' | 'coreToolIds'> = isRegisteredRole(roleName)
+        ? ROLE_CONFIGS[roleName]
+        : { toolIds: (row.toolIds as string[]) ?? [], coreToolIds: (row.coreToolIds as string[]) ?? [] };
       const builtin = isBuiltinRole(roleName);
       // Spawn rules, limits and a display name belong to runtime roles: a
       // built-in's place in the swarm is fixed by the code that ships it.
@@ -321,12 +374,6 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       if (body.spawnedBy !== undefined) updates.spawnedBy = body.spawnedBy;
       if (body.limits !== undefined) updates.limits = body.limits;
 
-      const db = getDb();
-      const [row] = await db.select().from(roles).where(eq(roles.role, roleName)).limit(1);
-      if (!row) {
-        set.status = 404;
-        return { error: `Role row not found: ${roleName}` };
-      }
       // An operator's role is a runtime role: the edited whole is checked by
       // the registry (and takes effect) before it is written, so an edit cannot
       // take it where a create could not.
@@ -342,7 +389,19 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         [updated] = await db.update(roles).set(updates).where(eq(roles.role, roleName)).returning();
       } catch (err) {
         // The registry already took the edit; put the stored definition back.
-        if (!builtin) registerRow(row);
+        // That can itself be refused (a row that never loaded): then the role
+        // is left out of the registry and listed as not loaded, never left
+        // registered with an edit the table does not hold.
+        if (!builtin) {
+          try {
+            registerRow(row);
+          } catch (restoreErr) {
+            unregisterRuntimeRole(roleName, { kind: 'admin' });
+            const problems = restoreErr instanceof RoleDefinitionError ? restoreErr.problems : [(restoreErr as Error).message];
+            setUnloadedRole(roleName, problems);
+            apiLogger.error({ role: roleName, err: restoreErr }, 'Role edit failed and the stored definition could not be restored to the registry');
+          }
+        }
         throw err;
       }
       if (!updated) {
@@ -411,6 +470,7 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       // Agents already running as it finish; a stage, hook or child that names
       // it later fails with `UnknownRoleError` rather than running as another role.
       unregisterRuntimeRole(params.role, { kind: 'admin' });
+      setUnloadedRole(params.role, null);
 
       apiLogger.info({ role: params.role, by: user.id }, 'Role deleted');
       return { deleted: params.role };

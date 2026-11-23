@@ -6,19 +6,24 @@
  *
  * `ROLE_CONFIGS` is the live map every spawn reads synchronously; this module
  * owns every write to it that adds or removes a role, and remembers where each
- * one came from. What a runtime role may be is decided here, once, for both
- * sources:
+ * one came from. What a runtime role may be is decided here:
  *
- *  - its id is a fresh name: the charset and length rule, not a built-in, not
- *    a reserved word (`root`, `system`, …), and not a role another source owns;
- *  - its tools are tools that exist, and that a built-in role already holds —
- *    so a runtime role never widens the root's delegation ceiling (the root's
- *    `allowedToolIds` is the union of every role's tools, and a child only ever
- *    gets the intersection). A plugin role is further refused the tools that
- *    install or reconfigure host code;
- *  - it runs on a text lane, its limits only lower the depth defaults, and
- *    nothing in it can make it the root: the root role is `ROOT_ROLE`, a
- *    constant, and a definition has no field that touches it.
+ *  - for every runtime role: the charset and length rule, not a built-in id
+ *    (no shadowing or redefinition), not an id another source owns, tools that
+ *    are registered, a text lane, limits that only lower the depth defaults —
+ *    and nothing in it can make it the root: the root role is `ROOT_ROLE`, a
+ *    constant, and a definition has no field that touches it;
+ *  - for a PLUGIN role, besides: not a reserved word (`root`, `system`, a lane
+ *    name, …); only tools a built-in role already holds, so it never widens the
+ *    root's delegation ceiling (the union of every role's tools; a child only
+ *    ever gets the intersection with its parent's); and none of
+ *    `PLUGIN_ROLE_DENIED_TOOLS`.
+ *
+ * An operator's role is not held to the last three: an admin can give a
+ * built-in role any registered tool anyway, so a ceiling on the admin's own
+ * roles bought nothing and stranded rows that worked before. A NEW operator
+ * id is refused a reserved word by the roles route (`newRoleIdProblem`),
+ * which cannot strand a row that already exists.
  *
  * Execution is unchanged by any of this: a tool call from an agent of any role
  * is authorized against the permissions of the user it runs for.
@@ -28,10 +33,10 @@ import { canonicalTopic, TOPICS } from '@/models/topics';
 import { getToolRegistry } from '@/tools/registry';
 import { withoutRetiredToolIds } from './retired-tools';
 import { loadRoles } from './roles/index';
-import { isBuiltinRole, ROLE_ID_RE, roleIdProblem } from './role-ids';
+import { isBuiltinRole, newRoleIdProblem, ROLE_ID_RE, roleIdShapeProblem } from './role-ids';
 import { type AgentRole, BUILTIN_ROLES, type RoleConfig, type RoleLimits } from './types';
 
-export { isBuiltinRole, RESERVED_ROLE_IDS, ROLE_ID_RE, roleIdProblem } from './role-ids';
+export { isBuiltinRole, isLaneName, newRoleIdProblem, RESERVED_ROLE_IDS, ROLE_ID_RE, roleIdProblem } from './role-ids';
 
 /** Where a registered role came from. */
 export type RoleSource =
@@ -43,14 +48,34 @@ export type RoleSource =
 
 /**
  * Tools a plugin-contributed role may never hold, whatever a built-in role
- * holds: they install code into the host (`plugin_dev`), add or change MCP
- * servers (`mcp_admin`), or change how data is guarded (`protection`). A
- * plugin's prompt text is third-party text; it does not get to drive those.
+ * holds. Two kinds:
+ *
+ *  - tools that change the host itself: install code (`plugin_dev`), add or
+ *    change MCP servers (`mcp_admin`), change how data is guarded
+ *    (`protection`);
+ *  - tools that make ANOTHER agent act later, under a role the plugin role is
+ *    not: a hook or schedule whose `spawn_agent` action runs a root `general`
+ *    turn (`scheduling`), a task assigned to a role whose agent picks it up
+ *    (`tasks`), a skill that is loaded into other roles' prompts
+ *    (`skill-distill`).
+ *
+ * What it guarantees: an agent of a plugin role cannot, through its own tool
+ * calls, reach those tools or start work under a role that holds them. What it
+ * does not: it is no boundary for the user's own actions or for other roles,
+ * and it narrows only the role's tool list — every call is still authorized as
+ * the user the agent works for. A plugin's prompt text is third-party text; it
+ * does not get to drive these.
  */
-export const PLUGIN_ROLE_DENIED_TOOLS: ReadonlySet<string> = new Set(['plugin_dev', 'mcp_admin', 'protection']);
+export const PLUGIN_ROLE_DENIED_TOOLS: ReadonlySet<string> = new Set([
+  'plugin_dev', 'mcp_admin', 'protection', 'scheduling', 'tasks', 'skill-distill',
+]);
 
-/** The most characters a runtime role's prompt may hold. */
-export const MAX_ROLE_PROMPT_CHARS = 16_000;
+/**
+ * The most characters a runtime role's prompt may hold. Generous on purpose:
+ * operator rows were stored with no cap, and a stored row must keep loading.
+ * A plugin's prompt file has its own, tighter cap (8,000 characters).
+ */
+export const MAX_ROLE_PROMPT_CHARS = 200_000;
 
 const roleRef = z.string().regex(ROLE_ID_RE, 'a role id: lowercase letters, digits, - or _, starting with a letter (2-32)');
 const toolRef = z.string().trim().min(1).max(64);
@@ -63,15 +88,15 @@ export const roleDefinitionSchema = z.object({
   id: z.string(),
   displayName: z.string().trim().min(1).max(60).optional(),
   /** The one line the model reads when choosing a role to spawn. */
-  description: z.string().trim().min(1).max(300).optional(),
+  description: z.string().trim().min(1).max(2_000).optional(),
   systemPrompt: z.string().trim().min(1, 'systemPrompt must not be empty').max(MAX_ROLE_PROMPT_CHARS),
-  toolIds: z.array(toolRef).min(1, 'toolIds: at least one tool').max(64),
-  coreToolIds: z.array(toolRef).max(64).optional(),
+  toolIds: z.array(toolRef).min(1, 'toolIds: at least one tool').max(200),
+  coreToolIds: z.array(toolRef).max(200).optional(),
   /** The model lane (`defaultTopic`). */
   lane: z.string().trim().min(1).max(64),
   spawns: z.array(roleRef).max(32).optional(),
   spawnedBy: z.array(roleRef).max(32).optional(),
-  criticalRules: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+  criticalRules: z.array(z.string().trim().min(1).max(4_000)).max(100).optional(),
   readOnly: z.boolean().optional(),
   limits: z.object({
     maxTokens: z.number().int().min(1_000).max(10_000_000).optional(),
@@ -182,7 +207,8 @@ export function roleDefinitionProblems(
 ): { problems: string[]; conflict: boolean } {
   const problems: string[] = [];
   let conflict = false;
-  const idProblem = roleIdProblem(def.id);
+  const plugin = source.kind === 'plugin';
+  const idProblem = roleIdShapeProblem(def.id) ?? (plugin ? newRoleIdProblem(def.id) : null);
   if (idProblem) {
     problems.push(idProblem);
     conflict = isBuiltinRole(def.id);
@@ -203,10 +229,14 @@ export function roleDefinitionProblems(
     const unknown = toolIds.filter((id) => id !== 'mcp' && !known.has(id));
     if (unknown.length > 0) problems.push(`unknown toolIds: ${unknown.join(', ')}`);
   }
-  const ceiling = runtimeRoleToolCeiling();
-  const beyond = toolIds.filter((id) => !ceiling.has(id));
-  if (beyond.length > 0) problems.push(`toolIds no built-in role holds (a runtime role cannot widen what agents can be given): ${beyond.join(', ')}`);
-  if (source.kind === 'plugin') {
+  if (plugin) {
+    const ceiling = runtimeRoleToolCeiling();
+    const beyond = toolIds.filter((id) => !ceiling.has(id));
+    if (beyond.length > 0) problems.push(`toolIds no built-in role holds (a plugin role cannot widen what agents can be given): ${beyond.join(', ')}`);
+    // The host renders `criticalRules` as its own mandatory block, outside any
+    // fence; a plugin's rules are third-party text and go inside its fenced
+    // prompt instead (`fencedRolePrompt`).
+    if (def.criticalRules?.length) problems.push('criticalRules: a plugin role\'s rules belong inside its fenced prompt, not in the host\'s critical rules');
     const denied = toolIds.filter((id) => PLUGIN_ROLE_DENIED_TOOLS.has(id));
     if (denied.length > 0) problems.push(`toolIds a plugin role may not hold: ${denied.join(', ')}`);
   }
@@ -251,6 +281,7 @@ export function registerRuntimeRole(
   const config = roleConfigOf(def);
   ROLE_CONFIGS[config.role] = config;
   sources.set(def.id, source);
+  unloaded.delete(def.id);
   return config;
 }
 
@@ -266,6 +297,23 @@ export function unregisterRuntimeRole(id: string, source: Exclude<RoleSource, { 
   delete ROLE_CONFIGS[id as AgentRole];
   sources.delete(id);
   return true;
+}
+
+/**
+ * Operator rows the boot load could not register, with why: listed by the
+ * roles route so they can be repaired or deleted instead of vanishing.
+ */
+const unloaded = new Map<string, string[]>();
+
+/** Record that a stored operator row could not be registered (or clear it with `null`). */
+export function setUnloadedRole(id: string, problems: string[] | null): void {
+  if (problems) unloaded.set(id, problems);
+  else unloaded.delete(id);
+}
+
+/** Why a stored operator row is not registered, or null. */
+export function unloadedRoleProblems(id: string): string[] | null {
+  return unloaded.get(id) ?? null;
 }
 
 /** The runtime roles `plugin` registered now. */

@@ -390,6 +390,12 @@ export async function permissionsCommand(io: OfflineIo, argv: string[]): Promise
     io.out(`  events:        ${list(c.events.map((x) => `${x.on} → ${x.tool}`))}\n`);
     io.out(`  prompt:        ${c.prompt ? `${c.prompt.file} (${roles(c.prompt.roles)}), sha256 ${c.prompt.sha256 ?? 'unreadable'}` : 'none'}\n`);
     io.out(`  context:       ${c.context ? `${c.context.tool} (${roles(c.context.roles)})` : 'none'}\n`);
+    for (const r of c.roles ?? []) {
+      io.out(`  role:          ${r.id} "${r.displayName}": ${r.description}; lane ${r.lane}; tools ${r.tools.join(', ')}${r.coreTools ? `; core ${r.coreTools.join(', ')}` : ''}`
+        + `${r.spawns ? `; spawns ${list(r.spawns)}` : ''}${r.spawnedBy ? `; spawned by ${list(r.spawnedBy)}` : ''}${r.readOnly ? '; read-only' : ''}`
+        + `${r.limits ? `; limits ${JSON.stringify(r.limits)}` : ''}; prompt sha256 ${r.promptSha256 ?? 'unreadable'}`
+        + `${r.criticalRules?.length ? `; rules ${JSON.stringify(r.criticalRules)}` : ''}\n`);
+    }
     io.out(`  pages:         ${list(p.pages.map((x) => `/${x.path} "${x.title}" → ${x.entry}`))}${p.ui ? `; ${p.ui.dir}/ sha256 ${p.ui.sha256 ?? 'unreadable'}` : ''}\n`);
     io.out(`  trustedInput: ${p.trustedInput ? 'yes' : 'no'}; maxProtection: ${p.maxProtection}\n`);
     return 0;

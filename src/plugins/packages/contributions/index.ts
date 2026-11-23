@@ -260,6 +260,12 @@ export async function contributionsView(row: Pick<PluginPackageRow, 'name' | 'ma
     context: m.context ? { tool: m.context.tool, effect: effect(m.context.tool), roles: m.context.roles ?? null, bound: bound('context'), lastRun: runs.context ?? null } : null,
     roles: (m.roles ?? []).map((r) => ({
       id: r.id, displayName: r.displayName, description: r.description, lane: r.lane, tools: [...r.tools],
+      coreTools: r.coreTools ? [...r.coreTools] : null,
+      spawns: r.spawns ? [...r.spawns] : null,
+      spawnedBy: r.spawnedBy ? [...r.spawnedBy] : null,
+      criticalRules: [...(r.criticalRules ?? [])],
+      readOnly: r.readOnly === true,
+      limits: r.limits ? { ...r.limits } : null,
       prompt: r.prompt, text: rolePrompts.get(r.id) ?? null, bound: bound(`role:${r.id}`),
     })),
     problems,

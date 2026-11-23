@@ -1,10 +1,12 @@
 /**
  * An operator's runtime roles through the role routes (PGlite, the real
  * routes and registry): the whole definition (display name, spawn rules,
- * limits) persists and survives a reload; a built-in or reserved id, a tool no
- * built-in role holds and a bad spawn rule are refused, on create and on edit;
- * a plugin's role is listed but cannot be edited or deleted here; and a stored
- * row that no longer passes is skipped at load, not registered.
+ * limits) persists and survives a reload; a built-in id, a reserved or lane
+ * NEW id and a bad spawn rule are refused; a stored row keeps loading under
+ * rules it predates, and one that cannot load is listed with why, repairable
+ * and deletable; boot order does not decide what loads; a failed edit never
+ * leaves the registry holding what the table does not; a plugin's role is
+ * read-only here; stored recipes naming a lane keep running as general.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -110,20 +112,17 @@ describe('operator runtime roles', () => {
     expect(list.body.roles.map((r: { role: string }) => r.role)).not.toContain('bad-rule');
   });
 
+  test('a lane name is refused as a new id', async () => {
+    const r = await call('POST', '/roles', { ...NEW_ROLE, role: 'everyday' });
+    expect(r.status).toBe(400);
+    expect(r.body.problems).toContain("role id 'everyday' is the name of a model lane");
+  });
+
   test('an edit is held to the same rules, and spawn rules apply to runtime roles only', async () => {
-    const { getToolRegistry } = await import('@/tools/registry');
-    const stubbed = 'unheld_tool';
-    await getToolRegistry().register({
-      id: stubbed, name: stubbed, version: '1.0.0', initialize: async () => {}, shutdown: async () => {},
-      checkAvailability: async () => ({ available: true }), getToolHandlers: () => [], getTool: () => undefined,
-      getManifest: () => ({ id: stubbed, name: stubbed, version: '1.0.0', description: 'stub', tools: [] }),
-    } as never);
-    const widened = await call('PATCH', '/roles/translator', { toolIds: ['filesystem', stubbed] });
-    expect(widened.status).toBe(400);
-    expect(widened.body.error).toMatch(/no built-in role holds/);
+    expect((await call('PATCH', '/roles/translator', { spawns: ['Not A Role'] })).status).toBe(400);
     const { ROLE_CONFIGS } = await import('@/core/agent/roles');
     const { resolveRole } = await import('@/core/agent/role-registry');
-    expect(ROLE_CONFIGS[resolveRole('translator')].toolIds).toEqual(['filesystem']);
+    expect(ROLE_CONFIGS[resolveRole('translator')].spawns).toEqual(['research']);
 
     const cleared = await call('PATCH', '/roles/translator', { spawnedBy: null, limits: null });
     expect(cleared.status).toBe(200);
@@ -149,14 +148,112 @@ describe('operator runtime roles', () => {
     }
   });
 
-  test('a stored row that no longer passes is skipped at load, not registered', async () => {
+  test('stored rows that predate the rules keep loading: a now-reserved id, a tool no built-in role holds', async () => {
+    const { getToolRegistry } = await import('@/tools/registry');
+    for (const id of ['plan', 'inline-ui']) {
+      await getToolRegistry().register({
+        id, name: id, version: '1.0.0', initialize: async () => {}, shutdown: async () => {},
+        checkAvailability: async () => ({ available: true }), getToolHandlers: () => [], getTool: () => undefined,
+        getManifest: () => ({ id, name: id, version: '1.0.0', description: 'stub', tools: [] }),
+      } as never);
+    }
     const { getDb } = await import('@/db/postgres');
     const { roles } = await import('@/db/schema/roles');
-    await getDb().insert(roles).values({ role: 'system', toolIds: ['filesystem'], defaultTopic: 'everyday', systemPromptTemplate: 'x', isSystem: false });
+    await getDb().insert(roles).values([
+      { role: 'agent', toolIds: ['filesystem'], defaultTopic: 'everyday', systemPromptTemplate: 'x', isSystem: false },
+      { role: 'planner-old', toolIds: ['plan', 'inline-ui'], defaultTopic: 'everyday', systemPromptTemplate: 'x', isSystem: false },
+    ]);
     const { loadRolesFromDb } = await import('@/db/seed-roles');
     await loadRolesFromDb();
     const { isRegisteredRole } = await import('@/core/agent/role-registry');
-    expect(isRegisteredRole('system')).toBe(false);
+    expect(isRegisteredRole('agent')).toBe(true);
+    expect(isRegisteredRole('planner-old')).toBe(true);
+    // And they stay editable.
+    expect((await call('PATCH', '/roles/agent', { description: 'still here' })).status).toBe(200);
+  });
+
+  test('boot order does not decide what loads: built-in rows first, then operator rows', async () => {
+    // An operator role on a tool only an EDITED built-in holds, its row
+    // stored before the built-in's: the reviewer's reproduction.
+    const { getDb } = await import('@/db/postgres');
+    const { roles } = await import('@/db/schema/roles');
+    const { eq } = await import('drizzle-orm');
+    expect((await call('POST', '/roles', { ...NEW_ROLE, role: 'order-probe', toolIds: ['filesystem'], spawns: undefined, spawnedBy: undefined })).status).toBe(200);
+    expect((await call('PATCH', '/roles/writing', { toolIds: ['filesystem', 'plan'] })).status).toBe(200);
+    expect((await call('PATCH', '/roles/order-probe', { toolIds: ['filesystem', 'plan'] })).status).toBe(200);
+    // Rewrite the built-in row last, so it sits after the operator row in the heap.
+    const [writing] = await getDb().select().from(roles).where(eq(roles.role, 'writing'));
+    await getDb().delete(roles).where(eq(roles.role, 'writing'));
+    await getDb().insert(roles).values(writing);
+    const { unregisterRuntimeRole, isRegisteredRole, ROLE_CONFIGS } = await import('@/core/agent/role-registry');
+    unregisterRuntimeRole('order-probe', { kind: 'admin' });
+    const { loadRolesFromDb } = await import('@/db/seed-roles');
+    await loadRolesFromDb();
+    expect(isRegisteredRole('order-probe')).toBe(true);
+    expect(ROLE_CONFIGS.writing.toolIds).toEqual(['filesystem', 'plan']);
+  });
+
+  test('a stored row that cannot load is listed with why, cannot be re-created over, and is repaired by an edit or deleted', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { roles } = await import('@/db/schema/roles');
+    await getDb().insert(roles).values({ role: 'broken-lane', toolIds: ['filesystem'], defaultTopic: 'embedding', systemPromptTemplate: 'x', isSystem: false });
+    const { loadRolesFromDb } = await import('@/db/seed-roles');
+    await loadRolesFromDb();
+    const { isRegisteredRole } = await import('@/core/agent/role-registry');
+    expect(isRegisteredRole('broken-lane')).toBe(false);
+
+    const listed = (await call('GET', '/roles')).body.roles.find((r: { role: string }) => r.role === 'broken-lane');
+    expect(listed).toMatchObject({ loaded: false, source: 'admin', problems: ["lane must resolve to a text lane (got 'embedding')"] });
+    // Not a unique-constraint 500.
+    const again = await call('POST', '/roles', { ...NEW_ROLE, role: 'broken-lane', spawns: undefined, spawnedBy: undefined });
+    expect(again.status).toBe(409);
+
+    expect((await call('PATCH', '/roles/broken-lane', { defaultTopic: 'everyday' })).status).toBe(200);
+    expect(isRegisteredRole('broken-lane')).toBe(true);
+    expect((await call('GET', '/roles')).body.roles.find((r: { role: string }) => r.role === 'broken-lane')).toMatchObject({ loaded: true, problems: [] });
+    expect((await call('DELETE', '/roles/broken-lane')).status).toBe(200);
+    expect(isRegisteredRole('broken-lane')).toBe(false);
+  });
+
+  test('a failed edit whose rollback is refused leaves the role out of the registry, listed as not loaded', async () => {
+    const { getDb, executeRaw } = await import('@/db/postgres');
+    const { roles } = await import('@/db/schema/roles');
+    await getDb().insert(roles).values({ role: 'rollback-probe', toolIds: ['filesystem'], defaultTopic: 'embedding', systemPromptTemplate: 'x', isSystem: false });
+    const { loadRolesFromDb } = await import('@/db/seed-roles');
+    await loadRolesFromDb();
+    // The table refuses the write after the registry took the edit; the
+    // stored definition (lane `embedding`) cannot be put back either.
+    await executeRaw(`CREATE FUNCTION refuse_rollback_probe() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.role = 'rollback-probe' THEN RAISE EXCEPTION 'write refused'; END IF; RETURN NEW; END $$`);
+    await executeRaw(`CREATE TRIGGER refuse_rollback_probe BEFORE UPDATE ON roles FOR EACH ROW EXECUTE FUNCTION refuse_rollback_probe()`);
+    try {
+      const r = await call('PATCH', '/roles/rollback-probe', { defaultTopic: 'everyday' });
+      expect(r.status).toBe(500);
+    } finally {
+      await executeRaw('DROP TRIGGER refuse_rollback_probe ON roles');
+      await executeRaw('DROP FUNCTION refuse_rollback_probe');
+    }
+    const { isRegisteredRole, unloadedRoleProblems } = await import('@/core/agent/role-registry');
+    expect(isRegisteredRole('rollback-probe')).toBe(false);
+    expect(unloadedRoleProblems('rollback-probe')).toEqual(["lane must resolve to a text lane (got 'embedding')"]);
+    expect((await call('DELETE', '/roles/rollback-probe')).status).toBe(200);
+  });
+
+  test('a stored recipe whose step names a lane runs as general, as before; a new one is refused it', async () => {
+    const { stageRoleOf, recipeStepRoleErrors, buildStagesFromTemplate, stepConfigToStageTemplate } = await import('@/core/agent/templates');
+    expect(stageRoleOf('everyday')).toBe('general');
+    expect(stageRoleOf('build')).toBe('general');
+    expect(stageRoleOf('coding')).toBe('coding');
+    expect(stageRoleOf(undefined)).toBe('general');
+    // A role that is gone is not a lane: it keeps its name and fails by it.
+    expect(stageRoleOf('gone-role')).toBe('gone-role');
+    const stage = stepConfigToStageTemplate({ name: 'Draft', topic: 'everyday', requiresApproval: false } as never);
+    expect(() => buildStagesFromTemplate({ stages: [stage] } as never, 'x')).not.toThrow();
+    expect(recipeStepRoleErrors([
+      { name: 'a', topic: 'everyday' }, { name: 'b', topic: 'gone-role' }, { name: 'c', topic: 'coding' }, { name: 'd', topic: '', stageType: 'human_input' },
+    ] as never)).toEqual([
+      "Stage 1: 'everyday' is a model lane, not a role; pick the role that does this step.",
+      "Stage 2: 'gone-role' is not a registered role.",
+    ]);
   });
 
   test('deleted: the role is gone from the registry', async () => {

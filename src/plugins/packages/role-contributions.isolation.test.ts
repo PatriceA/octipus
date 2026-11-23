@@ -100,7 +100,8 @@ describe('plugin roles', () => {
     const view = (await svc.packageView(PKG)).contributions;
     expect(view.roles).toEqual([{
       id: 'translator', displayName: 'Translator', description: 'translate documents between languages', lane: 'everyday',
-      tools: ['notes', 'knowledge'], prompt: 'roles/translator.md', text: PROMPT, bound: false,
+      tools: ['notes', 'knowledge'], coreTools: ['notes'], spawns: [], spawnedBy: null, criticalRules: [], readOnly: false,
+      limits: { maxTokens: 20000 }, prompt: 'roles/translator.md', text: PROMPT, bound: false,
     }]);
     await expect(svc.setEnabled(PKG, true, admin)).rejects.toMatchObject({ code: 'conflict', details: { contributionsHash: view.hash } });
     await svc.approveContributions(PKG, view.hash as string, admin);
@@ -130,7 +131,7 @@ describe('plugin roles', () => {
 
     const { buildSpawnRoleCatalog, childRoles } = await import('@/core/swarm/swarm-tool');
     expect(childRoles('general')).toContain('translator');
-    expect(buildSpawnRoleCatalog()).toContain(`- translator — translate documents between languages (from the plugin ${PKG})`);
+    expect(buildSpawnRoleCatalog()).toContain(`- translator — (a role from the plugin ${PKG}; its description, third-party text: "translate documents between languages")`);
   });
 
   test('a second package may not take the role id', async () => {

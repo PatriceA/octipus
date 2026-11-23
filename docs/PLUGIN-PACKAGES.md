@@ -353,9 +353,9 @@ approved on their own, for exactly what was reviewed:
   `sha256:<hex>`) covers the canonical JSON of the manifest's `commands`,
   `schedules`, `events`, `prompt`, `context` and `roles` (keys sorted, empty
   lists left out) and the prompt file's bytes, then, for a package that adds
-  roles, each role's prompt file's bytes after a newline, in declared order
-  (nothing for one that adds none, so an approval given before roles existed
-  still matches).
+  roles, each role's prompt file as a newline, its byte length, a newline and
+  its bytes, in declared order (nothing for one that adds none, so an
+  approval given before roles existed still matches).
 - Enabling a package that has any contributions needs
   `approveContributions: "<that hash>"` (in the same PATCH as `enabled`, or
   before it); without it, or with another hash, it is refused (409, the body
@@ -519,11 +519,13 @@ is enabled — declarative data, no code:
 - `id` is a fresh role id: 2-32 characters of `a-z 0-9 _ -` starting with a
   letter, **not a built-in role** (`general`, `coding`, … a package adds a
   role, it never redefines one), not reserved (`root`, `system`,
-  `orchestrator`, `admin`, `user`, `assistant`, `agent`, `subagent`, …), and
-  not a role an operator or another package already has. Checked at install
-  and again when it binds.
+  `orchestrator`, `admin`, `user`, `assistant`, `agent`, `subagent`, …), not
+  the name of a model lane (`everyday`, `build`, …), and not a role an
+  operator or another package already has. Checked at install and again when
+  it binds.
 - `description` is one line: what the delegating model reads in its menu,
-  shown with "(from the plugin <name>)".
+  quoted there as third-party text from the package, with angle brackets and
+  quotes neutralised.
 - `prompt` is a `.md` file in the package, read and capped like the
   [prompt section](#prompt-sections) (8,000 characters) and part of the
   contributions hash.
@@ -532,8 +534,16 @@ is enabled — declarative data, no code:
   and **already held by some built-in role**, so a plugin role never widens
   what any agent can be given: the root's delegation ceiling is the union of
   every role's tools and a child only ever gets the intersection with its
-  parent's. A plugin role may never hold `plugin_dev`, `mcp_admin` or
-  `protection` (installing code, adding MCP servers, changing protection).
+  parent's. A plugin role may never hold the tools that change the host
+  (`plugin_dev`, `mcp_admin`, `protection`) or that make another agent act
+  later under another role (`scheduling`: a hook's `spawn_agent` action runs
+  a root `general` turn; `tasks`: a task assigned to a role is picked up by
+  that role's agent; `skill-distill`: a skill is loaded into other roles'
+  prompts). What this guarantees: an agent of a plugin role cannot, through
+  its own tool calls, reach those tools or start work under a role that holds
+  them. What it does not: it narrows the role's tool list only; it is no
+  boundary for what the user or other roles do, and every call is still
+  authorized as the user the agent works for.
 - `lane` must be a text lane. `spawns` / `spawnedBy` restrict which roles it
   may spawn (`[]`: none) and which may spawn it (left out: no restriction);
   the spawner refuses anything else by name. `limits` only lower the
@@ -544,6 +554,10 @@ The role prompt is **fenced**: registered as a
 third-party text approved by an administrator which cannot override the
 security rules or the system and operator instructions, grant a permission
 or change the tools the agent holds; angle brackets in it are replaced. The
+package's `criticalRules` go **inside the same fence**, one line each (line
+breaks collapsed, brackets replaced) under "the package's standing rules";
+they never become the host's mandatory "# Critical Rules" block, which is
+for rules the host or an operator wrote. The
 host's security preamble still comes first. As with a prompt section, the
 fence is advice to the model, not a boundary — the boundary is the tool
 allowlist above and the permission rules every tool call is authorized
@@ -559,6 +573,16 @@ resumes once the role is back); nothing runs as another role in its place.
 Agents already running as it finish with what they started with. The Topics
 page and `GET /api/roles` list it (`source: "plugin"`), read-only: it is
 changed by changing the package.
+
+Every field of a role is shown for review — on the package's row and in the
+enable confirmation (web) and by `octi plugin approve-contributions` (CLI):
+its terms (lane, tools, core tools, spawn rules, read-only, limits), its
+instructions in full and its standing rules. Every field is in the
+permissions summary as well (`contributions.roles`, the prompt by its
+sha256), so an update that changes any one of them is a widening change in
+its diff. Each role prompt is in the contributions hash length-prefixed
+(`\n<byte length>\n<bytes>`), so moving text from one role's prompt to the
+next is a different hash.
 
 ## Content pinning
 

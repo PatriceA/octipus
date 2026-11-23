@@ -4,7 +4,50 @@ import type { PipelineStepConfig, RecipeParameter } from '@/db/schema/pipeline-t
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { validateRecipeParameterDefs, validateRecipeParameterRefs } from './recipe-params';
 import { getRoleConfig } from './roles';
+import { isLaneName, isRegisteredRole } from './role-registry';
 import type { AgentRole, PipelineStageType } from './types';
+import { coreLogger } from '@/utils/logger';
+
+/**
+ * The role a recipe step runs as, from its free-text `topic`.
+ *
+ * - A registered role: that role.
+ * - A LANE name (`everyday`, `build`, …) that is not a role: `general`, with a
+ *   warning. Recipes were saved with lane names in `topic` and always ran as
+ *   `general` (the old silent fallback of `getRoleConfig`); a stored recipe
+ *   keeps running exactly as it did. New recipes are refused one
+ *   (`recipeStepRoleErrors`).
+ * - Anything else: the text itself, so a role that has been removed (its
+ *   plugin disabled) fails by name (`stageContractErrors`, `UnknownRoleError`)
+ *   instead of running as `general`.
+ */
+export function stageRoleOf(topic: string | undefined): AgentRole {
+  const t = topic || 'general';
+  if (isRegisteredRole(t)) return t;
+  if (isLaneName(t)) {
+    coreLogger.warn({ topic: t }, 'Recipe step names a lane, not a role; it runs as general, as it always has');
+    return 'general';
+  }
+  return t as AgentRole;
+}
+
+/**
+ * Save-time check of a recipe's steps against the role registry: every step
+ * that runs a worker names a registered role. A lane name is refused here
+ * (it would run as `general`, which is not what the editor shows); an
+ * unregistered name is refused too.
+ */
+export function recipeStepRoleErrors(steps: ReadonlyArray<Pick<PipelineStepConfig, 'name' | 'topic' | 'stageType'>>): string[] {
+  const errors: string[] = [];
+  steps.forEach((step, i) => {
+    if (step.stageType === 'human_input' || !step.topic?.trim()) return;
+    if (isRegisteredRole(step.topic)) return;
+    errors.push(isLaneName(step.topic)
+      ? `Stage ${i + 1}: '${step.topic}' is a model lane, not a role; pick the role that does this step.`
+      : `Stage ${i + 1}: '${step.topic}' is not a registered role.`);
+  });
+  return errors;
+}
 
 export interface StageTemplate {
   name: string;
@@ -60,7 +103,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     name: step.name,
     // A `human_input` step has no worker to route, so its topic is optional;
     // the role is carried for display only.
-    role: (step.topic || 'general') as AgentRole,
+    role: stageRoleOf(step.topic),
     requiresApproval: step.requiresApproval,
     promptTemplate: step.promptTemplate || `Execute: ${step.name}\n\n{{description}}\n\n{{previousOutput}}`,
     stageType: step.stageType,

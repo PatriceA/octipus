@@ -4,8 +4,10 @@
  * prompt section, context and agent roles bind. `sha256:<hex>` over the
  * canonical JSON of the manifest's contribution fields, a newline, and the
  * prompt file's bytes; then, for a package that adds roles, each role's
- * prompt file's bytes after a newline, in declared order (nothing more for one
- * that adds none, so an approval made before roles existed still matches).
+ * prompt file as a newline, its byte length in decimal, a newline and its
+ * bytes, in declared order — length-prefixed, so no two different splits of
+ * the same bytes hash alike. Nothing more for a package that adds none, so an
+ * approval made before roles existed still matches.
  * Anything that changes what the package adds to every user's agents changes
  * it, so a changed package must be approved again.
  */
@@ -50,7 +52,7 @@ export function hashContributions(m: PluginManifest, promptBytes: Uint8Array | n
   h.update('\n');
   if (promptBytes) h.update(promptBytes);
   for (const bytes of rolePromptBytes) {
-    h.update('\n');
+    h.update(`\n${bytes.byteLength}\n`);
     h.update(bytes);
   }
   return `sha256:${h.digest('hex')}`;
