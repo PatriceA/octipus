@@ -33,10 +33,10 @@ import { canonicalTopic, TOPICS } from '@/models/topics';
 import { getToolRegistry } from '@/tools/registry';
 import { withoutRetiredToolIds } from './retired-tools';
 import { loadRoles } from './roles/index';
-import { isBuiltinRole, newRoleIdProblem, ROLE_ID_RE, roleIdShapeProblem } from './role-ids';
+import { isBuiltinRole, newRoleIdProblem, PLUGIN_ROLE_DENIED_TOOLS, ROLE_ID_RE, roleIdShapeProblem } from './role-rules';
 import { type AgentRole, BUILTIN_ROLES, type RoleConfig, type RoleLimits } from './types';
 
-export { isBuiltinRole, isLaneName, newRoleIdProblem, RESERVED_ROLE_IDS, ROLE_ID_RE, roleIdProblem } from './role-ids';
+export { isBuiltinRole, isLaneName, newRoleIdProblem, PLUGIN_ROLE_DENIED_TOOLS, RESERVED_ROLE_IDS, ROLE_ID_RE, roleIdProblem } from './role-rules';
 
 /** Where a registered role came from. */
 export type RoleSource =
@@ -46,32 +46,6 @@ export type RoleSource =
   /** The `roles` contribution of an enabled plugin package. */
   | { kind: 'plugin'; plugin: string };
 
-/**
- * Tools a plugin-contributed role may never hold, whatever a built-in role
- * holds. Two kinds:
- *
- *  - tools that change the host itself: install code (`plugin_dev`), add or
- *    change MCP servers (`mcp_admin`), change how data is guarded
- *    (`protection`);
- *  - tools that make ANOTHER agent act later, under a role the plugin role is
- *    not: a hook or schedule whose `spawn_agent` action runs a root `general`
- *    turn (`scheduling`), a task assigned to a role whose agent picks it up
- *    (`tasks`), a skill that is loaded into other roles' prompts
- *    (`skill-distill`), a monitor whose `continuation` text steers or starts
- *    the session's root turn on delivery (`monitor`), a companion session
- *    started or messaged (`companion`), and the user's own browser, which can
- *    type into the Octipus web chat (`browser-ext`).
- *
- * What it guarantees: an agent of a plugin role cannot, through its own tool
- * calls, reach those tools or start work under a role that holds them. What it
- * does not: it is no boundary for the user's own actions or for other roles,
- * and it narrows only the role's tool list — every call is still authorized as
- * the user the agent works for. A plugin's prompt text is third-party text; it
- * does not get to drive these.
- */
-export const PLUGIN_ROLE_DENIED_TOOLS: ReadonlySet<string> = new Set([
-  'plugin_dev', 'mcp_admin', 'protection', 'scheduling', 'tasks', 'skill-distill', 'monitor', 'companion', 'browser-ext',
-]);
 
 /**
  * The most characters a runtime role's prompt may hold. Generous on purpose:

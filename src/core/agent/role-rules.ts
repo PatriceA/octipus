@@ -1,7 +1,14 @@
 /**
- * What a runtime role's id may be. Kept apart from the registry (which loads
- * the role prompts and the tool registry) so the plugin manifest parser can
- * refuse a bad id at install without importing either.
+ * The rules a runtime role is checked against that need nothing at runtime:
+ * what its id may be and which tools a plugin role may never hold.
+ *
+ * Kept apart from the registry ON PURPOSE. The registry loads the role
+ * folders, whose `prompt.md` imports only resolve under the bundler or the
+ * test runner's loader; the plugin manifest parser and the offline
+ * `octi plugin` CLI (`scripts/plugin.ts`, run by plain `tsx` in CI) need these
+ * rules and must not load the role folders. This module imports nothing but
+ * the topic list and the role types; `scripts/plugin-cli-imports.test.ts`
+ * holds the CLI to that.
  */
 import { canonicalTopic, TOPICS } from '@/models/topics';
 import { BUILTIN_ROLES, type BuiltinAgentRole } from './types';
@@ -56,3 +63,30 @@ export function newRoleIdProblem(id: string): string | null {
 export function roleIdProblem(id: string): string | null {
   return roleIdShapeProblem(id) ?? newRoleIdProblem(id);
 }
+
+/**
+ * Tools a plugin-contributed role may never hold, whatever a built-in role
+ * holds. Two kinds:
+ *
+ *  - tools that change the host itself: install code (`plugin_dev`), add or
+ *    change MCP servers (`mcp_admin`), change how data is guarded
+ *    (`protection`);
+ *  - tools that make ANOTHER agent act later, under a role the plugin role is
+ *    not: a hook or schedule whose `spawn_agent` action runs a root `general`
+ *    turn (`scheduling`), a task assigned to a role whose agent picks it up
+ *    (`tasks`), a skill that is loaded into other roles' prompts
+ *    (`skill-distill`), a monitor whose `continuation` text steers or starts
+ *    the session's root turn on delivery (`monitor`), a companion session
+ *    started or messaged (`companion`), and the user's own browser, which can
+ *    type into the Octipus web chat (`browser-ext`).
+ *
+ * What it guarantees: an agent of a plugin role cannot, through its own tool
+ * calls, reach those tools or start work under a role that holds them. What it
+ * does not: it is no boundary for the user's own actions or for other roles,
+ * and it narrows only the role's tool list — every call is still authorized as
+ * the user the agent works for. A plugin's prompt text is third-party text; it
+ * does not get to drive these.
+ */
+export const PLUGIN_ROLE_DENIED_TOOLS: ReadonlySet<string> = new Set([
+  'plugin_dev', 'mcp_admin', 'protection', 'scheduling', 'tasks', 'skill-distill', 'monitor', 'companion', 'browser-ext',
+]);

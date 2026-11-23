@@ -23,7 +23,7 @@ import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context'
 import { CRON_FIELDS } from '../contributions/cron';
 import { MAX_IN_FLIGHT, RATE_PER_MINUTE } from '../contributions/events';
 import { MAX_PROMPT_CHARS } from '../contributions/prompt';
-import { PLUGIN_ROLE_DENIED_TOOLS } from '@/core/agent/role-registry';
+import { PLUGIN_ROLE_DENIED_TOOLS } from '@/core/agent/role-rules';
 import { MAX_CONCURRENT_RUNS } from '../contributions/schedules';
 import { DEFAULT_RUN_ROLE, MAX_RUN_OUTPUT_CHARS, MAX_RUNS_IN_FLIGHT, PLUGIN_RUN_TOOL_IDS, RUN_BURST, RUN_TIMEOUT_MS, RUNS_PER_HOUR } from '../host-agent';
 import { MAX_TOKEN_TTL_MS } from '../host-api';

@@ -6,7 +6,7 @@
  * declare, a bad cron expression or an unsafe prompt path refuses the install.
  */
 import { z } from 'zod';
-import { ROLE_ID_RE, roleIdProblem } from '@/core/agent/role-ids';
+import { ROLE_ID_RE, roleIdProblem } from '@/core/agent/role-rules';
 import { PLUGIN_EVENT_TYPES, PLUGIN_MANIFEST_FILE, type PluginToolEffect } from '@/shared/plugin-package';
 import { cronProblem } from './contributions/cron';
 import { SIGNATURE_FILE } from './integrity';

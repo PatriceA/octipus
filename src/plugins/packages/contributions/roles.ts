@@ -12,7 +12,7 @@
  * and the fence says the text cannot override it, grant a permission or change
  * the tools the agent holds.
  */
-import { PLUGIN_ROLE_DENIED_TOOLS, registerRuntimeRole, RoleDefinitionError, unregisterRuntimeRole } from '@/core/agent/role-registry';
+import { PLUGIN_ROLE_DENIED_TOOLS } from '@/core/agent/role-rules';
 import type { PluginRoleDecl } from '@/shared/plugin-package';
 import { neutraliseFencedText } from '@/shared/plugin-fence';
 
@@ -40,7 +40,10 @@ export function fencedRolePrompt(pkg: string, roleId: string, text: string, rule
  * Register one role of `pkg`. Returns its disposer, or the reasons it was not
  * registered (the role is then simply absent; the rest of the package binds).
  */
-export function bindRole(pkg: string, decl: PluginRoleDecl, promptText: string): { dispose: () => void } | { problem: string } {
+export async function bindRole(pkg: string, decl: PluginRoleDecl, promptText: string): Promise<{ dispose: () => void } | { problem: string }> {
+  // Loaded when a role binds, not when this module loads: the registry loads
+  // the role folders, and this module is on the offline CLI's import path.
+  const { registerRuntimeRole, RoleDefinitionError, unregisterRuntimeRole } = await import('@/core/agent/role-registry');
   const source = { kind: 'plugin' as const, plugin: pkg };
   try {
     registerRuntimeRole({
@@ -64,13 +67,35 @@ export function bindRole(pkg: string, decl: PluginRoleDecl, promptText: string):
 }
 
 /**
- * Why `roles` cannot be installed beside what is registered and the other
- * installed packages' roles. Checked at install, so a clash is refused then
- * rather than found when the package is enabled.
+ * Why `roles` cannot be installed beside the other installed packages' roles
+ * and, with `host`, beside what this host has: the registered roles and the
+ * stored role rows. Checked at install, so a clash is refused then rather
+ * than found when the package is enabled.
+ *
+ * `host: false` is the package checked on its own (`octi plugin validate`,
+ * offline): it reads no registry and no database, so the offline CLI never
+ * loads the role folders (their `.md` prompts need the bundler's loader).
+ * The install path always checks the host.
  */
 export async function roleConflicts(
   pkg: string, roles: readonly PluginRoleDecl[], others: ReadonlyArray<{ name: string; roles?: readonly PluginRoleDecl[] }>,
+  opts: { host: boolean } = { host: true },
 ): Promise<string[]> {
+  const problems: string[] = [];
+  for (const r of roles) {
+    const denied = r.tools.filter((t) => PLUGIN_ROLE_DENIED_TOOLS.has(t));
+    if (denied.length) problems.push(`roles.${r.id}: a plugin role may not hold ${denied.join(', ')}`);
+  }
+  const clashes = new Set<string>();
+  for (const r of roles) {
+    const owner = others.find((o) => o.name !== pkg && o.roles?.some((x) => x.id === r.id));
+    if (owner) {
+      problems.push(`roles: "${r.id}" is already a role of the plugin package ${owner.name}`);
+      clashes.add(r.id);
+    }
+  }
+  if (!opts.host) return problems;
+
   const { roleSource, describeSource } = await import('@/core/agent/role-registry');
   // Stored role rows too: an operator's row that did not load is not
   // registered, but it still owns its id — a plugin taking it would be merged
@@ -80,13 +105,8 @@ export async function roleConflicts(
   const { inArray } = await import('drizzle-orm');
   const ids = roles.map((r) => r.id);
   const stored = new Set(ids.length ? (await getDb().select({ role: rolesTable.role }).from(rolesTable).where(inArray(rolesTable.role, ids))).map((r) => r.role) : []);
-  const problems: string[] = [];
   for (const r of roles) {
-    const owner = others.find((o) => o.name !== pkg && o.roles?.some((x) => x.id === r.id));
-    if (owner) {
-      problems.push(`roles: "${r.id}" is already a role of the plugin package ${owner.name}`);
-      continue;
-    }
+    if (clashes.has(r.id)) continue;
     if (stored.has(r.id) && roleSource(r.id)?.kind !== 'plugin') {
       problems.push(`roles: "${r.id}" is already the id of a stored role (Topics page); an operator must rename or delete it first`);
       continue;
@@ -95,8 +115,6 @@ export async function roleConflicts(
     if (source && !(source.kind === 'plugin' && source.plugin === pkg)) {
       problems.push(`roles: "${r.id}" is already registered by ${describeSource(source)}`);
     }
-    const denied = r.tools.filter((t) => PLUGIN_ROLE_DENIED_TOOLS.has(t));
-    if (denied.length) problems.push(`roles.${r.id}: a plugin role may not hold ${denied.join(', ')}`);
   }
   return problems;
 }

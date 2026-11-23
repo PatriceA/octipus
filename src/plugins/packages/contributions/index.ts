@@ -152,7 +152,7 @@ async function bindRoles(row: PluginPackageRow, prompts: Map<string, string>, bi
       binding.problems.push(`roles.${decl.id}: its prompt could not be read`);
       continue;
     }
-    const result = bindRole(pkg, decl, text);
+    const result = await bindRole(pkg, decl, text);
     if ('problem' in result) binding.problems.push(result.problem);
     else {
       binding.disposers.push(result.dispose);
@@ -197,11 +197,14 @@ export function disposeAllContributions(): Promise<void> {
 
 /**
  * Why a package's contributions cannot be installed beside what is there:
- * its prompt file (read from `dir`, the copy being installed) and its command
- * names against the host's and the other installed packages'. Empty when it fits.
+ * its prompt files (read from `dir`, the copy being installed), its command
+ * names against the host's and the other installed packages', and its role
+ * ids against the other packages' and — with `host` (the default; the install
+ * path) — the host's registered roles and stored role rows. Empty when it fits.
  */
 export async function contributionInstallProblems(
   manifest: PluginManifest, dir: string, others: ReadonlyArray<{ name: string; manifest: PluginManifest }>,
+  opts: { host: boolean } = { host: true },
 ): Promise<string[]> {
   const problems: string[] = [];
   if (manifest.prompt) {
@@ -220,7 +223,7 @@ export async function contributionInstallProblems(
     }
   }
   if (manifest.roles?.length) {
-    problems.push(...await roleConflicts(manifest.name, manifest.roles, others.map((o) => ({ name: o.name, roles: o.manifest.roles }))));
+    problems.push(...await roleConflicts(manifest.name, manifest.roles, others.map((o) => ({ name: o.name, roles: o.manifest.roles })), opts));
   }
   return problems;
 }
