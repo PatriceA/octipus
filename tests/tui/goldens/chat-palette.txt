@@ -6,7 +6,7 @@
 05|
 06|
 07|       ┌───────────────────────────────────────────────────────────────────────────────────┐
-08|       │ Commands 5/35                                                                     │
+08|       │ Commands 5/36                                                                     │
 09|       │ filter: exp                                                                       │
 10|       │ › /export [path]  Write the transcript to a Markdown file                         │
 11|       │   /plan-hide  Collapse the expanded plan                                          │
