@@ -326,6 +326,10 @@ describe('path spellings cannot move an artifact page off its sandbox', () => {
     for (const path of ['/%61/pub-board/embed', '/__%61rtifacts__/a/pub-board/embed', '/%61pi/sessions', '/api/%73essions', '/a/x%zz']) {
       expect((await send('GET', path)).status, path).toBe(400);
     }
+    const refused = await send('GET', '/%61pi/sessions');
+    expect(refused.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(refused.headers.get('strict-transport-security')).toMatch(/max-age=/);
+    expect(refused.headers.get('content-security-policy')).toMatch(/default-src/);
     // A reserved escape in a parameter is still fine.
     expect((await send('GET', '/__artifacts__/a/pub-board/data/a%20b?vt=x')).status).toBe(401);
   });

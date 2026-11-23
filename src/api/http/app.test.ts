@@ -225,3 +225,47 @@ describe('App — streamed responses', () => {
     expect(released).toBe(true);
   });
 });
+
+describe('a default header never replaces one the handler set', () => {
+  const withDefaults = new App()
+    .onAfterHandle(({ set }) => {
+      set.headers['Content-Security-Policy'] ??= "default-src 'self'";
+      set.headers['cache-control'] ??= 'no-cache';
+      set.headers['X-Content-Type-Options'] = 'nosniff';
+    })
+    .get('/own-response', () => new Response('page', { headers: { 'Content-Security-Policy': "default-src 'none'; sandbox" } }))
+    .get('/own-response-status', ({ set }) => {
+      set.status = 202;
+      return new Response('page', { status: 200, headers: { 'content-security-policy': "default-src 'none'; sandbox" } });
+    })
+    .get('/assigned', ({ set }) => {
+      Object.assign(set.headers, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      return 'data: x\n\n';
+    });
+
+  test('on a Response the handler returned, its own headers stay; defaults only add', async () => {
+    for (const path of ['/own-response', '/own-response-status']) {
+      const res = await withDefaults.handle(new Request(`http://x${path}`));
+      expect(res.headers.get('content-security-policy'), path).toBe("default-src 'none'; sandbox");
+      expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      expect(res.headers.get('cache-control'), path).toBe('no-cache');
+    }
+  });
+
+  test('headers merged into set.headers stay case-insensitive', async () => {
+    const res = await withDefaults.handle(new Request('http://x/assigned'));
+    expect(res.headers.get('content-type')).toBe('text/event-stream');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+});
+
+describe('a non-canonical path is refused with the usual response headers', () => {
+  test('the 400 carries CORS for an allowed origin and the after-hook headers', async () => {
+    const res = await app.handle(new Request('http://x/%61pi/health', { headers: { origin: 'https://desk.test' } }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Bad request path', code: 'non_canonical_path' });
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://desk.test');
+    expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    expect(res.headers.get('x-test')).toBe('1');
+  });
+});
