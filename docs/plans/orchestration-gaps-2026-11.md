@@ -120,17 +120,32 @@ Not a model picker. Lanes stay bound by the admin.
 
 ## 5. Remaining webhook risks
 
-- A spawn that fails at `maxConcurrentAgents` still marks the delivery done, so
-  a redelivery is ignored and the event is lost (`webhook-delivery.ts:600-650`).
-  Release the claim when the action did not start an agent.
-- Cooldown and `maxExecutions` skips write no execution row
-  (`hooks/manager.ts:174-185`). Record them so a skipped event is visible.
-- Two concurrent first deliveries can each mint a hook session; only one is
-  saved (`actions.ts:334`). Make the persist conditional on `session_id IS NULL`
-  and use the stored value.
-- The session lock, run queue and merge windows are per process
-  (docs/WEBHOOKS.md). Multi-replica deployments need a shared lock before
-  ordering can be promised there.
+- **Closed.** A spawn that fails at `maxConcurrentAgents` still marks the
+  delivery done, so a redelivery is ignored and the event is lost. Now an
+  action refused before any agent existed reports `notStarted`, and
+  `fireWebhookHook` releases the claim, hands the cooldown / `maxExecutions`
+  reservation back and logs an `error` row (`webhook-delivery.ts`,
+  `manager.ts`). This first covered only the direct spawn
+  (`orchestrated: false`); an orchestrated hook's root agent refused at the cap
+  still completed the delivery with nothing in its session. The root turn now
+  reports that refusal as `TurnResult.notStarted` (`core/agent/service.ts`)
+  and the orchestrated path returns `notStarted` too (`hooks/actions.ts`). A
+  quota or spend-budget refusal of an orchestrated hook is still answered in
+  its session and completes the delivery, on purpose. Tests:
+  `hooks/webhook-risks.test.ts`, `core/agent/limit-refusal.test.ts`.
+- **Closed.** Cooldown and `maxExecutions` skips write no execution row. Now a
+  targeted hook (webhook, schedule, heartbeat) logs a `skipped` row with
+  `cooldown`, `max_executions` or `not_reserved` and its detail
+  (`manager.ts` `recordSkip`), shown in the Hooks page's execution log and
+  returned by `GET /api/hooks/:id/executions`.
+- **Closed.** Two concurrent first deliveries can each mint a hook session;
+  only one is saved. Now the persist only fills an empty `session_id`
+  (`persistHookSessionId` in `actions.ts`); the loser drops the session it
+  created and uses the stored id, so both runs share one session in one
+  process and across processes.
+- **Open, on purpose.** The session lock, run queue and merge windows are per
+  process (docs/WEBHOOKS.md). Multi-replica deployments need a shared lock
+  before ordering can be promised there.
 
 ## Status
 

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { limitKindOf, limitRefusalOf, sharedRefusalText } from '@/core/errors/limit-refusal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
+import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 
 const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[], created: [] as any[], context: {} as Record<string, unknown> }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
@@ -120,6 +121,31 @@ describe('AgentService.handleMessage', () => {
     expect(result.response).toBe(refusal.text);
     expect(result.metadata?.limit?.code).toBe('SPEND_BUDGET_EXCEEDED');
     expect(fixture.persisted).toEqual([expect.objectContaining({ content: refusal.text, metadata: { limit: refusal.refusal } })]);
+    // The agent ran before it was refused: not a turn a caller may simply retry.
+    expect(result.notStarted).toBeUndefined();
+  });
+
+  test('the agent cap at spawn is reported as not started, with nothing stored', async () => {
+    fixture.root.mockRejectedValueOnce(new ConcurrencyLimitError(3));
+    const result = await new AgentService().handleMessage('session', 'user', 'triage', 'hook');
+    expect(result).toMatchObject({ outcome: 'failed', notStarted: true });
+    expect(fixture.created).toEqual([]);
+    expect(fixture.persisted).toEqual([]);
+  });
+
+  test('a budget or quota refusal at spawn, or any other failure, is not: it is answered in the session', async () => {
+    const others = [
+      new SpendBudgetExceededError(reason),
+      new QuotaExceededError({ kind: 'concurrentAgents', current: 2, max: 2, userId: 'user' }),
+      new Error('model provider unreachable'),
+    ];
+    for (const err of others) {
+      fixture.root.mockRejectedValueOnce(err);
+      const result = await new AgentService().handleMessage('session', 'user', 'triage', 'hook');
+      expect(result.outcome).toBe('failed');
+      expect(result.notStarted).toBeUndefined();
+    }
+    expect(fixture.root).toHaveBeenCalledTimes(3);
   });
 
   describe('plan-execute path ("go")', () => {

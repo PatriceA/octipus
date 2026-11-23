@@ -7,6 +7,17 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **An orchestrated hook refused at the agent cap is no longer lost**
+  ([docs](docs/WEBHOOKS.md#idempotency-duplicate-deliveries)). When a
+  `spawn_agent` hook with `orchestrated: true` fired while the server was at
+  `maxConcurrentAgents`, its root agent never started and nothing reached its
+  session, yet the webhook delivery was marked done, so a redelivery was
+  ignored. It is now handled like the direct spawn already was: the delivery
+  id is released for a redelivery, the cooldown / `maxExecutions` reservation
+  is handed back, and the failure is logged as an `error` row. A scheduled
+  orchestrated one-shot refused this way is retried with the same back-off as
+  a direct one. A quota or spend-budget refusal is unchanged: it is answered in
+  the hook's session and the delivery counts as done.
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,
