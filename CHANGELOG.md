@@ -28,11 +28,18 @@ labels reflect blast radius, not contract guarantees.
     by the app itself and the artifact's `allowedEmbedOrigins` (before, it
     sent no framing policy). A site that frames the outer page rather than
     `/embed` must be added to the artifact's allowed embed origins.
-  - Fixed: a request path that percent-encodes an unreserved character (or
-    holds a broken `%` escape) is now refused with 400 everywhere, so request
-    classification and routing always see the same path. Response headers are
-    keyed case-insensitively, so a default header never replaces or
-    duplicates one a handler set; an embed always carries only its own
+  - **Behaviour change for API clients (all routes, not only artifacts):** a
+    request whose *path* percent-encodes an unreserved character (a letter,
+    digit, `-`, `.`, `_` or `~`, e.g. `%61` for `a` or `%7E` for `~`), or
+    holds a malformed `%` escape, is refused with `400`
+    `{"code": "non_canonical_path"}` (with the usual CORS and security
+    headers). Clients must send unreserved characters unencoded, as
+    `encodeURIComponent` does. Other escapes (`%20`, `%2F`, …) and query
+    strings are unaffected. This keeps request checks and routing on the same
+    path.
+  - Fixed: response headers are keyed case-insensitively, and a header a
+    handler set (on `set.headers` or on a `Response` it returns) is never
+    replaced or duplicated by a default; an embed always carries only its own
     sandboxing policy.
   - The debug request log no longer records share-link, viewer-token or
     OAuth-code query values.
