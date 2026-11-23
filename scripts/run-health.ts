@@ -132,20 +132,63 @@ export function rubberStampRate(total: number, rejected: number): number {
 interface AuditTally {
   total: number;
   rejected: number;
+  /** Of `rejected`: passes missing only `whatIDidNotCheck`/`confidence` (sent to a verdict repair). */
+  thinRejected: number;
+  /** Replies with no readable verdict at all — not passing verdicts, so counted in neither above. */
+  unparseable: number;
+}
+
+/** One `audit_coverage` row, reduced to what the tally reads. */
+export interface AuditRow {
+  passed: boolean;
+  /** `detail.fault`: `report` (repairable block fault), `coverage`, or absent. */
+  fault: string | null;
+  /** `detail.source`: `unparseable` for a reply with no readable verdict. */
+  source: string | null;
+}
+
+/**
+ * Fold audit rows into the rubber-stamp tally.
+ *
+ * A reply with no readable verdict (`source: 'unparseable'`) is not a passing
+ * verdict at all, yet it is written as a failed `audit_coverage` row so it can
+ * never stand as the newest evidence for its scope. Counting it as a rejected
+ * PASS is how the 2026-08 reading of 60% came to be mostly "forgot the json
+ * block", so those rows are set aside. Every PARSED pass the gate rejected
+ * still counts, including one missing only `whatIDidNotCheck`/`confidence`:
+ * a pass that will not say what it skipped is the thin artifact the gate
+ * exists for, whether or not a repair later fills it in. Those are also shown
+ * as their own sub-number.
+ */
+export function tallyAudits(audits: AuditRow[]): AuditTally {
+  let total = 0;
+  let rejected = 0;
+  let thinRejected = 0;
+  let unparseable = 0;
+  for (const a of audits) {
+    if (a.source === 'unparseable') {
+      unparseable++;
+      continue;
+    }
+    total++;
+    if (!a.passed) {
+      rejected++;
+      if (a.fault === 'report') thinRejected++;
+    }
+  }
+  return { total, rejected, thinRejected, unparseable };
 }
 
 /** Audit-coverage verdicts in the window. Only PASSING verdicts are gated, so
- *  every row here is a verdict that claimed success. */
+ *  every counted row is a verdict that claimed success. */
 async function loadAuditTally(days: number): Promise<AuditTally> {
   const res = await getDb().execute(sql`
-    SELECT COUNT(*)::int                                   AS total,
-           COUNT(*) FILTER (WHERE passed = false)::int      AS rejected
+    SELECT passed, detail->>'fault' AS fault, detail->>'source' AS source
       FROM verification_evidence
      WHERE kind = 'audit_coverage'
        AND created_at > now() - (${days}::text || ' days')::interval
   `);
-  const [row] = rows<AuditTally>(res);
-  return { total: row?.total ?? 0, rejected: row?.rejected ?? 0 };
+  return tallyAudits(rows<AuditRow>(res));
 }
 
 async function main(): Promise<number> {
@@ -170,8 +213,14 @@ async function main(): Promise<number> {
       console.log(`\nRubber-stamp rate — passing audit verdicts that named nothing they audited`);
       console.log(`  window        ${days}d · ${audits.total} passing verdicts`);
       console.log(`  rejected      ${audits.rejected} (${(rate * 100).toFixed(0)}%)`);
+      if (audits.thinRejected > 0) {
+        console.log(`    of which    ${audits.thinRejected} only left out whatIDidNotCheck/confidence (sent to verdict repair)`);
+      }
     } else {
       console.log(`\nRubber-stamp rate — no audit-coverage verdicts recorded in the last ${days} days.`);
+    }
+    if (audits.unparseable > 0) {
+      console.log(`  no verdict    ${audits.unparseable} replies with no readable verdict block (not passing verdicts — not counted above)`);
     }
 
     const runs = await loadRuns(days);

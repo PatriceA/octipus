@@ -7,6 +7,7 @@
  *   octi plugin keygen <prefix> [--passphrase-file <path|->]  Make an Ed25519 signing key pair.
  *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
  *   octi plugin sign-index <index.json> --key <file>  Sign a registry index (<index.json>.sig).
+ *   octi plugin sign-skill-bundle <bundle.json> --key <file>  Sign a skill exchange bundle in place.
  *   octi plugin hash <dir> [--json]  The content hash install records.
  *   octi plugin pack <dir> --out <file.tar.gz> [--json]  A reproducible tarball of the package.
  *   octi plugin permissions <dir> [--json]  What the package asks for, from its manifest.
@@ -51,6 +52,7 @@ import {
   signCommand,
   signIndexCommand,
   signKeysCommand,
+  signSkillBundleCommand,
   unpackCommand,
   validateCommand,
   verifyCommand,
@@ -192,12 +194,18 @@ Usage:
                                 root, second rootBackup), the schema, the root
                                 revocation rule and expires. --json prints {"valid",
                                 "keyId","version","endorsed","revoked","error"?}.
+  octi plugin sign-skill-bundle <bundle.json> --key <private-key-file> [--passphrase-file <path|->] [--json]
+                                Sign a skill exchange bundle (Skills → Export) in place:
+                                checks it as an import does, then writes its signature
+                                over the content hash. An importer trusts it when the
+                                key is in their plugins.trustedPublishers. Passphrases
+                                as for sign.
   octi plugin unpack <tarball> --out <dir> [--json]
                                 Unpack with the strict tar reader install uses into a
                                 new or empty <dir>. --json prints {"out","root",
                                 "sha256","name","version"}.
 
-validate, keygen, sign, sign-index, sign-keys, verify-keys, hash, pack, unpack,
+validate, keygen, sign, sign-index, sign-skill-bundle, sign-keys, verify-keys, hash, pack, unpack,
 permissions, verify and verify-index work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
@@ -361,6 +369,9 @@ async function main(): Promise<void> {
       break;
     case 'sign-index':
       await exitFlushed(await signIndexCommand(offlineIo(), rest));
+      break;
+    case 'sign-skill-bundle':
+      await exitFlushed(await signSkillBundleCommand(offlineIo(), rest));
       break;
     case 'hash':
       await exitFlushed(await hashCommand(offlineIo(), rest));
