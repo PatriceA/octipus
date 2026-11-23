@@ -48,8 +48,9 @@ labels reflect blast radius, not contract guarantees.
   - Fixed: the embed CSP kept pinning the SDK hash stored by an earlier
     release, so after an SDK change browsers refused the new client.
   - **Retention:** `artifacts.retentionDays` (`ARTIFACTS_RETENTION_DAYS`)
-    moves artifacts with no edit and no data refresh for that many days to
-    the trash; `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
+    moves artifacts with no edit, no view and no data refresh for that many
+    days to the trash (views are recorded in a new `last_viewed_at` column,
+    migration `0201`, at most hourly per artifact); `artifacts.trashDays` (`ARTIFACTS_TRASH_DAYS`) sets how long
     the trash keeps them before they are removed with their versions, data
     and bundle files. Defaults: `0` (never expire) and `30` (unchanged), so
     no existing artifact is deleted by upgrading.

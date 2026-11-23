@@ -60,6 +60,8 @@ export const artifacts = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** Last embed render, written at most hourly (`recordArtifactView`); retention counts it as activity. */
+    lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
   },
   (table) => ({
     workspaceIdx: index('artifacts_workspace_id_idx').on(table.workspaceId),

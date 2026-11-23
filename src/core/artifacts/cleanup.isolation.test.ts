@@ -75,7 +75,7 @@ async function seed(slug: string, ageDays: number): Promise<{ id: string; versio
   return { id: artifact.id, versionId: artifact.currentVersionId, sourceId: source.id };
 }
 
-async function setTimes(id: string, patch: { updatedAt?: Date; deletedAt?: Date }): Promise<void> {
+async function setTimes(id: string, patch: { updatedAt?: Date; deletedAt?: Date; lastViewedAt?: Date }): Promise<void> {
   const { getDb } = await import('@/db/postgres');
   const { artifacts } = await import('@/db/schema/artifacts');
   const { eq } = await import('drizzle-orm');
@@ -162,4 +162,57 @@ describe('artifact retention and garbage collection', () => {
     expect(await row(day29.id)).not.toBeNull();
     expect(await row(day31.id)).toBeNull();
   });
+
+  test('a viewed artifact does not expire, even when it is static or its refreshes fail', async () => {
+    // Static: no data source at all, last edited 100 days ago.
+    const created = await (await call('POST', '/api/artifacts', { slug: 'static-viewed', title: 'S', type: 'html', htmlTemplate: '<p>hi</p>' })).json();
+    const staticId = created.artifact.id as string;
+    await setTimes(staticId, { updatedAt: new Date(Date.now() - 100 * DAY) });
+    // Live, but every refresh fails: its newest snapshot is 100 days old.
+    const failing = await seed('failing-viewed', 100);
+    // Neither viewed: the control.
+    const unviewed = await seed('unviewed', 100);
+
+    const { _resetViewPersistence } = await import('./scheduler');
+    _resetViewPersistence();
+    for (const slug of ['static-viewed', 'failing-viewed']) {
+      expect((await call('GET', `/__artifacts__/a/${slug}/embed`)).status).toBe(200);
+    }
+    await waitFor(async () => (await row(staticId))?.lastViewedAt instanceof Date && (await row(failing.id))?.lastViewedAt instanceof Date);
+    // A view is not an edit.
+    expect((await row(staticId))!.updatedAt.getTime()).toBeLessThan(Date.now() - 99 * DAY);
+
+    policy.retentionDays = 90;
+    const { runArtifactCleanup } = await import('./cleanup');
+    await runArtifactCleanup();
+    expect((await row(staticId))?.deletedAt).toBeNull();
+    expect((await row(failing.id))?.deletedAt).toBeNull();
+    expect((await row(unviewed.id))?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('views are written at most once an hour per artifact', async () => {
+    const a = await seed('throttled', 1);
+    const { _resetViewPersistence } = await import('./scheduler');
+    _resetViewPersistence();
+    expect((await call('GET', '/__artifacts__/a/throttled/embed')).status).toBe(200);
+    await waitFor(async () => (await row(a.id))?.lastViewedAt instanceof Date);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await setTimes(a.id, { lastViewedAt: old });
+    // Within the hour of the last write: no new write.
+    expect((await call('GET', '/__artifacts__/a/throttled/embed')).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await row(a.id))!.lastViewedAt!.getTime()).toBe(old.getTime());
+    // Past it (here: a fresh process), the next view writes again.
+    _resetViewPersistence();
+    expect((await call('GET', '/__artifacts__/a/throttled/embed')).status).toBe(200);
+    await waitFor(async () => ((await row(a.id))?.lastViewedAt?.getTime() ?? 0) > old.getTime());
+  });
 });
+
+async function waitFor(check: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error('condition not reached');
+}

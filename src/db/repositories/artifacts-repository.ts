@@ -457,10 +457,22 @@ export class ArtifactsRepository {
 
   // ── retention ────────────────────────────────────────────────
   /**
+   * Record a view: sets `last_viewed_at` unless it is already newer than
+   * `unlessAfter` (the caller's throttle, so a busy artifact is not written on
+   * every render). Leaves `updated_at` alone: a view is not an edit.
+   */
+  async markViewed(id: string, now: Date, unlessAfter: Date): Promise<void> {
+    await this.db
+      .update(artifacts)
+      .set({ lastViewedAt: now })
+      .where(and(eq(artifacts.id, id), or(isNull(artifacts.lastViewedAt), lt(artifacts.lastViewedAt, unlessAfter))));
+  }
+
+  /**
    * Live artifacts with no activity since `cutoff`: not edited (`updated_at`,
-   * which a version or settings change bumps) and no snapshot captured — a
-   * refresh, which runs only while someone views the artifact, or a manual
-   * one. Oldest first, at most `limit`.
+   * which a version or settings change bumps), not viewed (`last_viewed_at`)
+   * and no snapshot captured (a refresh, or a manual one). Oldest first, at
+   * most `limit`.
    */
   async listInactiveSince(cutoff: Date, limit: number): Promise<Array<Pick<Artifact, 'id' | 'workspaceId' | 'slug' | 'updatedAt'>>> {
     const recentSnapshot = this.db
@@ -472,7 +484,12 @@ export class ArtifactsRepository {
       .select({ id: artifacts.id, workspaceId: artifacts.workspaceId, slug: artifacts.slug, updatedAt: artifacts.updatedAt })
       // i2: retention sweep across workspaces, ids only
       .from(artifacts)
-      .where(and(isNull(artifacts.deletedAt), lt(artifacts.updatedAt, cutoff), notExists(recentSnapshot)))
+      .where(and(
+        isNull(artifacts.deletedAt),
+        lt(artifacts.updatedAt, cutoff),
+        or(isNull(artifacts.lastViewedAt), lt(artifacts.lastViewedAt, cutoff)),
+        notExists(recentSnapshot),
+      ))
       .orderBy(asc(artifacts.updatedAt))
       .limit(limit);
   }

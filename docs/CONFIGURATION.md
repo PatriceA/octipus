@@ -405,7 +405,7 @@ when untrusted users can author artifacts in your workspace.
 | `ARTIFACT_SDK_SHA256`     | sha256 of `octipus-artifact-client.js` — pinned in CSP.   |
 | `ARTIFACT_TOKEN_SECRET`   | HMAC key for artifact-scoped JWT. Falls back to JWT_SECRET HKDF. |
 | `ARTIFACT_BUNDLES_DIR`    | Filesystem root for custom JS bundles. Default `data/artifacts/`. |
-| `ARTIFACTS_RETENTION_DAYS`| Move artifacts with no edit and no data refresh for this many days to the trash. `0` (default) = never expire. |
+| `ARTIFACTS_RETENTION_DAYS`| Move artifacts with no edit, no view and no data refresh for this many days to the trash. `0` (default) = never expire. |
 | `ARTIFACTS_TRASH_DAYS`    | Days a deleted or expired artifact stays in the trash before it is removed with its versions, data, share links and bundle files. Default `30`, minimum `1`. |
 
 Both retention settings are also in Settings → Artifacts

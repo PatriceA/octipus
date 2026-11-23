@@ -361,11 +361,14 @@ of the `artifacts` module; off, it deletes nothing) and:
 
 - **Expires inactive artifacts — only when configured.** With
   `artifacts.retentionDays` (env `ARTIFACTS_RETENTION_DAYS`) above 0, an
-  artifact that has not been edited and has had no data refresh for that many
-  days is moved to the trash, as if its owner had deleted it: it disappears
-  from lists and its pages and viewer tokens stop working, but nothing is
-  removed yet. A refresh only runs while someone has the artifact open, so a
-  viewed artifact does not expire. At most 500 expire per pass; each is
+  artifact that has not been edited, viewed, or had a data refresh for that
+  many days is moved to the trash, as if its owner had deleted it: it
+  disappears from lists and its pages and viewer tokens stop working, but
+  nothing is removed yet. A view is any render of its embed (the web app's
+  frame, the outer page, a share link), recorded in `last_viewed_at` at most
+  once an hour per artifact, so a viewed artifact does not expire, even a
+  static one or one whose refreshes fail. Artifacts not viewed since the
+  upgrade that added the column fall back to their edit and refresh times. At most 500 expire per pass; each is
   logged (`artifact.cleanup.expired`, with workspace and slug). The default is
   `0`: nothing expires, which is how every install behaved before the setting
   existed.

@@ -29,14 +29,50 @@ const lastViewedAt = new Map<string, number>();
  */
 export const MAX_TRACKED_VIEWS = 10_000;
 
+/** A view is written to the database at most this often per artifact. */
+export const VIEW_PERSIST_INTERVAL_MS = 60 * 60 * 1000;
+
+/** artifact id → when this process last wrote its view (bounded like `lastViewedAt`). */
+const viewPersistedAt = new Map<string, number>();
+
 export function recordArtifactView(artifactId: string): void {
+  const now = Date.now();
   // Re-inserted, so the map stays in view order and its first key is the oldest.
   lastViewedAt.delete(artifactId);
-  lastViewedAt.set(artifactId, Date.now());
+  lastViewedAt.set(artifactId, now);
   if (lastViewedAt.size > MAX_TRACKED_VIEWS) {
     const oldest = lastViewedAt.keys().next().value;
     if (oldest !== undefined) lastViewedAt.delete(oldest);
   }
+  persistView(artifactId, now);
+}
+
+/**
+ * Write the view to `artifacts.last_viewed_at` (what retention reads), at most
+ * once an hour per artifact from this process; the update's own condition
+ * keeps other processes to the same pace. Not awaited: a page render does not
+ * wait on it, and a failed write is logged, never thrown at the viewer.
+ */
+function persistView(artifactId: string, now: number): void {
+  const last = viewPersistedAt.get(artifactId);
+  if (last !== undefined && now - last < VIEW_PERSIST_INTERVAL_MS) return;
+  viewPersistedAt.delete(artifactId);
+  viewPersistedAt.set(artifactId, now);
+  if (viewPersistedAt.size > MAX_TRACKED_VIEWS) {
+    const oldest = viewPersistedAt.keys().next().value;
+    if (oldest !== undefined) viewPersistedAt.delete(oldest);
+  }
+  artifactsRepository
+    .markViewed(artifactId, new Date(now), new Date(now - VIEW_PERSIST_INTERVAL_MS))
+    .catch((err: unknown) => {
+      viewPersistedAt.delete(artifactId);
+      coreLogger.error({ err, artifactId }, 'artifact.view.persist_failed');
+    });
+}
+
+/** Test-only: forget which views were written, so the next view writes again. */
+export function _resetViewPersistence(): void {
+  viewPersistedAt.clear();
 }
 
 export function getLastViewMs(artifactId: string): number | null {

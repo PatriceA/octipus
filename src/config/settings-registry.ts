@@ -1277,7 +1277,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'artifacts',
     valueType: 'number',
     defaultValue: 0,
-    description: 'Move artifacts with no activity (no edit and no data refresh) for this many days to the trash, from where they are deleted after artifacts.trashDays. 0 = never expire (default). A refresh only runs while someone views the artifact, so this counts views too.',
+    description: 'Move artifacts with no activity (no edit, no view and no data refresh) for this many days to the trash, from where they are deleted after artifacts.trashDays. 0 = never expire (default).',
     isSecret: false,
     envVar: 'ARTIFACTS_RETENTION_DAYS',
   },
