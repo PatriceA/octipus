@@ -101,7 +101,7 @@ test.describe('interactive answers in the chat', () => {
     await expect.poll(() => gateway.sent.find((m) => m.type === 'chat.send')).toBeTruthy();
     const send = gateway.sent.find((m) => m.type === 'chat.send')!;
     expect(send.content).toBe('Explain the 15% case');
-    expect(send.renders).toEqual(['inline_ui']);
+    expect(send.renders).toEqual(['inline_ui', 'skill_nudge']);
     expect(send.inlineUi?.provenance).toEqual({ inlineUiId: LIVE });
     await expect(page.getByTestId('from-inline-ui')).toBeVisible();
   });
