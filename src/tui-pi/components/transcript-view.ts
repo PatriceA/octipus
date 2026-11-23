@@ -13,6 +13,7 @@
  * While the transcript search is open (`showAll`) every item in memory is
  * rendered: the search reads the rendered rows, and a message outside the
  * window was neither found nor counted.
+
  */
 import { type Component, ScrollView, type TuiMouseEvent, type TuiMouseEventResult } from '@/tui-kit';
 import type { MessagesPane } from './messages-pane';
@@ -20,6 +21,13 @@ import type { MessagesPane } from './messages-pane';
 export class TranscriptScroll extends ScrollView {
   /** Rows added above the current position since the last layout. */
   pendingShift = 0;
+  /**
+   * Ask for a frame that renders the document again (the app's
+   * `tui.requestRender`). A scroll alone redraws from the last frame's rows
+   * without rendering the document, so the window would not grow until
+   * something else changed.
+   */
+  requestContent: () => void = () => {};
 
   constructor(readonly document: TranscriptDocument) {
     super(document, { follow: 'end', primary: true, overscroll: 'chain', scrollbar: 'auto' });
@@ -28,10 +36,12 @@ export class TranscriptScroll extends ScrollView {
 
   override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
     super.updateLayout(contentHeight, viewportHeight, requestRender);
-    if (!this.pendingShift) return;
-    const shift = this.pendingShift;
-    this.pendingShift = 0;
-    this.scrollTo(this.scrollTop + shift);
+    if (this.pendingShift) {
+      const shift = this.pendingShift;
+      this.pendingShift = 0;
+      this.scrollTo(this.scrollTop + shift);
+    }
+    this.document.laidOut(this);
   }
 }
 
@@ -45,6 +55,12 @@ export class TranscriptDocument implements Component {
   attach(scroll: TranscriptScroll): void {
     this.scroll = scroll;
     this.pane.readingLatest = () => scroll.isFollowingEnd;
+  }
+
+  /** After every layout, scroll-only frames included: near the top of the window, render again so older items come in. */
+  laidOut(scroll: TranscriptScroll): void {
+    if (scroll.viewportHeight <= 0 || this.showAll() || scroll.isFollowingEnd) return;
+    if (scroll.scrollTop < scroll.viewportHeight && this.pane.canGrow()) scroll.requestContent();
   }
 
   render(width: number): string[] {

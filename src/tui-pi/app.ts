@@ -250,6 +250,7 @@ export class OctipusTuiApp {
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
       this.transcript = createTranscriptView(this.messages);
+      this.transcript.requestContent = () => tui.requestRender();
       // The search reads the rendered rows: while it is open, render every message in memory.
       this.transcript.document.showAll = () => this.search?.isOpen() ?? false;
       tui.setLayoutRoot(new VStack([
