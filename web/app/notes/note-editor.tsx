@@ -16,6 +16,14 @@ import type { LiveNote } from './use-live-note';
 
 export type EditorMode = 'edit' | 'preview' | 'split';
 
+/**
+ * Where a personal note's autosave stands (the workspace saves the draft a
+ * moment after the last change): shown in place of a Save button.
+ */
+export type AutosaveStatus =
+  | { status: 'idle' | 'saved' | 'saving' | 'unsaved' | 'untitled' }
+  | { status: 'error'; error: string };
+
 interface EditorProps {
   selectedId: string | null;
   draftTitle: string;
@@ -57,6 +65,11 @@ interface EditorProps {
   live?: LiveNote | null;
   /** A space note whose live session has not synced yet: no editor until it has. */
   liveLoading?: boolean;
+  /**
+   * The note saves itself (a personal note): a quiet status takes the Save
+   * button's place, with Retry after a failed save. `onSave` (⌘S) saves now.
+   */
+  autosave?: AutosaveStatus;
   /**
    * Only the text is edited here — a note of a space on another install
    * (federation §8.3): its title, tags, kind, pin and archive are the
@@ -163,6 +176,30 @@ function liveLabel(state: LiveNoteState): { text: string; icon: React.ReactNode 
     default:
       return { text: 'Connecting…', icon: <Loader2 size={12} className="animate-spin" /> };
   }
+}
+
+function AutosaveIndicator({ state, onRetry }: { state: AutosaveStatus; onRetry: () => void }) {
+  if (state.status === 'idle') return null;
+  if (state.status === 'error') {
+    return (
+      <span data-testid="note-save-status" role="alert" className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-error">
+        <CloudOff size={12} className="shrink-0" />
+        <span className="truncate max-w-[16rem]" title={state.error}>Not saved: {state.error}</span>
+        <button type="button" onClick={onRetry} className="shrink-0 underline underline-offset-2 hover:opacity-80">Retry</button>
+      </span>
+    );
+  }
+  const view = {
+    saved: { text: 'Saved', icon: <Check size={12} /> },
+    saving: { text: 'Saving…', icon: <Loader2 size={12} className="animate-spin" /> },
+    unsaved: { text: 'Unsaved', icon: null },
+    untitled: { text: 'Add a title to save', icon: null },
+  }[state.status];
+  return (
+    <span data-testid="note-save-status" className="inline-flex shrink-0 items-center gap-1 text-[11px] text-on-surface-variant">
+      {view.icon} {view.text}
+    </span>
+  );
 }
 
 function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -348,7 +385,8 @@ export function NoteEditor(props: EditorProps) {
             <Star size={16} className={pinned ? 'fill-warning/40' : ''} />
           </button>
         )}
-        {!textOnly && <button
+        {props.autosave && !live && !textOnly && <AutosaveIndicator state={props.autosave} onRetry={onSave} />}
+        {!textOnly && (live || !props.autosave) && <button
           type="button"
           disabled={!draftTitle || !dirty || saving}
           onClick={onSave}
@@ -438,7 +476,7 @@ export function NoteEditor(props: EditorProps) {
 
       {/* Formatting toolbar (edit/split only) */}
       {mode !== 'preview' && (
-        <div className="flex items-center gap-0.5 mx-5 mb-1.5 px-1 py-0.5 border border-outline-variant/40 rounded-xs bg-surface-container/50 shrink-0">
+        <div className="flex items-center gap-0.5 mx-5 mb-1.5 px-1 py-0.5 border border-outline-variant/40 rounded-xs bg-surface-container/50 shrink-0 overflow-x-auto">
           <ToolBtn title="Bold" onClick={() => editorRef.current?.wrap('**')}><Bold size={14} /></ToolBtn>
           <ToolBtn title="Italic" onClick={() => editorRef.current?.wrap('*')}><Italic size={14} /></ToolBtn>
           <ToolBtn title="Inline code" onClick={() => editorRef.current?.wrap('`')}><Code size={14} /></ToolBtn>
@@ -474,7 +512,7 @@ export function NoteEditor(props: EditorProps) {
               {uploadError} ✕
             </button>
           )}
-          {dirty && <span className="ml-auto pr-1 text-[10px] text-on-surface-variant/60">unsaved</span>}
+          {dirty && !props.autosave && <span className="ml-auto pr-1 text-[10px] text-on-surface-variant/60">unsaved</span>}
         </div>
       )}
 

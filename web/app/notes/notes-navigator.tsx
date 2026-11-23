@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Hash, Loader2, Plus, Search, Star, X,
+  ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Hash, Loader2, Plus, RotateCcw, Search, Star, X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -21,6 +21,17 @@ interface NavigatorProps {
   onOpen: (n: NoteRow) => void;
   /** Absent for a role that cannot create notes. */
   onNew?: (folder?: string) => void;
+  /**
+   * `notes` already answer `search` (the server searched titles, tags and
+   * bodies): shown as a flat list with a line of matching text, not filtered
+   * again here. Without it the search filters titles, slugs and tags locally
+   * (a remote space's list).
+   */
+  serverSearch?: boolean;
+  /** Offer the archive view (`filter === 'archived'`: `notes` are the archived ones). */
+  showArchive?: boolean;
+  /** Restore an archived note; shown on each row of the archive view. */
+  onRestore?: (n: NoteRow) => void;
 }
 
 // --- folder tree (derived from slug paths) ---------------------------------
@@ -124,7 +135,22 @@ interface TagCtx {
   setActiveTag: (t: string | null) => void;
 }
 
-function NoteRowButton({ note, depth, ctx }: { note: NoteRow; depth: number; ctx: RowCtx }) {
+/**
+ * One line of a note's text for a list: around the first word of `search` it
+ * holds, else its opening. Markdown markers are dropped and whitespace folded.
+ */
+export function previewLine(body: string | undefined, search = '', width = 90): string {
+  if (!body) return '';
+  const text = body.replace(/[#>*_`~[\]|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const lower = text.toLowerCase();
+  const word = search.trim().toLowerCase().split(/\s+/).find((w) => w && lower.includes(w));
+  const at = word ? lower.indexOf(word) : 0;
+  const start = Math.max(0, at - Math.floor(width / 3));
+  const line = text.slice(start, start + width);
+  return `${start > 0 ? '…' : ''}${line}${start + width < text.length ? '…' : ''}`;
+}
+
+function NoteRowButton({ note, depth, ctx, snippet }: { note: NoteRow; depth: number; ctx: RowCtx; snippet?: string }) {
   const active = note.id === ctx.selectedId;
   const label = note.noteKind === 'daily' ? note.slug.split('/').pop() ?? note.title : note.title;
   const seen = isLesson(note) ? sightings(note) : null;
@@ -139,14 +165,17 @@ function NoteRowButton({ note, depth, ctx }: { note: NoteRow; depth: number; ctx
         active ? 'bg-primary-container/40 text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
       )}
     >
-      <FileText size={13} className={cn('shrink-0', active ? 'text-primary' : 'text-outline')} />
-      <span className="truncate text-[13px] flex-1">
-        {label}
-        {seen !== null && <span className="text-[11px] text-on-surface-variant/70 tabular-nums" title={`seen in ${seen} learning reviews`}>{` ×${seen}`}</span>}
+      <FileText size={13} className={cn('shrink-0 self-start mt-0.5', active ? 'text-primary' : 'text-outline')} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px]">
+          {label}
+          {seen !== null && <span className="text-[11px] text-on-surface-variant/70 tabular-nums" title={`seen in ${seen} learning reviews`}>{` ×${seen}`}</span>}
+        </span>
+        {snippet && <span data-testid="note-snippet" className="block truncate text-[11px] text-on-surface-variant/70">{snippet}</span>}
       </span>
       {note.pinned && <Star size={11} className="shrink-0 text-warning fill-warning/40" />}
       <span className="shrink-0 text-[10px] text-on-surface-variant/50 tabular-nums group-hover/row:text-on-surface-variant">
-        {relativeTime(note.updatedAt)}
+        {relativeTime(note.archivedAt ?? note.updatedAt)}
       </span>
     </button>
   );
@@ -217,10 +246,12 @@ const FILTERS: { key: NoteFilter; label: string }[] = [
   { key: 'pinned', label: 'pins' },
   { key: 'daily', label: 'daily' },
   { key: 'moc', label: 'moc' },
+  { key: 'archived', label: 'archive' },
 ];
 
 export function NotesNavigator({
   notes, tags, isLoading, selectedId, filter, setFilter, search, setSearch, activeTag, setActiveTag, onOpen, onNew,
+  serverSearch = false, showArchive = false, onRestore,
 }: NavigatorProps) {
   // Default-expanded: a folder is open unless explicitly collapsed.
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
@@ -234,17 +265,19 @@ export function NotesNavigator({
     else if (filter === 'moc') r = r.filter((n) => n.noteKind === 'moc');
     if (activeTag) r = r.filter((n) => n.tags.includes(activeTag));
     const q = search.trim().toLowerCase();
-    if (q) {
+    if (q && !serverSearch) {
       r = r.filter(
         (n) => n.title.toLowerCase().includes(q) || n.slug.toLowerCase().includes(q) || n.tags.some((t) => t.includes(q)),
       );
     }
     return r;
-  }, [notes, filter, activeTag, search]);
+  }, [notes, filter, activeTag, search, serverSearch]);
+  // Search results and the archive are a flat list, in the server's order.
+  const flat = filter === 'archived' || (serverSearch && !!search.trim());
 
   // Automated learning notes remain searchable, but do not crowd the default view.
   // A user pin is an explicit choice and keeps that note in the ordinary list.
-  const groupLearnings = filter === 'all' && !activeTag && !search.trim();
+  const groupLearnings = filter === 'all' && !activeTag && !search.trim() && !flat;
   const learnings = useMemo(() => groupLearnings
     ? visible.filter(n => !n.pinned && isLesson(n))
     : [], [visible, groupLearnings]);
@@ -282,7 +315,8 @@ export function NotesNavigator({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="search notes…"
+            placeholder={filter === 'archived' ? 'search the archive…' : 'search notes…'}
+            aria-label="Search notes"
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px] placeholder:text-on-surface-variant/50"
           />
           {search && (
@@ -305,7 +339,7 @@ export function NotesNavigator({
 
       {/* Filter tabs */}
       <div className="flex items-center gap-1 px-2.5 pt-2 shrink-0">
-        {FILTERS.map((f) => (
+        {FILTERS.filter((f) => showArchive || f.key !== 'archived').map((f) => (
           <button
             key={f.key}
             type="button"
@@ -352,15 +386,37 @@ export function NotesNavigator({
           <div className="py-10 text-center font-mono">
             <p aria-hidden className="text-2xl text-on-surface-variant/30">#</p>
             <p className="mt-2 text-[12px] text-on-surface-variant">
-              {activeTag ? `no notes tagged #${activeTag}` : search ? 'no matches' : 'no notes yet'}
+              {activeTag ? `no notes tagged #${activeTag}` : search ? 'no matches' : filter === 'archived' ? 'the archive is empty' : 'no notes yet'}
             </p>
           </div>
         )}
 
-        {rootFolders.map(([name, node]) => (
-          <FolderBranch key={name} name={name} path={name} node={node} depth={0} ctx={rowCtx} />
-        ))}
-        {rootNotes.map((n) => <NoteRowButton key={n.id} note={n} depth={0} ctx={rowCtx} />)}
+        {flat ? (
+          visible.map((n) => (
+            <div key={n.id} className="flex items-center gap-1">
+              <div className="min-w-0 flex-1">
+                <NoteRowButton note={n} depth={0} ctx={rowCtx} snippet={search.trim() ? previewLine(n.body, search) : undefined} />
+              </div>
+              {filter === 'archived' && onRestore && (
+                <button
+                  type="button"
+                  onClick={() => onRestore(n)}
+                  aria-label={`Restore ${n.title}`}
+                  className="shrink-0 px-1.5 py-0.5 rounded-xs text-[11px] text-on-surface-variant hover:text-primary hover:bg-surface-container-high"
+                >
+                  <RotateCcw size={12} className="inline -mt-0.5" /> restore
+                </button>
+              )}
+            </div>
+          ))
+        ) : (
+          <>
+            {rootFolders.map(([name, node]) => (
+              <FolderBranch key={name} name={name} path={name} node={node} depth={0} ctx={rowCtx} />
+            ))}
+            {rootNotes.map((n) => <NoteRowButton key={n.id} note={n} depth={0} ctx={rowCtx} />)}
+          </>
+        )}
 
         {learnings.length > 0 && (
           <div className="mt-3 pt-2 border-t border-outline-variant/20">

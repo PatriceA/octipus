@@ -1,0 +1,158 @@
+import { expect, type Page, test } from './fixtures/auth';
+import { json } from './fixtures/api-stubs';
+
+/**
+ * Notes as a daily tool: the open note in the address bar, search on the
+ * server (bodies too), the archive with restore, and one pane at a time on a
+ * phone. The API is stubbed in the browser; the stub answers `q` and
+ * `archived=only` the way src/api/routes/notes.ts does.
+ */
+
+interface StubNote {
+  id: string;
+  title: string;
+  slug: string;
+  body: string;
+  archivedAt: string | null;
+}
+
+function row(n: StubNote) {
+  return { ...n, noteKind: 'note', tags: [], pinned: false, frontmatter: {}, createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-20T00:00:00Z' };
+}
+
+async function stubNotes(page: Page, notes: StubNote[]) {
+  const searches: string[] = [];
+  const restored: string[] = [];
+  await page.route('**/api/notes**', async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const path = url.pathname.replace(/\/$/, '');
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path.endsWith('/index')) return json(route, 200, { notes: notes.filter((n) => !n.archivedAt).map(row) });
+    const restore = path.match(/\/api\/notes\/([^/]+)\/restore$/);
+    if (restore && req.method() === 'POST') {
+      restored.push(restore[1]);
+      const n = notes.find((x) => x.id === restore[1]);
+      if (n) n.archivedAt = null;
+      return json(route, 200, { restored: true });
+    }
+    if (path === '/api/notes' && req.method() === 'GET') {
+      const archived = url.searchParams.get('archived') === 'only';
+      const q = url.searchParams.get('q');
+      if (q) searches.push(q);
+      const words = (q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+      const rows = notes
+        .filter((n) => (archived ? n.archivedAt : !n.archivedAt))
+        .filter((n) => words.every((w) => `${n.title} ${n.body}`.toLowerCase().includes(w)))
+        .map(row);
+      return json(route, 200, { notes: rows, total: rows.length });
+    }
+    const id = path.split('/').pop();
+    const note = notes.find((n) => n.id === id);
+    if (!note) return json(route, 404, { error: 'Note not found' });
+    return json(route, 200, { ...row(note), bodySha256: 'x', backlinks: [], outgoing: [] });
+  });
+  return { searches, restored };
+}
+
+const NOTES: StubNote[] = [
+  { id: 'n-1', title: 'Garden plan', slug: 'garden-plan', body: 'Plant tomatoes in May.', archivedAt: null },
+  { id: 'n-2', title: 'Reading list', slug: 'reading-list', body: 'The overstory, then something about bees.', archivedAt: null },
+  { id: 'n-3', title: 'Old recipe', slug: 'old-recipe', body: 'Lentil soup with cumin.', archivedAt: '2026-11-21T10:00:00Z' },
+];
+
+test('the open note is in the address bar: reload, back and forward follow it', async ({ authenticatedPage: page }) => {
+  await stubNotes(page, structuredClone(NOTES));
+  await page.goto('/notes?note=n-2');
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Reading list');
+  await page.getByRole('button', { name: /Garden plan/ }).click();
+  await expect(page).toHaveURL(/\/notes\?note=n-1$/);
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Garden plan');
+  await page.goBack();
+  await expect(page).toHaveURL(/\/notes\?note=n-2$/);
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Reading list');
+  await page.goForward();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Garden plan');
+  await page.reload();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Garden plan');
+});
+
+test('search asks the server and finds a word that is only in a note body', async ({ authenticatedPage: page }) => {
+  const stub = await stubNotes(page, structuredClone(NOTES));
+  await page.goto('/notes');
+  await page.getByPlaceholder('search notes…').fill('bees');
+  const hit = page.getByRole('button', { name: /Reading list/ });
+  await expect(hit).toBeVisible();
+  await expect(hit.getByTestId('note-snippet')).toContainText('bees');
+  await expect(page.getByRole('button', { name: /Garden plan/ })).toHaveCount(0);
+  expect(stub.searches).toContain('bees');
+  // Archived notes are not search results.
+  await page.getByPlaceholder('search notes…').fill('lentil');
+  await expect(page.getByText('no matches')).toBeVisible();
+});
+
+test('the archive lists archived notes, opens one read-only, and restores it', async ({ authenticatedPage: page }) => {
+  const notes = structuredClone(NOTES);
+  const stub = await stubNotes(page, notes);
+  await page.goto('/notes');
+  await expect(page.getByRole('button', { name: /Old recipe/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'archive', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Garden plan/ })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Old recipe/ }).click();
+  await expect(page.getByTestId('archived-note-banner')).toBeVisible();
+  await expect(page.getByTestId('note-reader')).toContainText('Lentil soup');
+  await page.getByRole('button', { name: 'Restore Old recipe' }).click();
+  await expect.poll(() => stub.restored).toEqual(['n-3']);
+  await expect(page.getByText('the archive is empty')).toBeVisible();
+  await page.getByRole('button', { name: 'all', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Old recipe/ })).toBeVisible();
+});
+
+test('on a phone the notes page shows one pane at a time, with the context panel closed', async ({ authenticatedPage: page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubNotes(page, structuredClone(NOTES));
+  await page.goto('/notes');
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  await expect(page.getByRole('button', { name: /Garden plan/ })).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveCount(0);
+  expect(await fits()).toBe(true);
+
+  await page.getByRole('button', { name: /Garden plan/ }).click();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Garden plan');
+  await expect(page.getByRole('button', { name: /Reading list/ })).toHaveCount(0);
+  await expect(page.getByTestId('note-context-sheet')).toHaveCount(0);
+  expect(await fits()).toBe(true);
+  // The editor is not covered by another pane.
+  const box = await page.getByPlaceholder('Untitled note').boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 390).toBe(true);
+
+  await page.getByTitle('Show context panel').click();
+  await expect(page.getByTestId('note-context-sheet')).toBeVisible();
+  await page.getByTestId('note-context-sheet').getByTitle('Hide context panel').click();
+  await expect(page.getByTestId('note-context-sheet')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(page).toHaveURL(/\/notes$/);
+  await expect(page.getByRole('button', { name: /Reading list/ })).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveCount(0);
+});
+
+test('a new note never overwrites one at the same slug: the save is refused and the draft stays', async ({ authenticatedPage: page }) => {
+  const posts: Record<string, unknown>[] = [];
+  await stubNotes(page, structuredClone(NOTES));
+  await page.route('**/api/notes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const input = route.request().postDataJSON();
+    posts.push(input);
+    return json(route, 409, { error: 'A note already exists at old-recipe', code: 'exists', id: 'n-3', slug: 'old-recipe' });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.getByPlaceholder('Untitled note').fill('Old recipe');
+  await page.locator('.cm-content').fill('A different soup');
+  await expect(page.getByTestId('note-save-status')).toContainText('already exists (perhaps in the archive): change the title');
+  expect(posts[0]).toMatchObject({ title: 'Old recipe', createOnly: true });
+  expect(posts[0].id).toBeUndefined();
+  await expect(page.locator('.cm-content')).toContainText('A different soup');
+});

@@ -1,46 +1,79 @@
 import { expect, test } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
-test('note create, edit, failed-save draft, reload and archive', async ({ authenticatedPage: page }) => {
+test('a note saves itself, keeps a failed draft, survives a reload at its own address, and archives with undo', async ({ authenticatedPage: page }) => {
   let notes: any[] = [];
   let failSave = false;
+  const posts: any[] = [];
   await page.route('**/api/notes**', async route => {
     const req = route.request();
-    const path = new URL(req.url()).pathname.replace(/\/$/, '');
+    const url = new URL(req.url());
+    const path = url.pathname.replace(/\/$/, '');
     if (path === '/api/notes' && req.method() === 'POST') {
       if (failSave) return json(route, 500, { error: 'Storage unavailable' });
       const input = req.postDataJSON();
-      const note = { ...input, id: 'crud-note', slug: 'cross-device-note', pinned: false, frontmatter: {}, noteKind: 'note', tags: input.tags || [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      posts.push(input);
+      const note = { ...notes.find(n => n.id === input.id), ...input, id: 'crud-note', slug: 'cross-device-note', pinned: false, frontmatter: {}, noteKind: 'note', tags: input.tags || [], archivedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       notes = [note];
       return json(route, 200, { note, created: !input.id, indexed: true });
     }
+    if (path.endsWith('/restore')) { notes = notes.map(n => ({ ...n, archivedAt: null })); return json(route, 200, { restored: true }); }
     if (path.endsWith('/index')) return json(route, 200, { notes });
     if (path.endsWith('/tags')) return json(route, 200, { tags: [] });
     if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
-    if (req.method() === 'DELETE') { notes = []; return json(route, 200, { deleted: true }); }
-    if (path === '/api/notes') return json(route, 200, { notes, total: notes.length });
+    if (req.method() === 'DELETE') { notes = notes.map(n => ({ ...n, archivedAt: new Date().toISOString() })); return json(route, 200, { deleted: true }); }
+    if (path === '/api/notes') {
+      const archived = url.searchParams.get('archived') === 'only';
+      const rows = notes.filter(n => archived ? n.archivedAt : !n.archivedAt);
+      return json(route, 200, { notes: rows, total: rows.length });
+    }
     return json(route, 200, { ...notes[0], backlinks: [], outgoing: [] });
   });
   await page.goto('/notes');
   await page.getByTitle('New note', { exact: true }).click();
-  await page.getByPlaceholder('Untitled note').fill('Cross-device note');
   await page.locator('.cm-content').fill('An idea captured on desktop');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  // No title yet: nothing can be saved, and the page says so.
+  await expect(page.getByTestId('note-save-status')).toHaveText('Add a title to save');
+  await page.getByPlaceholder('Untitled note').fill('Cross-device note');
+  // No Save button: it saves itself a moment after typing stops, once.
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
   await expect.poll(() => notes[0]?.body).toBe('An idea captured on desktop');
-  await page.locator('.cm-content').fill('Keep this draft when saving fails');
+  await expect(page.getByTestId('note-save-status')).toHaveText('Saved');
+  expect(posts.filter(p => !p.id)).toHaveLength(1);
+  expect(posts.find(p => !p.id)?.createOnly).toBe(true);
+  expect(posts.filter(p => p.id).every(p => p.createOnly === undefined)).toBe(true);
+  // The open note is in the address bar.
+  await expect(page).toHaveURL(/\/notes\?note=crud-note$/);
+
   failSave = true;
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByText('Storage unavailable', { exact: false })).toBeVisible();
+  await page.locator('.cm-content').fill('Keep this draft when saving fails');
+  await expect(page.getByTestId('note-save-status')).toContainText('Not saved: Storage unavailable');
   await expect(page.locator('.cm-content')).toContainText('Keep this draft when saving fails');
-  failSave = false;
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect.poll(() => notes[0]?.body).toBe('Keep this draft when saving fails');
+  // A reload while the save is failing: the draft comes back from this device.
   await page.reload();
-  await page.getByText('Cross-device note', { exact: false }).first().click();
-  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Cross-device note');
+  await expect(page.getByTestId('draft-notice')).toContainText('Restored unsaved changes');
   await expect(page.getByText('Keep this draft when saving fails', { exact: false }).first()).toBeVisible();
+  failSave = false;
+  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  await page.locator('.cm-content').press('End');
+  await page.keyboard.type('!');
+  await expect.poll(() => notes[0]?.body).toBe('Keep this draft when saving fails!');
+  await expect(page.getByTestId('note-save-status')).toHaveText('Saved');
+  expect(posts.every(p => !p.id || p.id === 'crud-note')).toBe(true);
+
+  await page.reload();
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Cross-device note');
+  await expect(page.getByTestId('draft-notice')).toHaveCount(0);
+
+  // Archive: gone from the list at once, with Undo.
   await page.getByTitle('Archive note', { exact: true }).click();
-  await expect.poll(() => notes.length).toBe(0);
+  await expect.poll(() => notes[0]?.archivedAt).toBeTruthy();
+  await expect(page.getByTestId('undo-toast')).toContainText('Archived “Cross-device note”');
+  await expect(page).toHaveURL(/\/notes$/);
+  await page.getByTestId('undo-toast').getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => notes[0]?.archivedAt).toBeNull();
+  await expect(page).toHaveURL(/\/notes\?note=crud-note$/);
+  await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Cross-device note');
 });
 
 test('automated session learnings are collapsed below personal notes and remain searchable', async ({ authenticatedPage: page }) => {

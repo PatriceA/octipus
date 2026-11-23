@@ -13,6 +13,10 @@ export interface NoteRow {
   noteDate?: string | null;
   /** The note's properties; `GET /notes` returns them, a remote space's list does not. */
   frontmatter?: Record<string, unknown>;
+  /** The markdown; `GET /notes` returns it (search results show a line of it). */
+  body?: string;
+  /** Set on an archived note (the archive view, or an archived note opened from it). */
+  archivedAt?: string | null;
 }
 
 export interface NoteIndexEntry {
@@ -66,4 +70,5 @@ export interface NoteListResponse {
   total: number;
 }
 
-export type NoteFilter = 'all' | 'pinned' | 'daily' | 'moc';
+/** `archived`: the archive view (archived notes, each with Restore). */
+export type NoteFilter = 'all' | 'pinned' | 'daily' | 'moc' | 'archived';
