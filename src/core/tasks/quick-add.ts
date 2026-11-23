@@ -5,25 +5,29 @@
  * One pure function shared by every capture surface: the web's capture line
  * and global quick-add (which show the parsed chips before submit), the
  * `/todo` chat command, and `POST /api/tasks` with `quick` (so the mobile app
- * gets identical behaviour without a copy). English only. What it reads:
+ * gets identical behaviour without a copy). English only. The full grammar is
+ * in docs/API.md ("Capture grammar"); in short, conservative and predictable:
  *
- *   Dates   today, tonight, tomorrow (tmrw), day after tomorrow, monday … sunday
- *           ("on fri", "next tue" = that day of next week), next week (Monday),
- *           this weekend / weekend (Saturday), next month (the 1st),
- *           in 3 days / in 2 weeks / in a month, 2026-12-01, dec 1, 1 december
- *           (an optional "on", "by" or "due" before any of them is absorbed)
- *   Times   3pm, 3:30pm, 15:00, at 9, noon, morning (09:00), afternoon (14:00),
- *           evening (18:00); a time alone means today, or tomorrow once it passed
- *   Repeat  daily, every day, weekdays, every weekday, weekly, every week,
- *           monthly, yearly, every 2 weeks, every monday (and the first such day is due)
- *   Priority !high / !!! / !3, !medium / !! / !2, !low / ! / !1
- *   Star    * on its own, or !important / !star
- *   List    #personal, #house-work (a letter first, so #3 is not a list; matched to an existing list by name,
- *           ignoring case and "-"/"_" for spaces; else kept as typed)
+ *   Marks    `#list` (letter first), `!high` `!medium` `!low` `!1`–`!3`, `!!`,
+ *            `!!!`, `*` or `!important` — read anywhere (a lone `!` is text)
+ *   Dates    today, tonight, tomorrow, day after tomorrow, monday … sunday,
+ *            on/by/due <weekday>, next <weekday>, next week, this weekend,
+ *            next month, in 3 days / 2 weeks / a month, 2026-12-01, dec 5,
+ *            5 december
+ *   Times    3pm, 3:30 pm, 15:00 (optionally "at"), at noon, in the morning /
+ *            afternoon / evening; a bare number is never a time
+ *   Repeat   only with "every": every day / weekday / week / month / year,
+ *            every 2 weeks, every other day, every mon and wed
  *
- * Everything recognised is removed from the title and reported as a token
- * with its span, so a UI can show it as a chip. A text that would be left
- * with no title is taken literally ("Tomorrow" is a to-do called Tomorrow).
+ * Dates, times and repeats are read only as a clause at the end (or the
+ * start) of the line — "Buy Sunday paper" and "Plan next week with Anna"
+ * stay titles — and only as whole words: never inside a URL, an address or a
+ * word ("Monday.com", "Today's"). Text in "double quotes", or a word after a
+ * backslash, is always literal (the quotes or backslash leave the title):
+ * that is how a chip is taken back, and how a title keeps "tomorrow". A time
+ * already past today moves to tomorrow; a repeat's first day is the next one
+ * that is still ahead. A line that would be left with no title is taken
+ * literally ("Tomorrow" is a to-do called Tomorrow).
  */
 import { REPEAT_PRESETS, type TaskRepeat } from './repeat';
 import { isValidTimezone, localDateTimeIn, localWallClock } from './rank';
@@ -78,9 +82,12 @@ const WEEKDAY_TITLE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', '
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** Words that may lead a date and belong to it. */
 const LEAD = String.raw`(?:(?:on|by|due)\s+)?`;
-/** A word boundary that also works after "!" and before "#" (`\b` does not). */
-const START = String.raw`(?<![\p{L}\p{N}_])`;
-const END = String.raw`(?![\p{L}\p{N}_])`;
+/** A token starts at the start of the line, or after a space or an opening bracket. */
+const START = String.raw`(?<=^|[\s(\[])`;
+/** …and ends at the end, or before a space, a closing mark, or a full stop / colon that ends the word. */
+const END = String.raw`(?=$|[\s,;!?)\]]|[.:](?=\s|$))`;
+/** What may sit between the tokens of a date clause. */
+const CLAUSE_GAP = /^[\s,;:\-–]*$/;
 
 function addDays(d: DateParts, n: number): DateParts {
   const x = new Date(Date.UTC(d.year, d.month - 1, d.day + n));
@@ -133,18 +140,28 @@ export function parseQuickAdd(text: string, opts: QuickAddOptions = {}): ParsedQ
   const wall = localWallClock(now.getTime(), zone);
   const today: DateParts = { year: wall.year, month: wall.month, day: wall.day };
   const todayIso = iso(today);
-  const taken: QuickAddToken[] = [];
-  const free = (start: number, end: number) => taken.every((t) => end <= t.start || start >= t.end);
-  /** Every match of `re` over free text; `on` decides and labels it (null = not this one). */
-  const scan = (source: string, kind: QuickAddTokenKind, on: (m: RegExpExecArray) => string | null) => {
+  const nowMinutes = wall.hour * 60 + wall.minute;
+
+  // Spans nothing is read from: URLs, addresses, "quoted text", \escaped words.
+  const blocked: [number, number][] = [];
+  for (const re of [/"[^"]*"/g, /\\\S+/g, /(?:https?:\/\/|www\.)\S+/gi, /\S+@\S+\.\S+/g, /\S+\.(?:com|org|net|io|de|co|app|dev)\b\S*/gi]) {
+    for (let m = re.exec(text); m; m = re.exec(text)) blocked.push([m.index, m.index + m[0].length]);
+  }
+
+  interface Candidate { kind: QuickAddTokenKind; start: number; end: number; text: string; apply: () => string | null }
+  const candidates: Candidate[] = [];
+  const free = (start: number, end: number) =>
+    candidates.every((t) => end <= t.start || start >= t.end) && blocked.every(([a, b]) => end <= a || start >= b);
+  /** Every match of `re` over free text; `make` turns it into a candidate's effect (null = not this one). */
+  const scan = (source: string, kind: QuickAddTokenKind, make: (m: RegExpExecArray) => (() => string | null) | null) => {
     const re = new RegExp(source, 'giu');
     for (let m = re.exec(text); m; m = re.exec(text)) {
       const start = m.index;
       const end = start + m[0].length;
       if (m[0].length === 0) { re.lastIndex += 1; continue; }
       if (!free(start, end)) continue;
-      const label = on(m);
-      if (label !== null) taken.push({ kind, text: m[0], start, end, label });
+      const apply = make(m);
+      if (apply) candidates.push({ kind, start, end, text: m[0], apply });
     }
   };
 
@@ -157,30 +174,29 @@ export function parseQuickAdd(text: string, opts: QuickAddOptions = {}): ParsedQ
   let category = null as string | null;
   let repeat = null as TaskRepeat | null;
   let tonight = false as boolean;
+  /** "every mon and wed": the listed days, for the first occurrence. */
+  let everyDays = null as number[] | null;
   const setDate = (d: DateParts): string | null => {
     if (date || !validDate(d)) return null;
     date = d;
     return dueChipLabel(iso(d), todayIso);
   };
+  const dateIf = (d: DateParts) => (validDate(d) ? () => setDate(d) : null);
 
-  // List: #name. Matched to an existing list when one fits.
-  scan(String.raw`${START}#(\p{L}[\p{L}\p{N}_\-/]*)`, 'list', (m) => {
+  // ── Marks: read anywhere ──────────────────────────────────────────────
+  scan(String.raw`${START}#(\p{L}[\p{L}\p{N}_\-/]*)${END}`, 'list', (m) => () => {
     if (category) return null;
     const typed = m[1];
     const known = opts.lists?.find((l) => listKey(l) === listKey(typed));
     category = known ?? typed;
     return `#${category}`;
   });
-
-  // Star.
-  scan(String.raw`(?<=^|\s)(?:\*|!important|!star)(?=\s|$)`, 'important', () => {
+  scan(String.raw`${START}(?:\*|!important|!star)${END}`, 'important', () => () => {
     if (important) return null;
     important = true;
     return 'Important';
   });
-
-  // Priority.
-  scan(String.raw`(?<=^|\s)(?:!(high|hi|h|medium|med|m|low|lo|l|[123])|(!{1,3}))(?=\s|$)`, 'priority', (m) => {
+  scan(String.raw`${START}(?:!(high|hi|h|medium|med|m|low|lo|l|[123])|(!{2,3}))${END}`, 'priority', (m) => () => {
     if (priority !== null) return null;
     const word = (m[1] ?? '').toLowerCase();
     const bangs = m[2]?.length ?? 0;
@@ -188,115 +204,149 @@ export function parseQuickAdd(text: string, opts: QuickAddOptions = {}): ParsedQ
     return ['', 'Low', 'Medium', 'High'][priority];
   });
 
-  // Repeat (before dates: "every monday" is a rule, not a date).
+  // ── Repeats: only with "every" ───────────────────────────────────────
   const preset = (name: keyof typeof REPEAT_PRESETS): TaskRepeat => {
     const p: TaskRepeat = REPEAT_PRESETS[name];
     return { unit: p.unit, interval: p.interval, ...(p.weekdays ? { weekdays: [...p.weekdays] } : {}) };
   };
   scan(String.raw`${START}every\s+(\d{1,3}|other)\s+(day|week|month|year)s?${END}`, 'repeat', (m) => {
-    if (repeat) return null;
     const n = m[1].toLowerCase() === 'other' ? 2 : Number(m[1]);
     if (n < 1 || n > 365) return null;
-    repeat = { unit: m[2].toLowerCase() as TaskRepeat['unit'], interval: n };
-    return `Every ${n} ${m[2].toLowerCase()}s`;
+    return () => {
+      if (repeat) return null;
+      repeat = { unit: m[2].toLowerCase() as TaskRepeat['unit'], interval: n };
+      return `Every ${n} ${m[2].toLowerCase()}s`;
+    };
   });
-  scan(String.raw`${START}every\s+((?:${ANY_WEEKDAY})(?:\s*(?:,|and|&)\s*(?:${ANY_WEEKDAY}))*)${END}`, 'repeat', (m) => {
+  scan(String.raw`${START}every\s+((?:${ANY_WEEKDAY})(?:\s*(?:,|and|&)\s*(?:${ANY_WEEKDAY}))*)${END}`, 'repeat', (m) => () => {
     if (repeat) return null;
     const days = [...new Set(m[1].toLowerCase().split(/\s*(?:,|and|&)\s*/).map((w) => WEEKDAYS[w.trim()]))].sort((a, b) => a - b);
     repeat = { unit: 'week', interval: 1, weekdays: days };
-    // The first occurrence is the next of those days, unless a date is given too.
-    const first = days.map((d) => nextWeekday(addDays(today, -1), d)).sort((a, b) => iso(a).localeCompare(iso(b)))[0];
-    if (!date) date = first;
+    everyDays = days;
     return `Every ${days.map((d) => WEEKDAY_TITLE[d].slice(0, 3)).join(', ')}`;
   });
-  scan(String.raw`${START}(?:every\s+(day|weekday|workday|week|month|year)|(daily|weekdays|weekly|monthly|yearly|annually))${END}`, 'repeat', (m) => {
+  scan(String.raw`${START}every\s+(day|weekday|workday|week|month|year)${END}`, 'repeat', (m) => () => {
     if (repeat) return null;
-    const word = (m[1] ?? m[2]).toLowerCase();
-    const name = ({ day: 'daily', daily: 'daily', weekday: 'weekdays', workday: 'weekdays', weekdays: 'weekdays', week: 'weekly', weekly: 'weekly', month: 'monthly', monthly: 'monthly', year: 'yearly', yearly: 'yearly', annually: 'yearly' } as const)[word as 'day'];
+    const word = m[1].toLowerCase();
+    const name = ({ day: 'daily', weekday: 'weekdays', workday: 'weekdays', week: 'weekly', month: 'monthly', year: 'yearly' } as const)[word as 'day'];
     repeat = preset(name);
     return { daily: 'Daily', weekdays: 'Weekdays', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' }[name];
   });
 
-  // Dates.
+  // ── Dates ───────────────────────────────────────────────────────────
   scan(String.raw`${START}${LEAD}(\d{4})-(\d{2})-(\d{2})${END}`, 'due', (m) =>
-    setDate({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) }));
-  const monthDay = (month: number, day: number, year?: string): string | null => {
+    dateIf({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) }));
+  const monthDay = (month: number, day: number, year?: string) => {
     let d: DateParts = { year: year ? Number(year) : today.year, month, day };
     if (!year && iso(d) < todayIso) d = { ...d, year: d.year + 1 };
-    return setDate(d);
+    return dateIf(d);
   };
   scan(String.raw`${START}${LEAD}(${MONTH})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?${END}`, 'due', (m) =>
     monthDay(MONTHS[m[1].toLowerCase()], Number(m[2]), m[3]));
   scan(String.raw`${START}${LEAD}(\d{1,2})(?:st|nd|rd|th)?\s+(${MONTH})\.?(?:\s+(\d{4}))?${END}`, 'due', (m) =>
     monthDay(MONTHS[m[2].toLowerCase()], Number(m[1]), m[3]));
-  scan(String.raw`${START}${LEAD}(?:the\s+)?day\s+after\s+tomorrow${END}`, 'due', () => setDate(addDays(today, 2)));
+  scan(String.raw`${START}${LEAD}(?:the\s+)?day\s+after\s+tomorrow${END}`, 'due', () => dateIf(addDays(today, 2)));
   scan(String.raw`${START}${LEAD}(today|tonight|tomorrow|tmrw|tmr)${END}`, 'due', (m) => {
     const word = m[1].toLowerCase();
-    const label = setDate(word === 'today' || word === 'tonight' ? today : addDays(today, 1));
-    if (label && word === 'tonight') tonight = true;
-    return label;
+    const d = word === 'today' || word === 'tonight' ? today : addDays(today, 1);
+    return () => {
+      const label = setDate(d);
+      if (label && word === 'tonight') tonight = true;
+      return label;
+    };
   });
-  scan(String.raw`${START}${LEAD}next\s+(${ANY_WEEKDAY})${END}`, 'due', (m) => setDate(weekdayNextWeek(today, WEEKDAYS[m[1].toLowerCase()])));
-  scan(String.raw`${START}(?:on|by|due)\s+(${ANY_WEEKDAY})${END}`, 'due', (m) => setDate(nextWeekday(today, WEEKDAYS[m[1].toLowerCase()])));
-  scan(String.raw`${START}(${FULL_WEEKDAY})${END}`, 'due', (m) => setDate(nextWeekday(today, WEEKDAYS[m[1].toLowerCase()])));
-  scan(String.raw`${START}${LEAD}next\s+week${END}`, 'due', () => setDate(weekdayNextWeek(today, 1)));
-  scan(String.raw`${START}${LEAD}(?:this\s+)?weekend${END}`, 'due', () => setDate(weekday(today) === 6 ? today : nextWeekday(today, 6)));
+  scan(String.raw`${START}${LEAD}next\s+(${ANY_WEEKDAY})${END}`, 'due', (m) => dateIf(weekdayNextWeek(today, WEEKDAYS[m[1].toLowerCase()])));
+  scan(String.raw`${START}(?:on|by|due)\s+(${ANY_WEEKDAY})${END}`, 'due', (m) => dateIf(nextWeekday(today, WEEKDAYS[m[1].toLowerCase()])));
+  scan(String.raw`${START}(${FULL_WEEKDAY})${END}`, 'due', (m) => dateIf(nextWeekday(today, WEEKDAYS[m[1].toLowerCase()])));
+  scan(String.raw`${START}${LEAD}next\s+week${END}`, 'due', () => dateIf(weekdayNextWeek(today, 1)));
+  scan(String.raw`${START}${LEAD}(?:this\s+)?weekend${END}`, 'due', () => dateIf(weekday(today) === 6 ? today : nextWeekday(today, 6)));
   scan(String.raw`${START}${LEAD}next\s+month${END}`, 'due', () =>
-    setDate(today.month === 12 ? { year: today.year + 1, month: 1, day: 1 } : { year: today.year, month: today.month + 1, day: 1 }));
+    dateIf(today.month === 12 ? { year: today.year + 1, month: 1, day: 1 } : { year: today.year, month: today.month + 1, day: 1 }));
   scan(String.raw`${START}in\s+(\d{1,3}|a|an|one)\s+(day|week|month)s?${END}`, 'due', (m) => {
     const n = /^\d+$/.test(m[1]) ? Number(m[1]) : 1;
     const unit = m[2].toLowerCase();
-    if (unit === 'day') return setDate(addDays(today, n));
-    if (unit === 'week') return setDate(addDays(today, 7 * n));
+    if (unit === 'day') return dateIf(addDays(today, n));
+    if (unit === 'week') return dateIf(addDays(today, 7 * n));
     const months = today.month - 1 + n;
     const year = today.year + Math.floor(months / 12);
     const month = (months % 12) + 1;
     const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return setDate({ year, month, day: Math.min(today.day, last) });
+    return dateIf({ year, month, day: Math.min(today.day, last) });
   });
 
-  // Times.
-  const setTime = (h: number, min: number): string | null => {
-    if (time || h > 23 || min > 59) return null;
+  // ── Times: am/pm or HH:MM; a bare number is never a time ─────────────
+  const timeIf = (h: number, min: number) => (h > 23 || min > 59 ? null : () => {
+    if (time) return null;
     time = hhmm(h, min);
     return time;
-  };
+  });
   scan(String.raw`${START}(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)${END}`, 'time', (m) => {
     let h = Number(m[1]);
     if (h < 1 || h > 12) return null;
     const pm = m[3].toLowerCase().startsWith('p');
     if (h === 12) h = pm ? 12 : 0;
     else if (pm) h += 12;
-    return setTime(h, Number(m[2] ?? 0));
+    return timeIf(h, Number(m[2] ?? 0));
   });
-  scan(String.raw`${START}(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)${END}`, 'time', (m) => setTime(Number(m[1]), Number(m[2])));
-  scan(String.raw`${START}at\s+(\d{1,2})${END}`, 'time', (m) => setTime(Number(m[1]), 0));
-  scan(String.raw`${START}(?:at\s+|in\s+the\s+)?(noon|midday|morning|afternoon|evening)${END}`, 'time', (m) => {
-    const word = m[1].toLowerCase();
-    const [h] = ({ noon: [12], midday: [12], morning: [9], afternoon: [14], evening: [18] } as Record<string, [number]>)[word];
-    return setTime(h, 0);
+  scan(String.raw`${START}(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)${END}`, 'time', (m) => timeIf(Number(m[1]), Number(m[2])));
+  scan(String.raw`${START}(?:at\s+(noon|midday)|in\s+the\s+(morning|afternoon|evening))${END}`, 'time', (m) => {
+    const word = (m[1] ?? m[2]).toLowerCase();
+    return timeIf({ noon: 12, midday: 12, morning: 9, afternoon: 14, evening: 18 }[word as 'noon'], 0);
   });
 
+  // ── The clause rule: dates, times and repeats only at the end or start ──
+  candidates.sort((a, b) => a.start - b.start);
+  const temporal = (c: Candidate) => c.kind === 'due' || c.kind === 'time' || c.kind === 'repeat';
+  const inClause = new Set<Candidate>();
+  // From the end backwards, then from the start forwards: a candidate joins
+  // while only separators lie between it and the clause.
+  let edge = text.length;
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    if (!CLAUSE_GAP.test(text.slice(candidates[i].end, edge))) break;
+    inClause.add(candidates[i]);
+    edge = candidates[i].start;
+  }
+  edge = 0;
+  for (const c of candidates) {
+    if (!CLAUSE_GAP.test(text.slice(edge, c.start))) break;
+    inClause.add(c);
+    edge = c.end;
+  }
+  const taken: QuickAddToken[] = [];
+  for (const c of candidates) {
+    if (temporal(c) && !inClause.has(c)) continue;
+    const label = c.apply();
+    if (label !== null) taken.push({ kind: c.kind, text: c.text, start: c.start, end: c.end, label });
+  }
+
+  // The title: what is left, with quotes and escapes taken off.
   const stripped = (() => {
     let out = '';
     let at = 0;
-    for (const t of [...taken].sort((a, b) => a.start - b.start)) {
+    for (const t of taken) {
       out += `${text.slice(at, t.start)} `;
       at = t.end;
     }
-    return (out + text.slice(at)).replace(/\s+/g, ' ').trim();
+    const rest = taken.length > 0 ? (out + text.slice(at)).replace(/^[\s,;:\-–]+|[\s,;:\-–]+$/g, '') : out + text.slice(at);
+    return rest.replace(/"([^"]*)"/g, '$1').replace(/\\(\S)/g, '$1').replace(/\s+/g, ' ').trim();
   })();
   if (!stripped) {
-    return { title: text.trim(), due: null, priority: null, important: false, category: null, repeat: null, tokens: [] };
+    const literal = text.replace(/"([^"]*)"/g, '$1').replace(/\\(\S)/g, '$1').trim();
+    return { title: literal, due: null, priority: null, important: false, category: null, repeat: null, tokens: [] };
   }
 
   if (tonight && !time) time = '20:00';
-  // A time alone is today, or tomorrow once that time has passed.
+  const ahead = (d: DateParts, t: string | null) => iso(d) > todayIso || (iso(d) === todayIso && (!t || toMinutes(t) > nowMinutes));
   let dueDate: DateParts | null = date;
-  if (!dueDate && time) {
-    const [h, min] = time.split(':').map(Number);
-    dueDate = h * 60 + min > wall.hour * 60 + wall.minute ? today : addDays(today, 1);
+  if (!dueDate && everyDays) {
+    // The first of the listed days still ahead (today counts until its time has passed).
+    for (let i = 0; i <= 7 && !dueDate; i += 1) {
+      const d = addDays(today, i);
+      if (everyDays.includes(weekday(d)) && ahead(d, time)) dueDate = d;
+    }
   }
+  // A time alone is today while it is still ahead, else tomorrow.
+  if (!dueDate && time) dueDate = toMinutes(time) > nowMinutes ? today : addDays(today, 1);
   return {
     title: stripped,
     due: dueDate ? { date: iso(dueDate), time } : null,
@@ -304,8 +354,13 @@ export function parseQuickAdd(text: string, opts: QuickAddOptions = {}): ParsedQ
     important,
     category,
     repeat,
-    tokens: taken.sort((a, b) => a.start - b.start),
+    tokens: taken,
   };
+}
+
+function toMinutes(t: string): number {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
 }
 
 /**

@@ -72,7 +72,6 @@ describe('parseQuickAdd', () => {
   });
 
   test.each([
-    ['at 9', '09:00'],
     ['9am', '09:00'],
     ['12am', '00:00'],
     ['12pm', '12:00'],
@@ -104,7 +103,7 @@ describe('parseQuickAdd', () => {
   });
 
   test.each([
-    ['!high', 3], ['!!!', 3], ['!3', 3], ['!medium', 2], ['!!', 2], ['!med', 2], ['!low', 1], ['!', 1], ['!1', 1],
+    ['!high', 3], ['!!!', 3], ['!3', 3], ['!medium', 2], ['!!', 2], ['!med', 2], ['!low', 1], ['!1', 1],
   ])('priority %s is %d', (mark, priority) => {
     expect(parse(`Fix the tap ${mark}`)).toMatchObject({ title: 'Fix the tap', priority });
   });
@@ -125,13 +124,11 @@ describe('parseQuickAdd', () => {
   });
 
   test.each([
-    ['daily', { unit: 'day', interval: 1 }],
     ['every day', { unit: 'day', interval: 1 }],
-    ['weekdays', { unit: 'week', interval: 1, weekdays: [1, 2, 3, 4, 5] }],
     ['every weekday', { unit: 'week', interval: 1, weekdays: [1, 2, 3, 4, 5] }],
-    ['weekly', { unit: 'week', interval: 1 }],
+    ['every week', { unit: 'week', interval: 1 }],
     ['every month', { unit: 'month', interval: 1 }],
-    ['yearly', { unit: 'year', interval: 1 }],
+    ['every year', { unit: 'year', interval: 1 }],
     ['every 2 weeks', { unit: 'week', interval: 2 }],
     ['every other day', { unit: 'day', interval: 2 }],
   ])('repeat "%s"', (phrase, repeat) => {
@@ -146,7 +143,7 @@ describe('parseQuickAdd', () => {
   });
 
   test('every token kind together, in any order', () => {
-    const p = parse('#work !! weekly Send report on friday 4pm *', ['Work']);
+    const p = parse('#work !! every week Send report on friday 4pm *', ['Work']);
     expect(p).toMatchObject({
       title: 'Send report',
       category: 'Work',
@@ -155,6 +152,58 @@ describe('parseQuickAdd', () => {
       repeat: { unit: 'week', interval: 1 },
       due: { date: '2026-11-27', time: '16:00' },
     });
+  });
+});
+
+describe('conservative reading (review findings)', () => {
+  test.each([
+    // Repeats need "every"; adjectives stay in the title.
+    ['Write weekly report', 'Write weekly report'],
+    ['Daily standup notes', 'Daily standup notes'],
+    // A bare number is never a time.
+    ['Look at 3 options', 'Look at 3 options'],
+    ['Call mom at 7', 'Call mom at 7'],
+    // Nothing is read inside a URL, an address or a word.
+    ['Read https://example.com/docs#setup', 'Read https://example.com/docs#setup'],
+    ['Check https://x.io/a?t=10:30 tomorrow', 'Check https://x.io/a?t=10:30'],
+    ['Monday.com invoice', 'Monday.com invoice'],
+    ["Today's agenda review", "Today's agenda review"],
+    ['Mail bob@monday.org', 'Mail bob@monday.org'],
+    // A date word in the middle of a phrase is a word.
+    ['Buy Sunday paper', 'Buy Sunday paper'],
+    ['Plan next week with Anna', 'Plan next week with Anna'],
+    // A lone "!" is punctuation.
+    ['Ship v2 !', 'Ship v2 !'],
+  ])('"%s" keeps its title', (text, title) => {
+    const p = parse(text);
+    expect(p.title).toBe(title);
+    if (title === text) expect(p).toMatchObject({ due: null, repeat: null, priority: null });
+  });
+
+  test('the URL case still reads the trailing date', () => {
+    expect(parse('Check https://x.io/a?t=10:30 tomorrow')).toMatchObject({ due: { date: '2026-11-24', time: null } });
+  });
+
+  test('a date clause may lead the line', () => {
+    expect(parse('Tomorrow: call Ana')).toMatchObject({ title: 'call Ana', due: { date: '2026-11-24' } });
+  });
+
+  test('marks are read anywhere, dates only in the clause', () => {
+    expect(parse('Plan #trip next week with Anna !high')).toMatchObject({ title: 'Plan next week with Anna', category: 'trip', priority: 3, due: null });
+  });
+
+  test('quotes and a backslash keep words literal, and leave the title', () => {
+    expect(parse('Watch "tomorrow never dies" tonight')).toMatchObject({ title: 'Watch tomorrow never dies', due: { date: '2026-11-23', time: '20:00' } });
+    expect(parse('Read \\tomorrow')).toMatchObject({ title: 'Read tomorrow', due: null });
+    expect(parse('"Tomorrow"')).toMatchObject({ title: 'Tomorrow', due: null });
+  });
+
+  test('"every mon and wed 7am" typed Monday 11:00 starts Wednesday, not an overdue today', () => {
+    const late = parseQuickAdd('gym every mon and wed 7am', { now: new Date('2026-11-23T10:00:00Z'), timezone: 'Europe/Berlin' });
+    expect(late.due).toEqual({ date: '2026-11-25', time: '07:00' });
+    // Earlier that Monday it is today.
+    const early = parseQuickAdd('gym every mon and wed 7am', { now: new Date('2026-11-23T05:00:00Z'), timezone: 'Europe/Berlin' });
+    expect(early.due).toEqual({ date: '2026-11-23', time: '07:00' });
   });
 });
 
