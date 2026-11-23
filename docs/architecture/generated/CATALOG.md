@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-785 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+787 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -405,6 +405,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/:id/merge` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/move` | `src/api/routes/notes.ts` |
 | PATCH | `/api/notes/:id/pin` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/:id/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/revisions` | `src/api/routes/notes.ts` |
@@ -412,6 +413,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/notes/:id/revisions/:revisionId/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/suggestions` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/capture` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/daily` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/index` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/proposals` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/proposals/:proposalId/accept` | `src/api/routes/notes.ts` |

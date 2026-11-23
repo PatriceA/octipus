@@ -227,6 +227,38 @@ describe('NoteService', () => {
     expect(edge?.toType).toBe('note');
   });
 
+  test('moving a note keeps its old slug as an alias: links to it stay bound and new ones bind', async () => {
+    const scope = personalNoteScope(userId);
+    const plan = await svc.save({ scope, title: 'Plan', body: 'the plan' });
+    const before = await svc.save({ scope, title: 'Linker', body: 'see [[Plan]]' });
+    const waiting = await svc.save({ scope, title: 'Waiting', body: 'see [[projects/plan]]' });
+
+    const moved = await svc.move(scope, plan.note.id, 'projects/Plan');
+    expect(moved?.slug).toBe('projects/plan');
+    expect(moved?.title).toBe('Plan');
+    expect(moved?.frontmatter.aliases).toEqual(['plan']);
+    // The link made before the move still points at the note…
+    const edge = (id: string) => links.getOutgoing(userId, 'note', id).then((es) => es.find((e) => e.linkType === 'references'));
+    expect((await edge(before.note.id))?.toId).toBe(plan.note.id);
+    // …so does one saved after it with the old slug, and one that waited for the new slug.
+    const after = await svc.save({ scope, title: 'Later', body: 'still [[Plan]]' });
+    expect((await edge(after.note.id))?.toId).toBe(plan.note.id);
+    expect((await edge(waiting.note.id))?.toId).toBe(plan.note.id);
+    expect((await svc.resolveSlug(scope, 'plan'))?.id).toBe(plan.note.id);
+    // The plain slug lookup is exact: a new note may take the old slug, and then wins it.
+    expect(await svc.getBySlug(scope, 'plan')).toBeNull();
+    const fresh = await svc.save({ scope, title: 'Plan', body: 'a new plan', createOnly: true });
+    expect((await svc.resolveSlug(scope, 'plan'))?.id).toBe(fresh.note.id);
+
+    // Moving back drops the alias it would shadow, and a taken slug is refused.
+    const back = await svc.move(scope, plan.note.id, 'archive/plan');
+    expect(back?.frontmatter.aliases).toEqual(['plan', 'projects/plan']);
+    const { NoteExistsError, InvalidSlugError } = await import('./notes');
+    await expect(svc.move(scope, plan.note.id, 'plan')).rejects.toBeInstanceOf(NoteExistsError);
+    await expect(svc.move(scope, plan.note.id, '///')).rejects.toBeInstanceOf(InvalidSlugError);
+    expect(await svc.move(personalNoteScope(randomUUID()), plan.note.id, 'x')).toBeNull();
+  });
+
   test('getOrCreateDaily is idempotent and stamps the date', async () => {
     const d1 = await svc.getOrCreateDaily(personalNoteScope(userId), '2026-06-09T12:00:00Z');
     expect(d1.slug).toBe('daily/2026-06-09');

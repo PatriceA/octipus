@@ -93,7 +93,7 @@ describe('selectCandidates', () => {
 describe('resolveGhostRefs', () => {
   test('fetching the candidates of a ghost link is not counted as reading them (skipAccess)', async () => {
     const searches: unknown[][] = [];
-    const notes = { getBySlug: async () => null, getByIds: async () => [] } as unknown as NoteRepository;
+    const notes = { getBySlug: async () => null, resolveSlug: async () => null, getByIds: async () => [] } as unknown as NoteRepository;
     const embeddings = { hybridSearch: async (...args: unknown[]) => { searches.push(args); return []; } } as unknown as EmbeddingService;
     const resolver = new LinkResolverService(notes, {} as KnowledgeLinkRepository, embeddings);
     await resolver.resolveGhostRefs({ scope: personalNoteScope(SELF, null), noteId: SELF, wikilinks: [{ ref: 'roadmap', target: 'Roadmap' } as never] });

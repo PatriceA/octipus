@@ -109,7 +109,8 @@ Three passes, all in `NoteService.save` (`notes.ts`) except where noted:
    `to_ref` equals its slug bind to it. ("B linked to [[Target]] before Target
    existed.")
 2. **Outgoing** — each of the saved note's own refs that matches an existing
-   note's slug binds immediately. Without this pass, linking A→B when B
+   note's slug (or a slug a note was moved away from, see below) binds
+   immediately. Without this pass, linking A→B when B
    already exists left the edge a ghost until B was next saved, and the graph
    drew no line between two freshly-linked notes.
 3. **Fuzzy** — refs that matched nothing exactly get one similarity guess (see
@@ -117,6 +118,18 @@ Three passes, all in `NoteService.save` (`notes.ts`) except where noted:
 
 `tagged` edges are intentionally never resolved to an id: a tag is a
 pseudo-entity, not a row.
+
+### Renames and moves
+
+A note's slug is fixed when it is created: changing its title renames it
+without touching the slug, so `[[links]]` to it are unaffected. Moving it to
+another folder or name (`NoteService.move`, `POST /api/notes/:id/move`) does
+change the slug; the old one is kept in `frontmatter.aliases`. Edges already
+bound keep their `to_id`, ghost edges waiting for the new slug bind at once,
+and a ref resolves to the note at that exact slug, else to an active note
+holding it as an alias (`NoteRepository.resolveSlug`) — so a link written
+with the old slug after the move binds too. An exact slug always wins: a new
+note created at an old slug takes the links saved after it.
 
 ### Fuzzy resolution of ghost links
 

@@ -96,6 +96,15 @@ describe('NotesTool', () => {
     expect(res.suggestions).toEqual([]);
   });
 
+  test('read_note by a slug the note was moved away from finds it', async () => {
+    const n = (await call('write_note', { title: 'Roadmap', body: 'q1' })) as { id: string };
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { personalNoteScope } = await import('@/db/repositories/note-repository');
+    await getNoteService().move(personalNoteScope(userId), n.id, 'plans/roadmap');
+    const read = (await call('read_note', { slug: 'roadmap' })) as { id: string; slug: string };
+    expect(read).toMatchObject({ id: n.id, slug: 'plans/roadmap' });
+  });
+
   test('read_note requires id or slug', async () => {
     await expect(call('read_note', {})).rejects.toThrow(/requires id or slug/);
   });

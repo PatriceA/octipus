@@ -6,7 +6,7 @@ import { merge3, normalizeNewlines } from '@/core/docs/text-merge';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
-import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
+import { assertNoteAccess, getNoteRepository, noteAliases, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
 import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
@@ -155,6 +155,14 @@ export class NoteExistsError extends Error {
   constructor(readonly noteId: string, readonly slug: string) {
     super(`A note already exists at ${slug}`);
     this.name = 'NoteExistsError';
+  }
+}
+
+/** A move named a slug that is empty once normalized (`slugify`); nothing was written. */
+export class InvalidSlugError extends Error {
+  constructor(readonly input: string) {
+    super(`Not a usable note slug: ${JSON.stringify(input)}`);
+    this.name = 'InvalidSlugError';
   }
 }
 
@@ -380,7 +388,8 @@ export class NoteService {
     const outgoingRefs = [...new Set(parsed.wikilinks.map((w) => w.ref))];
     for (const ref of outgoingRefs) {
       if (ref === note.slug) continue; // a self-link has nothing to bind
-      const target = await this.store(scope).getBySlug(ref);
+      // A link to a slug a note was moved away from still means that note.
+      const target = await this.store(scope).resolveSlug(ref);
       if (target) {
         await this.links.resolveTo({ scope, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
       }
@@ -572,6 +581,43 @@ export class NoteService {
   async getBySlug(scope: NoteScope, slug: string): Promise<Note | null> {
     const note = await this.store(scope).getBySlug(slugify(slug));
     return note ? this.withLive(scope, note) : null;
+  }
+
+  /**
+   * The note a `[[link]]` to `slug` means: the note at that slug, else one
+   * moved away from it (`move`). `getBySlug` matches the slug alone.
+   */
+  async resolveSlug(scope: NoteScope, slug: string): Promise<Note | null> {
+    const note = await this.store(scope).resolveSlug(slugify(slug));
+    return note ? this.withLive(scope, note) : null;
+  }
+
+  /**
+   * Move a note to another slug: another folder (`projects/plan`), or
+   * another name in its folder. The id, text and title stay; the old slug
+   * is kept in `frontmatter.aliases`, so every `[[link]]` to it still
+   * resolves (`resolveSlug`: the edges already bound keep their target, a
+   * link saved later binds through the alias), and links waiting for the
+   * new slug bind now. Null when the scope does not reach the note.
+   * Throws `NoteExistsError` when another note holds the slug (an archived
+   * one included), `InvalidSlugError` for a slug that is empty once
+   * normalized, and `SpaceError` for a role that may not write.
+   */
+  async move(scope: NoteScope, id: string, slugInput: string): Promise<Note | null> {
+    assertNoteAccess(scope, 'write');
+    const slug = slugify(slugInput);
+    if (!slug) throw new InvalidSlugError(slugInput);
+    const store = this.store(scope);
+    const note = await store.getById(id);
+    if (!note) return null;
+    if (note.slug === slug) return this.withLive(scope, note);
+    const taken = await store.getBySlug(slug);
+    if (taken && taken.id !== note.id) throw new NoteExistsError(taken.id, slug);
+    const aliases = [...new Set([...noteAliases(note.frontmatter), note.slug])].filter((a) => a !== slug);
+    const moved = await store.update(note.id, { slug, frontmatter: { ...note.frontmatter, aliases } });
+    if (!moved) throw new Error(`Note ${note.id} vanished during move`);
+    await this.links.resolveTo({ scope, toRef: slug, toType: SOURCE_PREFIX, toId: note.id });
+    return this.withLive(scope, moved);
   }
 
   async list(scope: NoteScope, opts?: Parameters<NoteStore['list']>[0]): Promise<Note[]> {

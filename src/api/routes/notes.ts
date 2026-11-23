@@ -3,7 +3,7 @@ import { apiContext } from '@/api/context';
 import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
 import { getConfig } from '@/config';
 import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
-import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
+import { getNoteService, InvalidSlugError, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import { getRevision, listRevisions } from '@/db/repositories/live-documents';
@@ -243,6 +243,30 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { body: t.Object({ text: t.String(), date: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
+  )
+
+  // The daily note of a day (the client's own calendar day, `YYYY-MM-DD`),
+  // created from the daily template the first time it is asked for.
+  .post(
+    '/daily',
+    async ({ user, principal, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const { noteScope } = noteRepos(principal);
+      const notes = getNoteService();
+      try {
+        const note = await notes.getOrCreateDaily(noteScope, body.date);
+        return { note };
+      } catch (err) {
+        if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
+        // Another tab created the day's note meanwhile: that one is it.
+        if (err instanceof Error && /unique constraint|duplicate key/i.test(err.message)) {
+          const note = await notes.getBySlug(noteScope, `daily/${body.date}`);
+          if (note) return { note };
+        }
+        throw err;
+      }
+    },
+    { body: t.Object({ date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }) }), detail: { tags: ['notes'] } },
   )
 
   // ── Edit proposals (space notes, §7.4) ────────────────────────────
@@ -489,6 +513,32 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       return { restored: true };
     },
     { detail: { tags: ['notes'] } },
+  )
+
+  // Move a note to another slug (another folder, or another name). Its old
+  // slug stays an alias, so links to it keep resolving (NoteService.move).
+  .post(
+    '/:id/move',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const note = await getNoteService().move(noteRepos(principal).noteScope, params.id, body.slug);
+        if (!note) { set.status = 404; return { error: 'Note not found' }; }
+        return { note };
+      } catch (err) {
+        if (err instanceof NoteExistsError) {
+          set.status = 409;
+          return { error: `A note already exists at ${err.slug}`, code: 'exists', id: err.noteId, slug: err.slug };
+        }
+        if (err instanceof InvalidSlugError) { set.status = 400; return { error: err.message, code: 'invalid_slug' }; }
+        if (err instanceof Error && /unique constraint|duplicate key/i.test(err.message)) {
+          set.status = 409;
+          return { error: 'A note with this slug already exists', code: 'exists' };
+        }
+        throw err;
+      }
+    },
+    { body: t.Object({ slug: t.String({ minLength: 1, maxLength: 300 }) }), detail: { tags: ['notes'] } },
   )
 
   .patch(

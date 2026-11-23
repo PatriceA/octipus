@@ -155,6 +155,21 @@ describe('revisions', () => {
   });
 });
 
+describe('moving a space note', () => {
+  test('an editor moves a note to another folder and keeps its old slug as an alias; a viewer may not', async () => {
+    const note = await createNote('editor', 'Launch plan', 'steps\n');
+    expect((await call('viewer', 'POST', `/api/notes/${note.id}/move`, { body: { slug: 'archive/launch-plan' } })).status).toBe(403);
+    expect((await call('stranger', 'POST', `/api/notes/${note.id}/move`, { body: { slug: 'x' } })).status).toBe(404);
+    const moved = await call('editor', 'POST', `/api/notes/${note.id}/move`, { body: { slug: 'archive/launch-plan' } });
+    expect(moved.status).toBe(200);
+    expect((await moved.json()).note).toMatchObject({ slug: 'archive/launch-plan', frontmatter: { aliases: ['launch-plan'] } });
+    // Another member's link to the old slug still finds it.
+    const linker = await createNote('owner', 'Linker', 'see [[Launch plan]]\n');
+    const detail = await (await call('owner', 'GET', `/api/notes/${linker.id}`)).json();
+    expect(detail.outgoing[0].endpoint).toMatchObject({ id: note.id, resolved: true });
+  });
+});
+
 describe('writes name their base', () => {
   test('a body write to an existing space note without a base is 400; with it, 200', async () => {
     const note = await createNote('editor', 'Based', 'text\n');

@@ -121,6 +121,33 @@ describe('Notes API', () => {
     expect(r.body.slug).toBe('daily/2026-06-09');
   });
 
+  test('daily opens the day’s note, creating it once', async () => {
+    const first = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
+    expect(first.status).toBe(200);
+    expect(first.body.note).toMatchObject({ slug: 'daily/2026-11-23', noteKind: 'daily', noteDate: '2026-11-23' });
+    const again = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
+    expect(again.body.note.id).toBe(first.body.note.id);
+    expect((await post(aliceApp, '/api/notes/daily', { date: 'today' })).status).toBe(422);
+    // Another user's day is their own.
+    expect((await post(bobApp, '/api/notes/daily', { date: '2026-11-23' })).body.note.id).not.toBe(first.body.note.id);
+  });
+
+  test('move changes the slug, keeps the old one as an alias, and refuses a taken slug', async () => {
+    const a = (await post(aliceApp, '/api/notes', { title: 'Move me', body: 'x' })).body.note;
+    await post(aliceApp, '/api/notes', { title: 'Taken', body: 'y' });
+    const moved = await post(aliceApp, `/api/notes/${a.id}/move`, { slug: 'projects/move-me' });
+    expect(moved.status).toBe(200);
+    expect(moved.body.note).toMatchObject({ id: a.id, slug: 'projects/move-me', title: 'Move me', frontmatter: { aliases: ['move-me'] } });
+    const index = await get(aliceApp, '/api/notes/index');
+    expect(index.body.notes.find((n: any) => n.id === a.id)).toMatchObject({ slug: 'projects/move-me', aliases: ['move-me'] });
+    const clash = await post(aliceApp, `/api/notes/${a.id}/move`, { slug: 'taken' });
+    expect(clash.status).toBe(409);
+    expect(clash.body.code).toBe('exists');
+    expect((await post(aliceApp, `/api/notes/${a.id}/move`, { slug: '!!!' })).status).toBe(400);
+    // Another user cannot move it (and cannot tell it exists).
+    expect((await post(bobApp, `/api/notes/${a.id}/move`, { slug: 'mine' })).status).toBe(404);
+  });
+
   test('archive (soft delete) hides from listing', async () => {
     const created = await post(aliceApp, '/api/notes', { title: 'Throwaway' });
     const id = created.body.note.id;

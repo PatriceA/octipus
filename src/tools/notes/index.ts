@@ -239,7 +239,8 @@ export class NotesTool extends BaseTool {
         const note = args.id
           ? await svc.getById(notesScope(context, false), args.id as string)
           : args.slug
-            ? await svc.getBySlug(notesScope(context), args.slug as string)
+            // A slug the note was moved away from still finds it.
+            ? await svc.resolveSlug(notesScope(context), args.slug as string)
             : null;
         if (!note) {
           if (!args.id && !args.slug) throw new Error('read_note requires id or slug');

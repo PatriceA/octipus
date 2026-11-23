@@ -102,6 +102,15 @@ export function guestNoteIds(workspaceId: string, folders: readonly string[]): S
  */
 const withoutArchiveMarkers = sql`CASE WHEN ${notes.noteKind} = 'lesson' THEN ${notes.frontmatter} - 'archivedBy' - 'mergedInto' ELSE ${notes.frontmatter} END`;
 
+/** One row of the `[[wikilink]]` autocomplete index. `aliases`: slugs the note was moved away from (absent when none). */
+export interface NoteIndexEntry { id: string; title: string; slug: string; noteKind: string; aliases?: string[] }
+
+/** The slugs a note was moved away from (`frontmatter.aliases`), ignoring anything that is not a string list. */
+export function noteAliases(frontmatter: Record<string, unknown> | null | undefined): string[] {
+  const aliases = frontmatter?.aliases;
+  return Array.isArray(aliases) ? aliases.filter((a): a is string => typeof a === 'string' && a.length > 0) : [];
+}
+
 /** What `NoteRepository.list` (and a bound `NoteStore.list`) takes. */
 export interface NoteListOptions {
   kind?: string;
@@ -220,6 +229,32 @@ export class NoteRepository {
   }
 
   /**
+   * The note a `[[link]]` to `slug` means: the note at that slug, else an
+   * active note that was moved away from it (its `frontmatter.aliases` holds
+   * the slug, `NoteService.move`), most recently edited first. An exact slug
+   * always wins over an alias. Same workspace rule as `getBySlug`.
+   */
+  async resolveSlug(scope: NoteScope | string, workspaceId: string | null, slug: string): Promise<Note | null> {
+    const exact = await this.getBySlug(scope, workspaceId, slug);
+    if (exact) return exact;
+    const space = typeof scope !== 'string' && scope.kind === 'space';
+    const rows = await this.db
+      .select()
+      .from(notes)
+      .where(
+        and(
+          ...owner(scope),
+          space ? undefined : workspaceId === null ? isNull(notes.workspaceId) : inWorkspace(scope, workspaceId),
+          isNull(notes.archivedAt),
+          sql`(${notes.frontmatter} -> 'aliases') @> ${JSON.stringify([slug])}::jsonb`,
+        ),
+      )
+      .orderBy(sql`${notes.workspaceId} IS NULL`, desc(notes.updatedAt))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  /**
    * The scope's notes, newest first (pinned ones, then the user's own before
    * lessons). `search` keeps the notes holding every word of it in the title,
    * slug, tags or body (case-insensitive, anywhere in the text), with title
@@ -294,13 +329,19 @@ export class NoteRepository {
    * for the `[[wikilink]]` autocomplete. Only the columns the picker needs,
    * so it stays cheap to refetch as the vault grows.
    */
-  async listIndex(scope: NoteScope | string, workspaceId?: string): Promise<Array<{ id: string; title: string; slug: string; noteKind: string }>> {
-    return this.db
-      .select({ id: notes.id, title: notes.title, slug: notes.slug, noteKind: notes.noteKind })
+  async listIndex(scope: NoteScope | string, workspaceId?: string): Promise<NoteIndexEntry[]> {
+    const rows = await this.db
+      .select({ id: notes.id, title: notes.title, slug: notes.slug, noteKind: notes.noteKind, aliases: sql<unknown>`${notes.frontmatter} -> 'aliases'` })
       .from(notes)
       .where(and(...owner(scope), isNull(notes.archivedAt), inWorkspace(scope, workspaceId)))
       .orderBy(notes.title)
       .limit(2000);
+    // The slugs a note was moved away from, so a client resolves an old
+    // `[[link]]` as the server does (`resolveSlug`). Only on notes that have any.
+    return rows.map(({ aliases, ...row }) => {
+      const list = noteAliases({ aliases });
+      return list.length > 0 ? { ...row, aliases: list } : row;
+    });
   }
 
   /**
@@ -380,9 +421,11 @@ export interface NoteStore {
   getById(id: string): Promise<Note | null>;
   getByIds(ids: string[]): Promise<Note[]>;
   getBySlug(slug: string): Promise<Note | null>;
+  /** The note a link to `slug` means: at that slug, else moved away from it (`NoteRepository.resolveSlug`). */
+  resolveSlug(slug: string): Promise<Note | null>;
   list(opts?: NoteListOptions): Promise<Note[]>;
   query(opts?: Omit<Parameters<NoteRepository['query']>[1], 'workspaceId'>): Promise<Note[]>;
-  listIndex(): Promise<Array<{ id: string; title: string; slug: string; noteKind: string }>>;
+  listIndex(): Promise<NoteIndexEntry[]>;
   tagCounts(): Promise<Array<{ tag: string; count: number }>>;
   setPinned(id: string, pinned: boolean): Promise<Note | null>;
   archive(id: string): Promise<boolean>;
@@ -410,6 +453,7 @@ export class PersonalNoteRepo implements NoteStore {
   getById(id: string) { return this.repo.getById(this.scope, id, this.ws); }
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids, this.ws); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }
+  resolveSlug(slug: string) { return this.repo.resolveSlug(this.scope, this.scope.workspaceId, slug); }
   list(opts: Parameters<NoteStore['list']>[0] = {}) { return this.repo.list(this.scope, { ...opts, workspaceId: this.ws }); }
   query(opts: Parameters<NoteStore['query']>[0] = {}) { return this.repo.query(this.scope, { ...opts, workspaceId: this.ws }); }
   listIndex() { return this.repo.listIndex(this.scope, this.ws); }
@@ -443,6 +487,7 @@ export class SpaceNoteRepo implements NoteStore {
   getById(id: string) { return this.repo.getById(this.scope, id); }
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }
+  resolveSlug(slug: string) { return this.repo.resolveSlug(this.scope, this.scope.workspaceId, slug); }
   list(opts: Parameters<NoteStore['list']>[0] = {}) { return this.repo.list(this.scope, opts); }
   query(opts: Parameters<NoteStore['query']>[0] = {}) { return this.repo.query(this.scope, opts); }
   listIndex() { return this.repo.listIndex(this.scope); }
