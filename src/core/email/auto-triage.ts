@@ -20,6 +20,7 @@
  * Runs from the cron tick while the inbox module is on (job `inbox-auto-triage`).
  */
 import { sql } from 'drizzle-orm';
+import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
@@ -185,8 +186,11 @@ export const defaultAutoTriageDeps: AutoTriageDeps = {
     }
     // The user's own IMAP / POP3 mailboxes; a space's shared mailbox is triaged by hand.
     const repos = contentRepos(backgroundUserPrincipal(userId));
+    // The email channel's mailbox is the channel's alone (docs/CHANNELS.md#email):
+    // a mail it answers is never also triaged or archived.
+    const channelMailbox = getConfig().emailChannel.enabled ? getConfig().emailChannel.accountId : '';
     for (const account of await repos.mail.accounts()) {
-      if (!account.enabled || account.workspaceId) continue;
+      if (!account.enabled || account.workspaceId || account.id === channelMailbox) continue;
       sources.push({ mailbox: imapMailbox(account.id), newest: async (limit) => keepForTriage(userId, await newestImap(repos, account.id, limit)) });
     }
     return sources;

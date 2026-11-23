@@ -25,6 +25,15 @@ export abstract class BaseChannel extends EventEmitter {
 
   protected connected = false;
 
+  /**
+   * A chat a person watches live: it gets progress notes ("Working on it…"),
+   * and a typed yes/no in it may answer a permission or approval prompt.
+   * False for email, where every note is a mail and a sender's
+   * authentication is weaker than a chat app's: only the turn's answer goes
+   * out, and approvals are answered in the web app.
+   */
+  readonly interactive: boolean = true;
+
   constructor() {
     super();
     // EventEmitter throws if 'error' is emitted with no listener. Guarantee one

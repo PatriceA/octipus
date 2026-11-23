@@ -22,6 +22,7 @@ export interface DiscoveredChannel {
  * module, not the SDK.
  */
 const CHANNEL_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
+  email: () => import('./email'),
   slack: () => import('./slack'),
   teams: () => import('./teams'),
   telegram: () => import('./telegram'),

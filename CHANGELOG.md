@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Email channel.** Talk to Octipus by mail: mail to a dedicated IMAP mailbox from an allow-listed, linked sender becomes a conversation, and the answer comes back as a threaded reply (`Re:`, `In-Reply-To`/`References`, `Auto-Submitted: auto-replied`); replying continues the session. A mail counts only when the receiving server's `Authentication-Results` under an operator-trusted authserv-id reports DMARC (or aligned DKIM/SPF) pass; anything else, auto replies, lists, bounces, repeats and senders over the hourly limit are dropped and recorded, never answered. Email turns run unattended (an action that needs approval is refused) and start `suspicious` in the flow guard. Off by default (`emailChannel.*` under Settings → Channels); automatic triage skips the channel mailbox. New table `email_channel_messages` (migration `0205_email_channel`). See docs/CHANNELS.md#email.
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

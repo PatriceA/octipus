@@ -833,13 +833,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 4 |
 | `capabilities` | `utils` | 11 |
-| `channels` | `config` | 7 |
-| `channels` | `core` | 51 |
-| `channels` | `db` | 44 |
+| `channels` | `config` | 8 |
+| `channels` | `core` | 57 |
+| `channels` | `db` | 50 |
 | `channels` | `models` | 8 |
-| `channels` | `security` | 24 |
+| `channels` | `security` | 25 |
 | `channels` | `shared` | 5 |
-| `channels` | `utils` | 24 |
+| `channels` | `utils` | 25 |
 | `channels` | `voice` | 5 |
 | `config` | `channels` | 2 |
 | `config` | `core` | 5 |
@@ -851,7 +851,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 78 |
+| `core` | `config` | 79 |
 | `core` | `db` | 563 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |

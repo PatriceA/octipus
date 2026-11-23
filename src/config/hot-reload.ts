@@ -68,6 +68,10 @@ export function initializeHotReload(): void {
           await reinitializeChannel('whatsapp' as ChannelType);
           break;
 
+        case 'emailChannel':
+          await reinitializeChannel('email');
+          break;
+
         case 'modules': {
           // The outside chats start or stop with the `channels` module
           // (docs/MODULES.md); everything else reads the module list live.

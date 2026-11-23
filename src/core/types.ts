@@ -265,7 +265,7 @@ export interface ModelUsage {
 // exercise documented in `docs/QA.md` — operators temporarily create
 // a channel of this type to verify discovery, then delete it. The
 // literal stays in the union so the QA-doc snippet compiles.
-export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api' | 'qa-demo';
+export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'email' | 'webchat' | 'api' | 'qa-demo';
 
 export interface UnifiedMessage {
   id: string;

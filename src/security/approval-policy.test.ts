@@ -112,6 +112,11 @@ describe('which channels can carry an approval', () => {
     }
   });
 
+  test('email cannot: a mailed "yes" never releases a tool call, so an ASK there is refused', () => {
+    expect(channelCanPrompt('email')).toBe(false);
+    expect(routeApproval({ level: 'ASK', root: true, attended: channelCanPrompt('email'), toolId: 'shell', action: 'exec' }).route).toBe('blocked');
+  });
+
   test('an unknown channel keeps prompting — the safe direction', () => {
     // Wrong here = a stall. Wrong the other way = a silent auto-approve.
     expect(channelCanPrompt('some-future-client')).toBe(true);

@@ -604,6 +604,28 @@ export const groupChannelsConfigSchema = z.object({
 });
 
 /**
+ * The inbound email channel (docs/CHANNELS.md#email): mail to a dedicated
+ * IMAP mailbox becomes a conversation, answered by mail. Off until enabled,
+ * and then only for allow-listed senders whose mail passed the receiving
+ * server's authentication, as reported under a trusted authserv-id.
+ */
+export const emailChannelConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** The IMAP mail account (Mail → mailboxes) the channel reads and answers from. Personal, with an SMTP server. */
+  accountId: z.string().default(''),
+  /** Addresses allowed to talk to Octipus by mail. Each must also be linked to an account (`link`). */
+  allowedSenders: z.array(z.string()).default([]),
+  /** The receiving server's authserv-id(s) whose Authentication-Results header is believed. Empty: nothing is accepted. */
+  trustedAuthservIds: z.array(z.string()).default([]),
+  /** How often the mailbox is checked for new mail. */
+  pollSeconds: z.number().int().min(15).max(3600).default(60),
+  /** Larger mail is not run as a turn; the sender is told so. */
+  maxMessageBytes: z.number().int().min(1024).max(25 * 1024 * 1024).default(10 * 1024 * 1024),
+  /** Mails one sender may start turns with per hour; more are dropped without an answer. */
+  maxPerSenderPerHour: z.number().int().min(1).max(1000).default(20),
+});
+
+/**
  * Shared spaces (docs/plans/coworking-spec.md §5). Spaces are always
  * available (D17); these keys are policy, not a switch.
  */
@@ -1090,6 +1112,7 @@ export const configSchema = z.object({
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
+  emailChannel: emailChannelConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
   backup: backupConfigSchema.prefault({}),
   modules: modulesConfigSchema.prefault({}),
@@ -1129,6 +1152,7 @@ export type VaultSyncConfig = z.infer<typeof vaultSyncConfigSchema>;
 export type MultiuserConfig = z.infer<typeof multiuserConfigSchema>;
 export type CompactionConfig = z.infer<typeof compactionConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
+export type EmailChannelConfig = z.infer<typeof emailChannelConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;
 export type SwarmConfig = z.infer<typeof swarmConfigSchema>;
