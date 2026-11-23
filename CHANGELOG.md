@@ -34,6 +34,14 @@ labels reflect blast radius, not contract guarantees.
   did not start`; that run is skipped), and a one-shot notifies when it gives
   up retrying after 24 hours. Orchestrated schedules refused at the cap are
   now retried and reported this way too, instead of as a failed run.
+- **Clean up host-command and CLI temporary data automatically.** Each local
+  host command, background job and CLI invocation receives an owned temporary
+  directory through `TMPDIR`, `TEMP` and `TMP`. Test databases and other scratch
+  files are removed after its processes exit, including failed and cancelled
+  commands. Live background processes retain their files. Startup and periodic
+  sweeps recover confirmed abandoned directories without sweeping arbitrary
+  `/tmp` contents. See [temporary storage](docs/TEMPORARY-STORAGE.md).
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,
