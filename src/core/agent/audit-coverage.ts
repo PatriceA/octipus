@@ -163,6 +163,41 @@ export function auditVerdictFailure(
 }
 
 /**
+ * What kind of fault a rejected PASS is, which decides what runs next.
+ *
+ * `report` is the narrow one: every stage in scope named, every criterion
+ * accounted for with evidence, and only `whatIDidNotCheck` or `confidence`
+ * missing. Those two are the auditor describing its own audit, so asking it
+ * for them again from its own report, without re-reading anything (a verdict
+ * repair), asks for nothing it could only know by looking.
+ *
+ * Everything else is `coverage` and gets a real re-audit:
+ * - an uncovered stage or unaddressed doubt: the auditor has to go and look;
+ * - any acceptance-criterion fault, including a met entry with no evidence and
+ *   a non-json pass on an item with criteria: a repair told "your findings
+ *   stand" would write the missing entry or its evidence from a report that
+ *   never checked it, which is inventing an audit, not restating one;
+ * - a pass whose own prose says FAIL: the reply contradicts itself, and only a
+ *   re-judgement, not a repair of the passing block, may settle it.
+ *
+ * Returns null when the verdict is not a rejected pass.
+ */
+export function auditFault(
+  verdict: QAValidationResult,
+  scope: AuditScopeStage[],
+  acceptance: string[] = [],
+  proseSaysFail = false,
+): 'coverage' | 'report' | null {
+  if (auditVerdictFailure(verdict, scope, acceptance) === null) return null;
+  const needsLook =
+    proseSaysFail ||
+    uncoveredStages(verdict, coverageScope(scope)).length > 0 ||
+    unaddressedDoubt(verdict, scope).length > 0 ||
+    criteriaReasons(verdict, acceptance).length > 0;
+  return needsLook ? 'coverage' : 'report';
+}
+
+/**
  * Thin-verdict rules — port of jcode's `validate_artifact` → `ThinArtifact`
  * (`ops.rs:703`). A passing verdict that states nothing it left unchecked, or
  * states no confidence, is structurally indistinguishable from a shallow one.

@@ -18,6 +18,16 @@ export interface ModelProvider {
   /** Create a streaming chat completion */
   stream(options: CompletionOptions): AsyncGenerator<StreamChunk>;
 
+  /**
+   * True when the content deltas of `stream()` concatenate to exactly the
+   * `content` that `complete()` returns for the same reply: neither path
+   * filters, trims or rewrites the text. Only then may a caller show streamed
+   * text as the answer a non-streamed call would give (`/v1` passthrough).
+   * Absent: the paths normalise differently (thinking tags, trimming) or the
+   * provider does not really stream.
+   */
+  readonly streamIsComplete?: boolean;
+
   /** Generate embeddings (optional — not all providers support it) */
   embed?(texts: string[], model: string, endpoint?: string): Promise<number[][]>;
 

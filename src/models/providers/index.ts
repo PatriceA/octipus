@@ -6,7 +6,8 @@ import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/cl
 import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
-import { getRateLimitManager, requestPriority } from '../rate-limiter';
+import { getRateLimitManager, type RateLimitToken, requestPriority } from '../rate-limiter';
+import { estimateStreamUsage } from './usage';
 import { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel } from '../thinking-budget';
 import { AnthropicProvider } from './anthropic-provider';
 import { CLIProvider } from './cli-provider';
@@ -379,21 +380,22 @@ export class ProviderRouter {
     const token = await rateLimiter.acquire(rateLimitKey, requestPriority(options));
 
     const startTime = Date.now();
+    const meter = new StreamMeter(options, token);
     try {
-      yield* provider.stream(options);
-
-      const latencyMs = Date.now() - startTime;
-      token.reportSuccess(latencyMs);
+      for await (const chunk of provider.stream(options)) {
+        meter.see(chunk);
+        yield chunk;
+      }
+      meter.succeeded(Date.now() - startTime);
       circuitBreakers.recordSuccess(rateLimitKey);
-      // Streaming usage isn't aggregated at the router; record latency + count
-      // only. Token totals come from the non-streaming path and the cost tracker.
     } catch (error) {
       const isRL = isRateLimitResponse(error);
-      token.reportError(isRL);
+      meter.failed(isRL);
       // A3: only transport-class failures trip the breaker.
       if (isTransportFailure(error)) circuitBreakers.recordFailure(rateLimitKey);
       throw classifyError(error, provider.name);
     } finally {
+      meter.end();
       token.release();
     }
   }
@@ -504,19 +506,67 @@ export class ProviderRouter {
     const fallback = this.getLiteLLM();
     const token = await getRateLimitManager().acquire('litellm', requestPriority(options));
     const startTime = Date.now();
+    const meter = new StreamMeter(options, token);
     try {
-      yield* fallback.stream(options);
-      const latencyMs = Date.now() - startTime;
-      token.reportSuccess(latencyMs);
+      for await (const chunk of fallback.stream(options)) {
+        meter.see(chunk);
+        yield chunk;
+      }
+      meter.succeeded(Date.now() - startTime);
       getCircuitBreakerRegistry().recordSuccess('litellm');
     } catch (error) {
-      token.reportError(isRateLimitResponse(error));
+      meter.failed(isRateLimitResponse(error));
       // Same rule as the primary path: a cancellation or a bad request is not the proxy failing.
       if (isTransportFailure(error)) getCircuitBreakerRegistry().recordFailure('litellm');
       throw classifyError(error, 'litellm');
     } finally {
+      meter.end();
       token.release();
     }
+  }
+}
+
+/**
+ * Counts a stream's tokens against its provider's TPM window, as `complete()`
+ * does with `result.usage.totalTokens`: the usage the provider reported, or
+ * an estimate (prompt plus output so far) when the stream ended without it —
+ * its reader went away, or it failed after it had started. A stream that
+ * produced nothing counts nothing.
+ */
+class StreamMeter {
+  private usage: CompletionResult['usage'] | undefined;
+  private chunks = 0;
+  private outputChars = 0;
+  private reported = false;
+
+  constructor(private readonly options: CompletionOptions, private readonly token: RateLimitToken) {}
+
+  see(chunk: StreamChunk): void {
+    this.chunks++;
+    this.outputChars += (chunk.content?.length ?? 0) + (chunk.toolCallDelta?.arguments?.length ?? 0) + (chunk.reasoningContent?.length ?? 0);
+    if (chunk.usage) this.usage = chunk.usage;
+  }
+
+  private tokens(): number {
+    if (this.usage && this.usage.available !== false) return this.usage.totalTokens;
+    return this.chunks > 0 ? estimateStreamUsage(this.options, this.outputChars).totalTokens : 0;
+  }
+
+  succeeded(latencyMs: number): void {
+    this.reported = true;
+    this.token.reportSuccess(latencyMs, this.tokens());
+  }
+
+  failed(isRateLimit: boolean): void {
+    this.reported = true;
+    this.token.reportError(isRateLimit);
+    this.token.reportTokens(this.tokens());
+  }
+
+  /** A stream its reader returned early: neither a success nor a failure, but its tokens were used. */
+  end(): void {
+    if (!this.reported) this.token.reportTokens(this.tokens());
+    this.reported = true;
   }
 }
 

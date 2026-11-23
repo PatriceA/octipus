@@ -55,6 +55,7 @@ export const defaultConfig: Partial<Config> = {
     port: 3000,
     corsOrigins: ['http://localhost:3001'],
     rateLimitMax: 600,
+    streamStallTimeoutMs: 60_000,
   },
   voice: {
     sttProvider: 'auto' as const,
