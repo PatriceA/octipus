@@ -954,7 +954,7 @@ export async function configure(
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
   if (change.approveContributions !== undefined) {
-    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt or context; there is nothing to approve`);
+    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt, context or roles; there is nothing to approve`);
     if (!isContentHash(change.approveContributions)) {
       throw new PluginPackageError('invalid',
         'approveContributions takes the contributions hash you reviewed ("sha256:<64 hex>", shown as contributions.hash), not true: what the package adds is approved only while it still hashes to it');

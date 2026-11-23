@@ -3,6 +3,7 @@ import { leaderFirst, prefixFamilyKey } from './leader-first';
 import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
+import { isRegisteredRole, roleSource, spawnRefusal } from '@/core/agent/role-registry';
 import type { AgentRole } from '@/core/agent/types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { coreLogger } from '@/utils/logger';
@@ -89,30 +90,40 @@ const BUILT_IN_CHILD_ROLES: AgentRole[] = [
 
 /**
  * The roles a parent may spawn: the built-ins in their curated order, then any
- * role the user added, in name order.
+ * runtime role (an operator's, a plugin's), in name order.
  *
  * Read from the registry per call rather than frozen at import, because that is
- * the only thing that makes a user-created role reachable. Nothing picks a role
- * out of a lane — a role resolves TO a lane — so a new role is chosen exactly
- * one way: the model reads it in this menu and names it. A role absent here is
- * a role that exists and can never be used.
+ * the only thing that makes a runtime role reachable. Nothing picks a role out
+ * of a lane — a role resolves TO a lane — so a new role is chosen exactly one
+ * way: the model reads it in this menu and names it. A role absent here is a
+ * role that exists and can never be used.
  *
- * `as AgentRole` is the one cast: the union is kept closed so a missing built-in
- * is still a compile error, and a user's role is a string it cannot name.
+ * With `parentRole`, narrowed to what that parent may spawn under the runtime
+ * roles' spawn rules (`spawnRefusal`); the spawner enforces the same rule, so
+ * this only keeps the menu honest.
  */
-export function childRoles(): AgentRole[] {
+export function childRoles(parentRole?: string): AgentRole[] {
   const extra = Object.keys(ROLE_CONFIGS)
-    .filter((r) => !BUILT_IN_CHILD_ROLES.includes(r as AgentRole))
+    .filter((r): r is AgentRole => isRegisteredRole(r) && !BUILT_IN_CHILD_ROLES.includes(r))
     .sort();
-  return [...BUILT_IN_CHILD_ROLES, ...(extra as AgentRole[])];
+  const all = [...BUILT_IN_CHILD_ROLES, ...extra];
+  return parentRole === undefined ? all : all.filter((r) => spawnRefusal(parentRole, r) === null);
+}
+
+/** One line of the menu: a runtime role's description is operator or plugin text, so it stays one line and says where it came from. */
+function catalogLine(role: AgentRole): string {
+  const config = ROLE_CONFIGS[role];
+  const description = (config?.description || 'user-defined role').replace(/\s+/g, ' ').trim();
+  const source = roleSource(role);
+  return `- ${role} — ${description}${source?.kind === 'plugin' ? ` (from the plugin ${source.plugin})` : ''}`;
 }
 
 /**
  * Render the spawnable-role menu for injection into a depth-1 agent's task
  * brief. One `- role — blurb` line per role, in enum order.
  */
-export function buildSpawnRoleCatalog(): string {
-  return childRoles().map((r) => `- ${r} — ${ROLE_CONFIGS[r]?.description || 'user-defined role'}`).join('\n');
+export function buildSpawnRoleCatalog(parentRole?: string): string {
+  return childRoles(parentRole).map(catalogLine).join('\n');
 }
 
 /**
@@ -122,7 +133,7 @@ export function buildSpawnRoleCatalog(): string {
  * per-task brief (Phase 4). Only the spawnable-role catalog varies, and only
  * when roles change. Kept out of `composeChildMessage` so briefs stay compact.
  */
-export function buildDelegationGuidance(): string {
+export function buildDelegationGuidance(parentRole?: string): string {
   return (
     'DELEGATION POLICY: you can spawn your OWN subagents with `spawn_child` ' +
     '(pick a `role`, give a focused `taskBrief`). Decide with these rules:\n' +
@@ -151,7 +162,7 @@ export function buildDelegationGuidance(): string {
     'the parent runs the full gate once after integrating a phase. Repeat checks only after changes or failures, ' +
     'or when repository instructions require them. Collect a wave together instead of polling each child.\n\n' +
     'Roles you can spawn (`role` — what it does):\n' +
-    buildSpawnRoleCatalog() +
+    buildSpawnRoleCatalog(parentRole) +
     '\n\nHOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +
     'handle — the child always runs in the background (there is no `mode` ' +
     'parameter). So you can fire several siblings in one turn, keep working, ' +
@@ -278,9 +289,9 @@ export function applyRoleFit(
  * routing and LLM-driven spawning never diverge.
  */
 export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string): AgentRole | undefined {
-  const spawnable = childRoles();
-  if (roleRaw && spawnable.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
-  if (spawnable.includes(topic as AgentRole)) return topic as AgentRole;
+  const spawnable: readonly string[] = childRoles();
+  if (roleRaw && spawnable.includes(roleRaw) && isRegisteredRole(roleRaw)) return roleRaw;
+  if (spawnable.includes(topic) && isRegisteredRole(topic)) return topic;
   if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
   if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
   return undefined;
@@ -466,7 +477,7 @@ export function createSpawnChildTool(
           handoff: HANDOFF_SCHEMA,
           role: {
             type: 'string',
-            enum: childRoles(),
+            enum: childRoles(parent.role),
             description: 'Specialist role for the child.',
           },
           taskBrief: {
@@ -495,7 +506,7 @@ export function createSpawnChildTool(
         handoff: HANDOFF_SCHEMA,
         role: {
           type: 'string',
-          enum: childRoles(),
+          enum: childRoles(parent.role),
           description:
             'Specialist role for the child. Determines the available tool set (permission-intersected with yours).',
         },

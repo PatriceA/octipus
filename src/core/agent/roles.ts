@@ -15,11 +15,11 @@ import { FILE_CHANGE_TOOLS } from '@/core/tool-executor';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getToolRegistry } from '@/tools/registry';
 import { logger } from '@/utils/logger';
-import { loadRoles } from './roles/index';
+import { ROLE_CONFIGS, resolveRole } from './role-registry';
 import { withoutRetiredToolIds } from './retired-tools';
 import type { AgentRole, RoleConfig } from './types';
 
-export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = loadRoles();
+export { ROLE_CONFIGS };
 
 /**
  * Security preamble prepended to every system prompt.
@@ -62,7 +62,12 @@ export const OUTPUT_FORMATTING_RULES = `OUTPUT FORMATTING:
  * text back as their reply.
  */
 export function getRoleConfig(role: AgentRole): RoleConfig {
-  const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.general;
+  // No fallback. This used to return `general` for a role it did not know, so
+  // a stage, hook or child naming a role that had since been removed (a
+  // plugin's, uninstalled) ran with the general prompt and the general
+  // toolset — wider than what was asked for, and silently. `UnknownRoleError`
+  // says which role is gone instead.
+  const config = ROLE_CONFIGS[resolveRole(role)];
   return {
     ...config,
     systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + UNTRUSTED_CONTENT_GUIDANCE + VAULT_USAGE_GUIDANCE + config.systemPromptTemplate,
@@ -132,7 +137,8 @@ export function setRoleToolIdsInMemory(role: AgentRole, toolIds: string[]): void
 }
 
 /**
- * Apply a patch to a role in the live registry, or register a new one.
+ * Apply a patch to a role already in the live registry (a built-in, or an
+ * operator's role whose merged definition the caller has checked).
  *
  * `getToolsForRole` and the worker spawner read ROLE_CONFIGS synchronously, so
  * this mutation IS the cache invalidation: without it an edit made in the UI
@@ -155,17 +161,9 @@ export function setRoleInMemory(role: AgentRole, patch: Partial<RoleConfig>): vo
     ROLE_CONFIGS[role] = merged;
     return;
   }
-  // A role the user just created: no folder, so the patch is all there is.
-  if (!patch.systemPromptTemplate || !patch.toolIds?.length) {
-    logger.warn({ role }, 'Ignoring new in-memory role with no prompt or no tools');
-    return;
-  }
-  ROLE_CONFIGS[role] = { ...defined, role } as RoleConfig;
-}
-
-/** Drop a deleted role from the live registry so nothing can spawn it again. */
-export function removeRoleInMemory(role: AgentRole): void {
-  delete ROLE_CONFIGS[role];
+  // A new role is registered through `registerRuntimeRole`, which checks it;
+  // a patch is never a way around that.
+  logger.warn({ role }, 'Ignoring a patch to a role that is not registered');
 }
 
 /**

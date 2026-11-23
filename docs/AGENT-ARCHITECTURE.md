@@ -270,7 +270,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 |---------|-----------|--------------|----------|
 | **Tool** | Executable module (shell, git...) | App startup | Singleton |
 | **Skill** | Domain knowledge | App startup | Singleton |
-| **Role** | Agent configuration (prompt, rules, tools and default lane) | Code or user-created row | Persistent |
+| **Role** | Agent configuration (prompt, rules, tools and default lane) | Code, an operator's row, or a plugin package | Persistent (a plugin's: while it is enabled) |
 | **Agent** | Running worker instance (depth 1) | Per `spawn_child` | Request-scoped, tracked in `swarm_nodes` |
 | **Subagent** | Leaf worker (depth 2) | Per `spawn_child` from an Agent | Request-scoped |
 | **Swarm** | Full tree for a session | Per root message | Session-scoped, persisted in `swarm_nodes` |
@@ -392,10 +392,15 @@ Create via the API (`POST /api/skills`) or add to `SYSTEM_SKILLS` in `src/db/see
 
 ### New Role
 From the UI: the Topics page lists roles under the lane they run on — add one
-there with a name, a one-line description, a prompt and a tool list. It is
-stored in `roles` with `is_system = false` and joins the registry at boot
-(`loadRolesFromDb`); the create call also registers it immediately, so it is
-spawnable without a restart.
+there with a name, a one-line description, a prompt and a tool list (the API,
+`POST /api/roles`, also takes `displayName`, `spawns`, `spawnedBy` and
+`limits`). It is stored in `roles` with `is_system = false` and joins the
+registry at boot (`loadRolesFromDb`); the create call also registers it
+immediately, so it is spawnable without a restart.
+
+From a plugin package: a `roles` contribution
+([PLUGIN-PACKAGES.md#roles](PLUGIN-PACKAGES.md#roles)), registered while the
+package is enabled and its contributions approved.
 
 In code, for a role that ships with Octipus:
 1. Create folder `src/core/agent/roles/<name>/`
@@ -407,6 +412,45 @@ In code, for a role that ships with Octipus:
 Either way the role is CHOSEN by an agent naming it in `spawn_child`, off the
 one-line `description` rendered into the delegation menu. Nothing selects a role
 out of a lane; the arrow runs role → lane, via `defaultTopic` → `canonicalTopic`.
+
+### Runtime roles
+
+`src/core/agent/role-registry.ts` owns the live role map (`ROLE_CONFIGS`) and
+where each role came from: `builtin` (a folder), `admin` (an operator's row)
+or `plugin` (a package's contribution). `AgentRole` is `BuiltinAgentRole`, the
+literal union of the shipped ids (`BUILTIN_ROLES`, so code naming a built-in
+is still checked and a switch over them stays exhaustive), or `CustomRoleId`,
+a branded string only `resolveRole` / `isRegisteredRole` hand out — text from
+a spawn argument, a row or a hook becomes a role through the registry or not
+at all.
+
+A runtime role is declarative data (`roleDefinitionSchema`, zod): id, display
+name, description, prompt, tools, core tools, lane, `spawns`, `spawnedBy`,
+critical rules, read-only, `limits { maxTokens, maxWallClockMs }`. The same
+policy applies to both runtime sources:
+
+- the id is fresh: the charset rule, not a built-in (no shadowing or
+  redefinition), not reserved (`root`, `system`, `orchestrator`, …), not a
+  role another source registered;
+- the tools exist and are each held by some built-in role
+  (`runtimeRoleToolCeiling`), so the root's `allowedToolIds` — the union of
+  every role's tools — is the same with or without runtime roles; a plugin
+  role is also refused `plugin_dev`, `mcp_admin` and `protection`;
+- the lane is a text lane; limits only lower the depth defaults
+  (`clampToRoleLimits`, applied in both spawn paths);
+- nothing in a definition can make it the root: the root runs as `ROOT_ROLE`,
+  a constant.
+
+Spawn rules are enforced in `SwarmSpawner.spawnChild` (`spawnRefusal`), and the
+`spawn_child` menu and enum are narrowed to what the parent may spawn.
+Execution is unchanged: every tool call is authorized against the permissions
+of the user the agent works for.
+
+There is no fallback to `general`. `getRoleConfig` of a role that is not
+registered — deleted, or its plugin disabled or uninstalled while a session,
+stage or hook still names it — throws `UnknownRoleError`; `spawnWorker`
+resolves its role first, a pipeline stage pauses on it, the spawner returns a
+denial naming it, and `stageContractErrors` reports it before a template runs.
 
 ## Knowledge Base (RAG)
 

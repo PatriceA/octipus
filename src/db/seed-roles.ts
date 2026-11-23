@@ -25,10 +25,14 @@ import { logger } from '@/utils/logger';
  */
 export async function seedRoles(): Promise<void> {
   // Dynamic import to avoid circular dependency
-  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+  const { listRegisteredRoles } = await import('@/core/agent/role-registry');
   const db = getDb();
 
-  for (const [roleName, config] of Object.entries(ROLE_CONFIGS)) {
+  // Built-ins only: a runtime role (an operator's row, a plugin's contribution)
+  // is not seeded as a system row — `isSystem` is what stops a role from being
+  // deleted, and a plugin's role is not even persisted.
+  for (const { config } of listRegisteredRoles().filter((r) => r.source.kind === 'builtin')) {
+    const roleName = config.role;
     const [existing] = await db
       .select()
       .from(roles)
@@ -141,36 +145,33 @@ function dbOwnedFields(row: Role, toolIds: string[]): Partial<RoleConfig> {
 
 export async function loadRolesFromDb(): Promise<void> {
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+  const { isBuiltinRole, registerRuntimeRole } = await import('@/core/agent/role-registry');
   const db = getDb();
 
   const dbRoles = await db.select().from(roles);
 
   for (const dbRole of dbRoles) {
-    const existing = ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS];
-    if (!existing) {
+    if (!isBuiltinRole(dbRole.role)) {
       // No folder. `isSystem` says which kind of orphan this is: a row the
       // seeder wrote for a role that has since been RETIRED (`orchestrator`,
       // removed in Phase 9, is still sitting in every existing database), or a
       // role the user created. Admitting the first kind would resurrect a
       // deleted role into the spawn menu, so only the second is registered.
       if (dbRole.isSystem) continue;
-      // The same bar `loadRoles` holds the built-ins to: a row with no prompt
-      // or no tools is skipped rather than registered as something that would
-      // fail at spawn time.
-      const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
-      if (!dbRole.systemPromptTemplate?.trim() || toolIds.length === 0) {
-        logger.warn({ role: dbRole.role }, 'Skipping user role with no prompt or no tools');
-        continue;
+      // Through the registry, so a stored row is held to the rules a new one
+      // is: a fresh id, tools a built-in role holds, a text lane. The tool
+      // REGISTRY is not consulted — it is empty this early in boot, and the row
+      // was checked against it when it was written. A row that fails is
+      // skipped, loudly, rather than registered as something wider.
+      try {
+        registerRuntimeRole(roleDefinitionOfRow(dbRole), { kind: 'admin' }, { checkRegisteredTools: false });
+      } catch (err) {
+        logger.warn({ role: dbRole.role, err: (err as Error).message }, 'Skipping stored role that is not a valid runtime role');
       }
-      ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS] = {
-        role: dbRole.role as any,
-        toolIds,
-        defaultTopic: dbRole.defaultTopic,
-        systemPromptTemplate: dbRole.systemPromptTemplate,
-        ...dbOwnedFields(dbRole, toolIds),
-      };
       continue;
     }
+    const existing = ROLE_CONFIGS[dbRole.role];
+    if (!existing) continue;
     {
       // Overlay the three columns the DB owns onto the registry entry. It used
       // to REBUILD the object from those columns, which silently dropped every
@@ -181,9 +182,9 @@ export async function loadRolesFromDb(): Promise<void> {
       // caught it.
       // A customized row can still name a removed tool; it is dropped here.
       const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
-      ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS] = {
+      ROLE_CONFIGS[dbRole.role] = {
         ...existing,
-        role: dbRole.role as any,
+        role: dbRole.role,
         toolIds,
         defaultTopic: dbRole.defaultTopic,
         systemPromptTemplate: dbRole.systemPromptTemplate,
@@ -193,4 +194,28 @@ export async function loadRolesFromDb(): Promise<void> {
   }
 
   logger.info({ count: dbRoles.length }, 'Loaded roles from database');
+}
+
+/** An operator's row as a runtime role definition (`role-registry.ts`). */
+export function roleDefinitionOfRow(row: Role): Record<string, unknown> {
+  const list = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map(String) : undefined);
+  const toolIds = withoutRetiredToolIds(list(row.toolIds) ?? []);
+  // Kept a subset of toolIds even when an edit removed one of them.
+  const core = (list(row.coreToolIds) ?? []).filter((id) => toolIds.includes(id));
+  const rules = list(row.criticalRules) ?? [];
+  const limits = row.limits && typeof row.limits === 'object' ? row.limits : undefined;
+  return {
+    id: row.role,
+    systemPrompt: row.systemPromptTemplate,
+    toolIds,
+    lane: row.defaultTopic,
+    ...(row.displayName ? { displayName: row.displayName } : {}),
+    ...(row.description ? { description: row.description } : {}),
+    ...(core.length ? { coreToolIds: core } : {}),
+    ...(rules.length ? { criticalRules: rules } : {}),
+    ...(row.readOnly ? { readOnly: true } : {}),
+    ...(list(row.spawns) ? { spawns: list(row.spawns) } : {}),
+    ...(list(row.spawnedBy) ? { spawnedBy: list(row.spawnedBy) } : {}),
+    ...(limits && (limits.maxTokens || limits.maxWallClockMs) ? { limits } : {}),
+  };
 }

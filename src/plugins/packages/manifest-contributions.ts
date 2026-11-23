@@ -1,11 +1,12 @@
 /**
  * The manifest fields of contributions besides tools (docs/PLUGIN-PACKAGES.md#contributions):
- * slash commands, schedules, events, a prompt section and turn context.
+ * slash commands, schedules, events, a prompt section, turn context and agent roles.
  * Merged into the manifest schema (./manifest.ts). Each contribution names
  * one of the package's own declared tools; a reference to a tool it does not
  * declare, a bad cron expression or an unsafe prompt path refuses the install.
  */
 import { z } from 'zod';
+import { ROLE_ID_RE, roleIdProblem } from '@/core/agent/role-ids';
 import { PLUGIN_EVENT_TYPES, PLUGIN_MANIFEST_FILE, type PluginToolEffect } from '@/shared/plugin-package';
 import { cronProblem } from './contributions/cron';
 import { SIGNATURE_FILE } from './integrity';
@@ -50,6 +51,23 @@ export const contributionFields = {
     tool: z.string().regex(TOOL_REF_RE),
     roles: rolesSchema.optional(),
   }).strict().optional(),
+  roles: z.array(z.object({
+    id: z.string().regex(ROLE_ID_RE, 'roles: an id is lower-case letters, digits, _ and -, starting with a letter (2-32)'),
+    displayName: z.string().trim().min(1).max(60),
+    description: z.string().trim().min(1).max(300).refine((d) => !/[\r\n]/.test(d), 'roles: a description is one line'),
+    prompt: z.string().max(300).regex(PROMPT_FILE_RE, 'roles: prompt is a relative path to a .md file inside the package'),
+    tools: z.array(z.string().regex(TOOL_REF_RE)).min(1, 'roles: name at least one tool').max(64),
+    coreTools: z.array(z.string().regex(TOOL_REF_RE)).max(64).optional(),
+    lane: z.string().trim().min(1).max(64),
+    spawns: z.array(z.string().regex(ROLE_ID_RE)).max(32).optional(),
+    spawnedBy: z.array(z.string().regex(ROLE_ID_RE)).max(32).optional(),
+    criticalRules: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+    readOnly: z.boolean().optional(),
+    limits: z.object({
+      maxTokens: z.number().int().min(1_000).max(10_000_000).optional(),
+      maxWallClockMs: z.number().int().min(10_000).max(24 * 3_600_000).optional(),
+    }).strict().optional(),
+  }).strict()).min(1).max(10).optional(),
 };
 
 interface ContributionManifest {
@@ -60,6 +78,8 @@ interface ContributionManifest {
   events?: Array<{ on: string; tool: string }>;
   prompt?: { file: string };
   context?: { tool: string };
+  roles?: Array<{ id: string; prompt: string; tools: string[]; coreTools?: string[] }>;
+  apiVersion?: string;
 }
 
 /**
@@ -72,8 +92,8 @@ export function contributionProblems(m: ContributionManifest): string[] {
   const problems: string[] = [];
   // Contributions are bound to the plugin's own sandboxed tools; an in-process
   // plugin registers what it adds through octi.* instead.
-  if (m.runtime === 'in-process' && (m.commands?.length || m.schedules?.length || m.events?.length || m.prompt || m.context)) {
-    problems.push('commands, schedules, events, prompt and context apply to the package runtime only; an in-process plugin registers through octi.*');
+  if (m.runtime === 'in-process' && (m.commands?.length || m.schedules?.length || m.events?.length || m.prompt || m.context || m.roles?.length)) {
+    problems.push('commands, schedules, events, prompt, context and roles apply to the package runtime only; an in-process plugin registers through octi.*');
   }
   const declared = (where: string, tool: string) => {
     if (!Object.hasOwn(m.tools ?? {}, tool)) problems.push(`${where}: "${tool}" is not one of the package's declared tools`);
@@ -103,6 +123,24 @@ export function contributionProblems(m: ContributionManifest): string[] {
     const lower = m.prompt.file.toLowerCase();
     if (lower === SIGNATURE_FILE.toLowerCase() || lower === PLUGIN_MANIFEST_FILE.toLowerCase()) {
       problems.push('prompt: file may not be the manifest or the signature file');
+    }
+  }
+  if (m.roles?.length) {
+    if (m.apiVersion && Number(m.apiVersion.split('.')[1]) < 3) problems.push('roles requires apiVersion 1.3.0 or newer');
+    const roleIds = new Set<string>();
+    for (const r of m.roles) {
+      // A built-in or reserved id is refused here, at install: a package may
+      // add a role, never redefine one.
+      const idProblem = roleIdProblem(r.id);
+      if (idProblem) problems.push(`roles: ${idProblem}`);
+      if (roleIds.has(r.id)) problems.push(`roles: "${r.id}" is declared twice`);
+      roleIds.add(r.id);
+      const lower = r.prompt.toLowerCase();
+      if (lower === SIGNATURE_FILE.toLowerCase() || lower === PLUGIN_MANIFEST_FILE.toLowerCase()) {
+        problems.push(`roles.${r.id}: prompt may not be the manifest or the signature file`);
+      }
+      const notHeld = (r.coreTools ?? []).filter((t) => !r.tools.includes(t));
+      if (notHeld.length) problems.push(`roles.${r.id}: coreTools must be a subset of tools (${notHeld.join(', ')})`);
     }
   }
   if (m.context) {

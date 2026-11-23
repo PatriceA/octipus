@@ -457,7 +457,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
 /** Whether a package adds anything besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
 function hasContributions(pkg: PluginPackageView): boolean {
   const c = pkg.contributions;
-  return !!c && (c.commands.length > 0 || c.schedules.length > 0 || c.events.length > 0 || !!c.prompt || !!c.context);
+  return !!c && (c.commands.length > 0 || c.schedules.length > 0 || c.events.length > 0 || !!c.prompt || !!c.context || (c.roles?.length ?? 0) > 0);
 }
 
 function LastRun({ run }: { run: { at: string; ok: boolean; error: string | null } | null }) {
@@ -469,8 +469,8 @@ function LastRun({ run }: { run: { at: string; ok: boolean; error: string | null
 
 /**
  * What a package adds besides tools, in full: its slash commands, schedules,
- * event handlers, turn context and the whole prompt text it puts in every
- * user's agents. Nothing of it is bound until an admin approves exactly this
+ * event handlers, turn context, agent roles and the whole prompt text it puts
+ * in every user's agents. Nothing of it is bound until an admin approves exactly this
  * (the contributions hash); shown in the row and in the enable confirmation.
  */
 function Contributions({ pkg }: { pkg: PluginPackageView }) {
@@ -521,6 +521,18 @@ function Contributions({ pkg }: { pkg: PluginPackageView }) {
             </pre>
           </li>
         )}
+        {(c.roles ?? []).map((r) => (
+          <li key={`r-${r.id}`} data-testid="plugin-contribution-role">
+            role <code className="font-mono">{r.id}</code> ({r.displayName}, lane {r.lane}{r.bound ? '' : ', not registered'}) with the tools{' '}
+            {r.tools.join(', ')}, offered to every user's agents to delegate to: {r.description}. Its instructions, fenced as third-party text:
+            <pre
+              className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-xs border border-outline-variant bg-surface-container p-2 font-mono text-on-surface"
+              data-testid="plugin-role-prompt-text"
+            >
+              {r.text ?? '(the file cannot be read)'}
+            </pre>
+          </li>
+        ))}
       </ul>
       {c.problems.map((p) => <p key={p} className={tone('bad')}>! {p}</p>)}
     </div>

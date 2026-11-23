@@ -30,6 +30,11 @@ export interface RoleRow {
   toolIds: string[];
   readOnly: boolean;
   isSystem: boolean;
+  /** `builtin`, `admin` (made here) or `plugin` (comes and goes with its package; not editable here). */
+  source?: 'builtin' | 'admin' | 'plugin';
+  /** The package that contributes it, for `source: 'plugin'`. */
+  plugin?: string | null;
+  displayName?: string | null;
   /** Admin-only in the API response — the editor below is admin-only too. */
   systemPromptTemplate?: string;
   criticalRules?: string[];
@@ -284,22 +289,29 @@ export function LaneRoles({
         {roles.length === 0 && (
           <span className="text-xs text-on-surface-variant">None — work routed here runs as the root agent.</span>
         )}
-        {roles.map((r) => (
-          <button
-            key={r.role}
-            onClick={() => canEdit && setOpen(open === r.role ? null : r.role)}
-            title={r.description || 'no description — agents will not pick this role'}
-            disabled={!canEdit}
-            className={cn(
-              'px-2 py-0.5 text-[11px] font-mono rounded-full ring-1 ring-outline-variant/20',
-              canEdit && 'cursor-pointer',
-              open === r.role ? 'bg-primary-container/60 text-primary' : 'bg-surface-container-high text-on-surface-variant',
-              !r.isSystem && 'ring-primary/30',
-            )}
-          >
-            {r.role}
-          </button>
-        ))}
+        {roles.map((r) => {
+          // A plugin's role is changed by changing the package (Admin → Plugin packages).
+          const editable = canEdit && r.source !== 'plugin';
+          const from = r.source === 'plugin' ? ` (from the plugin package ${r.plugin})` : '';
+          return (
+            <button
+              key={r.role}
+              onClick={() => editable && setOpen(open === r.role ? null : r.role)}
+              title={`${r.displayName ? `${r.displayName}: ` : ''}${r.description || 'no description — agents will not pick this role'}${from}`}
+              disabled={!editable}
+              data-testid={r.source === 'plugin' ? 'plugin-role' : undefined}
+              className={cn(
+                'px-2 py-0.5 text-[11px] font-mono rounded-full ring-1 ring-outline-variant/20',
+                editable && 'cursor-pointer',
+                open === r.role ? 'bg-primary-container/60 text-primary' : 'bg-surface-container-high text-on-surface-variant',
+                !r.isSystem && 'ring-primary/30',
+                r.source === 'plugin' && 'italic',
+              )}
+            >
+              {r.role}{r.source === 'plugin' && <span className="not-italic text-on-surface-variant"> · {r.plugin}</span>}
+            </button>
+          );
+        })}
         {canEdit && (
           <button
             onClick={() => setOpen(open === '' ? null : '')}

@@ -214,6 +214,20 @@ function diffContributions(before: PluginPermissionsSummary, after: PluginPermis
       add('contribution', 'changed', `prompt ${rolesText(b.prompt.roles)} → ${rolesText(a.prompt.roles)}`, reachesMore(b.prompt.roles, a.prompt.roles));
     }
   }
+  // Agent roles: a new role, or a changed one (tools, prompt, lane, spawn
+  // rules), widens; a summary from before roles reads as none.
+  const wasR = new Map((b.roles ?? []).map((r) => [r.id, r]));
+  const nowR = new Map((a.roles ?? []).map((r) => [r.id, r]));
+  for (const [id, r] of nowR) {
+    const old = wasR.get(id);
+    if (!old) add('contribution', 'added', `role ${id} (${r.lane}; tools ${r.tools.join(', ')})`, true);
+    else if (json(old) !== json(r)) {
+      const newTools = r.tools.filter((t) => !old.tools.includes(t));
+      add('contribution', 'changed', `role ${id}${newTools.length ? `: adds tools ${newTools.join(', ')}` : ''}${old.promptSha256 !== r.promptSha256 ? ' (prompt text changed)' : ''}`, true);
+    }
+  }
+  for (const id of wasR.keys()) if (!nowR.has(id)) add('contribution', 'removed', `role ${id}`, false);
+
   if (!b.context && a.context) add('contribution', 'added', `context → ${a.context.tool} (${rolesText(a.context.roles)})`, true);
   else if (b.context && !a.context) add('contribution', 'removed', `context → ${b.context.tool}`, false);
   else if (b.context && a.context) {

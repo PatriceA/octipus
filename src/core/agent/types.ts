@@ -6,12 +6,33 @@ import type { LimitRefusal } from '@/core/errors/limit-refusal';
  * supervisor runs as `companion` with its scoped toolbox, and the role that could only
  * delegate went with the routing hop in Phase 9 of the rebuild plan. Historical
  * `agents.role = 'orchestrator'` rows predate that and are read as plain text.
+ *
+ * The roles that ship with Octipus. A switch over these stays exhaustive and a
+ * typo in code that names one is still a compile error.
  */
-export type AgentRole =
-  | 'research' | 'coding' | 'review' | 'qa'
-  | 'communication' | 'general' | 'companion'
-  | 'design' | 'devops' | 'security' | 'data' | 'ai'
-  | 'finance' | 'automation' | 'pm' | 'writing' | 'architecture';
+export const BUILTIN_ROLES = [
+  'research', 'coding', 'review', 'qa',
+  'communication', 'general', 'companion',
+  'design', 'devops', 'security', 'data', 'ai',
+  'finance', 'automation', 'pm', 'writing', 'architecture',
+] as const;
+export type BuiltinAgentRole = (typeof BUILTIN_ROLES)[number];
+
+declare const customRoleBrand: unique symbol;
+/**
+ * The id of a role registered at runtime (an operator's role row or a plugin
+ * package's `roles` contribution, see `role-registry.ts`). Branded so that a
+ * bare string cannot pass for one: it comes from `resolveRole` /
+ * `isRegisteredRole`, which ask the registry, and nowhere else.
+ */
+export type CustomRoleId = string & { readonly [customRoleBrand]: true };
+
+/**
+ * A specialist arm: a built-in, or a role registered at runtime. Code that
+ * names a built-in keeps its literal type; anything read from text (a spawn
+ * argument, a database row, a hook config) goes through the registry.
+ */
+export type AgentRole = BuiltinAgentRole | CustomRoleId;
 
 /**
  * The role the ROOT agent of a turn runs as: an ordinary specialist role with
@@ -131,6 +152,25 @@ export interface RoleConfig {
   description?: string;
   /** Strip file-mutating handlers from this role; see `RoleMeta.readOnly`. */
   readOnly?: boolean;
+  /** A human name for pickers; the id when absent. Set on runtime roles only. */
+  displayName?: string;
+  /**
+   * The roles an agent of this role may spawn. Absent: any role that accepts
+   * it; empty: none (a leaf). Set on runtime roles only, see `spawnRefusal`.
+   */
+  spawns?: string[];
+  /** The roles that may spawn this one. Absent: any. Set on runtime roles only. */
+  spawnedBy?: string[];
+  /** Ceilings on one agent of this role; they only ever lower the depth default. */
+  limits?: RoleLimits;
+}
+
+/** Per-role ceilings, applied as `min(depth default, limit)`. */
+export interface RoleLimits {
+  /** Tokens one agent of this role may spend. */
+  maxTokens?: number;
+  /** Wall-clock milliseconds one agent of this role may run. */
+  maxWallClockMs?: number;
 }
 
 export interface MessageClassification {

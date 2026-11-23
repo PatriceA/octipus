@@ -7,6 +7,25 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Agent roles can be installed at runtime.** A plugin package can contribute
+  agent roles (`roles` in the manifest, apiVersion 1.3.0): an id, a prompt file,
+  tools, a lane, spawn rules and limits, registered while the package is enabled
+  and its contributions approved (the role prompts are part of the contributions
+  hash, and are fenced as third-party text). Operator roles (`POST /api/roles`)
+  now also take `displayName`, `spawns`, `spawnedBy` and `limits` (migration
+  `0205_runtime_role_fields`, four nullable columns on `roles`). Both are checked
+  by one role registry: a runtime role cannot reuse a built-in or reserved id
+  (`root`, `system`, …) or another source's id, and may only hold tools some
+  built-in role already holds (a plugin role never `plugin_dev`, `mcp_admin` or
+  `protection`). A stored operator role that no longer passes is skipped at boot
+  with a warning. Plugin roles are listed on the Topics page and in
+  `GET /api/roles` (`source: "plugin"`), read-only.
+- **A role that is not registered fails by name instead of running as
+  `general`.** A pipeline stage, hook or spawn naming a deleted role (or one
+  whose plugin was disabled) used to run with the general prompt and toolset;
+  it now fails with "Role '<id>' is not registered" (a pipeline pauses at that
+  stage).
+
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
   complex, successful turn the web chat offers, once and above the composer,

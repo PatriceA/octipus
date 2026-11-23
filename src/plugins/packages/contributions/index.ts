@@ -1,6 +1,6 @@
 /**
  * Contributions of plugin packages besides tools (docs/PLUGIN-PACKAGES.md#contributions):
- * slash commands, schedules, events, a prompt section and turn context.
+ * slash commands, schedules, events, a prompt section, turn context and agent roles.
  *
  * Every registration has a disposer. `syncContributions` runs after every
  * change to the installed packages (`syncPluginServers`): an enabled package
@@ -21,6 +21,7 @@ import { bindContext } from './context';
 import { bindEvent, forgetEventBudget } from './events';
 import { hasContributions, readContributions } from './approval';
 import { bindPrompt, boundPromptChars, readPromptFile } from './prompt';
+import { bindRole, roleConflicts } from './roles';
 import { bindSchedule } from './schedules';
 import { forgetRuns, lastRuns } from './status';
 
@@ -33,7 +34,7 @@ type Disposer = () => void | Promise<void>;
 interface Binding {
   key: string;
   disposers: Disposer[];
-  /** Contribution keys bound: `command:<name>`, `schedule:<id>`, `event:<on>:<tool>`, `prompt`, `context`. */
+  /** Contribution keys bound: `command:<name>`, `schedule:<id>`, `event:<on>:<tool>`, `prompt`, `context`, `role:<id>`. */
   bound: Set<string>;
   problems: string[];
 }
@@ -44,7 +45,7 @@ let chain: Promise<void> = Promise.resolve();
 /** What a binding depends on: when it changes, the package is bound again. */
 function bindingKey(row: PluginPackageRow): string {
   const m = row.manifest;
-  return JSON.stringify([row.version, row.contentHash, row.approvedContributionsHash, row.installedBy, m.commands, m.schedules, m.events, m.prompt, m.context]);
+  return JSON.stringify([row.version, row.contentHash, row.approvedContributionsHash, row.installedBy, m.commands, m.schedules, m.events, m.prompt, m.context, m.roles]);
 }
 
 async function dispose(pkg: string, binding: Binding): Promise<void> {
@@ -68,6 +69,7 @@ async function bind(row: PluginPackageRow): Promise<Binding> {
   const dir = packageDir(pkg);
   // Nothing binds unless an admin approved exactly what it adds now.
   let promptText: string | null = null;
+  let rolePrompts = new Map<string, string>();
   try {
     const read = await readContributions(m, dir);
     if (read.hash !== row.approvedContributionsHash) {
@@ -75,6 +77,7 @@ async function bind(row: PluginPackageRow): Promise<Binding> {
       return binding;
     }
     promptText = read.promptText;
+    rolePrompts = read.rolePrompts;
   } catch (err) {
     binding.problems.push(`Not bound: ${(err as Error).message}`);
     return binding;
@@ -112,12 +115,50 @@ async function bind(row: PluginPackageRow): Promise<Binding> {
       binding.disposers.push(await bindEvent(pkg, e));
       binding.bound.add(`event:${e.on}:${e.tool}`);
     }
+    if (m.roles?.length) await bindRoles(row, rolePrompts, binding);
   } catch (err) {
     coreLogger.error({ err, pkg }, 'Plugin contributions could not be bound');
     binding.problems.push(`Could not bind: ${(err as Error).message}`);
   }
   if (binding.problems.length > 0) coreLogger.warn({ pkg, problems: binding.problems }, 'Plugin contributions partly bound');
   return binding;
+}
+
+/**
+ * Register the package's roles: only from files that still hash to the
+ * approved content, and only while the admin who installed it is still an
+ * active admin — a role is never more than its installing principal could
+ * have created by hand.
+ */
+async function bindRoles(row: PluginPackageRow, prompts: Map<string, string>, binding: Binding): Promise<void> {
+  const pkg = row.name;
+  const { packageDir } = await import('../service');
+  if (row.contentHash === null) {
+    binding.problems.push('roles: not added until the package content is pinned (its first start)');
+    return;
+  }
+  if (await hashPackageContent(packageDir(pkg), row) !== row.contentHash) {
+    binding.problems.push('roles: not added, the package files changed since their content was approved');
+    return;
+  }
+  const { isAdminInDatabase } = await import('@/core/gateway/commands');
+  if (!row.installedBy || !(await isAdminInDatabase(row.installedBy))) {
+    binding.problems.push('roles: not added, the admin who installed the package is no longer an active admin; reinstall or upgrade it as an admin');
+    return;
+  }
+  for (const decl of row.manifest.roles ?? []) {
+    const text = prompts.get(decl.id);
+    if (text === undefined) {
+      binding.problems.push(`roles.${decl.id}: its prompt could not be read`);
+      continue;
+    }
+    const result = bindRole(pkg, decl, text);
+    if ('problem' in result) binding.problems.push(result.problem);
+    else {
+      binding.disposers.push(result.dispose);
+      binding.bound.add(`role:${decl.id}`);
+    }
+  }
 }
 
 async function apply(rows: readonly PluginPackageRow[]): Promise<void> {
@@ -171,6 +212,16 @@ export async function contributionInstallProblems(
     }
   }
   problems.push(...await commandConflicts(manifest.name, manifest.commands ?? [], others.map((o) => ({ name: o.name, commands: o.manifest.commands }))));
+  for (const role of manifest.roles ?? []) {
+    try {
+      await readPromptFile(dir, { file: role.prompt });
+    } catch (err) {
+      problems.push(`roles.${role.id}: ${(err as Error).message.replace(/^prompt: /, '')}`);
+    }
+  }
+  if (manifest.roles?.length) {
+    problems.push(...await roleConflicts(manifest.name, manifest.roles, others.map((o) => ({ name: o.name, roles: o.manifest.roles }))));
+  }
   return problems;
 }
 
@@ -189,10 +240,11 @@ export async function contributionsView(row: Pick<PluginPackageRow, 'name' | 'ma
   const problems = binding ? [...binding.problems] : [];
   let hash: string | null = null;
   let promptText: string | null = null;
+  let rolePrompts = new Map<string, string>();
   if (any) {
     try {
       const { packageDir } = await import('../service');
-      ({ hash, promptText } = await readContributions(m, packageDir(row.name)));
+      ({ hash, promptText, rolePrompts } = await readContributions(m, packageDir(row.name)));
     } catch (err) {
       problems.push(`Cannot be read: ${(err as Error).message}`);
     }
@@ -206,6 +258,10 @@ export async function contributionsView(row: Pick<PluginPackageRow, 'name' | 'ma
     events: (m.events ?? []).map((e) => ({ on: e.on, tool: e.tool, effect: effect(e.tool), bound: bound(`event:${e.on}:${e.tool}`), lastRun: runs[`event:${e.on}:${e.tool}`] ?? null })),
     prompt: m.prompt ? { file: m.prompt.file, roles: m.prompt.roles ?? null, text: promptText, bound: bound('prompt'), chars: boundPromptChars(row.name) } : null,
     context: m.context ? { tool: m.context.tool, effect: effect(m.context.tool), roles: m.context.roles ?? null, bound: bound('context'), lastRun: runs.context ?? null } : null,
+    roles: (m.roles ?? []).map((r) => ({
+      id: r.id, displayName: r.displayName, description: r.description, lane: r.lane, tools: [...r.tools],
+      prompt: r.prompt, text: rolePrompts.get(r.id) ?? null, bound: bound(`role:${r.id}`),
+    })),
     problems,
   };
 }
