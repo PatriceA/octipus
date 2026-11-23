@@ -337,6 +337,7 @@ A hook on GitHub's `check_run`, `check_suite`, `workflow_run` or `status` events
 - The filter runs before the hook's cooldown and `maxExecutions`, so skipped deliveries use neither. The execution log records them as `skipped: "no change"` or `skipped: "check not finished"`, and a change that opened or joined a window as `deferred: true`.
 - The merged turn runs when its window closes, through the same path as a delivery. The hook is read again, so a hook that was disabled or whose owner was deactivated meanwhile does not run. The turn uses cooldown and the execution count once and is logged as its own run.
 - State is kept for 30 days in the key-value store, which is in memory in embedded mode. It is written when the turn fires, so a restart inside a merge window loses that turn. The next red result of the same check then counts as a change again.
+- A turn refused before it started (the server at `maxConcurrentAgents`, or for a direct spawn a quota or paused spend budget) gives back the failures it carried, so they are not stored as seen. With `changeMergeWindowSeconds: 0` the delivery is the turn: its id is released and a redelivery of the same red result runs. With a merge window the deliveries were already answered when the window opened, so the merged turn is lost: it is logged as an `error` row, is not retried, and the next red result of the same check counts as a change again.
 
 Combined with `readOnly` and `threadKey`, a failing PR check wakes one read-only agent per pull request. That agent reads the job log and messages you with the cause.
 

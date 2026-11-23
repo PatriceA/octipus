@@ -131,8 +131,22 @@ Not a model picker. Lanes stay bound by the admin.
   reports that refusal as `TurnResult.notStarted` (`core/agent/service.ts`)
   and the orchestrated path returns `notStarted` too (`hooks/actions.ts`). A
   quota or spend-budget refusal of an orchestrated hook is still answered in
-  its session and completes the delivery, on purpose. Tests:
-  `hooks/webhook-risks.test.ts`, `core/agent/limit-refusal.test.ts`.
+  its session and completes the delivery, on purpose, and so is a turn that
+  had already stored its message (a room post, a plan's "go"). A scheduled
+  run refused this way sets a `Not started:` marker that no longer silences
+  the next real failure's notification, and the owner is told when the run
+  is lost (a recurring run, once per streak; a one-shot that gives up)
+  (`core/cron-runner.ts`). An `onlyOnChange` turn refused at the cap gives
+  back the check failures it carried (`forgetCheckStates`), so a redelivery
+  (no merge window) or the next red result is a change again. Tests:
+  `hooks/webhook-risks.test.ts`, `hooks/webhook-cap.test.ts`,
+  `hooks/event-changes.manager.test.ts`, `core/agent/limit-refusal.test.ts`,
+  `core/cron-runner.watch.test.ts`.
+- **Open.** An `onlyOnChange` merged turn (merge window over 0) refused at
+  the cap is lost: its deliveries were answered when the window opened, and
+  the merged turn is logged as an `error` row but not retried. Keeping the
+  deliveries' claims until the merged turn starts, or retrying the merged
+  turn, would close it.
 - **Closed.** Cooldown and `maxExecutions` skips write no execution row. Now a
   targeted hook (webhook, schedule, heartbeat) logs a `skipped` row with
   `cooldown`, `max_executions` or `not_reserved` and its detail
