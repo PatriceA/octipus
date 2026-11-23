@@ -1,6 +1,6 @@
 vi.mock('@/security/credential-redaction', async importOriginal => ({ ...await importOriginal<typeof import('@/security/credential-redaction')>(), redactAgentDiagnostics: async (_user: string, _workspace: string, data: unknown) => data }));
 vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -390,6 +390,39 @@ function sampleWorker(): CLIAgentWorker {
   return new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own',  id: 'a', sessionId: 's', userId: 'u', model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
 }
+
+it('CLI native commands inherit an owned temporary directory that is removed at completion', async () => {
+  writeFileSync(fixture.script, `
+    import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+    const root=os.tmpdir(); const database=fs.mkdtempSync(path.join(root,'ctx-wiring-'));
+    fs.writeFileSync(path.join(database,'data'),'temporary database');
+    fs.writeFileSync('preserved-project-file','keep');
+    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({root,tmp:process.env.TMP,temp:process.env.TEMP})}));
+  `);
+  const worker=sampleWorker();
+  const result=JSON.parse(await worker.run('Run the temporary fixture'));
+  expect(result.root).toContain('octipus-owned-temp-');
+  expect(result.tmp).toBe(result.root); expect(result.temp).toBe(result.root);
+  expect(existsSync(result.root)).toBe(false);
+  expect(readFileSync(join(fixture.dir,'preserved-project-file'),'utf8')).toBe('keep');
+  worker.stop();
+});
+
+it('a stopped CLI releases temporary data after its process closes', async () => {
+  writeFileSync(fixture.script, `
+    import fs from 'node:fs';import os from 'node:os';
+    fs.writeFileSync('temporary-path',os.tmpdir());setInterval(()=>{},1000);
+  `);
+  const worker=sampleWorker();
+  const running=worker.run('Wait for cancellation').catch(error=>String(error));
+  try {
+    await vi.waitFor(()=>expect(existsSync(join(fixture.dir,'temporary-path'))).toBe(true), {timeout:5000});
+    const dir=readFileSync(join(fixture.dir,'temporary-path'),'utf8');
+    expect(existsSync(dir)).toBe(true);
+    worker.stop(); await running;
+    expect(existsSync(dir)).toBe(false);
+  } finally { worker.stop(); }
+});
 
 it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('final tool failure terminates the CLI even if it would ignore the MCP error', async () => {
   writeFileSync(fixture.script, `

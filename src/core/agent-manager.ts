@@ -1,4 +1,5 @@
 import { getSettingsService } from '@/config/settings-service';
+import { sweepTemporaryDirectories } from './temporary-directory';
 import { withLiveCapabilitiesInventory } from '@/tools/self-report';
 import { executionEnvironmentFor, executionEnvironmentDescription } from '@/security/execution-environments';
 import { getConfig } from '@/config';
@@ -998,7 +999,11 @@ export class AgentManager {
    * Start periodic cleanup
    */
   startPeriodicCleanup(intervalMs: number = 300000): () => void {
-    const interval = setInterval(() => this.cleanup(), intervalMs);
+    sweepTemporaryDirectories();
+    const interval = setInterval(() => {
+      sweepTemporaryDirectories();
+      this.cleanup();
+    }, intervalMs);
     return () => clearInterval(interval);
   }
 }

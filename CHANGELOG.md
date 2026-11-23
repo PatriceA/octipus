@@ -19,6 +19,61 @@ labels reflect blast radius, not contract guarantees.
   up in an idle session stopped under "N earlier messages above"; `/history`
   replayed a companion's internal check-ins; the editor's Up/Down skipped
   the rows of a soft-wrapped line.
+- **OpenTelemetry tracing**
+  ([docs](docs/OBSERVABILITY.md#tracing-opentelemetry)). Off by default;
+  set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  or `OTEL_TRACES_EXPORTER=otlp`) to export spans over OTLP/HTTP to a
+  collector. Spans: inbound HTTP request (health and metrics excluded),
+  `agent.run` per turn, `agent.child` per spawn,
+  `pipeline.run` and `pipeline.stage`, `chat <model>` per model call with
+  provider, model, token counts and streaming, `execute_tool <name>` per tool
+  call, `channel.deliver`, and `webhook.deliver`. An inbound `traceparent`
+  is continued only with `OCTIPUS_TRACE_TRUST_INBOUND=true` (otherwise linked
+  from a new trace), and webhooks send `traceparent` only with
+  `OCTIPUS_TRACE_PROPAGATE_OUTBOUND=true`; `tracestate` is never forwarded.
+  Spans carry ids, names, counts, status and the error class only, never
+  prompts, completions, tool arguments, message text or the error message.
+  The standard `OTEL_*` variables set headers, service name, resource,
+  sampler and batching. An `OTEL_TRACES_EXPORTER` without `otlp`, or the
+  `grpc` protocol, is logged and leaves tracing off; boot is unaffected. The
+  shutdown flush is capped at 1.5 s. New dependencies:
+  `@opentelemetry/api`, `sdk-trace-base`, `context-async-hooks`, `core`,
+  `resources` and `exporter-trace-otlp-http`; the SDK is loaded only when
+  tracing is on.
+- **An orchestrated hook refused at the agent cap is no longer lost**
+  ([docs](docs/WEBHOOKS.md#idempotency-duplicate-deliveries)). When a
+  `spawn_agent` hook with `orchestrated: true` fired while the server was at
+  `maxConcurrentAgents`, its root agent never started and nothing reached its
+  session, yet the webhook delivery was marked done, so a redelivery was
+  ignored. It is now handled like the direct spawn already was: the delivery
+  id is released for a redelivery, the cooldown / `maxExecutions` reservation
+  is handed back, and the failure is logged as an `error` row. A quota or
+  spend-budget refusal is unchanged: it is answered in the hook's session and
+  the delivery counts as done. Limits: a turn whose message was already
+  stored (a room post, a plan's "go") is not released. An `onlyOnChange` hook
+  ([docs](docs/WEBHOOKS.md#only-when-a-check-turns-failing-onlyonchange))
+  refused at the cap no longer stores the failures it carried as seen: with no
+  merge window a redelivery runs; with a merge window the merged turn is lost
+  (logged as an `error` row, not retried), but the check's next red result
+  counts as a change again instead of being swallowed.
+- **A scheduled run refused before it started tells you, and no longer
+  silences later failures** ([docs](docs/HOOKS.md#a-failed-run-tells-you)).
+  A scheduled hook refused at the agent cap (or, for a direct spawn, by a
+  quota or paused budget) set `lastError` to `Not started: …` and sent
+  nothing; as the `schedule_failed` notification only fires when `lastError`
+  is empty, the next real failure was silent too. A `Not started` marker no
+  longer counts as a failure streak, so a later failure notifies. A recurring
+  schedule's first refusal of a streak now notifies (`Scheduled task "<name>"
+  did not start`; that run is skipped), and a one-shot notifies when it gives
+  up retrying after 24 hours. Orchestrated schedules refused at the cap are
+  now retried and reported this way too, instead of as a failed run.
+- **Clean up host-command and CLI temporary data automatically.** Each local
+  host command, background job and CLI invocation receives an owned temporary
+  directory through `TMPDIR`, `TEMP` and `TMP`. Test databases and other scratch
+  files are removed after its processes exit, including failed and cancelled
+  commands. Live background processes retain their files. Startup and periodic
+  sweeps recover confirmed abandoned directories without sweeping arbitrary
+  `/tmp` contents. See [temporary storage](docs/TEMPORARY-STORAGE.md).
 
 - **Offer to distil a finished task into a skill** (A1-M3,
   [docs](docs/SESSION-LEARNING.md#offer-to-distil-a-finished-task)). After a
@@ -251,15 +306,27 @@ labels reflect blast radius, not contract guarantees.
     left, right or centre edge) comes out as a Markdown table: header row,
     `---:` for a right-aligned column, empty cells kept, `|` escaped, a
     wrapped cell joined to its row when rows are spaced wider than lines.
+  - A table with no header row is a table too, under an empty header row
+    (`| | |`), when its grid is unmistakable: four or more rows, each with two
+    or more cells, 80% of every column on one edge, and a column of numbers
+    all the way down (both columns, for a two-column grid). Numbered lists,
+    label/value lines (`Total  415.00`), contents pages and grids that only
+    roughly line up keep their lines.
+  - A table that runs onto the next page stays one table: rows at the head of
+    the next page whose columns sit where the table's did continue it, with no
+    header of their own (a single row only when it has a number in the
+    table's column of numbers); a repeated header is dropped, and so is one
+    page number at the foot and one at the head, recognised by position (set
+    apart from the table and on none of its column edges). A number in a
+    column, such as a total, is kept, and anything else between the halves
+    (a running title) still splits the table in two; no other text is dropped.
   - A page where neither reading holds comes out exactly as before. Label/value
-    forms, bullet lists, tables of contents and tables without a header row
-    keep their lines; a gutter under three glyphs wide needs six lines, not
-    three; a page of over 10,000 fragments (or a line of over 500) skips
-    detection. Not handled: merged or spanning cells, tables whose columns
-    do not line up or whose cells are long text,
-    wrapped cells in tables without row spacing, columns that never share a
-    baseline, tables continuing onto the next page (read as two tables),
-    rotated and right-to-left text.
+    forms, bullet lists and tables of contents keep their lines; a gutter
+    under three glyphs wide needs six lines, not three; a page of over 10,000
+    fragments (or a line of over 500) skips detection. Not handled: merged or
+    spanning cells, tables whose columns do not line up or whose cells are
+    long text, wrapped cells in tables without row spacing, columns that
+    never share a baseline, rotated and right-to-left text.
   - Fixed: the gap between two runs of text on a line was lost on real PDFs,
     because pdfjs reports it as a whitespace item as wide as the gap; column
     and cell gaps came out as one space. Whitespace-only items no longer count
