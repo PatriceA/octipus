@@ -1,6 +1,7 @@
 /**
  * Webhook delivery risks, on embedded PGlite: a run refused at capacity
- * releases its delivery claim and hands its reservation back; cooldown and
+ * (direct spawn or an orchestrated root turn) releases its delivery claim and
+ * hands its reservation back; cooldown and
  * maxExecutions skips are logged; two first runs share one minted session.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -146,6 +147,34 @@ describe('a run refused before it started', () => {
       expect(await delivery.claimDelivery(hookId, 'd-stop')).not.toBeNull();
       expect(await hookRow()).toMatchObject({ execution_count: 0, last_executed_at: null });
       expect((await executions()).map((e) => [e.status, e.error])).toEqual([['skipped', 'Dropped by /stop before it ran']]);
+    } finally {
+      rootTurn.handleMessage = async () => ({ response: 'ok' });
+    }
+  });
+
+  test('an orchestrated run whose root agent was refused at the cap: released, reservation handed back, failure logged', async () => {
+    await insertHook({ cooldownMs: 600_000, maxExecutions: 5, orchestrated: true });
+    const refused = 'I encountered an error processing your message: Maximum concurrent agents (3) reached';
+    rootTurn.handleMessage = async () => ({ response: refused, outcome: 'failed', notStarted: true });
+    try {
+      expect(await delivery.claimDelivery(hookId, 'd-root-cap')).not.toBeNull();
+      await delivery.fireWebhookHook(run('d-root-cap'));
+      expect(await delivery.claimDelivery(hookId, 'd-root-cap')).not.toBeNull();
+      expect(await hookRow()).toMatchObject({ execution_count: 0, last_executed_at: null });
+      expect((await executions()).map((e) => [e.status, e.error])).toEqual([['error', refused]]);
+    } finally {
+      rootTurn.handleMessage = async () => ({ response: 'ok' });
+    }
+  });
+
+  test('an orchestrated turn that failed after it started still completes the delivery', async () => {
+    await insertHook({ orchestrated: true });
+    rootTurn.handleMessage = async () => ({ response: 'provider unreachable', outcome: 'failed' });
+    try {
+      await delivery.claimDelivery(hookId, 'd-root-failed');
+      await delivery.fireWebhookHook(run('d-root-failed'));
+      expect(await delivery.claimDelivery(hookId, 'd-root-failed')).toBeNull();
+      expect((await hookRow()).execution_count).toBe(1);
     } finally {
       rootTurn.handleMessage = async () => ({ response: 'ok' });
     }

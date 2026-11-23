@@ -5,6 +5,7 @@
  * (src/skills/exchange.ts, the routes) and the web Skills page; types only,
  * so the web bundle pulls in no server code.
  */
+import type { SkillRegistryPreviewSource, SkillRegistrySource } from './skill-registry';
 
 export const SKILL_BUNDLE_FORMAT = 'octipus-skill-bundle';
 export const SKILL_BUNDLE_VERSION = 1;
@@ -47,15 +48,17 @@ export interface SkillBundleExport {
 /**
  * Where an import comes from: a pasted or uploaded bundle, an export from
  * before bundles (`legacy_export`), an agentskills.io SKILL.md (or several, as
- * the markdown export writes them), or an https URL (admins).
+ * the markdown export writes them), an https URL (admins), or a listing of a
+ * configured skill registry (docs/SKILL-EXCHANGE.md#registries).
  */
-export type SkillImportSourceKind = 'bundle' | 'legacy_export' | 'skill_md' | 'url';
+export type SkillImportSourceKind = 'bundle' | 'legacy_export' | 'skill_md' | 'url' | 'registry';
 
 /** A request's source: exactly one of these. */
 export interface SkillImportSource {
   bundle?: string;
   skillMd?: string;
   url?: string;
+  registry?: SkillRegistrySource;
 }
 
 export type BundleSignatureStatus = 'valid' | 'unsigned' | 'unknown_key' | 'expired' | 'revoked' | 'invalid';
@@ -87,6 +90,8 @@ export interface SkillImportPreviewItem {
 export interface SkillImportPreview {
   source: SkillImportSourceKind;
   url: string | null;
+  /** The registry listing it came from (and what the caller installed from it before), or null. */
+  registry: SkillRegistryPreviewSource | null;
   contentHash: string;
   signature: BundleSignatureView;
   /** False when the trust settings refuse it; `refusal` says why. */

@@ -118,6 +118,8 @@ export class TuiHarness {
       // clipboard chain would otherwise reach the developer's real clipboard.
       env: {
         ...process.env, HOME: this.home, API_PORT: String(port), TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: undefined,
+        TERM_PROGRAM: undefined, TERM_PROGRAM_VERSION: undefined, VTE_VERSION: undefined,
+        ITERM_SESSION_ID: undefined, KITTY_WINDOW_ID: undefined, WT_SESSION: undefined,
         DISPLAY: undefined, WAYLAND_DISPLAY: undefined, TMUX: undefined, SSH_CONNECTION: undefined, SSH_TTY: undefined, WSL_DISTRO_NAME: undefined,
         ...options.env,
       },

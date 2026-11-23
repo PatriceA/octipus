@@ -532,6 +532,25 @@ export const multiuserConfigSchema = z.object({
 export const skillsConfigSchema = z.object({
   externalEnabled: z.boolean().default(true),
   externalDirectories: z.array(z.string()).default([]),
+  /**
+   * Skill registries to browse (docs/SKILL-EXCHANGE.md#registries): static
+   * https JSON indexes of signed skill bundles. None by default, and none is
+   * contacted unless listed here. `publishers` are names in
+   * `plugins.trustedPublishers` whose keys count for bundles from this
+   * registry; a bundle signed by any other key is not installed from it.
+   */
+  registries: z.array(z.object({
+    name: z.string().min(1).max(100).refine((v) => !/[\u0000-\u001f\u007f]/.test(v) && v.trim() === v, 'one line, no surrounding spaces'),
+    url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
+    publishers: z.array(z.string().min(1).max(100)).max(20).default([]),
+  }).strict()).max(20).default([]).superRefine((list, ctx) => {
+    const seen = new Set<string>();
+    list.forEach((r, i) => {
+      const key = r.name.toLowerCase();
+      if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `the registry name "${r.name}" is used twice; registry names are unique` });
+      seen.add(key);
+    });
+  }),
 });
 
 export const workspaceConfigSchema = z.object({

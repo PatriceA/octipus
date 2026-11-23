@@ -986,6 +986,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'SKILLS_EXTERNAL_DIRS',
   },
+  {
+    key: 'skills.registries',
+    category: 'skills',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Skill registries to browse on the Skills page: [{ "name": "...", "url": "https://.../skills/index.json", "publishers": ["<name in plugins.trustedPublishers>"] }]. None by default: no registry is contacted unless listed here. A bundle installs from a registry only after a preview, when its bytes match the index digest and it carries a valid signature by a key of one of that registry\'s publishers (docs/SKILL-EXCHANGE.md#registries).',
+    isSecret: false,
+  },
 
   // ── API (runtime-changeable subset) ──
   {

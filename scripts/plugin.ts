@@ -8,6 +8,7 @@
  *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
  *   octi plugin sign-index <index.json> --key <file>  Sign a registry index (<index.json>.sig).
  *   octi plugin sign-skill-bundle <bundle.json> --key <file>  Sign a skill exchange bundle in place.
+ *   octi plugin build-skill-index <dir> --base-url <https://…/>  A skill registry index of the bundles in <dir>.
  *   octi plugin hash <dir> [--json]  The content hash install records.
  *   octi plugin pack <dir> --out <file.tar.gz> [--json]  A reproducible tarball of the package.
  *   octi plugin permissions <dir> [--json]  What the package asks for, from its manifest.
@@ -53,6 +54,7 @@ import {
   signIndexCommand,
   signKeysCommand,
   signSkillBundleCommand,
+  buildSkillIndexCommand,
   unpackCommand,
   validateCommand,
   verifyCommand,
@@ -200,12 +202,18 @@ Usage:
                                 over the content hash. An importer trusts it when the
                                 key is in their plugins.trustedPublishers. Passphrases
                                 as for sign.
+  octi plugin build-skill-index <dir> --base-url <https://host/path/> [--out <file>] [--json]
+                                A skill registry index of the signed skill bundles in
+                                <dir> (each with a <name>.listing.json beside it:
+                                name, version, description, tags, author), written to
+                                <dir>/index.json. Host it and the bundles on any static
+                                web server or git host.
   octi plugin unpack <tarball> --out <dir> [--json]
                                 Unpack with the strict tar reader install uses into a
                                 new or empty <dir>. --json prints {"out","root",
                                 "sha256","name","version"}.
 
-validate, keygen, sign, sign-index, sign-skill-bundle, sign-keys, verify-keys, hash, pack, unpack,
+validate, keygen, sign, sign-index, sign-skill-bundle, build-skill-index, sign-keys, verify-keys, hash, pack, unpack,
 permissions, verify and verify-index work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
@@ -372,6 +380,9 @@ async function main(): Promise<void> {
       break;
     case 'sign-skill-bundle':
       await exitFlushed(await signSkillBundleCommand(offlineIo(), rest));
+      break;
+    case 'build-skill-index':
+      await exitFlushed(await buildSkillIndexCommand(offlineIo(), rest));
       break;
     case 'hash':
       await exitFlushed(await hashCommand(offlineIo(), rest));

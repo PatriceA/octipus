@@ -18,6 +18,7 @@ import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/gro
 import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
 import type { AttachedFileRef } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
+import { failActiveSpan, withSpan, type TraceSpan } from '@/core/tracing';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext, AgentSpace, AgentSponsor, AgentTrigger } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -34,6 +35,7 @@ import { guardInput } from './input-guard';
 import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
+import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { type InlineUiAcceptedAction, inlineUiActionLine, inlineUiGuardInput } from '@/core/inline-ui/turn-input';
@@ -77,12 +79,43 @@ export interface TurnEvent {
 }
 
 export type TurnOutcome = 'success' | 'failed' | 'cancelled';
+
+/**
+ * One orchestrated turn as an `agent.run` span (src/core/tracing.ts): ids,
+ * channel, trigger, and once it is over its outcome and topic. A failed turn
+ * is answered rather than thrown, so the outcome marks the span failed.
+ */
+export function traceTurn<R extends { outcome?: TurnOutcome; classification?: { type?: string } }>(
+  turn: { runId: string; sessionId: string; channel: string; trigger: string },
+  run: (span: TraceSpan) => Promise<R>,
+): Promise<R> {
+  return withSpan('agent.run', {
+    'octipus.run_id': turn.runId,
+    'octipus.session_id': turn.sessionId,
+    'octipus.channel': turn.channel,
+    'octipus.trigger': turn.trigger,
+  }, async (span) => {
+    const result = await run(span);
+    span.setAttributes({ 'octipus.outcome': result.outcome ?? 'success', 'octipus.topic': result.classification?.type });
+    if (result.outcome === 'failed') span.failWith('TurnFailed');
+    return result;
+  });
+}
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
   /** Images and speech the turn made for the person (src/core/media/turn-media.ts). */
   media?: import('@/core/media/turn-media').TurnMediaItem[];
   /** The reply is read aloud: a voice conversation on this session speaks it. */
   spoken?: boolean;
+  /**
+   * The global concurrent-agent cap refused the root agent's spawn: no agent
+   * ran and nothing was stored in the session, so a caller may retry the same
+   * input. Never set once the turn stored its message (a room post, the
+   * plan-execute path). A quota or spend-budget refusal is not this: it is
+   * answered in the session (`metadata.limit`), which is where its owner
+   * reads it.
+   */
+  notStarted?: boolean;
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -328,7 +361,7 @@ export class AgentService {
       // The whole turn runs inside one usage context; the turn binds its
       // workspace and funding once it has resolved them, so every model call
       // underneath is attributed to the space and its funding (§5.6).
-      return runWithContext(
+      return traceTurn({ runId, sessionId, channel: channel ?? 'api', trigger: turnTrigger }, () => runWithContext(
         {
           runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api',
           ...(internal?.companionObservation?{companionObservation:true}:{}),
@@ -341,7 +374,7 @@ export class AgentService {
         },
         () => withProviderUsageContext({ userId }, () =>
           this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
-      );
+      ));
     // A monitor or companion wake-up is redelivered by its own service: `/stop`
     // drops only messages (a user's, a hook run's), and only the stopper's.
     }, reservation ? { reservation } : { owner: userId, kind: turnTrigger === 'monitor' ? 'background' : 'message' });
@@ -479,7 +512,7 @@ export class AgentService {
         // message (checked when it was posted, postRoomMessage).
         const answer = posted.metadata?.inlineUiAction;
         const inlineUiNotes = answer ? [inlineUiActionLine({ blockId: answer.blockId, name: answer.name, context: answer.context as JsonObject })] : [];
-        const result = await runWithContext(
+        const result = await traceTurn({ runId, sessionId: roomId, channel: 'room', trigger }, () => runWithContext(
           { runId, sessionId: roomId, userId: requesterId, channel: 'room', origin: 'room', ...(inlineUiNotes.length ? { inlineUiNotes } : {}) },
           () => withProviderUsageContext({ userId: requesterId, ...(remoteInstanceId ? { accountingMetadata: { remoteInstance: remoteInstanceId } } : {}) }, async () => {
             const noModel = await this.noModelAnswer(requesterId);
@@ -491,7 +524,7 @@ export class AgentService {
               ...(answer ? { inlineUiContext: answer.context } : {}),
             });
           }),
-        );
+        ));
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
       }, { owner: requesterId, kind: 'background' });
     } catch (err) {
@@ -1432,6 +1465,7 @@ export class AgentService {
   ): Promise<TurnResult> {
     const { sessionId, channel, message, trajectory, turnSessionId, userMessageSaved } = info;
     recordRootRun(channel, undefined, 'error');
+    failActiveSpan(error);
     // A spend budget or quota refusal at spawn (the budget was already
     // paused) says which cap, how much, and when it resets — not "error".
     const limit = limitRefusalOf(error);
@@ -1506,6 +1540,11 @@ export class AgentService {
       // A room turn's runner reports it to the room (`room.turn` done,
       // failed); a scheduled hook records the run as failed (hooks/actions.ts).
       outcome: 'failed',
+      // The concurrent-agent cap refused the root agent's spawn and nothing
+      // was written for this turn. Not when the turn had already stored its
+      // message (a room post; the plan-execute path, which also used up the
+      // session's plan): a retry would store it again.
+      ...(isConcurrencyLimitError(error) && !userMessageSaved && { notStarted: true }),
     };
   }
 

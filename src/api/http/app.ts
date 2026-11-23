@@ -20,7 +20,8 @@
  * Error hooks run most-specific-first for the same reason. Everything else
  * runs in registration order, broad to narrow, as it did.
  */
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
+import { setHttpRoute, withInboundHttpSpan } from '@/core/tracing';
 import { apiLogger } from '@/utils/logger';
 import type { TSchema } from './t';
 import { checkValue, ValidationError } from './validate';
@@ -271,7 +272,7 @@ export class App {
     // The pipeline middleware is registered first on purpose: Hono runs
     // handlers in registration order, so a route added before it would run
     // without a context.
-    hono.use('*', async (c, next) => {
+    const pipeline: MiddlewareHandler<{ Variables: { octiCtx: Ctx } }> = async (c, next) => {
       const request = c.req.raw;
       const url = new URL(request.url);
       const set: Ctx['set'] = { status: undefined, headers: headerRecord() };
@@ -336,7 +337,10 @@ export class App {
         await this.runAfter(ctx);
         c.res = applyHeaders(res, set);
       }
-    });
+    };
+    // One SERVER span per request around the whole pipeline (src/core/tracing.ts);
+    // a pass-through while tracing is off.
+    hono.use('*', (c, next) => withInboundHttpSpan(c.req.raw, () => pipeline(c, next), (out) => (out ?? c.res)?.status));
 
     // Static segments win over parameters regardless of registration order,
     // which is what the previous router did: `/sessions/active` must not be
@@ -353,6 +357,7 @@ export class App {
       register(route.path, async (c: any) => {
         const ctx = c.get('octiCtx') as Ctx;
         ctx.params = c.req.param() ?? {};
+        setHttpRoute(route.method === 'ALL' ? ctx.request.method : route.method, route.path);
         try {
           // `type: 'text'` means the route parses the body itself, so undo the
           // global parse rather than handing it an object it did not ask for.
