@@ -206,7 +206,7 @@ export function splitParagraphs(text: string, max: number, firstMax = max): stri
       continue;
     }
     pushCurrent();
-    for (const piece of splitLong(para, max, limit())) {
+    for (const piece of isMarkdownTable(para) ? splitTable(para, max, limit()) : splitLong(para, max, limit())) {
       if (current) pushCurrent();
       current = piece;
     }
@@ -214,6 +214,54 @@ export function splitParagraphs(text: string, max: number, firstMax = max): stri
   pushCurrent();
   return out;
 }
+
+/** A paragraph that is one Markdown table: every line a `|` row, the second the `---` separator. */
+function isMarkdownTable(para: string): boolean {
+  const lines = para.trim().split('\n');
+  return lines.length >= 3 && lines.every((l) => /^\|.*\|\s*$/.test(l)) && /^\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[1]);
+}
+
+/**
+ * A table longer than `max` in pieces of whole rows, each opening with the
+ * header row and separator. Cut as prose, a table split at a sentence end
+ * inside a cell, and every piece after the first was a run of values with no
+ * column names — numbers a reader cannot place.
+ *
+ * The size bound still holds. A row that does not fit under the header is cut
+ * like prose on its own, and a header longer than {@link MAX_TABLE_HEADER_SHARE}
+ * of a piece (a sheet eighty columns wide) is not repeated at all: the whole
+ * table is cut like prose, since repeating it would multiply what is embedded
+ * and leave each piece mostly header.
+ */
+function splitTable(para: string, max: number, firstMax: number): string[] {
+  const [head, separator, ...rows] = para.trim().split('\n');
+  const header = `${head}\n${separator}`;
+  if (header.length > max * MAX_TABLE_HEADER_SHARE) return splitLong(para, max, firstMax);
+  const out: string[] = [];
+  const room = () => (out.length === 0 ? firstMax : max);
+  let held: string[] = [];
+  let length = header.length;
+  const flush = () => {
+    if (held.length > 0) out.push([header, ...held].join('\n'));
+    held = [];
+    length = header.length;
+  };
+  for (const row of rows) {
+    if (header.length + 1 + row.length > room()) {
+      flush();
+      out.push(...splitLong(row, max, room()));
+      continue;
+    }
+    if (length + 1 + row.length > room()) flush();
+    held.push(row);
+    length += 1 + row.length;
+  }
+  flush();
+  return out;
+}
+
+/** The most of a piece a table's header may take for it to be repeated on every piece. */
+const MAX_TABLE_HEADER_SHARE = 0.25;
 
 /** One paragraph longer than `max` in pieces of at most `max` (the first at most `firstMax`): at sentence ends, then whitespace, then anywhere. */
 function splitLong(para: string, max: number, firstMax: number): string[] {
