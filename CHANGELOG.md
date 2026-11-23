@@ -7,6 +7,33 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **An orchestrated hook refused at the agent cap is no longer lost**
+  ([docs](docs/WEBHOOKS.md#idempotency-duplicate-deliveries)). When a
+  `spawn_agent` hook with `orchestrated: true` fired while the server was at
+  `maxConcurrentAgents`, its root agent never started and nothing reached its
+  session, yet the webhook delivery was marked done, so a redelivery was
+  ignored. It is now handled like the direct spawn already was: the delivery
+  id is released for a redelivery, the cooldown / `maxExecutions` reservation
+  is handed back, and the failure is logged as an `error` row. A quota or
+  spend-budget refusal is unchanged: it is answered in the hook's session and
+  the delivery counts as done. Limits: a turn whose message was already
+  stored (a room post, a plan's "go") is not released. An `onlyOnChange` hook
+  ([docs](docs/WEBHOOKS.md#only-when-a-check-turns-failing-onlyonchange))
+  refused at the cap no longer stores the failures it carried as seen: with no
+  merge window a redelivery runs; with a merge window the merged turn is lost
+  (logged as an `error` row, not retried), but the check's next red result
+  counts as a change again instead of being swallowed.
+- **A scheduled run refused before it started tells you, and no longer
+  silences later failures** ([docs](docs/HOOKS.md#a-failed-run-tells-you)).
+  A scheduled hook refused at the agent cap (or, for a direct spawn, by a
+  quota or paused budget) set `lastError` to `Not started: …` and sent
+  nothing; as the `schedule_failed` notification only fires when `lastError`
+  is empty, the next real failure was silent too. A `Not started` marker no
+  longer counts as a failure streak, so a later failure notifies. A recurring
+  schedule's first refusal of a streak now notifies (`Scheduled task "<name>"
+  did not start`; that run is skipped), and a one-shot notifies when it gives
+  up retrying after 24 hours. Orchestrated schedules refused at the cap are
+  now retried and reported this way too, instead of as a failed run.
 - **Clean up host-command and CLI temporary data automatically.** Each local
   host command, background job and CLI invocation receives an owned temporary
   directory through `TMPDIR`, `TEMP` and `TMP`. Test databases and other scratch

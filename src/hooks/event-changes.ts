@@ -155,6 +155,23 @@ export async function recordCheckStates(hookId: string, observations: CheckObser
   }
 }
 
+/**
+ * Undo {@link recordCheckStates} for changes whose turn never started (the
+ * run was refused at the agent cap, a quota or a paused budget): an entry is
+ * removed only while it is still the one this turn wrote, so a newer result
+ * stays. Without this a redelivery of the same red result, or the check's
+ * next red result, would read as "no change" and the failure would never
+ * reach a turn.
+ */
+export async function forgetCheckStates(hookId: string, changes: CheckObservation[]): Promise<void> {
+  const storage = getStorageProvider();
+  for (const o of changes) {
+    if (o.state === 'other') continue;
+    const stored = await readState(hookId, o);
+    if (stored && stored.s === o.state && stored.at === o.observedAt) await storage.delRaw(stateKey(hookId, o));
+  }
+}
+
 /** One line per changed check, for the turn's event block. */
 export function describeChanges(changes: CheckObservation[]): string {
   return [`Checks that turned failing on ${changes[0]?.subject ?? 'this subject'}:`,

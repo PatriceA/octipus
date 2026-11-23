@@ -33,6 +33,7 @@ import { guardInput } from './input-guard';
 import { ModelSelector, type SelectedModel } from './model-selector';
 import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
+import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { inlineUiGuardText, type InlineUiStoreContext, logInlineUiOffer, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { type InlineUiAcceptedAction, inlineUiActionLine, inlineUiGuardInput } from '@/core/inline-ui/turn-input';
@@ -82,6 +83,15 @@ export interface TurnResult {
   media?: import('@/core/media/turn-media').TurnMediaItem[];
   /** The reply is read aloud: a voice conversation on this session speaks it. */
   spoken?: boolean;
+  /**
+   * The global concurrent-agent cap refused the root agent's spawn: no agent
+   * ran and nothing was stored in the session, so a caller may retry the same
+   * input. Never set once the turn stored its message (a room post, the
+   * plan-execute path). A quota or spend-budget refusal is not this: it is
+   * answered in the session (`metadata.limit`), which is where its owner
+   * reads it.
+   */
+  notStarted?: boolean;
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -1497,6 +1507,11 @@ export class AgentService {
       // A room turn's runner reports it to the room (`room.turn` done,
       // failed); a scheduled hook records the run as failed (hooks/actions.ts).
       outcome: 'failed',
+      // The concurrent-agent cap refused the root agent's spawn and nothing
+      // was written for this turn. Not when the turn had already stored its
+      // message (a room post; the plan-execute path, which also used up the
+      // session's plan): a retry would store it again.
+      ...(isConcurrencyLimitError(error) && !userMessageSaved && { notStarted: true }),
     };
   }
 
