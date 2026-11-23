@@ -84,3 +84,33 @@ function redact(value: unknown, depth: number, seen: WeakSet<object>): unknown {
 export function redactLogObject(obj: Record<string, unknown>): Record<string, unknown> {
   return redact(obj, 0, new WeakSet()) as Record<string, unknown>;
 }
+
+/**
+ * Query parameters that carry a credential under a short name the key
+ * pattern cannot recognise: an artifact share link (`t`), an embed viewer
+ * token (`vt`), an OAuth authorization code (`code`) and request signatures.
+ */
+const SENSITIVE_QUERY_PARAM = /^(t|vt|code|sig|signature)$/i;
+
+/**
+ * A URL for a log line, with the value of every credential-bearing query
+ * parameter replaced by `[REDACTED]` (names matching the key pattern, plus
+ * `SENSITIVE_QUERY_PARAM`). The path and the other parameters are kept. A
+ * string that is not a URL is returned as is.
+ */
+export function redactUrlForLog(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  let changed = false;
+  for (const key of [...new Set(url.searchParams.keys())]) {
+    if (SENSITIVE_QUERY_PARAM.test(key) || (!ALLOW_KEY.test(key) && SENSITIVE_KEY.test(key))) {
+      url.searchParams.set(key, REDACTED);
+      changed = true;
+    }
+  }
+  return changed ? url.href : raw;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { REDACTED, redactLogObject } from './log-redact';
+import { REDACTED, redactLogObject, redactUrlForLog } from './log-redact';
 
 describe('redactLogObject', () => {
   test('redacts credential-shaped keys at the top level', () => {
@@ -95,4 +95,18 @@ test('the real logger serializes Error fields named error as well as err', async
   logger.error({ error: new Error('worker exit diagnostic'), workerId: 'serialization-regression' }, 'Worker failed');
   const record = getRecent().find(row => row.workerId === 'serialization-regression');
   expect(record?.error).toMatchObject({ type: 'Error', message: 'worker exit diagnostic', stack: expect.stringContaining('worker exit diagnostic') });
+});
+
+describe('redactUrlForLog', () => {
+  test('redacts credential-bearing query values and keeps the rest', () => {
+    const out = redactUrlForLog('http://h/__artifacts__/a/board/data/feed?vt=abc.def.ghi&page=2&t=share123&access_token=x&code=oauth');
+    expect(out).not.toMatch(/abc\.def|share123|=x(&|$)|oauth/);
+    expect(out).toContain('page=2');
+    expect(out).toContain('/__artifacts__/a/board/data/feed');
+  });
+
+  test('leaves a URL without such parameters, and a non-URL, untouched', () => {
+    expect(redactUrlForLog('http://h/api/notes?limit=5')).toBe('http://h/api/notes?limit=5');
+    expect(redactUrlForLog('not a url')).toBe('not a url');
+  });
 });

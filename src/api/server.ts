@@ -21,6 +21,7 @@ import {
   principalFromUser,
 } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
+import { redactUrlForLog } from '@/utils/log-redact';
 import { setupGatewayWebSocket } from './gateway-ws';
 import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
@@ -231,7 +232,8 @@ export function createServer() {
     })
     // Request logging
     .onRequest(({ request }) => {
-      apiLogger.debug({ method: request.method, url: request.url }, 'Request received');
+      // Share links, viewer tokens and OAuth codes travel in the query.
+      apiLogger.debug({ method: request.method, url: redactUrlForLog(request.url) }, 'Request received');
     })
     // Error handling
     .onError(({ error, code, set }) => {

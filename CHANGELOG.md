@@ -33,6 +33,8 @@ labels reflect blast radius, not contract guarantees.
     keyed case-insensitively, so a default header never replaces or
     duplicates one a handler set; an embed always carries only its own
     sandboxing policy.
+  - The debug request log no longer records share-link, viewer-token or
+    OAuth-code query values.
   - Fixed: templates are sanitized again after `{{…}}` expansion, and the
     built artifact script is no longer served as a separate file
     (`/a/<slug>/bundle.js` is removed; embeds already inline it under a hash).
