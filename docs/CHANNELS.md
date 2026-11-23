@@ -21,6 +21,7 @@ User ─── Telegram ──┐
 User ─── Slack ─────┤
 User ─── Teams ─────┼──► UMI ──► Root agent ──► Worker(s) ──► UMI ──► Channel ──► User
 User ─── WhatsApp ──┤
+User ─── Email ─────┤
 User ─── WebChat ───┘
 ```
 
@@ -45,7 +46,7 @@ Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_w
 
 ## Account Linking
 
-All external channels (Telegram, Slack, Teams, WhatsApp) use the same account linking flow:
+All external channels (Telegram, Slack, Teams, WhatsApp, Email) use the same account linking flow (on [Email](#email): a mail with the subject `link`):
 
 1. Send `/link` in the channel
 2. You receive a 6-character code (valid for 5 minutes)
@@ -550,6 +551,235 @@ The temporary token expires after 24 hours. For production:
 |--------|------|-------------|
 | GET | `/api/channels/whatsapp/webhook` | Meta verification (hub.challenge) |
 | POST | `/api/channels/whatsapp/webhook` | Incoming messages |
+
+---
+
+## Email
+
+**Protocol:** IMAP polling of a mailbox; answers as draft replies, or sent over SMTP (no public URL required)
+**Library:** the mail stack of [MAIL.md](MAIL.md) (imapflow, mailparser, nodemailer)
+**Source:** `src/channels/email/`
+
+You talk to Octipus by sending a mail to a dedicated address. Each mail
+becomes a turn, and the answer is a reply in the same thread; replying to it
+continues the same conversation (session). Off by default.
+
+A mail is easier to forge than a chat message, so an email turn is a
+**restricted** turn: it can search the web and read Octipus's own help, and
+nothing else (see [What an email turn can do](#what-an-email-turn-can-do)).
+
+### Reply mode
+
+`emailChannel.replyMode`:
+
+- **`draft`** (default): the answer is saved as a **draft reply** in the
+  channel mailbox — to the sender, `Re: <subject>`, threaded — and a person
+  reviews and sends it from **Mail**. Nothing leaves without a person. A
+  channel draft sent by hand still carries `Auto-Submitted: auto-replied`.
+- **`send`**: the answer is sent at once, with `Auto-Submitted: auto-replied`.
+  The explicit opt-in for automatic replies.
+
+Notices (a link code, "not linked yet", "too large") follow the same mode. In
+send mode a link code is sent **without a copy** — no Sent-folder copy, no
+row in the mailbox — so it never sits where the mailbox owner could read it.
+In draft mode the code **sits in the admin's mailbox**, in a draft that the
+mailbox owner sees and sends; redeeming it themselves would only link that
+address to *their own* account.
+
+### Setup
+
+1. As an **admin**, add a mailbox used for nothing else (e.g.
+   `octipus@company.com`) under **Mail** as your *personal* **IMAP** mailbox,
+   with an outgoing (SMTP) server. Its passwords live in the vault like every
+   mailbox's. The channel refuses any mailbox that is not an admin's own
+   personal one (a space's mailbox, another user's), and stops at its next
+   check when the mailbox is disabled, removed, moved or loses its server.
+2. Find the **authserv-id** your receiving mail server writes into the
+   `Authentication-Results` header (its first word, e.g. `mx.company.com`):
+   open the source of any received mail in that mailbox. Check the
+   requirements below.
+3. Under **Settings → Channels → Email** set the account id, the allowed
+   senders and the trusted authserv-id, choose the reply mode, then turn the
+   channel on.
+4. Each allowed person sends a mail with the subject `link` to the address,
+   gets a link code back, and enters it under **Settings → Channels**.
+
+### Configuration
+
+| Setting | Store | Description |
+|---------|-------|-------------|
+| `emailChannel.enabled` | DB-settings | Off by default. Also needs the `mail` and `channels` modules. |
+| `emailChannel.replyMode` | DB-settings | `draft` (default) or `send`, above. |
+| `emailChannel.accountId` | DB-settings | Id of the admin's personal IMAP mailbox the channel reads and answers from. |
+| `emailChannel.allowedSenders` | DB-settings | Sender addresses allowed to use the channel. |
+| `emailChannel.trustedAuthservIds` | DB-settings | authserv-id(s) whose `Authentication-Results` are believed. Empty: every mail is dropped. |
+| `emailChannel.pollSeconds` | DB-settings | How often the mailbox is checked (default 60). |
+| `emailChannel.maxMessageBytes` | DB-settings | Largest mail run as a turn (default 10 MB). |
+| `emailChannel.maxPerSenderPerHour` | DB-settings | Mails per sender per hour that get a turn or a notice (default 20). |
+
+There are no secrets of its own: the mailbox's passwords are the mail
+account's.
+
+### Requirements on the receiving mail server (hard)
+
+The channel believes exactly one thing about who sent a mail: the
+`Authentication-Results` header your server writes. That is only as good as
+the server, so these are **requirements**, not advice:
+
+- The server **checks DMARC** and writes the result (`dmarc=pass
+  header.from=…`) into an `Authentication-Results` header under its own
+  authserv-id, on **every** message it delivers to the channel mailbox.
+- It **removes** any `Authentication-Results` header carrying its own
+  authserv-id that arrives from outside (RFC 8601 §5), or otherwise
+  guarantees its own header is the topmost one with that id.
+- It writes the **DMARC result in the same header as its SPF and DKIM
+  results, or in a header above them**. Only the topmost trusted header is
+  read, so a server that stamps SPF/DKIM and DMARC in separate headers must
+  put the DMARC one on top.
+- It **rejects a malformed envelope sender or HELO name** instead of copying
+  it into the header (Postfix: `strict_rfc821_envelopes = yes` and
+  `reject_invalid_helo_hostname`). A server that copies such a value
+  verbatim lets the sender write `;dmarc=pass header.from=…` into the
+  server's own header, and no parser can tell that from a real result.
+
+Ways a server breaks this, each of which lets a forged sender through —
+check yours:
+
+- **Local or internal delivery** (mail from another mailbox on the same
+  server, an internal relay) that skips the DMARC milter, so no header is
+  written and a header the sender wrote is the topmost one.
+- **Authenticated submission by a co-tenant**: a user of the same server
+  sending as `boss@yourdomain` may get DMARC pass for a From they do not own.
+- **Milter temp-fail accept**: when the DMARC checker is down, the server
+  accepts mail unchecked.
+- **Scanners or milters that skip large messages** and so write no header.
+
+**DMARC authenticates the domain, not the mailbox.** A pass says the mail
+came from a server allowed to send for `example.com`; it does not say which
+person at `example.com` wrote it. Anyone who can send as any address of an
+allowed sender's domain through that domain's own servers can claim to be
+that sender. Allow-list addresses of domains whose senders you trust with
+that.
+
+### Who may talk to it
+
+A mail gets a turn only when all of this holds, checked cheapest first.
+Anything else is **dropped and recorded, never answered** — no bounce, no
+"unknown sender" reply, so a forged mail cannot make Octipus write to the
+address it forged (no backscatter):
+
+1. **In time:** mail that arrived more than two hours before the channel
+   reaches it (a first sync of an existing mailbox, an outage, a flood) is
+   recorded as `too_old`. Every new mail is looked at — up to 1,000 a check,
+   the rest at the next — and none ages out without a record.
+2. **Well formed and not automatic.** A bare CR in the headers; `Auto-Submitted`
+   (other than `no`), `X-Autoreply`, `Precedence: bulk/list/junk`,
+   `List-Id`/`List-Unsubscribe`; a bounce (empty return path, a delivery
+   report, `MAILER-DAEMON`/`postmaster`); the channel's own address; no
+   Message-ID.
+3. **One plain sender:** exactly one `From` header with one `local@domain`
+   address, written as such (not an encoded word or a display name).
+4. **Not seen before:** a Message-ID the channel already handled (the same
+   mail again, or one of its own replies coming back).
+5. **DMARC pass from your server.** The *topmost* `Authentication-Results`
+   header under a trusted authserv-id (the id is compared before anything is
+   parsed) must parse under RFC 8601 and report `dmarc=pass` with
+   `header.from` equal to the From domain (compared in punycode). Nothing
+   else counts: not DKIM or SPF on their own, not `header.i`, not a header
+   further down or under another id. `dmarc=none`, no DMARC result, a header
+   that does not parse, or one over 64 KB: dropped (fail closed). The topmost trusted header decides even when it is rejected: a header below it is never used instead.
+6. **Allow-listed:** the address is in `emailChannel.allowedSenders`.
+7. **Within the hourly limit** for that sender.
+8. **Linked** to an active Octipus account (the link codes every channel
+   uses). An allowed, authenticated, unlinked sender gets a link code (subject
+   `link`) or a one-line explanation — the only mail to an address that is
+   not linked, and only after steps 1–7.
+
+What happened to each mail is in `email_channel_messages` (status, reason,
+sender address; the subject only for mail that got a turn or a notice). A
+mail whose handling fails part way is recorded as dropped (`error`).
+Dropped records are kept 30 days, the rest 90 days; the address and subject
+of a record whose user is gone or was never linked are cleared after a day.
+The logs carry the reason, never an address or subject.
+
+### What an email turn can do
+
+- **Tools:** `websearch__search` (web search, no page fetch) and the bundled
+  Octipus help (`knowledge__search_product_docs`,
+  `knowledge__read_product_doc`). Nothing else: no files, shell, mail,
+  calendar, tasks, notes or knowledge base; no MCP, plugin or extension
+  tools; no delegation to other agents, no memory or skill tools. A CLI
+  agent (which brings its own tools) cannot run an email turn.
+- **No stored grants:** the user's stored ALLOW / "always allow" permissions
+  and allow rules do not apply; the tools' defaults do. A stored DENY still
+  does.
+- **Never with approval:** email turns run **unattended**. An action that asks
+  for approval is refused, not prompted. No permission or approval prompt is
+  ever mailed, and a mailed "yes"/"no" answers nothing.
+- **No commands:** a mail's text is content. `/model`, `/skills …`, `/stop`
+  and other commands are not run, and `go` does not execute a stored plan.
+- **Nothing of the user's put in front of it:** no long-term memories, no
+  [context hooks](CONTEXT-HOOKS.md) (knowledge base and notes passages) and no
+  plugin turn context are loaded into an email turn.
+- **No egress after private data:** the session is marked `suspicious` in the
+  [flow guard](FLOW-GUARD.md) (persisted), and in an email run, once the
+  session holds private data or credential material, any call that carries
+  data out — a web search's query included — is refused, whatever the
+  flow-guard mode.
+- **The run, not the session:** these limits key on the turn's channel. A
+  later turn in the same session from the web app is an ordinary turn.
+- **Untrusted content:** the turn gets an email notice beside the message;
+  forwarded mail is passed on fenced as untrusted text.
+
+For anything more, the turn says to continue in the web app.
+
+### What a turn sees
+
+- **Text:** the text/plain part, or for HTML-only mail the HTML converted to
+  text (scripts, styles and markup dropped). Quoted reply history ("On …
+  wrote:", "-----Original Message-----", an Outlook header block, a trailing
+  `>` block) and the `-- ` signature are cut conservatively; when that would
+  leave nothing the text is kept. A **forward** is kept: below the sender's
+  own text, the forwarded mail (after a "Forwarded message" marker, or in a
+  `Fwd:`/`FW:` mail after Outlook's separator) is passed on fenced as
+  untrusted. A new mail's subject comes first (it is often the request); a
+  reply's or a forward's does not. At most 20,000 characters.
+- **Attachments are not read.** A mail's files never reach the turn, the
+  document pipeline, OCR or the knowledge index — content a mail could plant
+  there would later be read by full-privilege turns. The turn is told the
+  mail had files, and the answer ends with a note naming them ("Attachments
+  are not read by email: …; upload it in the web app"). A mail with nothing
+  but files gets that note as a notice, without a turn. Mail larger than
+  `maxMessageBytes` is not read at all; the sender is told the limit.
+
+### The answer
+
+To the sender of the mail it answers — never to `Reply-To` or `Cc`, and only
+while that address is still linked to the conversation's user — as plain
+text, subject `Re: <subject>`, with `In-Reply-To` and `References` naming
+that mail; sent replies also carry `Auto-Submitted: auto-replied`. Files the
+turn made stay in the web app; the answer says so. A mail whose
+`In-Reply-To`/`References` name a mail of the conversation continues the same
+session (clients keep the original in `References`, so this also holds after
+a draft was sent by hand); any other mail starts a new one. Only the answer
+goes out: no "Working on it" or stage notes.
+
+The channel only *answers*: hooks, notifications and agents cannot address
+email as an outbound target.
+
+### Privacy: the mailbox owner reads everything
+
+Every linked user's mails to the channel, and every answer (draft or sent),
+are ordinary mail of the channel mailbox. **The admin who owns that mailbox —
+and anyone with access to the server — can read every email-channel
+conversation** in the Mail page. Tell your users. What Octipus does keep out:
+
+- The owner's **agent** never sees the mailbox: the `mail` tool does not
+  list, read, answer from or send from it, and neither does a plugin package
+  with mail access (`mail:read`, `mail:draft`).
+- **Automatic triage skips it**, so a mail the channel handles is never also
+  triaged, labelled or archived. Keep triage on your own mailbox.
+- In send mode, **link codes** are never stored in it (above).
 
 ---
 

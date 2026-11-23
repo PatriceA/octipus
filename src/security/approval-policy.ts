@@ -66,7 +66,10 @@ export function canPromptHuman(caller: { role?: string; root?: boolean; attended
 // `remote-room`: a turn of a member's own agent answering a room post that
 // addressed it, in a space on another install (federation §9) — nobody is
 // waiting at a prompt.
-const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'monitor', 'cron', 'agent', 'qa-demo', 'remote-room']);
+// `email`: the inbound email channel never carries a prompt (BaseChannel.interactive):
+// a mailed "yes" is too easy to forge to release a tool call, so its turns run
+// unattended and an ASK action is refused rather than left waiting.
+const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'monitor', 'cron', 'agent', 'qa-demo', 'remote-room', 'email']);
 
 /** Can an approval raised on this channel actually reach a person? */
 export function channelCanPrompt(channel: string | undefined): boolean {

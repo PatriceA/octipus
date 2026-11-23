@@ -12,7 +12,8 @@ import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { type ContextTurnHandle, contextForAgentStart, finishContextTurn } from '@/core/context-hooks';
 import { runPluginContexts } from '@/plugins/packages/contributions/context';
-import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
+import { clearFlowLabel, getFlowLabel, markFlowTaint, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
+import { EMAIL_CHANNEL, emailTurnContext } from '@/core/channels/email-context';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
 import type { AttachedFileRef } from '@/core/session-files';
@@ -330,7 +331,8 @@ export class AgentService {
     try {
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
     // Background wake-ups always take the normal queue and cannot invoke this path.
-    if (!beforeStart) {
+    // A mail is never a control or an approval answer (docs/CHANNELS.md#email): its text is content.
+    if (!beforeStart && channel !== EMAIL_CHANNEL) {
       const control = isSessionControlMessage(message);
       const approvals = this.approvalManager.getPendingApprovals(userId);
       if (control || approvals.length === 1) {
@@ -762,7 +764,8 @@ export class AgentService {
       const sharedAudience = audience.shared;
       // A session whose text may not be copied anywhere (federation F-D11)
       // neither recalls nor extracts memories either.
-      const memoryOff = audience.personalMemoryOff || audience.contentStorageOff;
+      // An email turn (forgeable channel) gets no personal memories: nothing private is in it to leak.
+      const memoryOff = audience.personalMemoryOff || audience.contentStorageOff || channel === EMAIL_CHANNEL;
       const groupThread = audience.kind === 'group';
       // The flow guard's group rule keys on the session; set it from the stored
       // session on every turn, whichever entry point (channel, web chat,
@@ -806,7 +809,11 @@ export class AgentService {
         ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
         : isRoom
           ? (groupTurn ? groupTurnContext({ requester: groupTurn.requester, context: groupTurn.context, take: groupTurn.take }) : '') + takenTasks.block
-          : '';
+          // A mail's text may carry others' words (quoted, forwarded): framed, and the session starts suspicious.
+          : emailTurnContext(channel);
+      // The cap itself keys on the run's channel (flow-guard `isEmailRun`); the
+      // session's mail stays marked suspicious (persisted) for later turns.
+      if (channel === EMAIL_CHANNEL) markFlowTaint(resolvedSessionId, 'suspicious', 'email-channel:inbound_mail');
       // Auto-title sessions with generic names (never a room: its title is the room's).
       if (!isRoom) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
@@ -885,7 +892,8 @@ export class AgentService {
 
       // Command interception (works across all channels; a room's commands
       // are answered by the room handler before any turn).
-      if (!isRoom) try {
+      // Not by mail: a command (`/skills … always`, `/model`) changes the account, and a mail is forgeable.
+      if (!isRoom && channel !== EMAIL_CHANNEL) try {
         // Provide a notify callback so commands can send intermediate messages
         const commandNotify = async (msg: string) => {
           this.emit({
@@ -914,7 +922,7 @@ export class AgentService {
       const freshSessionForPlan = await sessionRepository.findById(resolvedSessionId);
       const sessionCtx = (freshSessionForPlan?.context as Record<string, any>) || {};
       const planState = sessionCtx.planningState;
-      if (!isRoom && planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
+      if (!isRoom && channel !== EMAIL_CHANNEL && planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
         // Check if a root agent is already running for this session
         const agentManager = getAgentManager();
         const sessionAgents = agentManager.getBySession(resolvedSessionId);
@@ -1106,7 +1114,8 @@ export class AgentService {
       });
       // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
       // same audience rule, never in a space; it never throws either.
-      const pluginContextRun = sharedAudience || audience.contentStorageOff
+      // Not in an email turn either: nothing of the user's notes, knowledge or plugins reaches a forgeable channel.
+      const pluginContextRun = sharedAudience || audience.contentStorageOff || channel === EMAIL_CHANNEL
         ? Promise.resolve({ text: '', labelledBlocks: [] })
         : runPluginContexts({ userId, sessionId: resolvedSessionId, role: 'general', query: message, scope });
 

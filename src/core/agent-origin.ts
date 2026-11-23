@@ -26,7 +26,7 @@ export function getAmbientOrigin(): AmbientOrigin | undefined {
   return storage.getStore();
 }
 
-const MESSAGING_CHANNELS = new Set(['telegram', 'slack', 'teams', 'whatsapp']);
+const MESSAGING_CHANNELS = new Set(['telegram', 'slack', 'teams', 'whatsapp', 'email']);
 
 /** The source a turn entering through `channel` gets when nothing more specific is known. */
 export function sourceForChannel(channel: string | undefined, trigger: AgentTrigger): AgentSource {

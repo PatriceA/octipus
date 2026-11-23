@@ -56,6 +56,7 @@ import delegationPrompt from './delegation-prompt.md';
 import COMPANION_CONTROLLER_PROMPT from '@/core/companion/controller-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
+import { EMAIL_CHANNEL, emailTurnTools } from '@/core/channels/email-context';
 import { ROOT_ROLE } from './types';
 import { type AgentScope, writesWithheld } from './context';
 import { spaceSessionNotice, withoutPersonalOnlyTools } from '@/security/space-tools';
@@ -597,6 +598,17 @@ export async function runRootAgent(
       if(!rootTools.some(current=>current.name===tool.name))rootTools.push(tool);rootAllowedToolIds.add(tool.toolId??tool.name);
     }
   }
+  // A turn that came in by email (docs/CHANNELS.md#email): a mail is forgeable,
+  // so the turn gets a small fixed set — web search and the bundled help —
+  // and nothing else: no meta-tools (no delegation, memory, skills or
+  // plans), no MCP, plugin or extension tools, no child that could be granted
+  // more. A CLI agent brings tools of its own, so it cannot run one.
+  if (channel === EMAIL_CHANNEL) {
+    const { getToolRegistry } = await import('@/tools/registry');
+    rootTools = emailTurnTools(getToolRegistry(), modelMeta?.provider);
+    metaTools = [];
+    rootAllowedToolIds.clear(); for (const tool of rootTools) rootAllowedToolIds.add(tool.toolId ?? tool.name);
+  }
   let turnTools = [...rootTools, ...metaTools];
   if (!remoteRoom) turnTools = [...turnTools, selfReport(turnTools)];
 
@@ -616,7 +628,7 @@ export async function runRootAgent(
     ? undefined
     : await sessionCoreToolIds(sessionId, planSessionCtx, selectCoreToolIds(message, rootRoleConfig.coreToolIds), rootRoleConfig.coreToolIds);
   if (
-    !remoteRoom &&
+    !remoteRoom && channel !== EMAIL_CHANNEL &&
     rootCoreToolIds !== undefined &&
     !supervisor && !planSessionCtx?.companionMaintenance && shouldUseLazyDiscovery({
       hasCoreToolIds: true,

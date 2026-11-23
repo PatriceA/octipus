@@ -1443,6 +1443,13 @@
       "when": 1795910400000,
       "tag": "0205_skill_registry_installs",
       "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1795996800000,
+      "tag": "0206_email_channel",
+      "breakpoints": true
     }
   ]
 }
