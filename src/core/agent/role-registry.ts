@@ -57,7 +57,10 @@ export type RoleSource =
  *    not: a hook or schedule whose `spawn_agent` action runs a root `general`
  *    turn (`scheduling`), a task assigned to a role whose agent picks it up
  *    (`tasks`), a skill that is loaded into other roles' prompts
- *    (`skill-distill`).
+ *    (`skill-distill`), a monitor whose `continuation` text steers or starts
+ *    the session's root turn on delivery (`monitor`), a companion session
+ *    started or messaged (`companion`), and the user's own browser, which can
+ *    type into the Octipus web chat (`browser-ext`).
  *
  * What it guarantees: an agent of a plugin role cannot, through its own tool
  * calls, reach those tools or start work under a role that holds them. What it
@@ -67,7 +70,7 @@ export type RoleSource =
  * does not get to drive these.
  */
 export const PLUGIN_ROLE_DENIED_TOOLS: ReadonlySet<string> = new Set([
-  'plugin_dev', 'mcp_admin', 'protection', 'scheduling', 'tasks', 'skill-distill',
+  'plugin_dev', 'mcp_admin', 'protection', 'scheduling', 'tasks', 'skill-distill', 'monitor', 'companion', 'browser-ext',
 ]);
 
 /**
@@ -216,6 +219,10 @@ export function roleDefinitionProblems(
     const owner = sources.get(def.id);
     if (owner && !sameSource(owner, source)) {
       problems.push(`role id '${def.id}' is already registered by ${describeSource(owner)}`);
+      conflict = true;
+    } else if (!owner && source.kind === 'plugin' && unloaded.has(def.id)) {
+      // An operator's stored row that did not load still owns its id.
+      problems.push(`role id '${def.id}' is already the id of a stored role that did not load; an operator must fix or delete it first`);
       conflict = true;
     }
   }

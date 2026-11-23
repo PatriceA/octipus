@@ -223,7 +223,10 @@ function diffContributions(before: PluginPermissionsSummary, after: PluginPermis
     if (!old) add('contribution', 'added', `role ${id} (${r.lane}; tools ${r.tools.join(', ')})`, true);
     else if (json(old) !== json(r)) {
       const newTools = r.tools.filter((t) => !old.tools.includes(t));
-      add('contribution', 'changed', `role ${id}${newTools.length ? `: adds tools ${newTools.join(', ')}` : ''}${old.promptSha256 !== r.promptSha256 ? ' (prompt text changed)' : ''}`, true);
+      const fields = (Object.keys({ ...old, ...r }) as Array<keyof typeof r>)
+        .filter((k) => k !== 'id' && json(old[k]) !== json(r[k]))
+        .map((k) => (k === 'promptSha256' ? 'prompt text' : k === 'tools' && newTools.length ? `tools (adds ${newTools.join(', ')})` : k));
+      add('contribution', 'changed', `role ${id}: ${fields.join(', ')} changed`, true);
     }
   }
   for (const id of wasR.keys()) if (!nowR.has(id)) add('contribution', 'removed', `role ${id}`, false);

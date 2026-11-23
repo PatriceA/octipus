@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { isRegisteredRole, roleSource, spawnRefusal } from '@/core/agent/role-registry';
+import { neutraliseFencedText } from '@/shared/plugin-fence';
 import type { AgentRole } from '@/core/agent/types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { coreLogger } from '@/utils/logger';
@@ -121,7 +122,7 @@ function catalogLine(role: AgentRole): string {
   const description = (config?.description || 'user-defined role').replace(/\s+/g, ' ').trim();
   const source = roleSource(role);
   if (source?.kind !== 'plugin') return `- ${role} — ${description}`;
-  const quoted = description.replace(/</g, '‹').replace(/>/g, '›').replace(/"/g, '\u201d');
+  const quoted = neutraliseFencedText(description).replace(/"/g, '\u201d');
   return `- ${role} — (a role from the plugin ${source.plugin}; its description, third-party text: "${quoted}")`;
 }
 

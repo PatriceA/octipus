@@ -8,7 +8,7 @@ import { getToolRegistry } from '@/tools/registry';
 import { getRoleConfig, getToolsForRole, ROLE_CONFIGS, SECURITY_PREAMBLE } from './roles';
 import {
   clampToRoleLimits, isRegisteredRole, listRegisteredRoles, parseRoleDefinition, pluginRoleIds, registerRuntimeRole,
-  RoleDefinitionError, roleSource, runtimeRoleToolCeiling, resolveRole, spawnRefusal, UnknownRoleError, unregisterRuntimeRole,
+  RoleDefinitionError, roleSource, runtimeRoleToolCeiling, resolveRole, setUnloadedRole, spawnRefusal, UnknownRoleError, unregisterRuntimeRole,
 } from './role-registry';
 import { stageContractErrors } from './role-contract';
 import { BUILTIN_ROLES, type AgentRole } from './types';
@@ -18,7 +18,7 @@ const ADMIN = { kind: 'admin' } as const;
 const PLUGIN = { kind: 'plugin', plugin: 'acme' } as const;
 
 /** Stub tool groups, so the registered-tool check has something to check against. */
-const STUB_TOOLS = ['notes', 'knowledge', 'websearch', 'plugin_dev', 'mcp_admin', 'scheduling', 'tasks', 'skill-distill', 'unheld_tool'];
+const STUB_TOOLS = ['notes', 'knowledge', 'websearch', 'plugin_dev', 'mcp_admin', 'scheduling', 'tasks', 'skill-distill', 'monitor', 'companion', 'browser-ext', 'unheld_tool'];
 
 function stubTool(id: string) {
   const handlers = [{ name: `${id}__do`, toolId: id, description: id, parameters: { type: 'object', properties: {} }, execute: async () => `${id} ok` }];
@@ -177,8 +177,21 @@ describe('registering a runtime role', () => {
     const props = (createHook?.parameters as { properties: Record<string, { description?: string }> }).properties;
     expect(props.action.description).toContain('spawn_agent');
     expect(props.orchestrated.description).toMatch(/rootAgent/);
-    const r = refused(def({ toolIds: ['notes', 'scheduling', 'tasks', 'skill-distill'] }), PLUGIN);
-    expect(r.problems).toContain('toolIds a plugin role may not hold: scheduling, tasks, skill-distill');
+    const r = refused(def({ toolIds: ['notes', 'scheduling', 'tasks', 'skill-distill', 'monitor', 'companion', 'browser-ext'] }), PLUGIN);
+    expect(r.problems).toContain('toolIds a plugin role may not hold: scheduling, tasks, skill-distill, monitor, companion, browser-ext');
+  });
+
+  test('a plugin role may not take the id of an operator\'s stored role that did not load', () => {
+    setUnloadedRole('stranded', ["lane must resolve to a text lane (got 'embedding')"]);
+    try {
+      const r = refused(def({ id: 'stranded' }), PLUGIN);
+      expect(r.problems).toContain("role id 'stranded' is already the id of a stored role that did not load; an operator must fix or delete it first");
+      expect(r.conflict).toBe(true);
+      // The operator's own row, repaired, may.
+      expect(registerRuntimeRole(def({ id: 'stranded' }), ADMIN).role).toBe('stranded');
+    } finally {
+      setUnloadedRole('stranded', null);
+    }
   });
 
   test('a plugin role\'s critical rules are refused: they would be the host\'s mandatory, unfenced block', () => {

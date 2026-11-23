@@ -89,6 +89,15 @@ describe('plugin roles', () => {
       .rejects.toMatchObject({ problems: expect.arrayContaining(['roles.translator: a plugin role may not hold plugin_dev']) });
     await expect(svc.installFromDirectory(variant(withRole({ prompt: 'roles/missing.md' })), admin))
       .rejects.toMatchObject({ problems: expect.arrayContaining(['roles.translator: roles/missing.md is not in the package']) });
+    // An operator's stored row owns its id even when it is not registered (it did not load).
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`INSERT INTO roles (role, tool_ids, default_topic, system_prompt_template, is_system) VALUES ('stored-role', '["notes"]', 'embedding', 'x', false)`);
+    try {
+      await expect(svc.installFromDirectory(variant(withRole({ id: 'stored-role' })), admin))
+        .rejects.toMatchObject({ code: 'conflict', problems: expect.arrayContaining(['roles: "stored-role" is already the id of a stored role (Topics page); an operator must rename or delete it first']) });
+    } finally {
+      await executeRaw(`DELETE FROM roles WHERE role = 'stored-role'`);
+    }
     expect((await svc.listPackages()).map((p) => p.name)).toEqual([]);
   });
 

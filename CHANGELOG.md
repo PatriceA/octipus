@@ -17,8 +17,10 @@ labels reflect blast radius, not contract guarantees.
   `octi plugin approve-contributions`) and in the permissions summary and update
   diff. A plugin role cannot reuse a built-in, reserved or lane-name id or
   another source's id, may only hold tools some built-in role already holds, and
-  never `plugin_dev`, `mcp_admin`, `protection`, `scheduling`, `tasks` or
-  `skill-distill`. Operator roles (`POST /api/roles`) now also take
+  never `plugin_dev`, `mcp_admin`, `protection`, `scheduling`, `tasks`,
+  `skill-distill`, `monitor`, `companion` or `browser-ext`. Fence look-alikes in
+  any plugin text put in front of a model (role, prompt section, context) are
+  neutralised: every angle-bracket form and the fence tag names. Operator roles (`POST /api/roles`) now also take
   `displayName`, `spawns`, `spawnedBy` and `limits` (migration
   `0205_runtime_role_fields`, four nullable columns on `roles`). Plugin roles are
   listed on the Topics page and in `GET /api/roles` (`source: "plugin"`),
@@ -32,7 +34,9 @@ labels reflect blast radius, not contract guarantees.
   `build`, …) still runs as `general`, with a warning in the log.
 - **Breaking — saving a recipe checks its step topics against the roles.** A step
   whose topic is a lane name or not a registered role is refused at save
-  (`POST /api/pipelines/templates`, `PUT /api/pipelines/templates/:id`); pick the role that does the step.
+  (`POST /api/pipelines/templates`, `PUT /api/pipelines/templates/:id`) and at
+  import (`POST /api/pipelines/templates/import`); pick the role that does the
+  step.
 - **Breaking — new operator role ids.** `POST /api/roles` refuses a reserved id
   (`root`, `system`, `agent`, `admin`, `user`, `default`, …) or a lane name.
   Stored roles with such ids keep loading.

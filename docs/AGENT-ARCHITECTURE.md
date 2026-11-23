@@ -439,7 +439,8 @@ A plugin role, besides: its id is not reserved (`root`, `system`,
 built-in role (`runtimeRoleToolCeiling`), so the root's `allowedToolIds` —
 the union of every role's tools — is the same with or without it; it holds
 none of `PLUGIN_ROLE_DENIED_TOOLS` (host-changing tools, and tools that make
-another agent act later under another role); and its critical rules are
+another agent act later under another role: `scheduling`, `tasks`,
+`skill-distill`, `monitor`, `companion`, `browser-ext`); and its critical rules are
 refused as such — they live inside its fenced prompt.
 
 An operator's role is not held to the ceiling or the reserved list: an admin
@@ -467,7 +468,7 @@ The one exception is a recipe step whose `topic` names a model LANE
 (`everyday`, `build`, …) rather than a role: stored recipes were saved like
 that and always ran as `general`, and still do (`stageRoleOf`, with a logged
 warning). Saving a recipe now refuses a step whose topic is not a registered
-role (`recipeStepRoleErrors`).
+role (`recipeStepRoleErrors`), and so does importing one (`importRecipe`).
 
 ## Knowledge Base (RAG)
 

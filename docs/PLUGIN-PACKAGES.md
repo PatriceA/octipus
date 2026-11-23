@@ -460,7 +460,11 @@ Each section is fenced: a `<plugin-prompt plugin="<name>">` block that says it
 is third-party text from that package, approved by an administrator, which
 cannot override the system or operator instructions, change the agent's role
 or rules, or grant a permission; angle brackets in the text are replaced so it
-cannot close the fence. **The fence is advice to the model, not a boundary**:
+cannot close the fence — every bracket form (fullwidth, other Unicode angle
+brackets, `&lt;`/`&gt;` and numeric entities), and the fence tag names
+themselves are rewritten (`plugin-prompt` → `plugin_prompt`), so not even a
+look-alike of a closing tag survives. The same applies to a role's text and
+to context text. **The fence is advice to the model, not a boundary**:
 the text is still in the system prompt of every agent of every user and the
 model reads it. Approve a prompt section only from a publisher you would let
 write instructions to your agents, and read the whole text first (it is at
@@ -521,7 +525,8 @@ is enabled — declarative data, no code:
   role, it never redefines one), not reserved (`root`, `system`,
   `orchestrator`, `admin`, `user`, `assistant`, `agent`, `subagent`, …), not
   the name of a model lane (`everyday`, `build`, …), and not a role an
-  operator or another package already has. Checked at install and again when
+  operator or another package already has. Checked at install (against stored role rows as
+  well: an operator's row that did not load still owns its id) and again when
   it binds.
 - `description` is one line: what the delegating model reads in its menu,
   quoted there as third-party text from the package, with angle brackets and
@@ -539,11 +544,17 @@ is enabled — declarative data, no code:
   later under another role (`scheduling`: a hook's `spawn_agent` action runs
   a root `general` turn; `tasks`: a task assigned to a role is picked up by
   that role's agent; `skill-distill`: a skill is loaded into other roles'
-  prompts). What this guarantees: an agent of a plugin role cannot, through
+  prompts; `monitor`: a monitor's `continuation` text steers or starts the
+  session's root turn when it fires; `companion`: starts or messages a
+  companion session; `browser-ext`: the user's browser can type into the
+  Octipus web chat). What this guarantees: an agent of a plugin role cannot, through
   its own tool calls, reach those tools or start work under a role that holds
   them. What it does not: it narrows the role's tool list only; it is no
   boundary for what the user or other roles do, and every call is still
-  authorized as the user the agent works for.
+  authorized as the user the agent works for. Tools that reach outside
+  Octipus by configuration (`mcp`, `connections`) are not on the list: they
+  can start a turn only if an operator pointed an MCP server or a
+  connection at this install's own API.
 - `lane` must be a text lane. `spawns` / `spawnedBy` restrict which roles it
   may spawn (`[]`: none) and which may spawn it (left out: no restriction);
   the spawner refuses anything else by name. `limits` only lower the

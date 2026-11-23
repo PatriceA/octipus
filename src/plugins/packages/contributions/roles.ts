@@ -14,9 +14,10 @@
  */
 import { PLUGIN_ROLE_DENIED_TOOLS, registerRuntimeRole, RoleDefinitionError, unregisterRuntimeRole } from '@/core/agent/role-registry';
 import type { PluginRoleDecl } from '@/shared/plugin-package';
+import { neutraliseFencedText } from '@/shared/plugin-fence';
 
-/** Angle brackets replaced, so the text cannot close its fence or open another. */
-export const neutralise = (text: string) => text.replace(/</g, '‹').replace(/>/g, '›');
+/** Fence look-alikes neutralised (`neutraliseFencedText`), so the text cannot close its fence or open another. */
+export const neutralise = neutraliseFencedText;
 
 /**
  * The role prompt as registered: the package's text inside a fence that says
@@ -71,11 +72,23 @@ export async function roleConflicts(
   pkg: string, roles: readonly PluginRoleDecl[], others: ReadonlyArray<{ name: string; roles?: readonly PluginRoleDecl[] }>,
 ): Promise<string[]> {
   const { roleSource, describeSource } = await import('@/core/agent/role-registry');
+  // Stored role rows too: an operator's row that did not load is not
+  // registered, but it still owns its id — a plugin taking it would be merged
+  // with the row in the roles list and change owner at the next restart.
+  const { getDb } = await import('@/db/postgres');
+  const { roles: rolesTable } = await import('@/db/schema/roles');
+  const { inArray } = await import('drizzle-orm');
+  const ids = roles.map((r) => r.id);
+  const stored = new Set(ids.length ? (await getDb().select({ role: rolesTable.role }).from(rolesTable).where(inArray(rolesTable.role, ids))).map((r) => r.role) : []);
   const problems: string[] = [];
   for (const r of roles) {
     const owner = others.find((o) => o.name !== pkg && o.roles?.some((x) => x.id === r.id));
     if (owner) {
       problems.push(`roles: "${r.id}" is already a role of the plugin package ${owner.name}`);
+      continue;
+    }
+    if (stored.has(r.id) && roleSource(r.id)?.kind !== 'plugin') {
+      problems.push(`roles: "${r.id}" is already the id of a stored role (Topics page); an operator must rename or delete it first`);
       continue;
     }
     const source = roleSource(r.id);

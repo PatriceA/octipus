@@ -248,6 +248,10 @@ describe('operator runtime roles', () => {
     expect(stageRoleOf('gone-role')).toBe('gone-role');
     const stage = stepConfigToStageTemplate({ name: 'Draft', topic: 'everyday', requiresApproval: false } as never);
     expect(() => buildStagesFromTemplate({ stages: [stage] } as never, 'x')).not.toThrow();
+    // An imported recipe is checked like a saved one.
+    const { importRecipe } = await import('@/core/agent/templates');
+    await expect(importRecipe(adminId, { name: 'Imported', steps: [{ name: 'Draft', topic: 'everyday', requiresApproval: false }] } as never))
+      .rejects.toThrow("Stage 1: 'everyday' is a model lane, not a role; pick the role that does this step.");
     expect(recipeStepRoleErrors([
       { name: 'a', topic: 'everyday' }, { name: 'b', topic: 'gone-role' }, { name: 'c', topic: 'coding' }, { name: 'd', topic: '', stageType: 'human_input' },
     ] as never)).toEqual([

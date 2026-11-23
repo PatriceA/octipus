@@ -862,7 +862,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 252 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 92 |
+| `core` | `shared` | 93 |
 | `core` | `skills` | 20 |
 | `core` | `tools` | 38 |
 | `core` | `utils` | 269 |
@@ -911,12 +911,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `utils` | 47 |
 | `plugins` | `config` | 12 |
 | `plugins` | `core` | 63 |
-| `plugins` | `db` | 69 |
+| `plugins` | `db` | 71 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
 | `plugins` | `security` | 33 |
-| `plugins` | `shared` | 39 |
+| `plugins` | `shared` | 42 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 38 |
 | `security` | `api` | 1 |

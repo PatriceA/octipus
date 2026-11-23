@@ -318,6 +318,10 @@ export function parseRecipeExport(json: string): RecipeExport {
 
 /** Import a recipe (from parseRecipeExport output) for a user. Returns the new id. */
 export async function importRecipe(userId: string, recipe: RecipeExport): Promise<{ id: string; name: string }> {
+  // The same check as saving one (`recipeStepRoleErrors`): an imported step
+  // names a role registered HERE, not a lane or a role of the install it came from.
+  const roleErrors = recipeStepRoleErrors(recipe.steps);
+  if (roleErrors.length > 0) throw new Error(roleErrors.join(' '));
   const db = getDb();
   // Avoid clobbering an existing same-named recipe for THIS user — suffix on
   // collision. Scope to the user's own names so another user's identically
