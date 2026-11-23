@@ -502,6 +502,13 @@ export interface ScorerContext {
    */
   filesTouched?: number | null;
   /**
+   * Run the command in this folder instead of the context's own. Only for a
+   * caller that has already checked it lies at or below that folder
+   * (`evidence-hooks.ts`): moving the directory through `projectPath` instead
+   * would also change which execution environment the context selects.
+   */
+  cwd?: string;
+  /**
    * Handed the raw result of every `command_exit_zero` command that actually
    * ran, pass or fail. The gate itself only says pass or why it failed; a
    * caller that records the run as evidence (`evidence-hooks.ts`) needs the
@@ -510,13 +517,6 @@ export interface ScorerContext {
    * runner beside it. Not called for a command that was refused or never
    * started.
    */
-  /**
-   * Run the command in this folder instead of the context's own. Only for a
-   * caller that has already checked it lies at or below that folder
-   * (`evidence-hooks.ts`): moving the directory through `projectPath` instead
-   * would also change which execution environment the context selects.
-   */
-  cwd?: string;
   onCommandResult?: (result: { exitCode: number | null; timedOut: boolean; signal?: string | null; stdout: string; stderr: string }) => void;
 }
 

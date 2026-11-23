@@ -19,7 +19,7 @@
  * hooks run is decided from the session, never from model text.
  */
 import { realpathSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
 import type { ScorerContext } from '@/core/swarm/scorers';
@@ -27,6 +27,7 @@ import { pathInEnvironment } from '@/security/execution-environments';
 import { type EvidenceHook, type EvidenceHookResult, evidenceHooksSchema } from '@/shared/evidence-hooks';
 import { coreLogger } from '@/utils/logger';
 import type { QAValidationResult } from './types';
+import { changedFilePaths, inPrunedDir, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
 export type { EvidenceHook, EvidenceHookResult } from '@/shared/evidence-hooks';
 
@@ -50,8 +51,6 @@ export const EVIDENCE_REPAIR_LIMIT = 2;
  */
 export const EVIDENCE_HOOK_OVERHEAD_MS = 15_000;
 
-/** Above this many changed paths, a run's change set is kept as "unknown" rather than stored. */
-export const MAX_TRACKED_CHANGES = 2_000;
 
 /** Which stage is asking, and in what scope its commands run. */
 export interface StageCommandCaller {
@@ -73,7 +72,7 @@ export interface StageCommandCaller {
  * what decides which project's hooks apply. `refused` is set when the stage
  * may not run commands in this scope at all.
  */
-export async function stageCommandScope(caller: StageCommandCaller): Promise<{ root: string | null; scorer: ScorerContext; refused?: string }> {
+export async function stageCommandScope(caller: StageCommandCaller): Promise<{ root: string | null; scorer: ScorerContext; refused?: string; remote?: boolean }> {
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const session = await sessionRepository.findById(caller.sessionId);
   if (!session) throw new Error(`session ${caller.sessionId} not found`);
@@ -108,7 +107,12 @@ export async function stageCommandScope(caller: StageCommandCaller): Promise<{ r
   // are reported as refused.
   const root = projectPath ?? (sessionCtx?.executionEnvironmentId ? sessionCtx.projectPath ?? null
     : workspaceRoot ?? (refused ? spaceRoot(WorkspaceFS, workspaceId) : null));
-  return { root, scorer, refused };
+  // Hook roots are resolved and hashed on this host, so a stage running on a
+  // remote (SSH) environment cannot be judged by them yet.
+  const { configuredExecutionEnvironments } = await import('@/security/execution-environments');
+  const remote = !!sessionCtx?.executionEnvironmentId
+    && configuredExecutionEnvironments().find((env) => env.id === sessionCtx.executionEnvironmentId)?.backend === 'ssh';
+  return { root, scorer, refused, ...(remote ? { remote } : {}) };
 }
 
 function spaceRoot(fs: typeof import('@/security/workspace-fs').WorkspaceFS, workspaceId: string): string | null {
@@ -165,6 +169,10 @@ export interface HookPlacement {
   refused: Array<{ hook: EvidenceHook; reason: string }>;
   /** Hooks under the stage folder skipped because the run changed no file under their root. */
   unchanged: EvidenceHook[];
+  /** The change set was trusted and used to skip hooks. */
+  narrowed: boolean;
+  /** Why a known change set could not be trusted, when that is not obvious. */
+  unknown?: string;
 }
 
 export interface PlacementOptions {
@@ -192,39 +200,56 @@ function isDirectory(path: string): boolean {
  * at the start of the run, is the stage folder or inside it. It is then run
  * in what its root resolves to now, which must still be a directory inside
  * the stage folder and the same place it was at the start; anything else is a
- * refusal (the run pauses), never a silent "does not apply". With a known
- * change set, a belonging hook runs only when the run changed a file under
- * its root, so a hook for another project in the same workspace is not run
- * against this one's work.
+ * refusal (the run pauses), never a silent "does not apply".
+ *
+ * The change set may only NARROW the belonging hooks, and only when it is
+ * trustworthy: it is known, every changed file lies under the root of some
+ * belonging hook (a change in a shared `lib/` beside `app/` runs `app`'s hooks
+ * too), it is not empty, and no belonging root lies inside a directory the snapshot never
+ * enters (`node_modules`, `.venv`, …). Then a hook whose root holds no changed
+ * file is skipped. Otherwise every belonging hook runs.
  */
 export function placeEvidenceHooks(hooks: EvidenceHook[], root: string | null, options: PlacementOptions = {}): HookPlacement {
-  const placement: HookPlacement = { apply: [], refused: [], unchanged: [] };
+  const placement: HookPlacement = { apply: [], refused: [], unchanged: [], narrowed: false };
   if (!root) return placement;
   const stageLex = resolve(root);
   const stageReal = canonicalPath(root);
-  const changed = options.changed ?? null;
-  const touches = (dirs: string[]) => changed === null || [...changed].some((file) => dirs.some((dir) => pathInEnvironment(dir, file)));
-  for (const hook of hooks) {
+  const placed = hooks.map((hook) => {
     const hookLex = resolve(hook.root);
     const pinned = options.pins?.has(hook.root) ? options.pins.get(hook.root) ?? null : realPath(hook.root);
+    const now = realPath(hook.root);
     const belongs = pathInEnvironment(stageLex, hookLex) || (pinned !== null && pathInEnvironment(stageReal, pinned));
+    return { hook, hookLex, pinned, now, belongs, dirs: [hookLex, ...(pinned ? [pinned] : []), ...(now ? [now] : [])] };
+  });
+  // An empty change set is not evidence the work is right, only that the
+  // tree is back where it started: it narrows nothing.
+  let changed = options.changed?.size ? options.changed : null;
+  if (changed) {
+    const belonging = placed.filter((p) => p.belongs);
+    const covered = (file: string) => belonging.some((p) => p.dirs.some((dir) => pathInEnvironment(dir, file)));
+    const pruned = belonging.some((p) => inPrunedDir(relative(stageReal, p.now ?? p.pinned ?? p.hookLex)) || inPrunedDir(relative(stageLex, p.hookLex)));
+    if (pruned) placement.unknown = 'a hook root lies inside a directory the change snapshot does not enter';
+    if (pruned || [...changed].some((file) => !covered(file))) changed = null;
+  }
+  placement.narrowed = changed !== null;
+  const touches = (dirs: string[]) => changed === null || [...changed].some((file) => dirs.some((dir) => pathInEnvironment(dir, file)));
+  for (const { hook, hookLex, pinned, now, belongs, dirs } of placed) {
     if (!belongs) {
       const above = pathInEnvironment(hookLex, stageLex) || (pinned !== null && pathInEnvironment(pinned, stageReal));
-      if (above && touches([stageLex, stageReal])) {
+      if (above) {
         placement.refused.push({ hook, reason: `its root ${hook.root} contains the folder this stage runs commands in (${root}) but lies outside it. ` +
           'A hook runs in its root, and a stage may only run commands in its own folder or below, so it was not run. ' +
           `Set the hook's root to ${root} or to a folder inside it.` });
       }
       continue;
     }
-    const now = realPath(hook.root);
     // A root that resolves somewhere else than at the start was changed
     // during the run, possibly by a stage: always a refusal, whatever changed.
     if (pinned !== null && now !== pinned) {
       placement.refused.push({ hook, reason: `its root ${hook.root} ${now === null ? 'no longer exists' : `resolves to ${now}`} but resolved to ${pinned} when the run started, so it was not run.` });
       continue;
     }
-    if (!touches([hookLex, ...(now ? [now] : [])])) {
+    if (!touches(dirs)) {
       placement.unchanged.push(hook);
       continue;
     }
@@ -239,6 +264,28 @@ export function placeEvidenceHooks(hooks: EvidenceHook[], root: string | null, o
     placement.apply.push({ hook, runIn: now as string });
   }
   return placement;
+}
+
+/** Content-hash budget for the change snapshots evidence hooks narrow on. */
+export const EVIDENCE_HASH_MAX_BYTES = 256 * 1024 * 1024;
+
+/**
+ * The stage folder's content, hashed, for narrowing hooks to what changed.
+ * Null (unknown) when the tree has a symlink, exceeds `EVIDENCE_HASH_MAX_BYTES`
+ * or the file cap, or cannot be read.
+ */
+export async function evidenceBaseline(root: string): Promise<WorkspaceSnapshot | null> {
+  const snapshot = await snapshotWorkspace(root, { contentHash: { maxBytes: EVIDENCE_HASH_MAX_BYTES } });
+  return snapshot && !snapshot.truncated ? snapshot : null;
+}
+
+/** Absolute paths whose content differs from `baseline`, or null when that cannot be established. */
+export async function changesSince(baseline: WorkspaceSnapshot | null, root: string): Promise<Set<string> | null> {
+  if (!baseline) return null;
+  const paths = changedFilePaths(baseline, await evidenceBaseline(root));
+  if (!paths) return null;
+  const base = canonicalPath(root);
+  return new Set(paths.map((rel) => resolve(base, rel)));
 }
 
 /** `formatCommandOutput`'s text without its sentence-joining prefix. */
@@ -324,6 +371,14 @@ export async function runEvidenceHooks(
   const configured = options.hooks ?? configuredEvidenceHooks();
   if (configured.length === 0) return { results: [], root: null };
   const scope = await stageCommandScope(caller);
+  if (scope.remote && scope.root) {
+    const stage = resolve(scope.root);
+    const concerned = configured.filter((hook) => pathInEnvironment(stage, resolve(hook.root)) || pathInEnvironment(resolve(hook.root), stage));
+    if (concerned.length) {
+      return { root: scope.root, results: concerned.map((hook) => refusedResult(hook,
+        'evidence hooks are not supported on remote (SSH) execution environments yet: their roots are checked on this host, not on the remote one, so it was not run.')) };
+    }
+  }
   const placement = placeEvidenceHooks(configured, scope.root, options);
   const results: EvidenceHookResult[] = placement.refused.map(({ hook, reason }) => refusedResult(hook, reason));
   if (placement.apply.length === 0 && results.length === 0) {
@@ -335,7 +390,8 @@ export async function runEvidenceHooks(
     coreLogger.warn({ sessionId: caller.sessionId, root: scope.root }, unmatched);
     return { results, root: scope.root, unmatched };
   }
-  // Never shorter than the hooks' own timeouts together (`EVIDENCE_HOOK_OVERHEAD_MS`).
+  // Never shorter than the hooks' own timeouts together (`EVIDENCE_HOOK_OVERHEAD_MS`);
+  // the setting keeps that sum under `EVIDENCE_HOOKS_MAX_TOTAL_MS`.
   const deadline = Date.now() + placement.apply.reduce((sum, { hook }) => sum + hook.timeoutMs + EVIDENCE_HOOK_OVERHEAD_MS, 0);
   for (const { hook, runIn } of placement.apply) {
     if (scope.refused) { results.push(refusedResult(hook, scope.refused)); continue; }
@@ -348,7 +404,7 @@ export async function runEvidenceHooks(
     // permission and sandbox are kept.
     results.push(await runEvidenceHook(hook, { ...scope.scorer, cwd: runIn, deadline }, options.signal));
   }
-  return { results, root: scope.root, ...(options.changed == null ? { changeSetUnknown: true } : {}) };
+  return { results, root: scope.root, ...(options.changed == null || placement.unknown ? { changeSetUnknown: true } : {}) };
 }
 
 /** How a hook ended, in a few words. Output is appended separately where it helps. */

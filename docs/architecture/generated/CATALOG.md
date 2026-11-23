@@ -859,7 +859,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `models` | 151 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 253 |
+| `core` | `security` | 254 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 93 |

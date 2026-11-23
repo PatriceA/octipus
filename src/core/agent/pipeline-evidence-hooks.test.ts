@@ -128,7 +128,7 @@ beforeAll(async () => {
     }
     if (stageName === 'Implement') {
       const visit = calls.filter((c) => c.stageName === 'Implement').length - 1;
-      for (const file of implementWrites[Math.min(visit, implementWrites.length - 1)] ?? []) writeFileSync(join(root, file), 'x');
+      for (const file of implementWrites[Math.min(visit, implementWrites.length - 1)] ?? []) writeFileSync(join(root, file), `${visit}-${rand(4)}`);
     }
     options?.onCounters?.({ filesChanged: stageName === 'Implement' || stageName === 'Polish' ? 1 : 0, commandsRun: stageName === 'QA' ? qaCommands : 1, toolCalls: 1, toolErrors: 0,
       approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, byName: {} });
@@ -472,6 +472,20 @@ describe('hooks that cannot run pause the run', () => {
 });
 
 const PROSE = 'I looked at it and it seems fine.';
+const sub = (name: string) => { const dir = join(root, `${name}-${rand(3)}`); mkdirSync(dir, { recursive: true }); return dir; };
+
+async function resumeApproved(id: string, opts: { fromSeq?: number } = {}) {
+  const { getPermissionManager } = await import('@/security/permissions');
+  const permissions = getPermissionManager();
+  let done = false;
+  const resumed = manager.resume(id, opts).finally(() => { done = true; });
+  // A rewind asks for a replay review; the test plays the person who approves it.
+  for (let i = 0; i < 300 && !done; i++) {
+    for (const request of await permissions.getPendingRequests(userId)) await permissions.approve(request.id, userId);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await resumed;
+}
 
 describe('second review', () => {
   test('a verdict repair on a non-final plan item does not run the project-wide hooks', async () => {
@@ -495,20 +509,24 @@ describe('second review', () => {
     onStage = { Implement: () => { if (!existsSync(`${sub}-real`)) { renameSync(sub, `${sub}-real`); symlinkSync(outside, sub); } } };
     const { pipelineId } = await run();
     const row = await pipelineRow(pipelineId);
+    // A symlink left in the workspace would make every later run's change set unknown.
+    rmSync(sub);
     expect(row.status).toBe('paused');
     expect(String(row.summary)).toContain('when the run started');
   });
 
   test('a hook for another project in the same workspace does not judge this run', async () => {
-    const other = join(root, `unrelated-${rand(3)}`);
-    mkdirSync(other);
-    refreshConfigKey('agent.evidenceHooks', [{ name: 'other-tests', command: 'ls never.txt', root: other }]);
+    const mine = sub('mine');
+    const other = sub('unrelated');
+    refreshConfigKey('agent.evidenceHooks', [
+      { name: 'mine-tests', command: 'ls built.txt', root: mine },
+      { name: 'other-tests', command: 'ls never.txt', root: other },
+    ]);
+    implementWrites = [[`${mine.slice(root.length + 1)}/built.txt`]];
     const { pipelineId } = await run();
-    const row = await pipelineRow(pipelineId);
-    expect(row.status).toBe('completed');
-    expect(String(row.summary)).toContain('changed no file under the root of "other-tests"');
+    expect((await pipelineRow(pipelineId)).status).toBe('completed');
     expect(stageCalls('Implement')).toHaveLength(1);
-    expect(await evidenceRows(pipelineId)).toEqual([]);
+    expect((await evidenceRows(pipelineId)).map((r) => r.detail.hook)).toEqual(['mine-tests']);
   });
 
   test('a hook that never ran is a block, not failed work', async () => {
@@ -546,5 +564,87 @@ describe('second review', () => {
     const { pipelineId } = await run('evidence-qa-writer');
     expect((await pipelineRow(pipelineId)).status).toBe('completed');
     expect(stageCalls('Implement')).toHaveLength(2);
+  });
+});
+
+describe('third review: the change set may only narrow when it is trustworthy', () => {
+  test('a rewind to an earlier checkpoint runs every hook, whatever that checkpoint knew', async () => {
+    const app = sub('app');
+    const other = sub('other');
+    refreshConfigKey('agent.evidenceHooks', [
+      { name: 'test', command: 'ls built.txt', root: app },
+      { name: 'other', command: 'ls ok.txt', root: other },
+    ]);
+    implementWrites = [[]];
+    let visits = 0;
+    // Three failing attempts in app; after the rewind the implementer only
+    // touches the other project, so a change set narrowed from the rewound
+    // checkpoint would skip app's hook.
+    onStage = { Implement: () => {
+      if (visits++ < 3) writeFileSync(join(app, 'draft.txt'), `x${visits}`);
+      else writeFileSync(join(other, 'ok.txt'), `y${visits}`);
+    } };
+    const { pipelineId } = await run();
+    expect((await pipelineRow(pipelineId)).status).toBe('failed');
+    const rowsBefore = (await evidenceRows(pipelineId)).length;
+    const { rows: checkpoints } = await queryRaw(`SELECT c.seq FROM pipeline_checkpoints c JOIN pipeline_nodes n
+      ON n.pipeline_id = c.pipeline_id AND n.node_key = c.node_key WHERE c.pipeline_id = '${pipelineId}' AND n.name = 'Implement' ORDER BY c.seq LIMIT 1`);
+    await resumeApproved(pipelineId, { fromSeq: Number(checkpoints[0].seq) });
+    expect((await pipelineRow(pipelineId)).status).not.toBe('completed');
+    expect((await evidenceRows(pipelineId)).length).toBeGreaterThan(rowsBefore);
+  }, 120_000);
+
+  test('a change only in a sibling folder runs the hooks of the project beside it', async () => {
+    const app = sub('app');
+    const lib = sub('lib');
+    refreshConfigKey('agent.evidenceHooks', [{ name: 'app-test', command: 'ls never.txt', root: app }]);
+    implementWrites = [[]];
+    onStage = { Implement: () => writeFileSync(join(lib, 'shared.js'), 'broken') };
+    const { pipelineId } = await run();
+    expect((await pipelineRow(pipelineId)).status).toBe('failed');
+    expect((await evidenceRows(pipelineId)).length).toBeGreaterThan(0);
+  });
+
+  test('a same-size rewrite with its timestamp put back is still a change', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const app = sub('app');
+    const other = sub('other');
+    const file = join(app, 'code.txt');
+    writeFileSync(file, 'a');
+    refreshConfigKey('agent.evidenceHooks', [
+      { name: 'app-test', command: 'ls never.txt', root: app },
+      { name: 'other-test', command: 'ls ok.txt', root: other },
+    ]);
+    implementWrites = [[]];
+    // An honest change in the other project, so the change set is not empty
+    // and would narrow to it if the forged rewrite in app went unseen.
+    onStage = { Implement: () => {
+      writeFileSync(join(other, 'ok.txt'), rand(4));
+      // `touch -r` restores the timestamp to the nanosecond, as a forger would.
+      execFileSync('cp', ['-p', file, `${file}.ref`]);
+      writeFileSync(file, 'b');
+      execFileSync('touch', ['-r', `${file}.ref`, file]);
+      rmSync(`${file}.ref`);
+    } };
+    const { pipelineId } = await run();
+    expect((await pipelineRow(pipelineId)).status).toBe('failed');
+    expect((await evidenceRows(pipelineId)).length).toBeGreaterThan(0);
+  });
+
+  test('a stage on a remote execution environment is refused with the reason, not "does not exist"', async () => {
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const remote = (await seedSession({ userId, channelId: `remote-${rand(3)}` })).id;
+    const pg = await import('@/db/postgres');
+    await pg.executeRaw(`UPDATE sessions SET context = '{"executionEnvironmentId":"remote-1","projectPath":"/remote/proj"}'::jsonb WHERE id = '${remote}'`);
+    refreshConfigKey('security.executionEnvironments', [{ id: 'remote-1', userId, name: 'Remote', backend: 'ssh', roots: ['/remote/proj'], ssh: { host: 'build.example', user: 'ci' } }]);
+    try {
+      const { runEvidenceHooks } = await import('./evidence-hooks');
+      const { results } = await runEvidenceHooks({ userId, sessionId: remote, role: 'coding' },
+        { hooks: [{ name: 'test', command: 'npm test', root: '/remote/proj', timeoutMs: 5_000 }] });
+      expect(results[0]).toMatchObject({ refused: true });
+      expect(results[0].reason).toContain('not supported on remote (SSH) execution environments');
+    } finally {
+      refreshConfigKey('security.executionEnvironments', []);
+    }
   });
 });

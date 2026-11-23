@@ -254,21 +254,37 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   else the session workspace) or a folder inside it. It runs in its `root`,
   in the stage's own execution environment (only the working directory
   moves).
-  - **Only where the run changed files.** The pipeline records which files
-    its writing stages changed (from the workspace snapshots the evidence
-    gate already takes). A belonging hook runs only when one of those files
-    lies under its root, so a hook for another project in the same workspace
-    does not judge this run. When the change set is unknown (a stage that
-    takes no snapshot, a truncated walk, more than 2000 changed files, a
-    checkpoint from before this existed), every belonging hook runs and the
-    run summary says so.
+  - **Narrowed to what the run changed, only when that is certain.** When a
+    walk starts, the pipeline hashes the CONTENT of every file in the stage
+    folder. When the hooks are due it hashes again and compares, so a
+    same-size rewrite with its timestamp put back still counts. The change
+    set may only narrow which hooks run, and only when it is trustworthy:
+    it is not empty, every changed file lies under the root of some
+    belonging hook (a change to a shared `lib/` beside `app/` runs `app`'s
+    hooks), and no belonging root lies inside a directory the snapshot does
+    not enter. Then a hook whose root holds no changed file is skipped, so a
+    hook for another project in the same workspace does not judge this run.
+    In every other case every belonging hook runs, and the run summary says
+    when the change set was unknown. It is unknown on any resume or rewind
+    (the baseline belongs to the walk that took it), when the tree holds a
+    symlink, more than 20,000 files or more than 256 MB, and on a remote
+    environment.
+  - **What the change snapshot cannot see.** It skips `node_modules`,
+    `.git`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
+    `.tox`, `.venv`, `venv`, `.gradle`, `.next` and `.turbo`, and compiled
+    files (`.pyc`, `.pyo`, `.class`, `.o`). A change only there is not seen,
+    so it does not by itself run a hook another change would not.
   - **Symlinks.** Each root is resolved once when the walk starts, before any
     stage ran. A root given through a symlink by the operator matches by what
     it resolved to then. A root that resolves anywhere else later (a stage
     replaced it with a symlink, or removed it), that is missing, not a
     directory, or resolves outside the stage folder is refused and pauses the
     run; it is never treated as "does not apply". On a resume the roots are
-    resolved again from the disk as it is then. Letter-case differences on a
+    resolved again from the disk as it is then.
+  - **Remote execution environments.** Hooks are not supported yet on a
+    stage that runs on a remote (SSH) execution environment: roots are
+    checked on this host. A hook whose root concerns such a stage pauses the
+    run with that reason. Letter-case differences on a
     case-insensitive filesystem are left to `realpath` and are untested.
   - **Above the stage folder.** A hook whose root lies above that folder is
     not run (it would run where the stage may not) and pauses the run with
@@ -284,7 +300,8 @@ setting, a list of `{name, command, root, timeoutMs}` (for example `test` →
   tool's content policy, the session user's `shell.execute` permission, the
   process sandbox (`security.shellSandbox`) and directory checks, the hook's
   timeout (default 120 s, at most 600 s; all hooks of one visit together get
-  the sum of their timeouts plus 15 s each) and the last ~2000 characters of
+  the sum of their timeouts plus 15 s each; the setting refuses hooks whose
+  timeouts add up to more than 30 minutes) and the last ~2000 characters of
   output. A hook that did not run (refused, a missing program, no time left)
   pauses the run; only a command that ran and failed goes back for repair. The command is the configured string,
   verbatim; nothing a stage wrote is substituted into it. Output handed back

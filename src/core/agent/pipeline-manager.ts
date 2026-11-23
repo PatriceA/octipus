@@ -1,5 +1,4 @@
 import { hasPipelineAutonomy, executionEnvironmentFor } from '@/security/execution-environments';
-import { resolve } from 'node:path';
 import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
 import { withAgentOrigin } from '@/core/agent-origin';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
@@ -78,8 +77,8 @@ import {
   type StageTemplate,
 } from './templates';
 import { appendSources, type AgentRole, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
-import { changedFilePaths, countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
-import { canonicalPath, configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, MAX_TRACKED_CHANGES, pinEvidenceRoots, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
+import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
+import { changesSince, configuredEvidenceHooks, EVIDENCE_REPAIR_LIMIT, evidenceBaseline, pinEvidenceRoots, type EvidenceHookResult, evidenceGroundTruth, evidenceRepairFeedback, evidenceSummary, runEvidenceHooks, stageCommandScope } from './evidence-hooks';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -689,27 +688,15 @@ export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: 
 }
 
 /**
- * The evidence bookkeeping after a stage ran: whether passing evidence still
- * describes the work, and which files the run has changed.
+ * Whether passing evidence still describes the work after a stage ran.
  *
- * A stage that may change files makes earlier evidence stale. A read-only one
- * cannot (its snapshot gate enforces it), but only while that snapshot could
- * see the workspace: with `changes === null` (no workspace root, a remote
- * environment, a truncated walk) nothing enforced it, so it counts as having
- * written. Its files are not added to the change set, which only grows from
- * stages allowed to write.
+ * A stage that may change files makes it stale. A read-only one cannot (its
+ * snapshot gate enforces it), but only while that snapshot could see the
+ * workspace: when it could not (no workspace root, a remote environment, a
+ * truncated walk) nothing enforced it, so it counts as having written.
  */
-export function evidenceAfterStage(
-  state: 'stale' | 'passed',
-  changed: Set<string> | null,
-  readOnly: boolean,
-  changes: string[] | null,
-): { state: 'stale' | 'passed'; changed: Set<string> | null } {
-  const next = !readOnly || changes === null ? 'stale' : state;
-  if (readOnly) return { state: next, changed };
-  if (changes === null || changed === null) return { state: next, changed: null };
-  const merged = new Set([...changed, ...changes]);
-  return { state: next, changed: merged.size > MAX_TRACKED_CHANGES ? null : merged };
+export function evidenceAfterStage(state: 'stale' | 'passed', readOnly: boolean, observed: boolean): 'stale' | 'passed' {
+  return readOnly && observed ? state : 'stale';
 }
 
 /** What a stage said it was for. Both flags are opt-in declarations from the
@@ -865,12 +852,6 @@ export interface WalkState {
   /** Trips back to the working stage spent on failing evidence hooks, keyed like `contractRetries`. */
   evidenceRepairs?: Record<string, number>;
   /**
-   * Absolute paths of files the run's stages changed, which decide the
-   * evidence hooks that apply. `null` (or absent, in an older checkpoint) is
-   * "unknown", and every hook under the stage folder then applies.
-   */
-  changedFiles?: string[] | null;
-  /**
    * Set on the checkpoint taken when the end-of-run evidence check paused: a
    * resume runs that check again, and no stage.
    */
@@ -937,7 +918,6 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     contractRetries: record<number>(r.contractRetries),
     verdictRepairs: record<number>(r.verdictRepairs),
     evidenceRepairs: record<number>(r.evidenceRepairs),
-    changedFiles: Array.isArray(r.changedFiles) && r.changedFiles.every((p) => typeof p === 'string') ? (r.changedFiles as string[]) : null,
     ...(r.finalEvidence && typeof (r.finalEvidence as { nodeKey?: unknown }).nodeKey === 'string'
       ? { finalEvidence: { nodeKey: (r.finalEvidence as { nodeKey: string }).nodeKey } } : {}),
     contractFeedback: typeof r.contractFeedback === 'string' ? r.contractFeedback : undefined,
@@ -1355,8 +1335,23 @@ export class PipelineManager {
         coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id }, 'Could not read agent.evidenceHooks to pin hook roots');
       }
     }
-    /** Files the run changed so far (absolute), or null when that is unknown. See `WalkState.changedFiles`. */
-    let runChanges: Set<string> | null = new Set();
+    /**
+     * The stage folder's content, hashed when this walk started, so the hooks
+     * that run can be narrowed to the projects the run actually changed
+     * (`placeEvidenceHooks`). Only a FRESH walk has one: a resume or a rewind
+     * cannot know what changed before it, so its change set is unknown and
+     * every hook under the folder runs.
+     */
+    let evidenceStart: { root: string; baseline: WorkspaceSnapshot | null } | null = null;
+    if (evidencePins && !args.resumeState) {
+      try {
+        const scope = await stageCommandScope({ userId: context.userId, sessionId, workspaceId: context.workspaceId, space: context.space, role: ROOT_ROLE });
+        if (scope.root && !scope.remote && !scope.refused) evidenceStart = { root: scope.root, baseline: await evidenceBaseline(scope.root) };
+      } catch (err) {
+        coreLogger.warn({ err: (err as Error).message, pipelineId: pipeline.id }, 'Could not take the evidence-hook baseline; every hook will run');
+      }
+    }
+    const changedSinceStart = async () => (evidenceStart ? changesSince(evidenceStart.baseline, evidenceStart.root) : null);
     /** The last node the walk visited, for the end-of-run evidence check. */
     let lastNode: PipelineNodeRow | undefined;
 
@@ -1437,9 +1432,6 @@ export class PipelineManager {
       for (const [k, v] of Object.entries(r.verdictRepairs ?? {})) verdictRepairs.set(k, v);
       evidenceRepairs.clear();
       for (const [k, v] of Object.entries(r.evidenceRepairs ?? {})) evidenceRepairs.set(k, v);
-      if (!Array.isArray(r.changedFiles)) runChanges = null;
-      else if (!deferred) runChanges = new Set(r.changedFiles);
-      else if (runChanges) for (const file of r.changedFiles) runChanges.add(file);
       for (const [key, attempts] of Object.entries(r.qaAttempts ?? {})) if (Array.isArray(attempts)) qaAttempts.set(key, attempts);
       for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
@@ -1510,7 +1502,6 @@ export class PipelineManager {
         contractRetries: Object.fromEntries(contractRetries),
         verdictRepairs: Object.fromEntries(verdictRepairs),
         evidenceRepairs: Object.fromEntries(evidenceRepairs),
-        changedFiles: runChanges ? [...runChanges] : null,
         contractFeedback,
         cursor,
         previousOutput,
@@ -1843,7 +1834,7 @@ export class PipelineManager {
         if (isQa && evidenceState === 'stale' && hooksDeclared && graphProduces && lastItem) {
           const evidence = await this.runStageEvidence({ pipeline, node, sessionId, context, role: b.role, hostServices: b.hostServices,
             checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
-            repair: evidenceRepairs.get(evidenceKey) ?? 0, pins: evidencePins, changed: runChanges });
+            repair: evidenceRepairs.get(evidenceKey) ?? 0, pins: evidencePins, changed: await changedSinceStart() });
           if (evidence.stopped) return evidence.stopped;
           if (evidence.blocked) return this.pauseForEnvironment(pipeline, node, evidence.blocked, attemptId, currentItem?.id ?? null);
           // Nothing ran: the evidence stays stale and the end-of-run check
@@ -1972,9 +1963,9 @@ export class PipelineManager {
         if (itemDecisions.length) input += `\n\nRECORDED USER DECISIONS: ${JSON.stringify(itemDecisions)}\nFollow these recorded answers for this item's required work; do not re-ask settled questions or invent a different rule.`;
         const verificationOnly = b.producesArtifacts && itemDecisions.some(recorded => recorded.blockedItemId === currentItem?.id && recorded.nodeKey === node.nodeKey && recorded.attemptId === attemptId);
         const declaredWork = verificationOnly ? { ...b, producesArtifacts: false, runsCommands: true } : b;
-        let stageChanges: string[] | null = null;
+        let stageObserved = false;
         const stepResult = await this.runStepNode({
-          onChanges: (paths) => { stageChanges = paths; },
+          ...(evidencePins ? { onObserved: (seen: boolean) => { stageObserved = seen; } } : {}),
           retryContract: retryCount < retryLimit,
           pipeline,
           node,
@@ -2014,7 +2005,7 @@ export class PipelineManager {
         // A stage that may have changed files makes earlier evidence stale. A
         // read-only one cannot, but only while its snapshot could see the
         // workspace; where it could not, it is treated as having written.
-        ({ state: evidenceState, changed: runChanges } = evidenceAfterStage(evidenceState, runChanges, b.readOnly === true, stageChanges as string[] | null));
+        evidenceState = evidenceAfterStage(evidenceState, b.readOnly === true, stageObserved as boolean);
         if (stepResult.contractFailure) {
           contractRetries.set(retryKey, retryCount + 1);
           contractFeedback = stepResult.contractFailure;
@@ -2223,7 +2214,7 @@ export class PipelineManager {
       const persisted = await this.getPipeline(pipeline.id);
       const evidence = await this.runStageEvidence({ pipeline, node: lastNode, sessionId, context, role: stage?.role ?? lastNode.role,
         hostServices: stage ? stageHostServices(stage, persisted ?? pipeline) : false, checkScope: 'run:final', repair: 0,
-        pins: evidencePins, changed: runChanges });
+        pins: evidencePins, changed: await changedSinceStart() });
       if (evidence.stopped) return evidence.stopped;
       if (evidence.blocked) {
         // Checkpoint a position AFTER the walk, so a resume runs this check
@@ -2231,7 +2222,7 @@ export class PipelineManager {
         await pipelineRepository.saveCheckpoint({ pipelineId: pipeline.id, nodeKey: lastNode.nodeKey,
           state: serializeWalk({ cursor: lastNode.nodeKey, previousOutput, handoffChain, pipelineSources, traversals: Object.fromEntries(traversals),
             loopMarks: Object.fromEntries(loopMarks), pendingFeedback: {}, judgedContext: {}, currentItemId: null, steps,
-            evidenceRepairs: Object.fromEntries(evidenceRepairs), changedFiles: runChanges ? [...runChanges] : null,
+            evidenceRepairs: Object.fromEntries(evidenceRepairs),
             finalEvidence: { nodeKey: lastNode.nodeKey } }) });
         return this.pauseForEnvironment(pipeline, lastNode, `End-of-run evidence check: ${evidence.blocked}`, randomUUID(), null);
       }
@@ -2775,8 +2766,8 @@ export class PipelineManager {
     /** Root the stage's worker writes to, re-walked here for the "after" side. */
     workspaceRoot?: string | null;
     context?: AgentContext;
-    /** Which files the stage changed, for evidence hooks; null when the snapshot cannot say. */
-    onChanges?: (paths: string[] | null) => void;
+    /** Told whether the stage's workspace snapshot could see the files (evidence hooks only). */
+    onObserved?: (seen: boolean) => void;
   }): Promise<void> {
     const declared: StageDeclaration = {
       producesArtifacts: args.declared?.producesArtifacts,
@@ -2784,7 +2775,7 @@ export class PipelineManager {
       readOnly: args.declared?.readOnly,
     };
     if (!declared.producesArtifacts && !declared.runsCommands && !declared.readOnly) {
-      args.onChanges?.(null);
+      args.onObserved?.(false);
       return;
     }
 
@@ -2801,8 +2792,7 @@ export class PipelineManager {
     const filesTouched = countChangedFiles(args.before ?? null, after, {
       countPackages: declared.producesArtifacts === true,
     });
-    const changedPaths = changedFilePaths(args.before ?? null, after);
-    args.onChanges?.(changedPaths && args.workspaceRoot ? changedPaths.map((rel) => resolve(canonicalPath(args.workspaceRoot as string), rel)) : null);
+    args.onObserved?.(filesTouched !== null);
 
     const failure = stageEvidenceFailure(declared, counters, filesTouched);
     const passed = failure === null;
@@ -3387,8 +3377,8 @@ export class PipelineManager {
     checkpoint?: { seq: number; state: Record<string, unknown> };
     /** What this attempt said before an earlier interruption. */
     partial?: StagePartial;
-    /** Told which files the stage changed (absolute paths), or null when the snapshot could not say. */
-    onChanges?: (paths: string[] | null) => void;
+    /** Told whether the stage's workspace snapshot could see the files (evidence hooks only). */
+    onObserved?: (seen: boolean) => void;
   }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, stageContext, context, registry, workspaceRoot, title, attemptId, itemId, checkpoint } = args;
     let input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
@@ -3634,7 +3624,7 @@ export class PipelineManager {
         workspaceRoot,
         context,
         counters,
-        onChanges: args.onChanges,
+        onObserved: args.onObserved,
       });
 
       // A planner that produced no plan would send the loop straight past every

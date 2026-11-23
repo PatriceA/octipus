@@ -32,9 +32,20 @@ export const evidenceHookSchema = z.object({
 }).strict();
 export type EvidenceHook = z.infer<typeof evidenceHookSchema>;
 
+/**
+ * Ceiling on the timeouts of all configured hooks together. Any of them can
+ * run in one visit (a run whose folder holds every hook root), so the sum is
+ * what bounds how long a pipeline can sit in its evidence checks.
+ */
+export const EVIDENCE_HOOKS_MAX_TOTAL_MS = 1_800_000;
+
 export const evidenceHooksSchema = z.array(evidenceHookSchema).max(50).superRefine((hooks, ctx) => {
   const keys = hooks.map(hook => `${hook.root}\u0000${hook.name}`);
   if (new Set(keys).size !== keys.length) ctx.addIssue({ code: 'custom', message: 'Hook names must be unique within a project folder' });
+  const total = hooks.reduce((sum, hook) => sum + hook.timeoutMs, 0);
+  if (total > EVIDENCE_HOOKS_MAX_TOTAL_MS) {
+    ctx.addIssue({ code: 'custom', message: `The hooks' timeouts add up to ${total}ms; all hooks together may take at most ${EVIDENCE_HOOKS_MAX_TOTAL_MS}ms (30 minutes)` });
+  }
 });
 
 /** What one hook run produced, as stored in `verification_evidence.detail` (`kind: 'pre_verify'`). */

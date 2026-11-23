@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { evidenceHooksSchema, type EvidenceHookResult } from '@/shared/evidence-hooks';
-import { mkdirSync, mkdtempSync, renameSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evidenceAfterStage } from './pipeline-manager';
+import { changesSince, evidenceBaseline } from './evidence-hooks';
 import { describeRun, evidenceGroundTruth, evidenceRepairFeedback, EVIDENCE_REPAIR_LIMIT, hookOutputBlock, pinEvidenceRoots, placeEvidenceHooks, runEvidenceHook } from './evidence-hooks';
 
 describe('evidenceHooksSchema', () => {
@@ -62,8 +64,8 @@ describe('placeEvidenceHooks', () => {
   });
 
   test('never a sibling that merely shares a prefix, nor an unknown folder', () => {
-    expect(placeEvidenceHooks(hooks, `${app}2`)).toEqual({ apply: [], refused: [], unchanged: [] });
-    expect(placeEvidenceHooks(hooks, null)).toEqual({ apply: [], refused: [], unchanged: [] });
+    expect(placeEvidenceHooks(hooks, `${app}2`)).toEqual({ apply: [], refused: [], unchanged: [], narrowed: false });
+    expect(placeEvidenceHooks(hooks, null)).toEqual({ apply: [], refused: [], unchanged: [], narrowed: false });
   });
 
   test('matches a root the operator gave through a symlink', () => {
@@ -140,17 +142,63 @@ describe('hookOutputBlock', () => {
 
 describe('evidenceAfterStage', () => {
   test('a read-only stage keeps passing evidence while its snapshot could see the workspace', () => {
-    expect(evidenceAfterStage('passed', new Set(), true, []).state).toBe('passed');
+    expect(evidenceAfterStage('passed', true, true)).toBe('passed');
   });
 
   test('a read-only stage whose snapshot could not see the workspace makes it stale', () => {
-    expect(evidenceAfterStage('passed', new Set(), true, null).state).toBe('stale');
+    expect(evidenceAfterStage('passed', true, false)).toBe('stale');
   });
 
-  test('a writing stage makes it stale and adds its files; an unknown change set stays unknown', () => {
-    const after = evidenceAfterStage('passed', new Set(['/w/a']), false, ['/w/b']);
-    expect(after.state).toBe('stale');
-    expect([...(after.changed ?? [])]).toEqual(['/w/a', '/w/b']);
-    expect(evidenceAfterStage('passed', new Set(['/w/a']), false, null).changed).toBeNull();
+  test('a writing stage makes it stale', () => {
+    expect(evidenceAfterStage('passed', false, true)).toBe('stale');
+  });
+});
+
+describe('narrowing on the change set', () => {
+  const base = mkdtempSync(join(tmpdir(), 'evidence-narrow-'));
+  const app = join(base, 'app');
+  const lib = join(base, 'lib');
+  const deps = join(base, 'node_modules', 'pkg');
+  for (const dir of [app, lib, deps]) mkdirSync(dir, { recursive: true });
+  const appHook = evidenceHooksSchema.parse([{ name: 'app', command: 'npm test', root: app }]);
+
+  test('a change outside every hook root runs every hook', () => {
+    const placed = placeEvidenceHooks(appHook, base, { changed: new Set([join(lib, 'shared.js')]) });
+    expect(placed.apply.map((p) => p.hook.name)).toEqual(['app']);
+    expect(placed.narrowed).toBe(false);
+  });
+
+  test('a hook rooted inside a pruned directory makes the change set unknown', () => {
+    const hooks = evidenceHooksSchema.parse([{ name: 'app', command: 'npm test', root: app }, { name: 'dep', command: 'npm test', root: deps }]);
+    const placed = placeEvidenceHooks(hooks, base, { changed: new Set([join(app, 'a.js')]) });
+    expect(placed.apply.map((p) => p.hook.name)).toEqual(['app', 'dep']);
+    expect(placed.unknown).toContain('does not enter');
+  });
+
+  test('the content baseline sees a same-size rewrite whose mtime was put back', async () => {
+    const file = join(app, 'code.txt');
+    writeFileSync(file, 'a');
+    const baseline = await evidenceBaseline(base);
+    execFileSync('cp', ['-p', file, `${file}.ref`]);
+    writeFileSync(file, 'b');
+    execFileSync('touch', ['-r', `${file}.ref`, file]);
+    rmSync(`${file}.ref`);
+    expect([...((await changesSince(baseline, base)) ?? [])]).toEqual([file]);
+  });
+
+  test('a symlink in the tree makes the baseline unknown', async () => {
+    const tree = mkdtempSync(join(tmpdir(), 'evidence-link-tree-'));
+    writeFileSync(join(tree, 'a.txt'), 'a');
+    symlinkSync(tree, join(tree, 'loop'));
+    expect(await evidenceBaseline(tree)).toBeNull();
+    expect(await changesSince(null, tree)).toBeNull();
+  });
+});
+
+describe('the total timeout ceiling', () => {
+  test('rejects hooks whose timeouts add up to more than 30 minutes', () => {
+    const many = Array.from({ length: 4 }, (_, i) => ({ name: `h${i}`, command: 'npm test', root: '/srv/app', timeoutMs: 600_000 }));
+    expect(evidenceHooksSchema.safeParse(many).success).toBe(false);
+    expect(evidenceHooksSchema.safeParse(many.slice(0, 3)).success).toBe(true);
   });
 });
