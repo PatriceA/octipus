@@ -257,7 +257,7 @@ export class TasksTool extends BaseTool {
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
           };
-          const task = await repo.update(args.id as string, patch, { asActor: agentActor(context) });
+          const task = await repo.update(args.id as string, patch, { asActor: agentActor(context), agent: agentOf(context) });
           if (!task) return refusal(await repo.findById(args.id as string));
           const change = changedTaskFields(patch, existing);
           if (change.length > 0) {
@@ -292,7 +292,7 @@ export class TasksTool extends BaseTool {
         if (!existing) return { error: 'Task not found' };
         // Idempotent: keep the original completedAt if already done.
         const patch = { status: 'done', ...completionPatch('done', Boolean(existing.completedAt)) };
-        const task = await repo.update(args.id as string, patch, { asActor: agentActor(context) });
+        const task = await repo.update(args.id as string, patch, { asActor: agentActor(context), agent: agentOf(context) });
         if (!task) return refusal(await repo.findById(args.id as string));
         // Already done: nothing changed, nothing to audit (same rule as PATCH).
         if (existing.status !== 'done') {
@@ -453,6 +453,16 @@ function agentActor(context: AgentContext): string {
   if (typeof pipelineId === 'string' && typeof nodeKey === 'string') return `pipeline:${pipelineId}/${nodeKey}`;
   if (context.sessionId) return `${context.role || 'agent'}@${context.sessionId}`;
   return 'agent';
+}
+
+/**
+ * The agent behind a write, for the note lines a completion ticks: in a
+ * space that takes the agent's note changes as proposals they are proposed
+ * as this session's (core/tasks/note-links.ts `syncNoteLines`). Null
+ * without a session (nothing to file a proposal under).
+ */
+function agentOf(context: AgentContext): { sessionId: string; agentId: string | null } | null {
+  return context.sessionId ? { sessionId: context.sessionId, agentId: context.id || null } : null;
 }
 
 /**

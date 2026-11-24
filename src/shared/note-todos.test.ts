@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { bodyPreview, noteTitleFrom } from './note-text';
 import {
-  anchorLine, anchorStates, changedAnchors, lineAt, newTodoAnchor, noteTaskLines, setAnchoredChecked, TODO_ANCHOR, TODO_TITLE_MAX,
+  anchorLine, anchorStates, changedAnchors, lineAt, newTodoAnchor, normalizeMarkers, noteTaskLines, setAnchoredChecked, TODO_ANCHOR, TODO_TITLE_MAX,
   todoTitleFromLine,
 } from './note-todos';
 
@@ -38,9 +38,9 @@ describe('changedAnchors', () => {
 });
 
 describe('setAnchoredChecked', () => {
-  test('ticks every line with the anchor and leaves the rest', () => {
+  test('ticks the line with the anchor (the first, as anchorStates reads it) and leaves the rest', () => {
     const body = '- [ ] a ^todo-aaaaaaaa\n- [ ] b\n- [ ] a again ^todo-aaaaaaaa';
-    expect(setAnchoredChecked(body, 'aaaaaaaa', true)).toBe('- [x] a ^todo-aaaaaaaa\n- [ ] b\n- [x] a again ^todo-aaaaaaaa');
+    expect(setAnchoredChecked(body, 'aaaaaaaa', true)).toBe('- [x] a ^todo-aaaaaaaa\n- [ ] b\n- [ ] a again ^todo-aaaaaaaa');
   });
 
   test('null when nothing changes or the anchor is gone', () => {
@@ -95,4 +95,17 @@ test('lineAt counts lines before an offset', () => {
   expect(lineAt('a\nb\nc', 0)).toBe(0);
   expect(lineAt('a\nb\nc', 2)).toBe(1);
   expect(lineAt('a\nb\nc', 4)).toBe(2);
+});
+
+describe('normalizeMarkers', () => {
+  test('a copied marker and one with no link are taken off their lines; the first linked one stays', () => {
+    const body = '- [ ] a ^todo-aaaaaaaa\n- [x] a copy ^todo-aaaaaaaa\n- [ ] from elsewhere ^todo-zzzzzzzz\n- [ ] plain';
+    expect(normalizeMarkers(body, new Set(['aaaaaaaa']))).toBe('- [ ] a ^todo-aaaaaaaa\n- [x] a copy\n- [ ] from elsewhere\n- [ ] plain');
+  });
+
+  test('the same string back when nothing is taken', () => {
+    const body = '- [ ] a ^todo-aaaaaaaa';
+    expect(normalizeMarkers(body, new Set(['aaaaaaaa']))).toBe(body);
+    expect(normalizeMarkers('no markers', new Set())).toBe('no markers');
+  });
 });

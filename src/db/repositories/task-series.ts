@@ -6,9 +6,10 @@
  * occurrence; to end a series, stop its repeat). The next occurrence is a
  * new open task: same title, notes, list, priority, assignee, source and
  * rule, its steps copied open (deleted steps are not), each user's star and
- * order copied (not My Day), its notes attached (not the note line it was
- * made from: that line stays with its own occurrence, ticked), due one step
- * on in the series' zone.
+ * order copied (not My Day), its attached notes moved on to it (the note
+ * line it was made from stays with its own occurrence, ticked; a deleted
+ * occurrence hands on its line too, as `carry`), due one step on in the
+ * series' zone.
  *
  * Exactly once: the next id is claimed on the finished row
  * (`repeat_next_id IS NULL`, still finished) in the same transaction as the
@@ -31,8 +32,8 @@ import { nextOccurrence, normalizeRepeat, type TaskRepeat } from '@/core/tasks/r
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { taskComments } from '../schema/task-comments';
-import { type Task, tasks, taskUserState } from '../schema/tasks';
-import { copyLinksSql } from './task-note-links';
+import { type Task, type TaskNoteLink, taskNoteLinks, tasks, taskUserState } from '../schema/tasks';
+import { moveAttachmentsSql } from './task-note-links';
 
 /** How long after it was made an untouched next occurrence may still be taken back by a reopen. */
 export const RETRACT_WINDOW_MS = 10 * 60_000;
@@ -50,7 +51,7 @@ export interface SpawnResult {
  * deleted) unconditionally. Null when there is nothing to make or another
  * caller made it. `fallbackTz` is used only for a rule without its own zone.
  */
-export async function spawnNextOccurrence(finished: Task, opts: { claim: boolean; fallbackTz: string; now?: Date }): Promise<SpawnResult | null> {
+export async function spawnNextOccurrence(finished: Task, opts: { claim: boolean; fallbackTz: string; now?: Date; carry?: TaskNoteLink[] }): Promise<SpawnResult | null> {
   let rule: TaskRepeat | null;
   try {
     rule = normalizeRepeat(finished.repeat);
@@ -114,7 +115,12 @@ export async function spawnNextOccurrence(finished: Task, opts: { claim: boolean
     if (states.length > 0) {
       await tx.insert(taskUserState).values(states.map((s) => ({ taskId: nextId, userId: s.userId, important: s.important, sortOrder: s.sortOrder })));
     }
-    await tx.execute(copyLinksSql(finished.id, nextId));
+    for (const statement of moveAttachmentsSql(finished.id, nextId)) await tx.execute(statement);
+    // A deleted occurrence's links (gone with its row): the next one takes them, its line included.
+    if (opts.carry && opts.carry.length > 0) {
+      await tx.insert(taskNoteLinks).values(opts.carry.map((l) => ({ taskId: nextId, noteId: l.noteId, anchor: l.anchor, createdBy: l.createdBy })))
+        .onConflictDoNothing();
+    }
     return { claimed, next };
   });
 }

@@ -13,23 +13,32 @@
  * open it. Federation reads (host-ops `task.list` / `task.read`) return the
  * raw rows and carry no links at all.
  *
- * The tick of a line and the to-do's status follow each other, edge for
- * edge, never state for state:
- *   - a to-do moved between done and not done ticks or unticks its lines
- *     (`syncNoteLines`, from `TaskRepo.update`), written like any writer's
- *     change: a personal note only over the text it read (`ifSha256`, read
- *     again on a race), a space note merged into its live text;
- *   - a save of a note whose anchored line's tick changed completes or
- *     reopens that to-do (`reconcileNoteTasks`, from `NoteService.save` and
- *     the live note's refresh); a marker that only appears or disappears
- *     changes nothing.
- * Each side writes only when the other differs, so the two never loop. A
- * to-do that is archived (deleted) is never brought back by a tick, and
- * archiving one leaves its line as it is. A line deleted from the note
- * leaves the to-do and its link (the line comes back with an undo); an
- * edited line keeps its link (the to-do keeps its own title). A repeating
- * to-do's line stays with its occurrence (ticked when it is done); the next
- * occurrence has the note attached (db/repositories/task-series.ts).
+ * The tick of a line and the to-do's status follow each other, change for
+ * change:
+ *   - a to-do moved between done and not done (or restored from deleted)
+ *     ticks or unticks its line (`syncNoteLines`, from `TaskRepo.update`):
+ *     a personal note by one UPDATE conditional on the text read (read
+ *     again on a race), a space note merged into its live text; an agent's
+ *     change in a space that takes its note changes as proposals is
+ *     proposed instead. A write that fails is owed (`pending_checked`) and
+ *     made when the note is next opened by a writer or refreshed
+ *     (`healNoteLines`), so the two always come back together;
+ *   - a change of the note that ticks or unticks a marked line completes or
+ *     reopens its to-do, as the member who made it and within their reach
+ *     (`reconcileNoteTasks`): a save (`NoteService.save`), any merged write
+ *     (`writeSpaceBody`: a merge, a restored revision, an accepted proposal)
+ *     and each update typed in a live note (the hub's `onTicks`, in order);
+ *     a marker that only appears or disappears changes nothing.
+ * Each side writes only when the other differs, so the two never loop. Every
+ * marker names one line and one link: a save takes a copied marker or one
+ * without a link off its line (`normalizeMarkers`). A to-do that is archived
+ * (deleted) is never brought back by a tick, and archiving one leaves its
+ * line as it is. A line deleted from the note leaves the to-do and its link
+ * (an undo brings the line back); an edited line keeps its link (the to-do
+ * keeps its own title). A repeating to-do's line stays with its occurrence
+ * (ticked when it is done); its attached notes move on to the next one, and
+ * the note of its line is attached there (db/repositories/task-series.ts);
+ * deleting an occurrence hands its links, line included, to the next.
  */
 import { StaleWriteError } from '@/core/docs/hub';
 import { getNoteService } from '@/core/knowledge/notes';
@@ -38,14 +47,16 @@ import { isActiveStatus } from '@/core/tasks/status';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import { type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
 import { memberPrincipal } from '@/db/repositories/space';
-import { anchoredLinksOfNote, clearAnchors, deleteLink, linksOfNote, linksOfTasks, putLink } from '@/db/repositories/task-note-links';
+import {
+  anchoredLinksOfNote, anchorsOfNote, clearAnchors, deleteLink, linksOfNote, linksOfTasks, pendingLinksOfNote, putLink, setPending,
+} from '@/db/repositories/task-note-links';
 import type { Note } from '@/db/schema/notes';
 import type { Task } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
 import {
   anchorLine, changedAnchors, type LinkedNote, type LinkedTask as SharedLinkedTask, newTodoAnchor, noteTaskLines, setAnchoredChecked, TODO_ANCHOR,
-  todoTitleFromLine,
+  TODO_MARKER_TAIL, todoTitleFromLine,
 } from '../../shared/note-todos';
 
 const logger = coreLogger.child({ component: 'task-note-links' });
@@ -156,14 +167,31 @@ function ownerPrincipal(userId: string): Principal {
   return { kind: 'user', userId, username: userId, isAdmin: false, sessionToken: null, roles: ['user'], workspaceId: null, workspaceKind: 'personal' };
 }
 
+/** Who a mirrored tick or a reconciled to-do is attributed to (audit, revisions). */
+export interface TickActor {
+  /** The member or user whose change it is. */
+  userId: string;
+  /** An agent acting for them (its audit actor and run). */
+  agent?: { id: string; sessionId: string | null } | null;
+  /** The user a privileged actor (an impersonating admin) acted for. */
+  onBehalfOf?: string | null;
+}
+
 /**
- * Write a change of a note's body as `userId` would: a space note merged
- * into its current (live) text, a personal note only over the text read
+ * Write a change of a note's body: a space note merged into its current
+ * (live) text, a personal note by one UPDATE conditional on the sha it read
  * (read again when another write came first). `change` gets the body as it
- * is and returns the new one, or null for nothing to write. Returns whether
- * it wrote.
+ * is and returns the new one, or null for nothing to write. `mirror`: the
+ * write is a to-do's state reaching its line (no reconcile back; a closed
+ * space note's ticks share one revision a while). Returns whether it wrote.
  */
-export async function writeNoteBody(scope: NoteScope, noteId: string, userId: string, change: (body: string) => string | null): Promise<boolean> {
+export async function writeNoteBody(
+  scope: NoteScope,
+  noteId: string,
+  actor: TickActor,
+  change: (body: string) => string | null,
+  opts: { mirror?: boolean } = {},
+): Promise<boolean> {
   const notes = getNoteService();
   for (let attempt = 0; ; attempt++) {
     const note = await notes.getById(scope, noteId);
@@ -172,41 +200,81 @@ export async function writeNoteBody(scope: NoteScope, noteId: string, userId: st
     if (next === null || next === note.body) return false;
     try {
       if (scope.kind === 'space') {
-        await notes.writeSpaceBody(scope, noteId, { base: { sha256: note.bodySha256, text: note.body }, next, origin: { kind: 'external', userId } });
+        await notes.writeSpaceBody(scope, noteId, {
+          base: { sha256: note.bodySha256, text: note.body }, next,
+          origin: { kind: 'external', userId: actor.userId, onBehalfOfUserId: actor.onBehalfOf ?? null },
+          mirror: opts.mirror, actor,
+        });
       } else {
         await notes.save({
           scope, id: noteId, title: note.title, body: next, tags: note.tags, ifSha256: note.bodySha256,
-          // This write is the to-do side's: its own lines need no reconcile.
-          skipTaskSync: true, deferIndex: true,
+          // A to-do's own tick needs no reconcile back.
+          skipTaskSync: opts.mirror, deferIndex: true, actor,
         });
       }
       return true;
     } catch (err) {
-      if (err instanceof StaleWriteError && attempt < 2) continue;
+      if (err instanceof StaleWriteError && attempt < 4) continue;
       throw err;
     }
   }
 }
 
+/** A shared space that takes the agent's note changes as proposals (suggest mode). */
+async function suggesting(workspaceId: string): Promise<boolean> {
+  const { agentEditModeOf } = await import('@/core/spaces/service');
+  return (await agentEditModeOf(workspaceId)) === 'suggest';
+}
+
 /**
  * A to-do moved between done (`checked`) and not done: tick or untick the
- * note lines it was made from, as `principal` (who changed the to-do).
- * Never throws: a line that could not be written is logged and stays as it
- * was (the to-do's change stands; the next tick of either side writes again).
+ * note line it was made from, as `principal` (who changed the to-do).
+ *
+ * An agent's change in a space that takes the agent's note changes as
+ * proposals (`agent`, suggest mode) is proposed, as any of its edits there
+ * would be (the line follows once a member accepts); everything else is
+ * written. A write that fails is owed to the line (`pending_checked`) and
+ * made when the note is next opened or refreshed (`healNoteLines`), so
+ * line and to-do always come back together. Never throws.
  */
-export async function syncNoteLines(principal: Principal, task: Task, checked: boolean): Promise<void> {
+export async function syncNoteLines(
+  principal: Principal,
+  task: Task,
+  checked: boolean,
+  opts: { agent?: { sessionId: string | null; agentId: string | null } | null } = {},
+): Promise<void> {
   try {
     const links = (await linksOfTasks([task.id])).filter((l) => l.anchor);
     if (links.length === 0) return;
     const repos = contentRepos(principal);
     // A personal to-do's notes are its owner's (made so); a space's, the space's.
     const scope = repos.kind === 'space' ? repos.noteScope : personalNoteScope(task.userId);
+    const propose = repos.kind === 'space' && !!opts.agent && await suggesting(repos.workspaceId as string);
+    const actor: TickActor = {
+      userId: principal.userId,
+      agent: opts.agent ? { id: opts.agent.agentId ?? 'agent', sessionId: opts.agent.sessionId } : null,
+      onBehalfOf: principal.actorUserId && principal.actorUserId !== principal.userId ? principal.userId : null,
+    };
     for (const link of links) {
       const anchor = link.anchor as string;
       try {
-        await writeNoteBody(scope, link.noteId, principal.userId, (body) => setAnchoredChecked(body, anchor, checked));
+        if (propose && opts.agent) {
+          // No session to file a proposal under (a pipeline's own close): the line waits for a member.
+          if (!opts.agent.sessionId) {
+            logger.info({ taskId: task.id, noteId: link.noteId }, 'An agent completed a linked to-do in a suggest-mode space without a session: its line is left for a member');
+            continue;
+          }
+          const { proposeAgentEdit } = await import('@/core/docs/edit-proposals');
+          const note = await getNoteService().getById(scope, link.noteId);
+          const next = note ? setAnchoredChecked(note.body, anchor, checked) : null;
+          if (note && next !== null) await proposeAgentEdit(scope, { sessionId: opts.agent.sessionId, agentId: opts.agent.agentId }, { noteId: note.id, baseSha256: note.bodySha256, body: next });
+          continue;
+        }
+        await writeNoteBody(scope, link.noteId, actor, (body) => setAnchoredChecked(body, anchor, checked), { mirror: true });
+        if (link.pendingChecked !== null) await setPending(task.id, link.noteId, null);
       } catch (err) {
-        logger.warn({ err, taskId: task.id, noteId: link.noteId }, 'A linked note line could not follow its to-do; it is left as it was');
+        logger.warn({ err, taskId: task.id, noteId: link.noteId }, 'A linked note line could not follow its to-do now; it is owed and made when the note is next opened');
+        await setPending(task.id, link.noteId, checked).catch((e: unknown) => logger.error({ err: e, taskId: task.id }, 'The owed tick of a note line was not recorded'));
       }
     }
   } catch (err) {
@@ -215,17 +283,45 @@ export async function syncNoteLines(principal: Principal, task: Task, checked: b
 }
 
 /**
- * A note was saved from `before` to `after` (by `scope.userId`): complete or
- * reopen the to-dos of the anchored lines whose tick changed, as that member.
- * Never throws (the note's save stands; logged).
+ * Make the ticks a note's lines are owed by their to-dos (`syncNoteLines`
+ * could not write them), as `userId`, and clear them. Called when the note
+ * is opened by someone who may write it and when a live note is refreshed.
+ * Never throws.
  */
-export async function reconcileNoteTasks(scope: NoteScope, noteId: string, before: string, after: string): Promise<void> {
+export async function healNoteLines(scope: NoteScope, noteId: string, userId: string): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/i.test(noteId)) return;
+  try {
+    const owed = await pendingLinksOfNote(noteId);
+    for (const link of owed) {
+      const anchor = link.anchor as string;
+      const checked = link.pendingChecked as boolean;
+      try {
+        await writeNoteBody(scope, noteId, { userId }, (body) => setAnchoredChecked(body, anchor, checked), { mirror: true });
+        await setPending(link.taskId, noteId, null);
+      } catch (err) {
+        logger.warn({ err, noteId, taskId: link.taskId }, 'An owed note line tick is still owed');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, noteId }, 'The owed ticks of a note were not made');
+  }
+}
+
+/**
+ * A note changed from `before` to `after` by `actor` (a save, a merged
+ * write, a live editor's update): complete or reopen the to-dos of the
+ * anchored lines whose tick changed, as that member, with their own reach —
+ * a to-do they cannot see is left alone. Never throws (the note's change
+ * stands; logged).
+ */
+export async function reconcileNoteTasks(scope: NoteScope, noteId: string, before: string, after: string, actor?: TickActor): Promise<void> {
   const changed = changedAnchors(before, after);
   if (changed.length === 0) return;
+  const who: TickActor = actor ?? { userId: scope.userId };
   try {
     const links = await anchoredLinksOfNote(noteId, changed.map((c) => c.anchor));
     if (links.length === 0) return;
-    const principal = scope.kind === 'space' ? await memberPrincipal(scope.userId, scope.workspaceId) : ownerPrincipal(scope.userId);
+    const principal = scope.kind === 'space' ? await memberPrincipal(who.userId, scope.workspaceId) : ownerPrincipal(scope.userId);
     const repos = contentRepos(principal);
     const want = new Map(changed.map((c) => [c.anchor, c.checked]));
     for (const link of links) {
@@ -240,7 +336,10 @@ export async function reconcileNoteTasks(scope: NoteScope, noteId: string, befor
         if (!updated) continue;
         await auditTaskMutation({
           userId: task.userId, taskId: task.id, op: checked ? 'complete' : 'update', change: ['status'],
-          actor: { kind: 'user', id: scope.userId }, runId: null,
+          actor: who.agent
+            ? { kind: 'agent', id: who.agent.id }
+            : who.onBehalfOf ? { kind: 'user', id: who.userId, onBehalfOf: who.onBehalfOf } : { kind: 'user', id: who.userId },
+          runId: who.agent?.sessionId ?? null,
         });
       } catch (err) {
         logger.warn({ err, taskId: task.id, noteId }, 'A to-do did not follow its note line');
@@ -275,7 +374,9 @@ export async function makeTodosFromNote(
   const note = await getNoteService().getById(repos.noteScope, noteId);
   if (!note) throw new NoteLinkError('not_found', 'Note not found');
   const wanted = opts.lines ? new Set(opts.lines) : null;
-  const lines = noteTaskLines(note.body).filter((l) => !l.anchor && (wanted ? wanted.has(l.line) : !l.checked));
+  // A marker with no link here (copied from another note) is no to-do: its line may become one.
+  const known = await anchorsOfNote(note.id);
+  const lines = noteTaskLines(note.body).filter((l) => !(l.anchor && known.has(l.anchor)) && (wanted ? wanted.has(l.line) : !l.checked));
   const made: Array<{ task: Task; line: number; anchor: string }> = [];
   for (const line of lines) {
     const title = todoTitleFromLine(line.text);
@@ -295,14 +396,21 @@ export async function makeTodosFromNote(
   if (!markLines) return { tasks: made.map((m) => m.task), marked: false, reason: 'the note takes changes as proposals here' };
   try {
     // Each line found again in the text as it is now (by its text: lines may have moved).
-    const wrote = await writeNoteBody(repos.noteScope, note.id, repos.principal.userId, (body) => {
+    const wrote = await writeNoteBody(repos.noteScope, note.id, { userId: repos.principal.userId }, (body) => {
       let next = body;
-      const current = noteTaskLines(body);
+      // Markers that mean nothing here come off first (anchorLine refuses a marked line).
+      const unknown = noteTaskLines(body).filter((l) => l.anchor && !known.has(l.anchor) && !made.some((m) => m.anchor === l.anchor));
+      for (const l of [...unknown].reverse()) next = `${next.slice(0, l.from)}${next.slice(l.from, l.to).replace(TODO_MARKER_TAIL, '')}${next.slice(l.to)}`;
+      const current = noteTaskLines(next);
+      const used = new Set<number>();
       for (const m of made) {
         const seen = lines.find((l) => l.line === m.line);
-        const at = current.find((l) => l.line === m.line && !l.anchor && l.text === seen?.text)
-          ?? current.find((l) => !l.anchor && l.text === seen?.text);
-        if (at) next = anchorLine(next, at.line, m.anchor) ?? next;
+        // Its own line when it still reads the same; else the first unused line that does (two equal lines stay two).
+        const free = (l: { line: number; anchor: string | null; text: string }) => !l.anchor && !used.has(l.line) && l.text === seen?.text;
+        const at = current.find((l) => l.line === m.line && free(l)) ?? current.find(free);
+        if (!at) continue;
+        used.add(at.line);
+        next = anchorLine(next, at.line, m.anchor) ?? next;
       }
       return next;
     });

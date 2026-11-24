@@ -131,10 +131,22 @@ describe('Notes API', () => {
     // A day that does not exist is refused, not rolled into the next month.
     const impossible = await post(aliceApp, '/api/notes/daily', { date: '2026-02-31' });
     expect(impossible.status).toBe(400);
-    // An archived day's note comes back when asked for.
+    // An archived day's note stays archived: asking for the day says so and writes nothing,
+    // a capture is not hidden in it, and only an explicit restore (or a fresh note) moves it.
     await del(aliceApp, `/api/notes/${first.body.note.id}`);
-    const back = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
+    const refused = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
+    expect(refused).toMatchObject({ status: 409, body: { code: 'archived', id: first.body.note.id } });
+    expect((await post(aliceApp, '/api/notes/capture', { text: 'hidden?', date: '2026-11-23' }))).toMatchObject({ status: 409, body: { code: 'archived' } });
+    expect((await get(aliceApp, `/api/notes/${first.body.note.id}`)).body.archivedAt).not.toBeNull();
+    const back = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23', restore: true });
     expect(back.body).toMatchObject({ restored: true, note: { id: first.body.note.id, archivedAt: null } });
+    expect((await get(aliceApp, `/api/notes/${first.body.note.id}`)).body.body).not.toContain('hidden?');
+    // Archived again, and a fresh note this time: the archived one steps aside, the day's slug is the new note's.
+    await del(aliceApp, `/api/notes/${first.body.note.id}`);
+    const fresh = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23', fresh: true });
+    expect(fresh.body).toMatchObject({ fresh: true, note: { slug: 'daily/2026-11-23', archivedAt: null } });
+    expect(fresh.body.note.id).not.toBe(first.body.note.id);
+    expect((await get(aliceApp, `/api/notes/${first.body.note.id}`)).body).toMatchObject({ archivedAt: expect.any(String), slug: expect.stringMatching(/^daily\/2026-11-23-archived-/) });
     // Another user's day is their own.
     expect((await post(bobApp, '/api/notes/daily', { date: '2026-11-23' })).body.note.id).not.toBe(first.body.note.id);
   });

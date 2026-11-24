@@ -147,19 +147,39 @@ export function changedAnchors(before: string, after: string): Array<{ anchor: s
 }
 
 /**
- * Tick or untick every line carrying `anchor`. Null when no line carries it
- * or every one already reads `checked` (nothing to write).
+ * Tick or untick the line carrying `anchor` (its first, should a copy of it
+ * still be in the text: the one `anchorStates` reads). Null when no line
+ * carries it or it already reads `checked` (nothing to write).
  */
 export function setAnchoredChecked(body: string, anchor: string, checked: boolean): string | null {
-  let next = body;
-  let changed = false;
-  // From the end, so earlier offsets stay valid as the text changes.
-  for (const t of noteTaskLines(body).reverse()) {
-    if (t.anchor !== anchor || t.checked === checked) continue;
-    next = `${next.slice(0, t.box)}${checked ? 'x' : ' '}${next.slice(t.box + 1)}`;
-    changed = true;
+  const t = noteTaskLines(body).find((l) => l.anchor === anchor);
+  if (!t || t.checked === checked) return null;
+  return `${body.slice(0, t.box)}${checked ? 'x' : ' '}${body.slice(t.box + 1)}`;
+}
+
+/**
+ * Every marker in the text names exactly one line and one link: a marker
+ * whose anchor is not in `linked` (a line copied from another note, a link
+ * removed with its to-do) and any copy of a marker after its first line (a
+ * pasted or duplicated line) is taken off its line, which stays a plain task
+ * line. Returns the text unchanged (the same string) when nothing is taken.
+ */
+export function normalizeMarkers(body: string, linked: ReadonlySet<string>): string {
+  if (!body.includes('^todo-')) return body;
+  const seen = new Set<string>();
+  const drop: NoteTaskLine[] = [];
+  for (const t of noteTaskLines(body)) {
+    if (!t.anchor) continue;
+    if (!linked.has(t.anchor) || seen.has(t.anchor)) drop.push(t);
+    else seen.add(t.anchor);
   }
-  return changed ? next : null;
+  if (drop.length === 0) return body;
+  let next = body;
+  for (const t of drop.reverse()) {
+    const line = next.slice(t.from, t.to);
+    next = `${next.slice(0, t.from)}${line.replace(TODO_MARKER_TAIL, '')}${next.slice(t.to)}`;
+  }
+  return next;
 }
 
 /**

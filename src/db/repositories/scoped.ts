@@ -66,7 +66,7 @@ import { hookExecutions } from '../schema/hook-executions';
 import { monitors } from '../schema/monitors';
 import { companionActions, companionGoals } from '../schema/companion-supervision';
 import { type TaskComment, taskComments } from '../schema/task-comments';
-import { type NewTask, type Task, type TaskView, taskLists, tasks, taskUserState } from '../schema/tasks';
+import { type NewTask, type Task, type TaskNoteLink, type TaskView, taskLists, taskNoteLinks, tasks, taskUserState } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
 import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
@@ -1588,7 +1588,7 @@ export class TaskRepo {
    * sibling rule in core/tasks/wakeups.ts. The wakeup itself is detached
    * (`scheduleWakeup`): it never adds latency to, or fails, the write.
    */
-  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string; tz?: string | null } = {}): Promise<Task | null> {
+  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string; tz?: string | null; agent?: { sessionId: string | null; agentId: string | null } | null } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     this.taskScope.can('write');
     // Going back to an active status may take back a repeat's next occurrence.
@@ -1623,11 +1623,13 @@ export class TaskRepo {
     // Between done and not done: the note lines it was made from follow
     // (core/tasks/note-links.ts). Awaited, so the response comes after the
     // note has its tick; never fails the write.
+    // Back to active from done, or from deleted (archived: perhaps archived
+    // while done), unticks; a line already unticked is left alone.
     const ticked = result.closedFrom !== null && row.status === 'done' ? true
-      : reopening && previous?.status === 'done' && isActiveStatus(row.status) ? false : null;
+      : reopening && previous && !isActiveStatus(previous.status) && isActiveStatus(row.status) ? false : null;
     if (ticked !== null) {
       const { syncNoteLines } = await import('@/core/tasks/note-links');
-      await syncNoteLines(this.principal, row, ticked);
+      await syncNoteLines(this.principal, row, ticked, { agent: opts.agent ?? null });
     }
     return row;
   }
@@ -1638,9 +1640,9 @@ export class TaskRepo {
    * occurrence stays finished and the cron sweep (`healRepeatSeries`) makes
    * the next one later. Returns the finished row as it now is.
    */
-  private async nextOfSeries(finished: Task, claim: boolean): Promise<Task> {
+  private async nextOfSeries(finished: Task, claim: boolean, carry?: TaskNoteLink[]): Promise<Task> {
     try {
-      const made = await spawnNextOccurrence(finished, { claim, fallbackTz: await resolveSeriesTimezone(finished.userId) });
+      const made = await spawnNextOccurrence(finished, { claim, fallbackTz: await resolveSeriesTimezone(finished.userId), carry });
       if (!made) return claim ? (await this.findById(finished.id)) ?? finished : finished;
       this.afterWrite(made.next, null);
       return made.claimed ?? finished;
@@ -2093,12 +2095,14 @@ export class TaskRepo {
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
     this.taskScope.can('write');
+    // A repeating occurrence's note links go with its row: read first, so the next one can take them on.
+    const carry = await this.db.select().from(taskNoteLinks).where(eq(taskNoteLinks.taskId, id));
     const result = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
     const gone = result[0];
     // A delete ranks at the moment it happened in the sibling order.
     if (gone) {
       // Deleting an occurrence of a series skips it: the series goes on.
-      if (isActiveStatus(gone.status) && gone.repeat) await this.nextOfSeries(gone, false);
+      if (isActiveStatus(gone.status) && gone.repeat) await this.nextOfSeries(gone, false, carry);
       this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
       // The row is gone: guests are matched on the deleted row's source.
       this.changed(gone, true);

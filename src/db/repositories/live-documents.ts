@@ -112,6 +112,8 @@ export interface NewRevision {
   onBehalfOfUserId: string | null;
   origin: NoteRevisionOrigin;
   restoredFrom?: string | null;
+  /** Only to-dos' ticks (`insertTickRevision`). */
+  tick?: boolean;
 }
 
 export async function insertRevision(rev: NewRevision): Promise<NoteRevision> {
@@ -120,6 +122,30 @@ export async function insertRevision(rev: NewRevision): Promise<NoteRevision> {
     .insert(noteRevisions)
     .values({ ...rev, authors: [...new Set(rev.authors)], restoredFrom: rev.restoredFrom ?? null })
     .returning();
+  return row;
+}
+
+/** A run of ticks by one member shares one revision this long. */
+export const TICK_REVISION_WINDOW_MS = 10 * 60_000;
+
+/**
+ * The revision of a to-do's tick reaching a closed note: the note's latest
+ * revision takes it when that is the same member's tick revision, of the
+ * text the tick was made over (`previousSha`), less than
+ * `TICK_REVISION_WINDOW_MS` old — a run of ticks is one step of history,
+ * not one each. Otherwise a new revision.
+ */
+export async function insertTickRevision(rev: NewRevision, previousSha: string): Promise<NoteRevision> {
+  const [last] = await getDb().select().from(noteRevisions)
+    .where(eq(noteRevisions.noteId, rev.noteId)).orderBy(desc(noteRevisions.createdAt)).limit(1);
+  const joinable = last && last.tick && last.origin === 'external' && last.bodySha256 === previousSha
+    && last.authors.length === 1 && last.authors[0] === rev.authors[0]
+    && (last.onBehalfOfUserId ?? null) === (rev.onBehalfOfUserId ?? null)
+    && Date.now() - last.createdAt.getTime() < TICK_REVISION_WINDOW_MS;
+  if (!joinable) return insertRevision({ ...rev, tick: true });
+  assertNoCredentialTemplates(rev);
+  const [row] = await getDb().update(noteRevisions).set({ body: rev.body, bodySha256: rev.bodySha256 })
+    .where(eq(noteRevisions.id, last.id)).returning();
   return row;
 }
 

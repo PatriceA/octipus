@@ -148,6 +148,8 @@ export const taskNoteLinks = pgTable('task_note_links', {
   taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
   noteId: uuid('note_id').references(() => notes.id, { onDelete: 'cascade' }).notNull(),
   anchor: text('anchor'),
+  /** The tick the line is owed: the to-do's write to it failed and is retried (migration 0208). Null when none. */
+  pendingChecked: boolean('pending_checked'),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

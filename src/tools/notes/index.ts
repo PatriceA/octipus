@@ -216,6 +216,8 @@ export class NotesTool extends BaseTool {
           // A note the user asked Octipus for directly is the USER's note, so
           // the root writes it unattributed; a spawned agent's note is stamped.
           createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+          // A to-do this write ticks off is audited to the agent and its run.
+          actor: { userId: context.userId, agent: { id: context.id, sessionId: context.sessionId ?? null } },
         });
         return {
           id: result.note.id,

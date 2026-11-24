@@ -3,15 +3,15 @@ import { apiContext } from '@/api/context';
 import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
 import { getConfig } from '@/config';
 import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
-import { getNoteService, InvalidSlugError, NoteExistsError } from '@/core/knowledge/notes';
+import { getNoteService, InvalidSlugError, NoteArchivedError, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import { getRevision, listRevisions } from '@/db/repositories/live-documents';
 import type { Principal } from '@/security/principal';
-import { SpaceError } from '@/security/space-access';
+import { can, SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 import { bodyPreview } from '@/shared/note-text';
-import { linkedTasksOf, makeTodosFromNote, NoteLinkError, withLinkedNotes } from '@/core/tasks/note-links';
+import { healNoteLines, linkedTasksOf, makeTodosFromNote, NoteLinkError, withLinkedNotes } from '@/core/tasks/note-links';
 import { auditTaskMutation } from '@/core/tasks/audit';
 
 const logger = apiLogger.child({ component: 'notes-route' });
@@ -143,6 +143,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           ifSha256: body.ifSha256,
           // An editor saves on every pause: embed once the note is quiet.
           deferIndex: true,
+          // An admin acting as the user: the to-dos this save ticks are audited to them, for the user.
+          ...(principal.actorUserId && principal.actorUserId !== principal.userId ? { actor: { userId: principal.actorUserId, onBehalfOf: principal.userId } } : {}),
         });
         return result;
       } catch (err) {
@@ -246,6 +248,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         const note = await getNoteService().capture(noteRepos(principal).noteScope, body.text, body.date);
         return { id: note.id, slug: note.slug };
       } catch (err) {
+        if (err instanceof NoteArchivedError) {
+          set.status = 409;
+          return { error: err.message, code: 'archived', id: err.noteId };
+        }
         const refused = liveWriteError(err, set);
         if (refused) return refused;
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
@@ -273,7 +279,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
   )
 
   // The daily note of a day (the client's own calendar day, `YYYY-MM-DD`),
-  // created from the daily template the first time it is asked for.
+  // created from the daily template the first time it is asked for. A day
+  // whose note is archived answers 409 `archived` (nothing written) unless
+  // asked explicitly: `restore` brings it back, `fresh` starts a new one
+  // (the archived note steps aside).
   .post(
     '/daily',
     async ({ user, principal, body, set }) => {
@@ -281,21 +290,32 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       const { noteScope } = noteRepos(principal);
       const notes = getNoteService();
       try {
-        let note = await notes.getOrCreateDaily(noteScope, body.date);
-        // Asking for the day's note brings an archived one back (it would
-        // otherwise open read-only, and a capture could not be read there).
-        const restored = !!note.archivedAt;
-        if (restored) {
-          await notes.restore(noteScope, note.id);
-          note = (await notes.getById(noteScope, note.id)) ?? note;
+        const found = await notes.findDaily(noteScope, body.date);
+        if (found.note?.archivedAt) {
+          if (body.restore) {
+            await notes.restore(noteScope, found.note.id);
+            return { note: (await notes.getById(noteScope, found.note.id)) ?? found.note, restored: true };
+          }
+          if (body.fresh) return { note: await notes.startFreshDaily(noteScope, body.date), fresh: true };
+          set.status = 409;
+          return { error: 'The day\'s note is archived: restore it, or start a fresh one', code: 'archived', id: found.note.id };
         }
-        return { note, ...(restored ? { restored } : {}) };
+        return { note: await notes.getOrCreateDaily(noteScope, body.date) };
       } catch (err) {
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
         throw err;
       }
     },
-    { body: t.Object({ date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }) }), detail: { tags: ['notes'] } },
+    {
+      body: t.Object({
+        date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+        /** The day's note is archived: bring it back. */
+        restore: t.Optional(t.Boolean()),
+        /** The day's note is archived: start a new one (the archived one steps aside). */
+        fresh: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['notes'] },
+    },
   )
 
   // ── Edit proposals (space notes, §7.4) ────────────────────────────
@@ -354,6 +374,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const repos = noteRepos(principal);
+      // Ticks its lines are owed by their to-dos (a write that failed) are
+      // made first, by a reader who may write: line and to-do come back together.
+      const mayWrite = repos.kind === 'personal' || (can(repos.role, 'write') && !principal.spaceArchived);
+      if (mayWrite) await healNoteLines(repos.noteScope, params.id, principal.userId);
       // A space note open in an editor reads as its live text and sha (§7.3).
       const note = await getNoteService().getById(repos.noteScope, params.id);
       if (!note) { set.status = 404; return { error: 'Note not found' }; }

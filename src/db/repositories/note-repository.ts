@@ -178,10 +178,16 @@ export class NoteRepository {
     return result[0];
   }
 
+  /**
+   * Update a note in the scope. With `ifSha256`, only while its stored body
+   * still has that sha, in the same UPDATE (a write that came in since the
+   * caller read it wins; null then, as for a miss).
+   */
   async update(
     scope: NoteScope | string,
     id: string,
     patch: Partial<Omit<NewNote, 'id' | 'userId' | 'createdAt'>>,
+    opts: { ifSha256?: string } = {},
   ): Promise<Note | null> {
     // Neither the author nor the workspace changes on an edit.
     const { workspaceId: _ws, ...safe } = patch;
@@ -189,7 +195,7 @@ export class NoteRepository {
     const result = await this.db
       .update(notes)
       .set({ ...safe, updatedAt: new Date() })
-      .where(and(eq(notes.id, id), ...owner(scope)))
+      .where(and(eq(notes.id, id), ...owner(scope), opts.ifSha256 !== undefined ? eq(notes.bodySha256, opts.ifSha256) : undefined))
       .returning();
     return result[0] ?? null;
   }
@@ -440,7 +446,8 @@ export class NoteRepository {
 export interface NoteStore {
   readonly scope: NoteScope;
   create(record: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt' | 'userId' | 'workspaceId'>): Promise<Note>;
-  update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>): Promise<Note | null>;
+  /** `ifSha256`: only while the stored body still has it (null otherwise). */
+  update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>, opts?: { ifSha256?: string }): Promise<Note | null>;
   getById(id: string): Promise<Note | null>;
   getByIds(ids: string[]): Promise<Note[]>;
   getBySlug(slug: string): Promise<Note | null>;
@@ -474,7 +481,7 @@ export class PersonalNoteRepo implements NoteStore {
     await assertPersonalWorkspace(this.scope.workspaceId);
     return this.repo.create({ ...record, userId: this.scope.userId, workspaceId: this.scope.workspaceId });
   }
-  update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>) { return this.repo.update(this.scope, id, patch); }
+  update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>, opts?: { ifSha256?: string }) { return this.repo.update(this.scope, id, patch, opts); }
   getById(id: string) { return this.repo.getById(this.scope, id, this.ws); }
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids, this.ws); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }
@@ -509,7 +516,7 @@ export class SpaceNoteRepo implements NoteStore {
     this.write();
     return this.repo.create({ ...record, userId: this.scope.userId, workspaceId: this.scope.workspaceId });
   }
-  async update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>) { this.write(); return this.repo.update(this.scope, id, patch); }
+  async update(id: string, patch: Partial<Omit<NewNote, 'id' | 'userId' | 'workspaceId' | 'createdAt'>>, opts?: { ifSha256?: string }) { this.write(); return this.repo.update(this.scope, id, patch, opts); }
   getById(id: string) { return this.repo.getById(this.scope, id); }
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }

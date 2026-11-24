@@ -162,7 +162,7 @@ export async function runRoleTaskPipeline(input: {
 
   if (outcome.status === 'completed') {
     await comment(`Pipeline "${template.name}" finished.${outcome.summary ? `\n\n${outcome.summary.slice(0, 4000)}` : ''}`);
-    const done = await repos.tasks.update(task.id, { status: 'done', completedAt: new Date() }, { asActor: actor });
+    const done = await repos.tasks.update(task.id, { status: 'done', completedAt: new Date() }, { asActor: actor, agent: { sessionId: null, agentId: actor } });
     if (!done) coreLogger.warn({ taskId: task.id }, 'role pipeline: the task could not be closed (taken over meanwhile)');
   } else {
     await handBack(repos, task, actor, userId, template.name, outcome, pipelineId);

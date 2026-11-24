@@ -71,6 +71,25 @@ export async function clearAnchors(noteId: string, taskIds: readonly string[]): 
     .where(and(eq(taskNoteLinks.noteId, noteId), inArray(taskNoteLinks.taskId, [...taskIds])));
 }
 
+/** Record (`checked`) or clear (null) the tick a line is owed by its to-do. */
+export async function setPending(taskId: string, noteId: string, checked: boolean | null): Promise<void> {
+  await getDb().update(taskNoteLinks).set({ pendingChecked: checked })
+    .where(and(eq(taskNoteLinks.taskId, taskId), eq(taskNoteLinks.noteId, noteId)));
+}
+
+/** The links of a note whose line is owed a tick. */
+export async function pendingLinksOfNote(noteId: string): Promise<TaskNoteLink[]> {
+  return getDb().select().from(taskNoteLinks)
+    .where(and(eq(taskNoteLinks.noteId, noteId), isNotNull(taskNoteLinks.anchor), isNotNull(taskNoteLinks.pendingChecked)));
+}
+
+/** The anchors of a note's lines that are to-dos (its markers that mean something). */
+export async function anchorsOfNote(noteId: string): Promise<Set<string>> {
+  const rows = await getDb().select({ anchor: taskNoteLinks.anchor }).from(taskNoteLinks)
+    .where(and(eq(taskNoteLinks.noteId, noteId), isNotNull(taskNoteLinks.anchor)));
+  return new Set(rows.map((r) => r.anchor as string));
+}
+
 /** Remove the link of a to-do and a note. False when there was none. */
 export async function deleteLink(taskId: string, noteId: string): Promise<boolean> {
   const rows = await getDb().delete(taskNoteLinks)
@@ -79,12 +98,19 @@ export async function deleteLink(taskId: string, noteId: string): Promise<boolea
 }
 
 /**
- * The SQL that gives a repeating to-do's next occurrence the notes of the one
- * before, as attachments (the line stays with the occurrence it was made
- * from). Run inside the transaction that makes the occurrence.
+ * The statements that hand a repeating to-do's notes on to its next
+ * occurrence: its attached notes move (one link per series, not one per
+ * occurrence), and a note whose line it was made from is attached to the
+ * next one (the line stays with this occurrence, ticked when it is done).
+ * Run inside the transaction that makes the occurrence.
  */
-export function copyLinksSql(fromTaskId: string, toTaskId: string) {
-  return sql`INSERT INTO task_note_links (task_id, note_id, anchor, created_by)
-    SELECT ${toTaskId}::uuid, note_id, NULL, created_by FROM task_note_links WHERE task_id = ${fromTaskId}::uuid
-    ON CONFLICT DO NOTHING`;
+export function moveAttachmentsSql(fromTaskId: string, toTaskId: string) {
+  return [
+    sql`UPDATE task_note_links SET task_id = ${toTaskId}::uuid
+      WHERE task_id = ${fromTaskId}::uuid AND anchor IS NULL
+        AND NOT EXISTS (SELECT 1 FROM task_note_links o WHERE o.task_id = ${toTaskId}::uuid AND o.note_id = task_note_links.note_id)`,
+    sql`INSERT INTO task_note_links (task_id, note_id, anchor, created_by)
+      SELECT ${toTaskId}::uuid, note_id, NULL, created_by FROM task_note_links WHERE task_id = ${fromTaskId}::uuid AND anchor IS NOT NULL
+      ON CONFLICT DO NOTHING`,
+  ];
 }

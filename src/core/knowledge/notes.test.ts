@@ -281,7 +281,7 @@ describe('NoteService', () => {
 
   test('getOrCreateDaily never replaces a daily note written meanwhile, and refuses an impossible day', async () => {
     const scope = personalNoteScope(userId);
-    const { NoteExistsError, normalizeDay } = await import('./notes');
+    const { normalizeDay } = await import('./notes');
     // Another tab created the day's note between this one's read and its write.
     const realStore = svc.store.bind(svc);
     let raced = false;
@@ -303,7 +303,10 @@ describe('NoteService', () => {
     });
     const daily = await svc.getOrCreateDaily(scope, '2026-03-01');
     expect(daily.body).toBe('typed in the other tab');
-    expect(NoteExistsError).toBeDefined();
+    // The template lost the race: its create-only save was refused with the note that won, never written over it.
+    expect(raced).toBe(true);
+    await expect(svc.save({ scope, slug: 'daily/2026-03-01', title: '2026-03-01', body: 'template', createOnly: true }))
+      .rejects.toMatchObject({ name: 'NoteExistsError', noteId: daily.id, slug: 'daily/2026-03-01' });
     expect(() => normalizeDay('2026-02-31')).toThrow(/Invalid date/);
     expect(normalizeDay('2028-02-29')).toBe('2028-02-29');
   });

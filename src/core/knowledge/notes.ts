@@ -4,7 +4,7 @@ import { type DocOrigin, type DocumentHub, NoteTooLargeError, StaleWriteError } 
 import { getDocHub } from '@/core/docs';
 import { merge3, normalizeNewlines } from '@/core/docs/text-merge';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
+import { insertRevision, insertTickRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { assertNoteAccess, getNoteRepository, MOVED_FROM, noteMovedFrom, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
@@ -16,6 +16,9 @@ import { type KnowledgeOwner, noteKnowledgeScope } from '@/core/rag/knowledge-sc
 import { getLinkResolverService, type LinkResolverService } from './link-resolver';
 import { NOTE_PURPOSES, notePurposeFor } from './note-purpose';
 import { parseLinks, slugify } from './wikilink';
+import type { TickActor } from '@/core/tasks/note-links';
+import { anchorsOfNote } from '@/db/repositories/task-note-links';
+import { normalizeMarkers } from '../../shared/note-todos';
 
 /**
  * Knowledge-graph Tier 2 — the note authoring pipeline.
@@ -122,6 +125,8 @@ export interface SaveNoteInput {
    * it ticked or unticked.
    */
   skipTaskSync?: boolean;
+  /** Who the change is (audit of the to-dos its ticks complete): an agent, an admin acting for the user. Default: the scope's user. */
+  actor?: TickActor;
 }
 
 /** A deferred re-index (`SaveNoteInput.deferIndex`) runs this long after the note's last save. */
@@ -146,6 +151,14 @@ export interface SpaceBodyWrite {
   origin: DocOrigin;
   title?: string;
   tags?: string[];
+  /**
+   * A to-do's state reaching its line (core/tasks/note-links.ts): no
+   * reconcile back, and on a closed note one revision takes a run of such
+   * ticks by one member instead of one each.
+   */
+  mirror?: boolean;
+  /** Who the write is (the to-dos its ticks complete are audited to them); default the origin's user. */
+  actor?: TickActor;
 }
 
 export interface SpaceBodyWriteResult {
@@ -162,6 +175,18 @@ export class NoteExistsError extends Error {
   constructor(readonly noteId: string, readonly slug: string) {
     super(`A note already exists at ${slug}`);
     this.name = 'NoteExistsError';
+  }
+}
+
+/**
+ * The day's daily note is archived: nothing writes into it or brings it back
+ * but an explicit restore (or a fresh note for the day), so an archive the
+ * user made stays one. Nothing was written.
+ */
+export class NoteArchivedError extends Error {
+  constructor(readonly noteId: string, readonly slug: string) {
+    super(`The note at ${slug} is archived: restore it, or start a fresh one`);
+    this.name = 'NoteArchivedError';
   }
 }
 
@@ -248,6 +273,16 @@ export class NoteService {
     if (existing && scope.kind !== 'space' && input.ifSha256 !== undefined && existing.bodySha256 !== input.ifSha256) {
       throw new StaleWriteError('unknown_base', existing.bodySha256);
     }
+    // Every to-do marker names one line and one link: a copied one, or one
+    // whose link is gone, comes off its line (src/shared/note-todos.ts).
+    if (input.body !== undefined && body.includes('^todo-')) {
+      const known = existing ? await anchorsOfNote(existing.id) : new Set<string>();
+      const normalized = normalizeMarkers(body, known);
+      if (normalized !== body) {
+        body = normalized;
+        bodySha = sha256Hex(body);
+      }
+    }
 
     // A space note's body goes through the hub (or the conditional write):
     // what is saved is the writer's change merged into the current text.
@@ -264,6 +299,7 @@ export class NoteService {
         base: { sha256: input.baseSha256 ?? sha256Hex(input.baseBody ?? ''), text: input.baseBody },
         next: body,
         origin: { kind: 'external', userId: scope.userId, onBehalfOfUserId: input.onBehalfOfUserId ?? null },
+        actor: input.actor,
       });
       body = write.note.body;
       bodySha = write.note.bodySha256;
@@ -290,7 +326,13 @@ export class NoteService {
         tags,
         noteKind: input.noteKind ?? existing.noteKind,
         noteDate: input.noteDate ?? existing.noteDate,
-      });
+        // `ifSha256` is the UPDATE's own condition, not only the check above:
+        // a write that lands between the read and this one wins.
+      }, scope.kind !== 'space' && input.ifSha256 !== undefined ? { ifSha256: input.ifSha256 } : undefined);
+      if (!updated && scope.kind !== 'space' && input.ifSha256 !== undefined) {
+        const now = await store.getById(existing.id);
+        if (now) throw new StaleWriteError('unknown_base', now.bodySha256);
+      }
       if (!updated) throw new Error(`Note ${existing.id} vanished during update`);
       note = updated;
       created = false;
@@ -331,9 +373,13 @@ export class NoteService {
     }
 
     // A ticked or unticked line made a to-do: the to-do follows (never fails the save).
-    if (existing && !input.skipTaskSync && existing.body !== body) {
+    // (A space note's write reconciled in `writeSpaceBody`.)
+    if (existing && scope.kind !== 'space' && !input.skipTaskSync && existing.body !== body) {
       const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
-      await reconcileNoteTasks(scope, note.id, existing.body, body);
+      await reconcileNoteTasks(scope, note.id, existing.body, body, input.actor);
+      // A to-do that followed may have written the note again: answer with the note as it is now.
+      const now = await store.getById(note.id);
+      if (now && now.bodySha256 !== note.bodySha256) note = now;
     }
 
     const links = await this.relink(scope, note, parsed, tags, input.createdByAgentId ?? null);
@@ -448,7 +494,20 @@ export class NoteService {
   async writeSpaceBody(scope: SpaceScope, noteId: string, input: SpaceBodyWrite): Promise<SpaceBodyWriteResult> {
     assertNoteAccess(scope, 'write');
     const write = { ...input, next: normalizeNewlines(input.next) };
+    // Every to-do marker names one line and one link (as on a personal save).
+    if (write.next.includes('^todo-')) write.next = normalizeMarkers(write.next, await anchorsOfNote(noteId));
     assertSpaceNoteSize(write.next);
+    // The text before this write: the to-dos of the lines it ticks follow, once the note's lock is let go.
+    let before: string | null = null;
+    const result = await this.writeSpaceBodyLocked(scope, noteId, write, (text) => { before = text; });
+    if (!write.mirror && before !== null && result.changed) {
+      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+      await reconcileNoteTasks(scope, noteId, before, result.note.body, write.actor ?? { userId: write.origin.userId, onBehalfOf: write.origin.onBehalfOfUserId ?? null });
+    }
+    return result;
+  }
+
+  private async writeSpaceBodyLocked(scope: SpaceScope, noteId: string, write: SpaceBodyWrite, seen: (before: string) => void): Promise<SpaceBodyWriteResult> {
     const store = this.store(scope);
     const hub = this.hub();
     const meta = {
@@ -460,6 +519,7 @@ export class NoteService {
       const row = await store.getById(noteId);
       if (!row) throw new Error(`Note ${noteId} not found for this user`);
       if (open) {
+        seen(hub.readLive(noteId)?.text ?? row.body);
         const result = await hub.applyExternalLocked(noteId, write.base, write.next, write.origin);
         const note = hasMeta ? await store.update(noteId, meta) : await store.getById(noteId);
         if (!note) throw new Error(`Note ${noteId} vanished during update`);
@@ -469,6 +529,7 @@ export class NoteService {
         ? write.base.text
         : write.base.sha256 === row.bodySha256 ? row.body : null;
       if (baseText === null) throw new StaleWriteError('unknown_base', row.bodySha256);
+      seen(row.body);
       // A stored body from before line endings were normalized merges as `\n`.
       const result = merge3(normalizeNewlines(baseText), normalizeNewlines(row.body), write.next);
       if (!result.ok) throw new StaleWriteError('conflict', row.bodySha256);
@@ -482,16 +543,17 @@ export class NoteService {
       // Every writer of this note holds the mutex; a miss is a write from
       // outside this process (or the row's deletion).
       if (!note) throw new StaleWriteError('unknown_base', row.bodySha256);
-      const revision = await insertRevision({
+      const rev = {
         noteId,
         workspaceId: scope.workspaceId,
         body: result.text,
         bodySha256: sha,
         authors: [write.origin.userId],
         onBehalfOfUserId: write.origin.onBehalfOfUserId ?? null,
-        origin: write.origin.kind === 'peer' ? 'external' : write.origin.kind,
+        origin: write.origin.kind === 'peer' ? 'external' as const : write.origin.kind,
         restoredFrom: write.origin.restoredFrom ?? null,
-      });
+      };
+      const revision = write.mirror ? await insertTickRevision(rev, row.bodySha256) : await insertRevision(rev);
       return { note, changed: true, merged: result.text !== write.next, revisionId: revision.id };
     });
   }
@@ -520,11 +582,10 @@ export class NoteService {
     const previousBodyTags = new Set(previousBody === undefined ? [] : parseLinks(stripFrontmatter(previousBody)).tags);
     const tags = [...new Set([...note.tags.filter((tag) => !previousBodyTags.has(tag)), ...parsed.tags])];
     const current = (await this.notes.update(scope, noteId, { tags })) ?? note;
-    // Lines ticked by typing in the live text since the last refresh: their to-dos follow.
-    if (previousBody !== undefined && previousBody !== note.body) {
-      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
-      await reconcileNoteTasks(scope, noteId, previousBody, note.body);
-    }
+    // Ticks a to-do could not write into the note before: made now (typed
+    // ticks reached their to-dos as they were typed, `onTicks` of the hub).
+    const { healNoteLines } = await import('@/core/tasks/note-links');
+    await healNoteLines(scope, noteId, editorUserId);
     await withProviderUsageContext(
       { userId: editorUserId, workspaceId: row.workspaceId, funding: 'install', accountingMetadata: { noteId, purpose: 'live-note-reindex' } },
       async () => {
@@ -684,6 +745,23 @@ export class NoteService {
     return { note: note ? this.withLive(scope, note) : null, template: dailyTemplate(date) };
   }
 
+  /**
+   * A fresh daily note for a day whose note is archived: the archived one
+   * steps aside to `daily/<date>-archived-<n>` (no alias: the day's slug is
+   * the new note's) and the day's note is made from the template.
+   */
+  async startFreshDaily(scope: NoteScope, day: string): Promise<Note> {
+    assertNoteAccess(scope, 'write');
+    const date = normalizeDay(day);
+    const store = this.store(scope);
+    const archived = await store.getBySlug(`daily/${date}`);
+    if (archived?.archivedAt) {
+      const aside = `daily/${date}-archived-${Date.now().toString(36)}`;
+      if (!(await store.update(archived.id, { slug: aside }))) throw new Error(`Daily note ${archived.id} vanished while starting a fresh one`);
+    }
+    return this.getOrCreateDaily(scope, date);
+  }
+
   async getOrCreateDaily(scope: NoteScope, day: string): Promise<Note> {
     const date = normalizeDay(day);
     const slug = `daily/${date}`;
@@ -725,6 +803,7 @@ export class NoteService {
       assertNoteAccess(scope, 'write');
       const slug = `daily/${date}`;
       let found = await this.store(scope).getBySlug(slug);
+      if (found?.archivedAt) throw new NoteArchivedError(found.id, slug);
       if (!found) {
         try {
           const created = await this.save({
@@ -752,6 +831,8 @@ export class NoteService {
       if (appended) return { ...opened, body: appended.text, bodySha256: appended.sha256 };
     }
     const daily = this.withLive(scope, await this.getOrCreateDaily(scope, date));
+    // An archived day's note stays archived: the line is not hidden in it.
+    if (daily.archivedAt) throw new NoteArchivedError(daily.id, daily.slug);
     const body = `${daily.body.replace(/\s+$/, '')}\n- ${time} ${text}\n`;
     // Based on the text just read: a space note's capture merges with
     // whatever members typed meanwhile.
