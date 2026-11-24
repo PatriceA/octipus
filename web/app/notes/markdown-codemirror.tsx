@@ -14,7 +14,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import { livePreview } from './live-preview';
+import { livePreview, type TodoChipView, todoLinksChanged } from './live-preview';
 import type { NoteIndexEntry, TagCount } from './types';
 
 // ---------------------------------------------------------------------------
@@ -45,6 +45,8 @@ export interface MarkdownEditorHandle {
    */
   replaceToken: (token: string, text: string) => void;
   focus: () => void;
+  /** "Make a to-do" of the caret's line, or of the selected text (as ⌘⇧Enter). */
+  makeTodo: () => void;
 }
 
 /** A live document to edit instead of a controlled `value` (space notes, §7.6). */
@@ -79,6 +81,15 @@ interface Props {
   autoFocus?: boolean;
   /** Draw `![images]` in the text (false: text from another install, whose images never load). */
   images?: boolean;
+  /** The to-do a line's marker names, as the reader can see it (see live-preview.ts). */
+  todoOf?: (anchor: string) => TodoChipView | null;
+  /** Changes whenever what `todoOf` answers does: the chips redraw. */
+  todoVersion?: string;
+  onOpenTodo?: (anchor: string) => void;
+  /** "Make a to-do" of a line (0-based), or of the text selected on it. Absent: not offered. */
+  onMakeTodo?: (line: number, selection?: string) => void;
+  /** A line made a to-do was ticked or unticked here. */
+  onTodoToggled?: (anchor: string, checked: boolean) => void;
 }
 
 /**
@@ -120,6 +131,16 @@ export function imageFilesFrom(data: DataTransfer | null): File[] {
   }
   for (const file of Array.from(data.files ?? [])) add(file);
   return out;
+}
+
+/** "Make a to-do" of the caret's line, or of the text selected (on the line where the selection starts). */
+function makeTodoAt(view: EditorView, make: ((line: number, selection?: string) => void) | undefined): boolean {
+  if (!make) return false;
+  const { from, to } = view.state.selection.main;
+  const line = view.state.doc.lineAt(from).number - 1;
+  const selected = view.state.sliceDoc(from, to).trim();
+  make(line, selected || undefined);
+  return true;
 }
 
 /** Completion source for `[[wikilinks]]`. */
@@ -225,7 +246,7 @@ const editorTheme = EditorView.theme({
 });
 
 const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function NotesMarkdownEditor(
-  { value, onChange, onSave, getNotes, getTags, onFiles, collab, onOpenWikilink, onTag, placeholder, onEscape, autoFocus, images = true },
+  { value, onChange, onSave, getNotes, getTags, onFiles, collab, onOpenWikilink, onTag, placeholder, onEscape, autoFocus, images = true, todoOf, todoVersion, onOpenTodo, onMakeTodo, onTodoToggled },
   ref,
 ) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -239,8 +260,13 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   getNotesRef.current = getNotes;
   const getTagsRef = useRef(getTags);
   getTagsRef.current = getTags;
-  const linksRef = useRef({ openWikilink: onOpenWikilink, openTag: onTag });
-  linksRef.current = { openWikilink: onOpenWikilink, openTag: onTag };
+  const linksRef = useRef({ openWikilink: onOpenWikilink, openTag: onTag, todoOf, openTodo: onOpenTodo, makeTodo: onMakeTodo, todoToggled: onTodoToggled });
+  linksRef.current = { openWikilink: onOpenWikilink, openTag: onTag, todoOf, openTodo: onOpenTodo, makeTodo: onMakeTodo, todoToggled: onTodoToggled };
+  // What the chips show changed: redraw them (the extensions stay as they are).
+  const offersTodo = !!onMakeTodo;
+  useEffect(() => {
+    cmRef.current?.view?.dispatch({ effects: todoLinksChanged.of(null) });
+  }, [todoVersion, offersTodo]);
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
 
@@ -276,6 +302,11 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
             onEscapeRef.current();
             return true;
           },
+        },
+        {
+          // "Make a to-do" of the caret's line, or of the selected text.
+          key: 'Mod-Shift-Enter',
+          run: (view) => makeTodoAt(view, linksRef.current.makeTodo),
         },
         {
           key: 'Mod-s',
@@ -363,6 +394,10 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
     },
     focus() {
       cmRef.current?.view?.focus();
+    },
+    makeTodo() {
+      const view = cmRef.current?.view;
+      if (view) makeTodoAt(view, linksRef.current.makeTodo);
     },
   }));
 

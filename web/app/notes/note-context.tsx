@@ -1,7 +1,10 @@
 'use client';
 
-import { ArrowLeft, ArrowRight, Hash, Loader2, PanelRightClose, Plus, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CircleCheckBig, Hash, Loader2, PanelRightClose, Plus, Repeat, Sparkles } from 'lucide-react';
+import { dueText } from '@/components/todos/model';
+import { TodoCheck } from '@/components/todos/todo-row';
 import { cn } from '@/lib/utils';
+import type { LinkedTask } from '../../../src/shared/note-todos';
 import type { LinkEdge, NoteDetail, Suggestion } from './types';
 
 interface ContextProps {
@@ -14,6 +17,30 @@ interface ContextProps {
   onAddLink?: (s: Suggestion) => void;
   onTagClick: (tag: string) => void;
   onCollapse: () => void;
+  /** Open a linked to-do. */
+  onOpenTask?: (id: string) => void;
+  /** Complete or reopen a linked to-do (absent: read-only). */
+  onSetTaskDone?: (task: LinkedTask, done: boolean) => void;
+}
+
+/** A to-do linked to the note: its box, title (opens it), and whether it came from a line. */
+function LinkedTaskRow({ task, onOpen, onSetDone }: { task: LinkedTask; onOpen?: (id: string) => void; onSetDone?: (task: LinkedTask, done: boolean) => void }) {
+  const done = task.status === 'done';
+  const due = task.dueAt && task.status !== 'done' ? dueText(task.dueAt) : null;
+  return (
+    <li className="flex items-center gap-0.5 rounded-xs pr-1 hover:bg-surface-container-high" data-testid="note-linked-task">
+      <TodoCheck task={task} size="sm" disabled={!onSetDone || task.status === 'archived'} onToggle={() => onSetDone?.(task, !done)} />
+      <button type="button" onClick={() => onOpen?.(task.id)} className="min-w-0 flex-1 py-1 text-left" title={task.anchor ? 'Made from a line of this note' : 'Attached to this note'}>
+        <span className={cn('block truncate text-[12.5px] text-on-surface', done && 'text-on-surface-variant line-through', task.status === 'archived' && 'text-on-surface-variant/60 line-through')}>{task.title}</span>
+        <span className="flex items-center gap-1.5 text-[10.5px] text-on-surface-variant/70">
+          {task.anchor ? 'from a line' : 'attached'}
+          {task.status === 'archived' && <span>· deleted</span>}
+          {due && <span className={cn(due.tone === 'overdue' && 'text-error', due.tone === 'today' && 'text-primary')}>· {due.text}</span>}
+          {task.repeating && <Repeat size={10} aria-label="Repeats" />}
+        </span>
+      </button>
+    </li>
+  );
 }
 
 function EdgeRow({ edge, dir, onOpenNote }: { edge: LinkEdge; dir: 'in' | 'out'; onOpenNote: (id: string) => void }) {
@@ -54,8 +81,9 @@ function Section({ icon, label, count, children }: { icon: React.ReactNode; labe
 }
 
 export function NoteContext({
-  detail, suggestions, suggestionsLoading, bodyHasLink, onOpenNote, onAddLink, onTagClick, onCollapse,
+  detail, suggestions, suggestionsLoading, bodyHasLink, onOpenNote, onAddLink, onTagClick, onCollapse, onOpenTask, onSetTaskDone,
 }: ContextProps) {
+  const linkedTasks = detail?.linkedTasks ?? [];
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-3 h-11 shrink-0 border-b border-outline-variant/30">
@@ -76,6 +104,14 @@ export function NoteContext({
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-3 space-y-5 stagger">
+          <Section icon={<CircleCheckBig size={12} className="text-primary" />} label="to-dos" count={linkedTasks.length}>
+            {linkedTasks.length === 0 ? (
+              <p className="px-1.5 text-[12px] text-on-surface-variant/50">None yet. Make a line a to-do with ⌘⇧Enter.</p>
+            ) : (
+              <ul aria-label="Linked to-dos">{linkedTasks.map((t) => <LinkedTaskRow key={t.id} task={t} onOpen={onOpenTask} onSetDone={onSetTaskDone} />)}</ul>
+            )}
+          </Section>
+
           <Section icon={<ArrowLeft size={12} className="text-primary" />} label="backlinks" count={detail.backlinks.length}>
             {detail.backlinks.length === 0 ? (
               <p className="px-1.5 text-[12px] text-on-surface-variant/50">None yet.</p>

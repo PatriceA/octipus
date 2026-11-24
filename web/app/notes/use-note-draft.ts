@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { useWorkspaceId } from '@/lib/workspace-context';
 import { draftDiffers, latestNewNoteDraft, newDraftLocal, type NoteDraftBackup, noteDraftKey, readNoteDraft, removeNoteDraft, writeNoteDraft } from '@/lib/note-drafts';
 import { noteTitleFrom, toggleSeenTask, toggleTaskAt } from '../../../src/shared/note-text';
+import { merge3 } from '../../../src/core/docs/text-merge';
 import type { AutosaveStatus } from './note-editor';
 import type { NoteDetail, NoteRow, Suggestion } from './types';
 import { type LiveNote, useLiveNote } from './use-live-note';
@@ -18,7 +19,10 @@ import { type LiveNote, useLiveNote } from './use-live-note';
 //   • A personal note saves itself a moment after each change (autosave),
 //     only over the text it was made from (`ifSha256`), after any save still
 //     in flight; a copy of every unsaved change is kept on this device until
-//     the server has it, and offered back when the note is opened again.
+//     the server has it, and offered back when the note is opened again. A
+//     save refused because the note changed meanwhile (a to-do's tick reached
+//     its line, another device saved) is merged with that change and saved
+//     again when the two touch different text; only a real clash asks.
 //   • A new note needs no title: it takes its title from its first line, and
 //     so does an existing note whose title is its first line (rename by
 //     editing that line; the slug never changes, so links keep working).
@@ -103,9 +107,16 @@ export interface NoteDraftOptions {
   onCreated: (id: string) => void;
   /** Saves changed the notes (lists, index, tags and graph are stale). */
   onSaved: () => void;
+  /**
+   * How a new note comes to exist, instead of a create-only save of the
+   * draft: called by its first save (a page's own note, made on its first
+   * keystroke: the Today page's daily note). The draft is then saved over
+   * the note it answers, merged with it when that already had other text.
+   */
+  create?: () => Promise<NoteDetail>;
 }
 
-export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: NoteDraftOptions) {
+export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved, create }: NoteDraftOptions) {
   // A personal note saves itself a moment after each change (autosave); a
   // space note's text is saved by the hub and its details by "Save details".
   const personal = !isSpace;
@@ -173,9 +184,11 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
   const chainRef = useRef<Promise<unknown>>(Promise.resolve());
   const onCreatedRef = useRef(onCreated);
   const onSavedRef = useRef(onSaved);
+  const createRef = useRef(create);
   useEffect(() => {
     onCreatedRef.current = onCreated;
     onSavedRef.current = onSaved;
+    createRef.current = create;
   });
 
   // The live text drives the preview and is never "unsaved" here: the hub
@@ -227,12 +240,46 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
   }, [personal, setTitleAuto]);
 
   /**
+   * The note changed on the server since the draft's base (a to-do ticked its
+   * line, another device saved): take the server's text as the new base and
+   * merge the draft's own changes into it (diff3, as a space note's writers
+   * are). When that merges cleanly the draft is the merged text, saved again
+   * over the new base by the caller. Null on a clash or a failed read:
+   * nothing changes and the stale save asks. Returns the merged draft.
+   */
+  const rebaseOnServer = useCallback(async (id: string): Promise<DraftFields | null> => {
+    let server: NoteDetail;
+    try {
+      server = await api.get<NoteDetail>(`/notes/${id}`);
+    } catch (err) {
+      console.warn('Could not read the note again to merge a refused save', err);
+      return null;
+    }
+    if (targetRef.current.id !== id) return null;
+    const before = savedRef.current;
+    const mine = draftRef.current;
+    const merged = merge3(before.body, server.body, mine.body);
+    if (!merged.ok) return null;
+    const tags = sameTags(mine.tags, before.tags) ? server.tags : mine.tags;
+    const title = titleAutoRef.current ? noteTitleFrom(merged.text) : mine.title === before.title ? server.title : mine.title;
+    savedRef.current = { title: server.title, body: server.body, tags: server.tags, kind: server.noteKind, sha256: server.bodySha256 };
+    targetRef.current.sha = server.bodySha256;
+    setSavedTitle(server.title); setSavedBody(server.body); setSavedTags(server.tags); setSavedKind(server.noteKind);
+    setDraftTags(tags);
+    setDraftTitle(title);
+    setDraftBody(merged.text);
+    draftRef.current = { ...mine, title, body: merged.text, tags };
+    return { ...mine, title, body: merged.text, tags };
+  }, []);
+
+  /**
    * Save a draft of a personal note. Runs after any save still in flight, so
    * a new note is created once; skipped when the server already has it. The
    * draft stays in the editor (and its copy on this device) when it fails.
    */
-  const persist = useCallback((snap: DraftSnapshot): Promise<boolean> => {
-    const run = async (): Promise<boolean> => {
+  const persist = useCallback((first: DraftSnapshot): Promise<boolean> => {
+    // `rebased`: this is the save again after a stale one merged with the server's text (once).
+    const run = async (snap: DraftSnapshot = first, rebased = false): Promise<boolean> => {
       const current = () => targetRef.current === snap.target;
       if (current() && !differs(snap, savedRef.current)) return true;
       if (!snap.title.trim()) return false;
@@ -242,7 +289,48 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
         if (current() && mountedRef.current) setSaveState({ status: 'error', error: 'the workspace changed; this draft is kept on this device' });
         return false;
       }
-      const creating = !snap.target.id;
+      let creating = !snap.target.id;
+      // A note the page makes itself: made now, then this draft is saved over it.
+      if (creating && createRef.current) {
+        let made: NoteDetail;
+        try {
+          made = await createRef.current();
+        } catch (err) {
+          if (current()) setSaveState({ status: 'error', error: err instanceof Error ? err.message : 'Could not create the note' });
+          return false;
+        }
+        // What the draft was started from; the note may already hold more (made elsewhere meanwhile).
+        const seed = current() ? savedRef.current.body : made.body;
+        const merged = made.body === seed ? { ok: true as const, text: snap.body } : merge3(seed, made.body, snap.body);
+        const wasLocal = snap.target.local;
+        snap.target.id = made.id;
+        snap.target.local = made.id;
+        snap.target.sha = made.bodySha256;
+        removeNoteDraft(noteDraftKey(snap.target.workspaceId, wasLocal));
+        if (current()) {
+          savedRef.current = { title: made.title, body: made.body, tags: made.tags, kind: made.noteKind, sha256: made.bodySha256 };
+          setSavedTitle(made.title); setSavedBody(made.body); setSavedTags(made.tags); setSavedKind(made.noteKind);
+          loadedRef.current = made.id;
+          if (merged.ok && merged.text !== snap.body) {
+            setDraftBody(merged.text);
+            draftRef.current = { ...draftRef.current, body: merged.text };
+          }
+        }
+        if (mountedRef.current) onCreatedRef.current(made.id);
+        if (!merged.ok) {
+          if (current()) {
+            setSaveState({ status: 'error', error: 'the note was written elsewhere meanwhile' });
+            setDraftNotice({ kind: 'stale', currentSha256: made.bodySha256 });
+          }
+          return false;
+        }
+        snap = { ...snap, body: merged.text, baseSha256: made.bodySha256 };
+        creating = false;
+        if (current() && !differs(snap, savedRef.current)) {
+          setSaveState({ status: 'saved' });
+          return true;
+        }
+      }
       // A title is a name, never a path: "Notes 11/24" is not a folder `notes-11`.
       const name = snap.title.replace(/\//g, '-');
       const folder = snap.folder.trim().replace(/^\/+|\/+$/g, '');
@@ -266,6 +354,11 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
           ? 'a note with this title already exists (perhaps in the archive): change the first line or the title'
           : code === 'stale' ? 'the note was changed elsewhere since you opened it'
           : err instanceof Error ? err.message : 'Could not save the note';
+        // Changed elsewhere meanwhile: merged with that change when they do not clash, and saved again.
+        if (code === 'stale' && !rebased && current() && snap.target.id) {
+          const merged = await rebaseOnServer(snap.target.id);
+          if (merged) return run({ ...snap, ...merged, baseSha256: savedRef.current.sha256 }, true);
+        }
         if (current()) {
           setSaveState({ status: 'error', error });
           if (code === 'stale' && err instanceof ApiError && typeof err.body.currentSha256 === 'string') {
@@ -310,10 +403,10 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
       qc.invalidateQueries({ queryKey: ['note-suggestions', note.id] });
       return true;
     };
-    const next = chainRef.current.then(run);
+    const next = chainRef.current.then(() => run());
     chainRef.current = next.catch((err: unknown) => console.error('Note save chain failed', err));
     return next;
-  }, [qc]);
+  }, [qc, rebaseOnServer]);
 
   const snapshot = useCallback((): DraftSnapshot => ({ target: targetRef.current, ...draftRef.current, baseSha256: savedRef.current.sha256 }), []);
   // For the page-leave handlers, which outlive a render.
@@ -475,17 +568,28 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
     return window.confirm('This note could not be saved. A copy is kept on this device and comes back when you open it again. Leave it anyway?');
   }, [isSpace, flush]);
 
-  /** Start a new note (after `leave`): blank, or its draft kept on this device. `folder` files it there. */
-  const startNew = useCallback((folder?: string) => {
+  /**
+   * Start a new note (after `leave`): blank, or its draft kept on this
+   * device. `folder` files it there. `seed`: the text it starts from (shown,
+   * not unsaved: nothing is written until it is edited).
+   */
+  const startNew = useCallback((folder?: string, seed?: { title: string; body: string; kind: string }) => {
     // A new note's draft kept on this device (its save failed, or the tab
     // closed first) comes back, under its own key.
-    const kept = personal && !folder ? latestNewNoteDraft(api.getWorkspaceId()) : null;
+    const kept = personal && !folder && !seed ? latestNewNoteDraft(api.getWorkspaceId()) : null;
     targetRef.current = newTarget(null, kept?.local);
     loadedRef.current = null;
     // Match saved===draft for the initial kind so a brand-new note isn't
     // marked dirty before the user types anything.
-    resetDrafts(folder?.split('/')[0] === 'daily' ? 'daily' : 'note');
+    resetDrafts(seed?.kind ?? (folder?.split('/')[0] === 'daily' ? 'daily' : 'note'));
     setDraftFolder(folder ?? '');
+    if (seed) {
+      savedRef.current = { title: seed.title, body: seed.body, tags: [], kind: seed.kind };
+      setSavedTitle(seed.title); setSavedBody(seed.body);
+      setDraftTitle(seed.title); setDraftBody(seed.body);
+      setTitleAuto(personal && followsFirstLine(seed.title, seed.body));
+      return;
+    }
     if (kept) {
       const backup = kept.draft;
       setTitleAuto(followsFirstLine(backup.title, backup.body));

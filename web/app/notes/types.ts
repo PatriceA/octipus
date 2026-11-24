@@ -2,6 +2,8 @@
 // by `src/api/routes/notes.ts` (web-only view models — the canonical entities
 // live in `src/db/schema/notes.ts`).
 
+import type { LinkedTask } from '../../../src/shared/note-todos';
+
 export interface NoteRow {
   id: string;
   slug: string;
@@ -60,6 +62,8 @@ export interface NoteDetail extends NoteRow {
   frontmatter: Record<string, unknown>;
   backlinks: LinkEdge[];
   outgoing: LinkEdge[];
+  /** The to-dos linked to it that the reader can open (made from its lines, or attached). */
+  linkedTasks?: LinkedTask[];
 }
 
 export interface Suggestion {

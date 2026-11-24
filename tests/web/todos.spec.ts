@@ -210,7 +210,7 @@ test.describe('to-dos', () => {
     await expect.poll(() => server.patches().at(-1)?.body).toEqual({ priority: 2 });
     // A title cannot be emptied: clicking away puts the saved one back, and nothing is sent.
     await detail.getByLabel('Title').fill('');
-    await detail.getByLabel('Notes').focus();
+    await detail.getByRole('textbox', { name: 'Notes' }).focus();
     await expect(detail.getByLabel('Title')).toHaveValue('Water the plants');
     expect(server.patches().some((p) => 'title' in p.body)).toBe(false);
     await page.getByRole('button', { name: 'Mark as important' }).first().click();
@@ -364,10 +364,11 @@ test.describe('to-dos', () => {
     await page.getByRole('textbox', { name: 'Add a to-do' }).fill('half typed');
     await page.keyboard.press('Escape');
     await expect(detail).toBeVisible();
-    await detail.getByLabel('Notes').fill('a note');
+    await detail.getByRole('textbox', { name: 'Notes' }).fill('a note');
     await page.keyboard.press('Escape');
     await expect(detail).toBeVisible();
-    await expect(detail.getByLabel('Notes')).not.toBeFocused();
+    // The field let go of the focus (and shows its text rendered).
+    await expect(detail.getByTestId('todo-notes-rendered')).toHaveText('a note');
     await page.keyboard.press('Escape');
     await expect(detail).toHaveCount(0);
   });

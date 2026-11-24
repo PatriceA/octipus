@@ -1,8 +1,9 @@
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
-import type { Range } from '@codemirror/state';
+import { type Range, StateEffect } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { api } from '@/lib/api';
+import { TODO_MARKER_TAIL } from '../../../src/shared/note-todos';
 
 // ---------------------------------------------------------------------------
 // Live preview for the notes editor: one surface that reads like the rendered
@@ -17,14 +18,42 @@ import { api } from '@/lib/api';
 //     text, so it saves (or syncs) like typing;
 //   • `[[wikilinks]]` and `#tags` are links: a click on a wikilink opens the
 //     note (with the markup shown, Ctrl/⌘-click does), Ctrl/⌘-click on a tag
-//     filters by it, and Ctrl/⌘-click on a web link opens it.
+//     filters by it, and Ctrl/⌘-click on a web link opens it;
+//   • a task line made a to-do ends in its marker (` ^todo-…`,
+//     src/shared/note-todos.ts), drawn as a chip naming the to-do's state
+//     that opens it (one step for the caret: the marker cannot be typed
+//     into); a task line that is not one yet offers "make a to-do" on hover
+//     and on the caret's line.
 // ---------------------------------------------------------------------------
+
+/** A to-do as a line's chip shows it. */
+export interface TodoChipView {
+  title: string;
+  status: string;
+}
 
 /** What clicks on links in the text do. Read through a getter so the editor's extensions stay stable. */
 export interface LivePreviewHandlers {
   openWikilink?: (target: string) => void;
   openTag?: (tag: string) => void;
+  /** The to-do a line's marker names, as the reader can see it; null when it is not one they can open. */
+  todoOf?: (anchor: string) => TodoChipView | null;
+  /** A click on a line's to-do chip. */
+  openTodo?: (anchor: string) => void;
+  /**
+   * "Make a to-do" of a line (0-based line number), or of the text selected
+   * on it (`selection`). Absent: not offered.
+   */
+  makeTodo?: (line: number, selection?: string) => void;
+  /** The box of a line made a to-do was ticked (or unticked) here. */
+  todoToggled?: (anchor: string, checked: boolean) => void;
 }
+
+/** Dispatched when what `todoOf` answers changed (a to-do was completed, made, removed): the chips redraw. */
+export const todoLinksChanged = StateEffect.define<null>();
+
+/** A task line: list marker, then a box. Its marker (if any) is at the end. */
+const TASK_LINE = /^[ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+\[[ xX]\]/;
 
 /** Mirrors `TAG_RE` in src/core/knowledge/wikilink.ts: `#` after a space or line start, not all digits. */
 const TAG_RE = /(^|\s)#([a-zA-Z0-9_/-]*[a-zA-Z_/-][a-zA-Z0-9_/-]*)/g;
@@ -36,12 +65,12 @@ const lineClass = (cls: string) => Decoration.line({ class: cls });
 
 /** A drawn `- [ ]`: a checkbox that ticks the task in the text. */
 class TaskBox extends WidgetType {
-  constructor(readonly checked: boolean) {
+  constructor(readonly checked: boolean, readonly anchor: string | null, readonly handlers: () => LivePreviewHandlers) {
     super();
   }
 
   override eq(other: TaskBox): boolean {
-    return other.checked === this.checked;
+    return other.checked === this.checked && other.anchor === this.anchor;
   }
 
   override toDOM(view: EditorView): HTMLElement {
@@ -62,9 +91,75 @@ class TaskBox extends WidgetType {
       const marker = view.state.sliceDoc(pos, pos + 3);
       if (!/^\[[ xX]\]$/.test(marker)) return;
       view.dispatch({ changes: { from: pos + 1, to: pos + 2, insert: marker[1] === ' ' ? 'x' : ' ' }, userEvent: 'input.toggle-task' });
+      if (this.anchor) this.handlers().todoToggled?.(this.anchor, marker[1] === ' ');
     });
     wrap.appendChild(box);
     return wrap;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const TODO_STATE: Record<string, string> = { done: 'Done', archived: 'Deleted', in_progress: 'In progress' };
+
+/** A line's marker drawn as the to-do it names: its state, a click opens it. */
+class TodoChip extends WidgetType {
+  constructor(readonly anchor: string, readonly todo: TodoChipView | null, readonly handlers: () => LivePreviewHandlers) {
+    super();
+  }
+
+  override eq(other: TodoChip): boolean {
+    return other.anchor === this.anchor && other.todo?.status === this.todo?.status && other.todo?.title === this.todo?.title;
+  }
+
+  override toDOM(): HTMLElement {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'cm-np-todo';
+    chip.dataset.todoAnchor = this.anchor;
+    const state = this.todo ? TODO_STATE[this.todo.status] ?? 'To-do' : 'To-do';
+    chip.dataset.state = this.todo?.status ?? 'unknown';
+    chip.textContent = state;
+    chip.title = this.todo ? `Open the to-do “${this.todo.title}”` : 'A to-do (not one you can open here)';
+    chip.setAttribute('aria-label', this.todo ? `To-do: ${this.todo.title} (${state.toLowerCase()}). Open it` : 'Linked to-do');
+    chip.addEventListener('mousedown', (e) => e.preventDefault());
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (this.todo) this.handlers().openTodo?.(this.anchor);
+    });
+    return chip;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** "Make a to-do" at the end of a task line that is not one yet. */
+class MakeTodo extends WidgetType {
+  constructor(readonly line: number, readonly handlers: () => LivePreviewHandlers) {
+    super();
+  }
+
+  override eq(other: MakeTodo): boolean {
+    return other.line === this.line;
+  }
+
+  override toDOM(): HTMLElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cm-np-make-todo';
+    button.textContent = '+ To-do';
+    button.title = 'Make this a to-do (⌘⇧Enter)';
+    button.setAttribute('aria-label', 'Make this line a to-do');
+    button.addEventListener('mousedown', (e) => e.preventDefault());
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.handlers().makeTodo?.(this.line);
+    });
+    return button;
   }
 
   override ignoreEvent(): boolean {
@@ -159,8 +254,10 @@ function inCode(view: EditorView, pos: number): boolean {
   return false;
 }
 
-function build(view: EditorView, images: boolean): DecorationSet {
+function build(view: EditorView, images: boolean, handlers: () => LivePreviewHandlers): { decorations: DecorationSet; markers: DecorationSet } {
   const out: Range<Decoration>[] = [];
+  const markers: Range<Decoration>[] = [];
+  const links = handlers();
   const { state } = view;
   const active = activeLines(view);
   const isActive = (pos: number) => active.has(state.doc.lineAt(pos).number);
@@ -271,7 +368,8 @@ function build(view: EditorView, images: boolean): DecorationSet {
             const marker = node.node.getChild('TaskMarker');
             if (!marker) break;
             const checked = /x/i.test(state.sliceDoc(marker.from, marker.to));
-            replace(Decoration.replace({ widget: new TaskBox(checked) }), marker.from, marker.to);
+            const anchor = TODO_MARKER_TAIL.exec(state.doc.lineAt(node.from).text)?.[1] ?? null;
+            replace(Decoration.replace({ widget: new TaskBox(checked, anchor, handlers) }), marker.from, marker.to);
             out.push(lineClass(checked ? 'cm-np-task cm-np-task-done' : 'cm-np-task').range(state.doc.lineAt(node.from).from));
             break;
           }
@@ -301,6 +399,17 @@ function build(view: EditorView, images: boolean): DecorationSet {
           replace(hide, end - 2, end);
         }
       }
+      // A task line's to-do: its marker as a chip, or the offer to make one.
+      if (TASK_LINE.test(line.text) && !inCode(view, line.from)) {
+        const tail = TODO_MARKER_TAIL.exec(line.text);
+        if (tail) {
+          const at = line.from + tail.index;
+          markers.push(Decoration.replace({ widget: new TodoChip(tail[1], links.todoOf?.(tail[1]) ?? null, handlers) }).range(at, line.to));
+        } else if (links.makeTodo && !view.state.readOnly) {
+          out.push(Decoration.widget({ widget: new MakeTodo(n - 1, handlers), side: 1 }).range(line.to));
+          if (lineActive) out.push(lineClass('cm-np-task-active').range(line.from));
+        }
+      }
       for (const m of line.text.matchAll(TAG_RE)) {
         const start = line.from + (m.index ?? 0) + m[1].length;
         // A heading's `#` is followed by a space and never matches; skip code.
@@ -309,7 +418,7 @@ function build(view: EditorView, images: boolean): DecorationSet {
       }
     }
   }
-  return Decoration.set(out, true);
+  return { decorations: Decoration.set(out, true), markers: Decoration.set(markers, true) };
 }
 
 /**
@@ -317,35 +426,44 @@ function build(view: EditorView, images: boolean): DecorationSet {
  * foreseen above), the note shows as plain text and stays editable rather
  * than the editor breaking. Logged, once per editor.
  */
-function decorations(images: boolean) {
-  return ViewPlugin.fromClass(
+function decorations(images: boolean, handlers: () => LivePreviewHandlers) {
+  const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet = Decoration.none;
+      /** The line markers' chips: drawn, and one step for the caret (`atomicRanges`). */
+      markers: DecorationSet = Decoration.none;
       failed = false;
 
       constructor(view: EditorView) {
-        this.decorations = this.draw(view);
+        this.draw(view);
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-          this.decorations = this.draw(update.view);
+        const relinked = update.transactions.some((tr) => tr.effects.some((e) => e.is(todoLinksChanged)));
+        if (relinked || update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          this.draw(update.view);
         }
       }
 
-      draw(view: EditorView): DecorationSet {
-        if (this.failed) return Decoration.none;
+      draw(view: EditorView): void {
+        if (this.failed) return;
         try {
-          return build(view, images);
+          ({ decorations: this.decorations, markers: this.markers } = build(view, images, handlers));
         } catch (err) {
           this.failed = true;
           console.error('Live preview failed; showing this note as plain text', err);
-          return Decoration.none;
+          this.decorations = Decoration.none;
+          this.markers = Decoration.none;
         }
       }
     },
     { decorations: (v) => v.decorations },
   );
+  return [
+    plugin,
+    EditorView.decorations.of((view) => view.plugin(plugin)?.markers ?? Decoration.none),
+    EditorView.atomicRanges.of((view) => view.plugin(plugin)?.markers ?? Decoration.none),
+  ];
 }
 
 /** Clicks on the drawn links. */
@@ -407,5 +525,5 @@ const highlight = HighlightStyle.define([
  * another install, whose images are never loaded).
  */
 export function livePreview(handlers: () => LivePreviewHandlers, opts: { images?: boolean } = {}) {
-  return [decorations(opts.images ?? true), clicks(handlers), syntaxHighlighting(highlight)];
+  return [decorations(opts.images ?? true, handlers), clicks(handlers), syntaxHighlighting(highlight)];
 }

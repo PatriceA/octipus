@@ -74,12 +74,14 @@ test('the detail panel saves each field as it changes, keeps a failed draft, and
   // An unrelated field changes meanwhile: the retry sends the title only.
   task = { ...task, priority: 3 };
   await title.focus();
-  await detail.getByLabel('Notes').focus();
+  // The notes read as rendered markdown; a click edits them (and leaves the title).
+  await detail.getByTestId('todo-notes-rendered').click();
+  await expect(detail.getByRole('textbox', { name: 'Notes' })).toBeFocused();
   await expect.poll(() => patches.at(-1)).toEqual({ title: 'Benchmark with evidence' });
   await expect(detail.getByRole('alert')).toHaveCount(0);
   expect(task.priority).toBe(3);
   // Notes save themselves a moment after typing stops.
-  await detail.getByLabel('Notes').fill('Save measured results');
+  await detail.getByRole('textbox', { name: 'Notes' }).fill('Save measured results');
   await expect.poll(() => patches.at(-1)).toEqual({ notes: 'Save measured results' });
   await page.reload();
   await expect(page.getByTestId('todo-detail').getByLabel('Title')).toHaveValue('Benchmark with evidence');

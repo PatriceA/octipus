@@ -1,9 +1,11 @@
 'use client';
 
 import {
-  Bold, BookOpen, Check, CloudOff, Heading2, Image as ImageIcon, Italic, Link2, List, ListChecks, Loader2, PencilLine, Save, Trash2,
+  Bold, BookOpen, Check, CircleCheckBig, CloudOff, Heading2, Image as ImageIcon, Italic, Link2, List, ListChecks, Loader2, PencilLine, Save, Trash2,
 } from 'lucide-react';
-import { type ReactNode, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { TODO_MARKER_TAIL } from '../../../src/shared/note-todos';
+import type { NoteTodos } from './use-note-todos';
 import type { Awareness } from 'y-protocols/awareness';
 import type { LiveNoteState } from '@/lib/live-note';
 import { Markdown } from '@/components/ui/markdown-renderer';
@@ -108,6 +110,8 @@ export interface NoteEditorProps {
   trailing?: ReactNode;
   /** Notices shown at the top of the page (an archived note, a kept draft). */
   notices?: ReactNode;
+  /** The note's to-dos (`useNoteTodos`): chips on lines made to-dos, and "make a to-do" where it may be written. */
+  todos?: NoteTodos;
 }
 
 function ToolBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
@@ -280,6 +284,34 @@ export function NoteEditor(props: NoteEditorProps) {
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const readingRef = useRef<HTMLDivElement>(null);
+  const todos = props.todos;
+  const makeTodo = readOnly ? undefined : todos?.make;
+  // A selection in the reading view: "make a to-do" of it, offered beside it.
+  const [picked, setPicked] = useState<{ text: string; top: number; left: number } | null>(null);
+  const pickingSelection = mode === 'read' && !!makeTodo;
+  useEffect(() => {
+    if (!pickingSelection) return;
+    const pickSelection = () => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() ?? '';
+      const box = readingRef.current;
+      if (!sel || !text || !box || sel.rangeCount === 0 || !box.contains(sel.anchorNode)) { setPicked(null); return; }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      const frame = box.getBoundingClientRect();
+      setPicked({ text, top: rect.bottom - frame.top + 6, left: Math.max(0, Math.min(rect.left - frame.left, frame.width - 140)) });
+    };
+    document.addEventListener('selectionchange', pickSelection);
+    return () => { document.removeEventListener('selectionchange', pickSelection); setPicked(null); };
+  }, [pickingSelection]);
+  // A reading view's tick of a linked line reaches its to-do too (see useNoteTodos).
+  const onToggleTask = props.onToggleTask && todos
+    ? (offset: number, checked: boolean, seenLine: string) => {
+      props.onToggleTask?.(offset, checked, seenLine);
+      const anchor = TODO_MARKER_TAIL.exec(seenLine)?.[1];
+      if (anchor) todos.toggled(anchor, checked);
+    }
+    : props.onToggleTask;
   const [uploadError, setUploadError] = useState<string | null>(null);
   const isNew = !selectedId;
 
@@ -339,6 +371,11 @@ export function NoteEditor(props: NoteEditorProps) {
       onEscape={props.onEscape}
       autoFocus={props.autoFocus}
       images={!textOnly}
+      todoOf={todos?.of}
+      todoVersion={todos?.version}
+      onOpenTodo={todos?.open}
+      onMakeTodo={makeTodo ? (line, selection) => void makeTodo(selection ? { line, selection } : { line }) : undefined}
+      onTodoToggled={todos?.toggled}
     />
   );
 
@@ -349,7 +386,8 @@ export function NoteEditor(props: NoteEditorProps) {
       onWikilink={onOpenSlug}
       onTag={onTagClick}
       untrusted={textOnly}
-      onToggleTask={readOnly ? undefined : props.onToggleTask}
+      onToggleTask={readOnly ? undefined : onToggleTask}
+      todos={todos ? { of: todos.of, open: todos.open, make: makeTodo ? (offset) => void makeTodo({ offset }) : undefined } : undefined}
     />
   ) : (
     <p className="text-[15px] text-on-surface-variant/70">
@@ -412,6 +450,7 @@ export function NoteEditor(props: NoteEditorProps) {
             <ToolBtn title="Heading" onClick={() => editorRef.current?.linePrefix('## ')}><Heading2 size={15} /></ToolBtn>
             <ToolBtn title="Bullet list" onClick={() => editorRef.current?.linePrefix('- ')}><List size={15} /></ToolBtn>
             <ToolBtn title="Checklist" onClick={() => editorRef.current?.linePrefix('- [ ] ')}><ListChecks size={15} /></ToolBtn>
+            {makeTodo && <ToolBtn title="Make a to-do of this line or the selection (⌘⇧Enter)" onClick={() => editorRef.current?.makeTodo()}><CircleCheckBig size={15} /></ToolBtn>}
             <ToolBtn title="Link to a note ([[…]])" onClick={() => editorRef.current?.wrap('[[', ']]', 'Note title')}><Link2 size={15} /></ToolBtn>
             <ToolBtn title="Image (or just paste / drop one)" onClick={() => fileInputRef.current?.click()}><ImageIcon size={15} /></ToolBtn>
             <input
@@ -517,7 +556,22 @@ export function NoteEditor(props: NoteEditorProps) {
         <article className="notes-sheet">
           {title}
           {meta}
-          {mode === 'read' ? <div className="notes-reading">{reading}</div> : <div className={cn('notes-body', titleAuto && 'is-title-first')}>{editor}</div>}
+          {mode === 'read' ? (
+            <div ref={readingRef} className="notes-reading relative">
+              {reading}
+              {picked && makeTodo && (
+                <button
+                  type="button"
+                  className="notes-selection-todo"
+                  style={{ top: picked.top, left: picked.left }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { void makeTodo({ selection: picked.text }); setPicked(null); window.getSelection()?.removeAllRanges(); }}
+                >
+                  <CircleCheckBig size={14} /> Make a to-do
+                </button>
+              )}
+            </div>
+          ) : <div className={cn('notes-body', titleAuto && 'is-title-first')}>{editor}</div>}
         </article>
       </div>
     </div>

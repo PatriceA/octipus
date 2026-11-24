@@ -503,7 +503,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await expect.poll(() => calls.filter((c) => c.method === 'GET' && c.path === '/').length).toBeGreaterThan(readsBefore);
 
     // Save notes while that read is out.
-    await detail.getByLabel('Notes').fill('2 litres');
+    await detail.getByRole('textbox', { name: 'Notes' }).fill('2 litres');
     await detail.getByLabel('Title').focus();
     await expect.poll(() => calls.some((c) => c.method === 'PATCH' && c.body?.notes === '2 litres')).toBe(true);
 
@@ -512,7 +512,8 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     listGate = null;
     release();
     await expect(page.getByTestId('task-row').filter({ hasText: 'Book the venue' })).toBeVisible({ timeout: 5_000 });
-    await expect(detail.getByLabel('Notes')).toHaveValue('2 litres');
+    // Saved notes read as rendered markdown once their field is left.
+    await expect(detail.getByTestId('todo-notes-rendered')).toHaveText('2 litres');
     await expect(page.getByTestId('task-row').filter({ hasText: 'Deploy it' }).getByLabel('Has notes')).toBeVisible();
   });
 

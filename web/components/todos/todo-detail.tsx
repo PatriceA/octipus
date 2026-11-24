@@ -10,6 +10,7 @@ import {
   dayFromToday, dueDateInput, dueText, dueTimeInput, dueValue, localDateTimeInput, localToday, nextMonday,
   PRIORITY_LABEL, remindText, type Todo, type TodoPatch,
 } from './model';
+import { TodoLinkedNotes, TodoNotesField } from './todo-notes';
 import { StarButton, TodoCheck } from './todo-row';
 import type { TodosApi } from './use-todos';
 
@@ -260,19 +261,9 @@ export function TodoDetail({ task, tasks, todos, lists, roles, canWrite, canComm
           </>
         )}
 
-        <section className="todo-card">
-          <textarea
-            aria-label="Notes"
-            placeholder="Add a note"
-            value={notes.draft}
-            readOnly={!canWrite}
-            onChange={(e) => notes.onChange(e.target.value)}
-            onBlur={notes.onBlur}
-            maxLength={10000}
-            className="block min-h-[96px] w-full resize-y rounded-[10px] bg-transparent px-4 py-3 text-sm leading-relaxed text-on-surface [field-sizing:content] placeholder:text-on-surface-variant/80 focus:outline-none"
-          />
-          {notes.failed && <p role="alert" className="px-4 py-2 text-xs text-error">Notes not saved. Your text is still here; it is tried again when you click away.</p>}
-        </section>
+        <TodoNotesField value={notes.draft} onChange={notes.onChange} onBlur={notes.onBlur} canWrite={canWrite} failed={notes.failed} />
+
+        <TodoLinkedNotes task={task} canWrite={canWrite && !archived} onChanged={todos.refetch} onError={todos.setError} />
 
         <BoardFieldsCard task={task} tasks={tasks} todos={todos} roles={roles} canWrite={canWrite} canComment={canComment} defaultOpen={isSpace} />
       </div>

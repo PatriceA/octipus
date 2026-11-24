@@ -9,6 +9,7 @@ import type { TaskRepeat } from '../../../src/core/tasks/repeat';
 import { isAllDayDue } from '../../../src/core/tasks/smart-lists';
 import type { TaskStatus } from '../../../src/core/tasks/status';
 import type { BoardFields } from '@/components/tasks/work-board';
+import type { LinkedNote } from '../../../src/shared/note-todos';
 
 export interface Todo extends BoardFields {
   id: string;
@@ -31,6 +32,8 @@ export interface Todo extends BoardFields {
   source: string;
   createdAt: string;
   updatedAt?: string;
+  /** The notes it is linked to that the reader can open (attached, or the note a line of which it was made from). */
+  linkedNotes?: LinkedNote[];
   /** Present on ranked responses (`?view=next`, My Day suggestions). */
   bucket?: NextBucket | 'earlier';
   reason?: string;

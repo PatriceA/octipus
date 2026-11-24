@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, CalendarDays, Check, GripVertical, Lock, NotebookPen, Repeat, Star, Sun } from 'lucide-react';
+import { Bell, CalendarDays, Check, FileText, GripVertical, Lock, NotebookPen, Repeat, Star, Sun } from 'lucide-react';
 import { forwardRef, type ReactNode } from 'react';
 import { AssigneeChip } from '@/components/tasks/work-board';
 import { cn } from '@/lib/utils';
@@ -9,7 +9,7 @@ import { dueText, type Todo } from './model';
 
 /** The round checkbox: a real button with a 40px hit area around a 20px ring. */
 export function TodoCheck({ task, onToggle, disabled, completing, size = 'md' }: {
-  task: Todo;
+  task: { status: string };
   onToggle: () => void;
   disabled?: boolean;
   completing?: boolean;
@@ -79,6 +79,15 @@ function MetaLine({ id, task, ctx, steps, waiting }: { id: string; task: Todo; c
   if (task.remindAt && active) parts.push(<span key="remind" aria-label="Has a reminder" role="img"><Bell className="h-3.5 w-3.5" aria-hidden /></span>);
   if (task.repeat) parts.push(<span key="repeat" aria-label="Repeats" role="img"><Repeat className="h-3.5 w-3.5" aria-hidden /></span>);
   if (task.notes?.trim()) parts.push(<span key="notes" aria-label="Has notes" role="img"><NotebookPen className="h-3.5 w-3.5" aria-hidden /></span>);
+  const linked = task.linkedNotes ?? [];
+  if (linked.length > 0) {
+    parts.push(
+      <span key="linked" data-testid="todo-linked-note" className="inline-flex min-w-0 max-w-[14rem] items-center gap-1" title={linked.map((n) => n.title).join(', ')}>
+        <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="sr-only">Linked note: </span>
+        <span className="truncate">{linked.length === 1 ? linked[0].title : `${linked.length} notes`}</span>
+      </span>,
+    );
+  }
   if (task.important) parts.push(<span key="star" className="sr-only">Important</span>);
   if (waiting && active) parts.push(<span key="wait" className="inline-flex items-center gap-1 text-error/80" title="cannot start yet"><Lock className="h-3 w-3" aria-hidden />{waiting}</span>);
   if (ctx.showAssignee || task.assigneeKind === 'role' || task.assigneeKind === 'node') {

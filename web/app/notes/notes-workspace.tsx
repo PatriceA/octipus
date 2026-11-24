@@ -21,6 +21,7 @@ import { noteFolders, NotesNavigator } from './notes-navigator';
 import { DraftNoticeBar } from './draft-notice';
 import type { NoteDetail, NoteFilter, NoteIndexEntry, NoteListResponse, NoteRow, Suggestion, TagCount } from './types';
 import { hasLink, useNoteDraft } from './use-note-draft';
+import { useNoteTodos } from './use-note-todos';
 import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
 
 /** Phone width: one pane at a time (the list, or the open note). */
@@ -140,6 +141,16 @@ export function NotesWorkspace() {
     onSaved: invalidateAll,
   });
   const { detail, live, liveSynced, personal, openArchived } = note;
+  const openTask = useCallback((taskId: string) => router.push(`/tasks?list=all&task=${encodeURIComponent(taskId)}`), [router]);
+  const todos = useNoteTodos({
+    noteId: selectedId,
+    draft: note,
+    isSpace,
+    canWrite: canWrite && !openArchived,
+    onError: (message) => setActionError(message),
+    onOpenTask: openTask,
+    showUndo,
+  });
 
   const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId, activeTag], queryFn: () => api.get<NoteListResponse>(`/notes?limit=500&preview=true${activeTag ? `&tag=${encodeURIComponent(activeTag)}` : ''}`) });
   // The archive view, and server-side search (titles, tags and bodies).
@@ -446,6 +457,8 @@ export function NotesWorkspace() {
             onAddLink={canWrite && !openArchived ? note.addLink : undefined}
             onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
             onCollapse={closeCtx}
+            onOpenTask={openTask}
+            onSetTaskDone={canWrite && !openArchived ? (t, done) => void todos.setDone(t, done) : undefined}
           />
         </div>
       )}
@@ -598,6 +611,7 @@ export function NotesWorkspace() {
                   leading={leading}
                   trailing={trailing}
                   notices={notices}
+                  todos={todos}
                 />
               ) : (
                 <div className="notes-blank">

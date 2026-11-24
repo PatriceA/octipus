@@ -152,6 +152,25 @@
 .notes-prose .md-task-box:disabled { cursor: default; opacity: 0.8; }
 .notes-body .cm-np-task-done { color: var(--color-on-surface-variant); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--color-on-surface-variant) 55%, transparent); }
 
+/* A task line made a to-do: its marker as a quiet chip that opens the to-do; the others offer to become one. */
+.notes-body .cm-np-todo, .notes-prose .md-todo-chip { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 0 8px; height: 20px; border-radius: 9999px; font-size: 11.5px; font-weight: 600; line-height: 1; vertical-align: 0.1em; text-decoration: none; color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 10%, transparent); cursor: pointer; white-space: nowrap; }
+.notes-body .cm-np-todo::before, .notes-prose .md-todo-chip::before { content: ''; width: 6px; height: 6px; border-radius: 9999px; background: currentColor; }
+.notes-body .cm-np-todo:hover, .notes-prose .md-todo-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--color-primary) 18%, transparent); }
+.notes-body .cm-np-todo[data-state='done'], .notes-prose .md-todo-chip[data-state='done'] { color: var(--color-tertiary); background: color-mix(in srgb, var(--color-tertiary) 12%, transparent); }
+.notes-body .cm-np-todo[data-state='archived'], .notes-body .cm-np-todo[data-state='unknown'],
+.notes-prose .md-todo-chip[data-state='archived'], .notes-prose .md-todo-chip[data-state='unknown'] { color: var(--color-on-surface-variant); background: var(--color-surface-container-high); }
+.notes-prose .md-todo-chip:disabled { cursor: default; }
+.notes-body .cm-np-make-todo, .notes-prose .md-make-todo { margin-left: 8px; padding: 0 7px; height: 20px; border-radius: 9999px; font-size: 11.5px; font-weight: 600; line-height: 1; vertical-align: 0.1em; color: var(--color-on-surface-variant); border: 1px dashed var(--color-outline-variant); background: transparent; cursor: pointer; opacity: 0; transition: opacity 0.12s ease; white-space: nowrap; }
+.notes-body .cm-line:hover .cm-np-make-todo, .notes-body .cm-np-task-active .cm-np-make-todo, .notes-body .cm-np-make-todo:focus-visible,
+.notes-prose .md-task-item:hover .md-make-todo, .notes-prose .md-make-todo:focus-visible { opacity: 1; }
+.notes-body .cm-np-make-todo:hover, .notes-prose .md-make-todo:hover { color: var(--color-primary); border-color: var(--color-primary); }
+.notes-body .cm-np-task-done .cm-np-todo { text-decoration: none; }
+@media (hover: none) {
+  /* No hover on a touch screen: the caret's line shows the offer; the reading view always does, quietly. */
+  .notes-prose .md-make-todo { opacity: 0.6; }
+}
+.notes-selection-todo { position: absolute; z-index: 30; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 9999px; font-size: 12.5px; font-weight: 600; color: var(--color-on-primary); background: var(--color-primary); box-shadow: 0 8px 20px -6px #0f2a3055; cursor: pointer; }
+
 .notes-body .cm-np-image { display: inline-block; max-width: 100%; vertical-align: top; font-size: 12px; color: var(--color-on-surface-variant); }
 .notes-body .cm-np-image img { display: block; max-width: 100%; max-height: 420px; border-radius: 8px; margin: 4px 0; }
 .notes-body .cm-np-image[data-state='loading'] { min-width: 120px; min-height: 60px; border-radius: 8px; background: var(--color-surface-container-high); }

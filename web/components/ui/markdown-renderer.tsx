@@ -6,6 +6,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm';
 import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
+import { remarkTodoMarker } from '@/lib/remark-todo-marker';
 import { pointsHere, remoteImage } from '@/lib/remote-content';
 import { localFileLink } from '../../../src/shared/local-file-link';
 import { taskLineAt } from '../../../src/shared/note-text';
@@ -78,6 +79,45 @@ function TaskCheckbox({ checked, onToggle }: { checked: boolean; onToggle?: (off
   );
 }
 
+/** What a reading view of a note does with the task lines made to-dos (`Markdown`'s `todos`). */
+export interface MarkdownTodos {
+  /** The to-do a line's marker names, as the reader can see it; null when it is not one they can open. */
+  of: (anchor: string) => { title: string; status: string } | null;
+  open: (anchor: string) => void;
+  /** "Make a to-do" of the task item starting at `offset` of the text drawn. Absent: not offered. */
+  make?: (offset: number) => void;
+}
+
+const TODO_STATE: Record<string, string> = { done: 'Done', archived: 'Deleted', in_progress: 'In progress' };
+
+/** A task line's to-do, after its text: a chip naming it, or the offer to make one. */
+function TodoMark({ anchor, offset, todos }: { anchor: string | null; offset: number | null; todos: MarkdownTodos }) {
+  if (anchor) {
+    const todo = todos.of(anchor);
+    const state = todo ? TODO_STATE[todo.status] ?? 'To-do' : 'To-do';
+    return (
+      <button
+        type="button"
+        className="md-todo-chip"
+        data-state={todo?.status ?? 'unknown'}
+        disabled={!todo}
+        onClick={() => todos.open(anchor)}
+        title={todo ? `Open the to-do “${todo.title}”` : 'A to-do (not one you can open here)'}
+        aria-label={todo ? `To-do: ${todo.title} (${state.toLowerCase()}). Open it` : 'Linked to-do'}
+      >
+        {state}
+      </button>
+    );
+  }
+  if (!todos.make || offset === null) return null;
+  const make = todos.make;
+  return (
+    <button type="button" className="md-make-todo" onClick={() => make(offset)} aria-label="Make this line a to-do" title="Make this a to-do">
+      + To-do
+    </button>
+  );
+}
+
 /** This page's origin: what text from another install may not point into. */
 function here(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
@@ -103,6 +143,7 @@ export function Markdown({
   untrusted = false,
   listing,
   onToggleTask,
+  todos,
 }: {
   content: string;
   className?: string;
@@ -130,6 +171,12 @@ export function Markdown({
    * Without it the boxes show their state and cannot be clicked.
    */
   onToggleTask?: (offset: number, checked: boolean, seenLine: string) => void;
+  /**
+   * A note's reading view: task lines made to-dos show a chip naming the
+   * to-do (their ` ^todo-…` marker is not drawn), and the others may offer
+   * "make a to-do".
+   */
+  todos?: MarkdownTodos;
 }) {
   const enableInline = !!(onWikilink || onTag);
   // Component identity must survive polling and streaming renders. Defining
@@ -285,9 +332,11 @@ export function Markdown({
           li({ children, className: itemClass, node }) {
             if (!itemClass?.includes('task-list-item')) return <li>{children}</li>;
             const offset = node?.position?.start.offset ?? null;
+            const anchor = typeof node?.properties?.dataTodoAnchor === 'string' ? node.properties.dataTodoAnchor : null;
             return (
-              <li className="list-none">
+              <li className={cn('list-none', todos && 'md-task-item')}>
                 <TaskOffset.Provider value={offset}>{children}</TaskOffset.Provider>
+                {todos && <TodoMark anchor={anchor} offset={offset} todos={todos} />}
               </li>
             );
           },
@@ -298,12 +347,12 @@ export function Markdown({
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-  }), [onWikilink, onTag, onOpenFile, untrusted, listing, onToggleTask]);
+  }), [onWikilink, onTag, onOpenFile, untrusted, listing, onToggleTask, todos]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <TaskSource.Provider value={content}>
       <ReactMarkdown
-        remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
+        remarkPlugins={[remarkGfm, ...(enableInline ? [remarkWikilink] : []), ...(todos ? [remarkTodoMarker] : [])]}
         urlTransform={(url) => {
           if (enableInline && (url.startsWith('wikilink:') || url.startsWith('tag:'))) return url;
           if (!untrusted && onOpenFile && localFileLink(url, here())) return url;

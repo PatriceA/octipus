@@ -15,6 +15,30 @@
  * editors draw it as a chip and keep it out of titles and previews.
  */
 
+/** A note as a to-do shows it (`linkedNotes` on a task): enough to name and open it. */
+export interface LinkedNote {
+  id: string;
+  title: string;
+  slug: string;
+  noteKind: string;
+  noteDate: string | null;
+  archived: boolean;
+  /** Set when the to-do was made from a line of this note. */
+  anchor: string | null;
+}
+
+/** A to-do as a note shows it (`linkedTasks` on a note). Dates are ISO strings over the API. */
+export interface LinkedTask<D = string> {
+  id: string;
+  title: string;
+  status: string;
+  dueAt: D | null;
+  completedAt: D | null;
+  repeating: boolean;
+  /** Set when the to-do was made from a line of this note: the line's marker. */
+  anchor: string | null;
+}
+
 /** A link's anchor: lowercase letters and digits. */
 export const TODO_ANCHOR = /^[a-z0-9]{6,16}$/;
 

@@ -43,33 +43,16 @@ import type { Note } from '@/db/schema/notes';
 import type { Task } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
-import { anchorLine, changedAnchors, newTodoAnchor, noteTaskLines, setAnchoredChecked, TODO_ANCHOR, todoTitleFromLine } from '../../shared/note-todos';
+import {
+  anchorLine, changedAnchors, type LinkedNote, type LinkedTask as SharedLinkedTask, newTodoAnchor, noteTaskLines, setAnchoredChecked, TODO_ANCHOR,
+  todoTitleFromLine,
+} from '../../shared/note-todos';
 
 const logger = coreLogger.child({ component: 'task-note-links' });
 
-/** A note as a to-do shows it (`linkedNotes`): enough to name and open it. */
-export interface LinkedNote {
-  id: string;
-  title: string;
-  slug: string;
-  noteKind: string;
-  noteDate: string | null;
-  archived: boolean;
-  /** Set when the to-do was made from a line of this note. */
-  anchor: string | null;
-}
-
+export type { LinkedNote } from '../../shared/note-todos';
 /** A to-do as a note shows it (`linkedTasks`). */
-export interface LinkedTask {
-  id: string;
-  title: string;
-  status: string;
-  dueAt: Date | null;
-  completedAt: Date | null;
-  repeating: boolean;
-  /** Set when the to-do was made from a line of this note: the line's marker. */
-  anchor: string | null;
-}
+export type LinkedTask = SharedLinkedTask<Date>;
 
 export class NoteLinkError extends Error {
   constructor(readonly code: 'not_found' | 'anchor_taken' | 'other_anchor' | 'invalid', message: string) {
