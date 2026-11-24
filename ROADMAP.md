@@ -64,7 +64,8 @@ are not an instruction to expand scope during this cycle.
   Next: a live validation run on a real install (step 1, needs providers),
   then an opt-in reference bar with blind A/B judging, a builder + critic mode
   for `spawn_child`, letting the root choose that loop on its own, and the
-  B1b verify hook per item. Plan:
+  B1b verify hook per item (project-wide evidence hooks shipped 2026-11-24;
+  a check scoped to the files one item touched is still open). Plan:
   [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md).
 
 - **Provider-boundary test coverage — SHIPPED (2026-11-23), known gaps listed.**
@@ -87,10 +88,14 @@ are not an instruction to expand scope during this cycle.
   sandbox policy, no artifact script served as a file), read-only
   single-artifact viewer tokens with expiry and share-link revocation, a
   retention policy (`artifacts.retentionDays`, off by default) that counts
-  views, and typed slug conflicts with a suggested slug. Outstanding: the
-  agent-authored refresh loop (the `skill_query` source kind is a stub with
-  no design: it needs a deliverable, a headless execution path, budgets and
-  an injection boundary), shared token revocation for multi-node
+  views, and typed slug conflicts with a suggested slug. **Agent refresh
+  shipped (2026-11-24):** the owner can have an agent regenerate the page from
+  a stored instruction, by hand or on a schedule, with web search and page
+  fetch only, the owner's budget, and an atomic replace that keeps the old
+  version on failure (`docs/ARTIFACTS.md`). Outstanding: refresh from the
+  knowledge base (removed in review: a generated page could send out what it
+  read, which needs sanitising the generated HTML), viewer-triggered refresh,
+  the `skill_query` source kind (still a stub), shared token revocation for multi-node
   deployments, and a check of the forms and live refresh in a real browser.
   Stays in **Now** until the BETA flag drops.
 
@@ -210,9 +215,13 @@ All three landed. What each actually became:
   limits (no role needs a different depth today, and a shape nobody varies is a
   knob with no user), and the **role seam** itself — swappable providers behind
   a role contract, so roles can be installed and replaced at runtime. That last
-  one is the real remaining work here: `AgentRole` is a frozen 17-member union
-  in `src/core/agent/types.ts` and every registry keys off it, so a
-  runtime-installable role is a type-level change, not a config one.
+  one **shipped (2026-11-24):** `AgentRole` is now the built-in roles plus a
+  branded custom id that only the role registry hands out
+  (`src/core/agent/role-registry.ts`). Operators add roles through
+  `/api/roles`, plugin packages contribute them through a `roles` manifest
+  entry (apiVersion 1.3.0), and an unregistered role fails by name instead of
+  running as `general` (`docs/AGENT-ARCHITECTURE.md`, `docs/PLUGIN-PACKAGES.md#roles`).
+  Still open: limiting a plugin role's MCP access to its own package's servers.
 - **Deterministic policy layer — approvals SHIPPED (2026-08-20).** The part of
   this that was genuinely scattered was the approval decision: whether an
   ASK-level tool call blocks for a human was decided twice, in the agent loop
@@ -287,9 +296,11 @@ All three landed. What each actually became:
   letting a partial index read as a complete one. Since 2026-11-23 multi-column
   bands are read column by column and aligned grids come out as Markdown tables,
   with the old line-by-line output wherever detection is uncertain; the chunker
-  splits a long table between rows and repeats its header. Not handled: merged
-  cells, header-less data tables, tables continuing across pages, rotated and
-  right-to-left text (see `docs/DOCUMENTS.md`). Deliberately NOT attempted:
+  splits a long table between rows and repeats its header. Header-less data
+  tables and tables continuing across a page break are read too (2026-11-23).
+  Not handled: merged cells, all-text grids without a header, a table split by
+  a running header or footer with words in it, rotated and right-to-left text
+  (see `docs/DOCUMENTS.md`). Deliberately NOT attempted:
   GUI-screenshot understanding — that belongs to the vision/OCR path, which
   never had this problem.
 - **Native mobile clients — EXISTS, out of this repo.** The entry used to say
@@ -315,23 +326,28 @@ All three landed. What each actually became:
   handling, child relay and scaffolding strip rewrite the whole answer after the
   model finishes, and SSE cannot take text back. Unblocking it means those
   passes deciding on a prefix, which changes non-streaming answers too.
-- **Inbound email channel.** A reply-drafts-only email adapter
-  (**ASK-gated**: every send is a human-approved draft, per the
-  gap-integration decision). Blocked on a reusable channel-adapter
-  harness — the same harness would serve Signal / Matrix (under
-  **Later**). The email *triage* surface already shipped (2026-06-03 /
-  2026-06-10); this is the missing *inbound conversational channel*.
-- **OpenTelemetry export.** Prometheus metrics + `runId` correlation
-  shipped (WS4, 2026-07-12); spans are the remaining half. Blocked on
-  packaging — the OTel SDK's ~20 transitive packages can't currently
-  install through the build environment's package proxy. Pick up when
-  the dependency constraint lifts. The wave-2 dashboard deliberately
-  does not depend on this.
-- **TUI — modernization.** Wheel scrolling shipped; the open work is the
-  screen model (alternate screen, pinned composer, drag-to-select), the move
-  off the deprecated `@mariozechner/pi-tui` package, the chat experience and
-  editor correctness. Findings, the pi-tui decision and the phases are in
-  [`docs/plans/tui-modernization.md`](docs/plans/tui-modernization.md).
+- **Inbound email channel — SHIPPED (2026-11-24).** Mail to a dedicated
+  mailbox from an allow-listed, linked sender becomes a conversation; the
+  answer is saved as a draft reply by default (`emailChannel.replyMode`), or
+  sent at once as an opt-in. A mail counts only on a DMARC pass reported by an
+  operator-trusted receiving server, and an email turn is deliberately
+  limited: web search and the product docs only, no stored grants, no
+  attachments, no private context (`docs/CHANNELS.md#email`). Still open:
+  reading attachments, and Signal / Matrix on the same adapter shape (under
+  **Later**).
+- **OpenTelemetry export — spans SHIPPED (2026-11-24).** Tracing is off by
+  default and switched on by the standard `OTEL_*` variables, exported over
+  OTLP/HTTP: spans for the HTTP request, turn, child spawn, pipeline run and
+  stage, model call, tool call, channel delivery and webhook delivery, with a
+  closed attribute list that carries no user content
+  (`docs/OBSERVABILITY.md`). Still open: database spans, gRPC export, and
+  trace ids in log lines.
+- **TUI — modernization.** The screen model, the move off the deprecated
+  package and the editor work shipped earlier; the model picker, `@` mentions
+  for agents, skills and sessions, loading older turns and the soft-wrap
+  cursor shipped 2026-11-24. Still open: pasted paths as chips, inline
+  diagrams, and any server-side meaning for mentions (they are text the agent
+  reads). See [`docs/plans/tui-modernization.md`](docs/plans/tui-modernization.md).
 - **Compaction — branch summarization.** The structured summary format
   (cumulative file-op tracker, iterative summary chaining via
   `firstKeptEntryId` walk-back, `/compact <instructions>` pass-through) shipped
@@ -382,19 +398,26 @@ All three landed. What each actually became:
 - **Completion contracts — verify against evidence, not the model's word.**
   The **evidence ledger shipped** (Hermes B1, #242): QA verdicts persist to
   `verification_evidence` and are readable at `GET /api/verification/:sessionId`;
-  the "verified" rule fails loud (no evidence ⇒ not verified). Still next
-  (**B1b**): `pre_verify` project hooks that run tests/build/lint as evidence,
-  and a **verify-stop-loop** that blocks a role's deliverable until required
-  evidence passes (bounded by the existing node budgets; on exhaustion a typed
-  failure, never a coerced pass) — plus persisting the `expectedOutput.schema`
-  gate results alongside the QA verdicts. Lands naturally as policy on the
+  the "verified" rule fails loud (no evidence ⇒ not verified). **B1b shipped
+  (2026-11-24):** `agent.evidenceHooks` declares project commands (test,
+  build, lint) that run as `pre_verify` evidence at the QA stage and before a
+  run can complete; a failing hook sends its output back for a bounded repair
+  and then ends the run as failed, and a QA pass cannot override it
+  (`docs/AGENT-ARCHITECTURE.md`). Still open: hooks on the swarm path and on
+  remote (SSH) execution environments, a check scoped to one plan item's
+  files, a settings UI, and persisting the `expectedOutput.schema` gate
+  results alongside the QA verdicts. Lands naturally as policy on the
   wave-1 waterfall. Scoped per plan item in
   [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md) (step 5).
-- **Skill marketplace — export/import SHIPPED (2026-11-23), discovery open.**
+- **Skill marketplace — export/import and registries SHIPPED (2026-11-24).**
   Skills export as a hashed, optionally signed JSON bundle and import through a
   write-free preview and an explicit install, under the plugin-package trust
-  settings (`docs/SKILL-EXCHANGE.md`). Still open: a registry to discover and
-  install community skills from the web UI, ratings, automatic updates.
+  settings (`docs/SKILL-EXCHANGE.md`). Operators can add static skill
+  registries (`skills.registries`, none by default) to browse, search and
+  install from the web UI through the same preview; updates are shown, never
+  applied. Still open: ratings, revocation lists in an index, and a signature
+  that covers a listing's name and version (a compromised registry can relist
+  an old signed bundle; the preview warns).
   (Filesystem `SKILL.md` discovery per the agentskills.io spec already ships —
   `src/skills/external-loader.ts`.)
 - **Pipeline templates from natural language.** Describe a multi-stage workflow,
