@@ -6,7 +6,7 @@ vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: () => 
   f.release = () => resolve({ response: 'done', sessionId: 'new-session', agentId: 'agent' });
 }) }) }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ stopSession: f.stop }) }));
-vi.mock('@/db/repositories/scoped', () => ({ scopedRepos: () => ({ sessions: {
+vi.mock('@/db/repositories/scoped', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/db/repositories/scoped')>()), scopedRepos: () => ({ sessions: {
   findById: async () => ({ id: 'existing' }),
   create: async (row: unknown) => { f.created.push(row); return { id: 'new-session' }; },
 } }) }));
