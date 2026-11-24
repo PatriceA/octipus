@@ -85,7 +85,7 @@ async function stub(page: Page, notes: StubNote[]) {
 }
 
 const NOTES = (): StubNote[] => [
-  { id: 'shop', title: 'Shopping', slug: 'shopping', body: 'Shopping\n- [ ] oat milk\n- [x] eggs\nSee [[Garden plan]] and [[old-plans/recipes|the recipes]]', updatedAt: hoursAgo(1) },
+  { id: 'shop', title: 'Shopping', slug: 'shopping', body: 'Shopping\n- [ ] oat milk\n- [x] eggs\nSee [[Garden plan]] and [[old-plans/recipes|the recipes]]', updatedAt: new Date().toISOString() },
   { id: 'garden', title: 'Garden plan', slug: 'home/garden-plan', body: 'Plant tomatoes in May.', updatedAt: hoursAgo(30) },
   { id: 'recipes', title: 'Recipes', slug: 'kitchen/recipes', body: 'Recipes\nLentil soup', updatedAt: hoursAgo(300), frontmatter: { aliases: ['old-plans/recipes'] } },
   { id: 'd-old', title: '2026-01-02', slug: 'daily/2026-01-02', body: '# 2026-01-02\nold day', noteKind: 'daily', noteDate: '2026-01-02', updatedAt: hoursAgo(10) },

@@ -204,16 +204,20 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
     if (titleAutoRef.current) setDraftTitle(noteTitleFrom(body));
   }, []);
 
-  /** A title set by hand (empty: take it from the first line again). */
-  const setTitle = useCallback((title: string) => {
-    if (title.trim() === '') {
+  /**
+   * A title set by hand. Empty takes a personal note's title from its first
+   * line again, except while the title field is being typed in (`typing`):
+   * a title erased letter by letter to write another is not given up.
+   */
+  const setTitle = useCallback((title: string, typing = false) => {
+    if (title.trim() === '' && personal && !typing) {
       setTitleAuto(true);
       setDraftTitle(noteTitleFrom(draftRef.current.body));
       return;
     }
     setTitleAuto(false);
     setDraftTitle(title);
-  }, [setTitleAuto]);
+  }, [personal, setTitleAuto]);
 
   /**
    * Save a draft of a personal note. Runs after any save still in flight, so

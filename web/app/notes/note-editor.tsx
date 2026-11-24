@@ -28,8 +28,11 @@ export type AutosaveStatus =
 export interface NoteEditorProps {
   selectedId: string | null;
   draftTitle: string;
-  /** A title set by hand; empty takes it from the first line again (`titleAuto`). */
-  setDraftTitle: (v: string) => void;
+  /**
+   * A title set by hand; empty takes it from the first line again
+   * (`titleAuto`), except while the title field is typed in (`typing`).
+   */
+  setDraftTitle: (v: string, typing?: boolean) => void;
   /**
    * The title is the first line's: no title field shows, the first line reads
    * as the title, and editing it renames the note (its slug stays).
@@ -374,9 +377,13 @@ export function NoteEditor(props: NoteEditorProps) {
   ) : showTitleField ? (
     <input
       value={draftTitle}
-      onChange={(e) => setDraftTitle(e.target.value)}
+      onChange={(e) => setDraftTitle(e.target.value, true)}
       onFocus={() => props.onTitleEditing?.(true)}
-      onBlur={() => props.onTitleEditing?.(false)}
+      onBlur={(e) => {
+        props.onTitleEditing?.(false);
+        // Left empty: the title is the first line's again.
+        if (!e.target.value.trim()) setDraftTitle('');
+      }}
       onKeyDown={(e) => {
         // Enter goes on into the text, as on paper.
         if (e.key === 'Enter') { e.preventDefault(); editorRef.current?.focus(); }

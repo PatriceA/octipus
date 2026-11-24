@@ -138,6 +138,13 @@ test('a title set by hand stays put while the first line changes, and clearing i
   await page.locator('.cm-content').fill('oat milk\neggs');
   await expect.poll(() => posts.at(-1)?.body).toBe('oat milk\neggs');
   expect(posts.at(-1).title).toBe('Groceries');
+  // A title erased to write another one keeps its field while it is typed in.
+  const titleField = page.getByPlaceholder('Untitled note');
+  await titleField.fill('');
+  await expect(titleField).toBeVisible();
+  await titleField.pressSequentially('Shop');
+  await page.locator('.cm-content').click();
+  await expect.poll(() => posts.at(-1)?.title).toBe('Shop');
 
   // The details menu holds the title, tags and kind.
   await page.getByRole('button', { name: 'Details' }).click();
