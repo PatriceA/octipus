@@ -373,7 +373,9 @@ target to draw a line to.
 
 - **`notes` tool** — `write_note`, `read_note`, `list_notes`, `search_notes`,
   `capture_note`, `suggest_links`, `archive_note`, `query_notes`,
-  `export_canvas`, `sync_vault`.
+  `export_canvas`, `sync_vault`. `read_note` lists the note's linked to-dos
+  (`linkedTasks`); the tasks tool's `todos_from_note` makes to-dos of its task
+  lines.
 - **`knowledge` tool** — `link_knowledge` (create an edge, including a ghost
   by `to_ref`; lands with `origin='agent'`), `get_backlinks`,
   `traverse_knowledge` (bounded BFS), plus
@@ -396,7 +398,19 @@ whose title is its first line keeps following it (a rename: the slug never
 changes). Title, tags, kind, folder and pin are in the note's details menu;
 "Move to…" and dragging a note onto a folder call `POST /api/notes/:id/move`.
 The draft, autosave and live-note logic is `use-note-draft.ts`, so another
-page can embed the same editor. The graph is a view of the same page:
+page can embed the same editor (the Today page does, for the daily note,
+created by its first keystroke through the hook's `create`). A personal
+note's save refused as stale is merged with the server's text (diff3) and
+saved again when the two changes do not overlap.
+
+**Note lines as to-dos.** A task line made a to-do ends in ` ^todo-<anchor>`
+(`src/shared/note-todos.ts`), drawn as a chip in the editor and the reading
+view; ⌘⇧Enter, the line's "+ To-do" or the toolbar makes one of the caret's
+line or the selection (`use-note-todos.ts`), and the context panel lists the
+note's to-dos. The tick of a marked line and its to-do follow each other on
+the server (`src/core/tasks/note-links.ts`, hooked into `NoteService.save`,
+the live note's refresh and `TaskRepo.update`). See
+[API.md](API.md#note--to-do-links). The graph is a view of the same page:
 `/graph` redirects to `/notes?view=graph` so old links keep working.
 
 ---

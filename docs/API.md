@@ -305,6 +305,8 @@ tools, and which runs through the plugin host API scopes `agent:run` and
 | GET | `/api/tasks/my-day` | Today's My Day (`?tz=`): `{timezone, date, tasks, suggestions}` (see below) |
 | POST | `/api/tasks/parse` | Preview a capture line without creating anything: `{text, tz?}` → the parse (see below) |
 | DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
+| POST | `/api/tasks/:id/notes` | Link a note to the to-do: `{noteId}` (an existing note) or `{title}` (a new note made for it, that title as its first line) → `{note}` (a `linkedNotes` entry). Idempotent. See [Note ↔ to-do links](#note--to-do-links) |
+| DELETE | `/api/tasks/:id/notes/:noteId` | Unlink a note from the to-do (the note and its line stay) → `{unlinked: true}`; `404` when there is no such link in reach |
 | GET | `/api/tasks/role-agents` | The caller's role agents: task counts, on/off, `pipelineTemplate` (the template each task runs through, or null) |
 | PUT | `/api/tasks/role-agents` | Turn a role agent on or off (`{role, enabled}`); with `enabled: true`, `pipelineTemplate` (an id or name) makes it run each task through that pipeline and `null` makes it work tasks itself. A template with a required parameter is refused |
 
@@ -462,6 +464,81 @@ task row plus `bucket` and `reason` — first those left in My Day on an earlier
 day (`bucket: "earlier"`, reason "in My Day yesterday"), then the next-action
 ranking's pressing ones (`doing`, `overdue`, `today`, `high`, `inbound`,
 `upcoming`), at most 12.
+
+### Note ↔ to-do links
+
+A to-do can be linked to notes: notes **attached** to it, or the note **line**
+it was made from. Every task row (`GET /api/tasks` in every form, `GET
+/api/tasks/:id`, `GET /api/tasks/my-day`'s `tasks`, and the answers of `POST`
+and `PATCH`) carries
+
+| Field | Type | Meaning |
+|---|---|---|
+| `linkedNotes` | array | The notes it is linked to **that the caller can open**, oldest link first: `{id, title, slug, noteKind, noteDate, archived, anchor}`. `anchor` is set when the to-do was made from a line of that note (see below), null for an attached note. An archived note is listed with `archived: true`; a deleted one is gone. Empty when none |
+
+and `GET /api/notes/:id` carries `linkedTasks`: the to-dos linked to the note
+that the caller can open, `{id, title, status, dueAt, completedAt, repeating,
+anchor}`.
+
+**Making links.** `POST /api/tasks` takes `noteId` (link the new to-do to that
+note) and, with it, `noteAnchor` (it was made from the line of that note that
+carries this anchor). `POST /api/tasks/:id/notes {noteId | title}` attaches a
+note to an existing to-do (`title`: a new note made for it). `POST
+/api/notes/:id/todos {lines?}` makes to-dos of a note's task lines on the
+server: every unticked `- [ ]` line that is not a to-do yet, or the 0-based
+`lines` given (a ticked one then becomes a done to-do); each line gets its
+marker and its link → `{tasks, marked}` (`marked: false` with a `reason` when
+the note could not take the markers: the to-dos are then attached instead).
+
+**Line markers.** A task line made a to-do ends in ` ^todo-<anchor>` (the
+anchor: 6–16 lowercase letters and digits, random):
+
+    - [ ] Call the dentist ^todo-k3x9qa2b
+
+The marker names the link, never the to-do, so a note says nothing about a
+to-do to a reader who cannot open it. A client that makes a to-do from a line
+picks a new anchor, creates the to-do with `noteId` and `noteAnchor`, then
+writes the marker into the line as an ordinary edit of the note (the web does
+this; `409 {code: "anchor_taken"}` when that line is already another to-do).
+Clients draw the marker as a chip and leave it out of titles and previews;
+the pure helpers are in `src/shared/note-todos.ts`.
+
+**Ticks follow each other**, change for change, never state for state:
+
+- A to-do moved between done and not done (by anyone: the web, the mobile app,
+  an agent) ticks or unticks its line on the server: a personal note is written
+  only over the text the server read (read again on a race), a space note is
+  merged into its live text. A client editing that note sees the new text on
+  its next read; a save made from the older text is refused as `stale` (the web
+  merges it with the change and saves again when the two do not touch the same
+  text).
+- A note save that ticks or unticks a marked line completes or reopens its
+  to-do. Only a line whose tick **changed** in that save counts: a marker that
+  only appears (a line just made a to-do) or only disappears (a line deleted)
+  changes nothing, and an unrelated edit of a note whose line is out of step
+  does not flip the to-do. A live space note's typed ticks reach their to-dos
+  when the note is next saved (on last leave, and every few minutes); the web
+  completes the to-do at once when a linked box is clicked there.
+- A **deleted** (archived) to-do is never brought back by a tick, and deleting
+  one leaves its line as it is.
+- **Repeating** to-dos: the line stays with the occurrence it was made from
+  (ticked when that is done); the next occurrence has the note attached, not
+  the line.
+- **Deleting the line** leaves the to-do and its link (an undo brings the
+  line's link back); **editing** the line keeps the link (the to-do keeps its
+  own title). A marker copied into another note means nothing there.
+- A **stale or offline** client: a save refused as stale writes nothing (the
+  to-do's change stands); the web merges it and saves again, and a real clash
+  asks the user. A tick that cannot reach its line (the note gone, out of
+  reach) is logged and the to-do's change stands.
+
+**Who sees what.** Both ends of a link are always in one scope: a user's
+personal to-dos and notes, or one space's (a personal note can never be linked
+to a space to-do, nor a space note to a personal one). A link is made only by
+someone who can write the to-do and reach the note there, and is shown only
+through the reader's own access on each side: a space guest sees the linked
+notes of their folders only and, from a note, the to-dos of their rooms only.
+A remote member of a federated space reads the host's task rows without links.
 
 **Live updates.** Every write to one of your personal tasks (yours, an agent's,
 a repeat's), and every change to your own star / My Day / order (in a space
@@ -744,9 +821,11 @@ in its body.
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,noteKind}` list — the source for `[[` autocomplete. A note that was moved also carries `movedFrom` (the slugs it was moved away from), so a client resolves an old `[[link]]` as the server does. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
 | POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). The web app sends its own calendar day as `date` (`YYYY-MM-DD`); without it the server's UTC day is used. |
+| GET | `/api/notes/daily?date=YYYY-MM-DD` | `{ note, template }`: the day's daily note if it exists (`note: null` otherwise; nothing is created) and the text a new one starts from. The Today page shows the day with it and creates the note on the first keystroke. |
 | POST | `/api/notes/daily` | `{ date: "YYYY-MM-DD" }` (the caller's calendar day) → `{ note }`: the day's daily note (`daily/<date>`, kind `daily`), created from the daily template only while the day has none (a note created meanwhile is returned, never replaced). An archived one is restored and answered with `restored: true`. `400` for a day that does not exist (`2026-02-31`). |
 | POST | `/api/notes/:id/move` | `{ slug }` → `{ note }`: give the note another slug — another folder (`projects/plan`) or name. The id, text and title stay. The old slug is added to `frontmatter.movedFrom` (and taken out of any other note's: one note holds a moved slug), and a `[[link]]` to a slug resolves to the note at that slug, else to the active note that was moved away from it (the exact slug always wins): links to the old slug keep working, before and after the move. `movedFrom` is written by this route alone: `POST /api/notes` ignores it in `frontmatter` and keeps the note's own. `409 {code: "exists", id, slug}` when another note (an archived one included) has the slug, `400 {code: "invalid_slug"}` for a slug that is empty once normalized, `404` when the caller cannot reach the note; in a space, editors and owners only. Renaming a note (a new `title` on `POST /api/notes` with its `id`) never changes its slug. |
-| GET | `/api/notes/:id` | Read a note with its backlinks. |
+| GET | `/api/notes/:id` | Read a note with its backlinks and `linkedTasks` (the to-dos linked to it that the caller can open; see [Note ↔ to-do links](#note--to-do-links)). |
+| POST | `/api/notes/:id/todos` | `{ lines?: number[] }` → `{ tasks, marked, reason? }`: make to-dos of the note's task lines that are not to-dos yet (every unticked one, or the 0-based `lines`), each marked and linked. `404` when the caller cannot reach the note. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
 | POST | `/api/notes/:id/restore` | Undo an archive: the note is back in lists, search and recall → `{ restored: true }` (also for a note that is not archived, which is left untouched). `404` when the caller cannot reach the note; in a space, editors and owners only (`403` otherwise). |

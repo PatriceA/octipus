@@ -7,6 +7,31 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Today, and to-dos linked to notes** ([guide](docs/guides/todos-notes-today.md),
+  [API](docs/API.md#note--to-do-links)). A **Today** page (first in the
+  sidebar, and a tab beside To-dos) shows the day: overdue, due today and My
+  Day to-dos with capture, done today, yesterday's unfinished picks offered
+  again, today's calendar events (or a word on connecting a calendar), and
+  today's daily note written in place — made by the first keystroke, never by
+  opening the page (`GET /api/notes/daily?date=` reads the day without
+  creating it). A note's task line, or a selection, becomes a to-do linked to
+  it (⌘⇧Enter, the line's "+ To-do", the toolbar, or the reading view); the
+  line shows a chip, the note's context panel lists its to-dos, and ticking
+  either side ticks the other on the server (change for change: a deleted
+  to-do is never revived, a repeating one keeps its line on its occurrence and
+  attaches the note to the next). A to-do's panel renders its notes as
+  markdown and lists its linked notes as chips, with attach (existing or new)
+  and unlink. Links never show a note or a to-do to someone who cannot open
+  it, and never cross from personal to a space. New: table `task_note_links`
+  (migration 0207); `linkedNotes` on every task row, `linkedTasks` on
+  `GET /api/notes/:id`; `POST /api/tasks {noteId, noteAnchor}`,
+  `POST|DELETE /api/tasks/:id/notes`, `POST /api/notes/:id/todos`. A personal
+  note's save refused as stale (a to-do ticked its line meanwhile) is merged
+  and saved again when the changes do not overlap. Agents: task summaries name
+  their notes, `create_task` takes `noteId`, new `todos_from_note`,
+  `list_tasks` `view: "today"` (also on the MCP server's
+  `octipus_list_tasks`), `read_note` lists a note's to-dos. Ctrl+K can add a
+  line to today's note from any page.
 - **Web notes are a notepad.** A note opens straight into one live-preview
   editor: headings, bold, lists, quotes, links, `[[wikilinks]]` and `#tags`
   read as rendered while the text stays markdown, `- [ ]` tasks are
