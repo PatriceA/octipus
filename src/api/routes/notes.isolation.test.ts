@@ -128,6 +128,13 @@ describe('Notes API', () => {
     const again = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
     expect(again.body.note.id).toBe(first.body.note.id);
     expect((await post(aliceApp, '/api/notes/daily', { date: 'today' })).status).toBe(422);
+    // A day that does not exist is refused, not rolled into the next month.
+    const impossible = await post(aliceApp, '/api/notes/daily', { date: '2026-02-31' });
+    expect(impossible.status).toBe(400);
+    // An archived day's note comes back when asked for.
+    await del(aliceApp, `/api/notes/${first.body.note.id}`);
+    const back = await post(aliceApp, '/api/notes/daily', { date: '2026-11-23' });
+    expect(back.body).toMatchObject({ restored: true, note: { id: first.body.note.id, archivedAt: null } });
     // Another user's day is their own.
     expect((await post(bobApp, '/api/notes/daily', { date: '2026-11-23' })).body.note.id).not.toBe(first.body.note.id);
   });
@@ -137,15 +144,26 @@ describe('Notes API', () => {
     await post(aliceApp, '/api/notes', { title: 'Taken', body: 'y' });
     const moved = await post(aliceApp, `/api/notes/${a.id}/move`, { slug: 'projects/move-me' });
     expect(moved.status).toBe(200);
-    expect(moved.body.note).toMatchObject({ id: a.id, slug: 'projects/move-me', title: 'Move me', frontmatter: { aliases: ['move-me'] } });
+    expect(moved.body.note).toMatchObject({ id: a.id, slug: 'projects/move-me', title: 'Move me', frontmatter: { movedFrom: ['move-me'] } });
     const index = await get(aliceApp, '/api/notes/index');
-    expect(index.body.notes.find((n: any) => n.id === a.id)).toMatchObject({ slug: 'projects/move-me', aliases: ['move-me'] });
+    expect(index.body.notes.find((n: any) => n.id === a.id)).toMatchObject({ slug: 'projects/move-me', movedFrom: ['move-me'] });
     const clash = await post(aliceApp, `/api/notes/${a.id}/move`, { slug: 'taken' });
     expect(clash.status).toBe(409);
     expect(clash.body.code).toBe('exists');
     expect((await post(aliceApp, `/api/notes/${a.id}/move`, { slug: '!!!' })).status).toBe(400);
     // Another user cannot move it (and cannot tell it exists).
     expect((await post(bobApp, `/api/notes/${a.id}/move`, { slug: 'mine' })).status).toBe(404);
+  });
+
+  test('preview=true lists a line of each note instead of its body', async () => {
+    const created = (await post(aliceApp, '/api/notes', { title: 'Previewed', body: `Previewed\n${'- [ ] a task\n'.repeat(5000)}` })).body.note;
+    const list = await get(aliceApp, '/api/notes?preview=true&limit=500');
+    const row = list.body.notes.find((n: any) => n.id === created.id);
+    expect(row.body).toBeUndefined();
+    expect(row.preview.startsWith('a task · a task')).toBe(true);
+    expect(row.preview.length).toBeLessThanOrEqual(140);
+    // Without it the list is as before (the mobile app reads `body`).
+    expect((await get(aliceApp, '/api/notes')).body.notes.find((n: any) => n.id === created.id).body).toContain('a task');
   });
 
   test('archive (soft delete) hides from listing', async () => {

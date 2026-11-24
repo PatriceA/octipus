@@ -48,35 +48,88 @@ export function noteTitleFrom(body: string): string {
   return '';
 }
 
-/** A task line: list marker, then `[ ]` or `[x]`. Group 1 runs up to the box's inside. */
-const TASK_LINE = /^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[)([ xX])\]/;
+/**
+ * A task item from the start of its line: list marker (inside any quote),
+ * then `[ ]` or `[x]` on the same line or, as CommonMark allows, at the
+ * start of the next. Group 1 runs up to the box's inside.
+ */
+const TASK_ITEM = /^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])(?:[ \t]+|[ \t]*\n[ \t>]*)\[)([ xX])\]/;
+
+/** Where the box's inside of the task item starting on the line of `offset` is, or -1. */
+function taskBoxAt(body: string, offset: number): number {
+  if (offset < 0 || offset > body.length) return -1;
+  const start = body.lastIndexOf('\n', offset - 1) + 1;
+  const match = TASK_ITEM.exec(body.slice(start, start + 400));
+  return match ? start + match[1].length : -1;
+}
 
 /**
- * Tick (or untick) the task on the line holding `offset`: its `[ ]` becomes
- * `[x]` and back. `checked` sets the state instead of flipping it. Null when
- * that line is not a task, or the offset is outside the text.
+ * Tick (or untick) the task whose list item starts on the line holding
+ * `offset`: its `[ ]` becomes `[x]` and back. `checked` sets the state
+ * instead of flipping it. Null when that line starts no task, or the offset
+ * is outside the text.
  */
 export function toggleTaskAt(body: string, offset: number, checked?: boolean): string | null {
-  if (offset < 0 || offset > body.length) return null;
-  const start = body.lastIndexOf('\n', offset - 1) + 1;
-  const end = body.indexOf('\n', start);
-  const line = body.slice(start, end === -1 ? body.length : end);
-  const match = TASK_LINE.exec(line);
-  if (!match) return null;
-  const next = checked ?? match[2] === ' ';
-  const at = start + match[1].length;
+  const at = taskBoxAt(body, offset);
+  if (at < 0) return null;
+  const next = checked ?? body[at] === ' ';
   return `${body.slice(0, at)}${next ? 'x' : ' '}${body.slice(at + 1)}`;
+}
+
+/** The text of the line holding `offset`, its task box read as unticked (to recognise the task in a changed text). */
+export function taskLineAt(body: string, offset: number): string | null {
+  const at = taskBoxAt(body, offset);
+  if (at < 0) return null;
+  const start = body.lastIndexOf('\n', offset - 1) + 1;
+  const end = body.indexOf('\n', at);
+  return `${body.slice(start, at)} ${body.slice(at + 1, end === -1 ? body.length : end)}`;
+}
+
+/**
+ * Tick the task the user saw: the item at `offset` of the text they were
+ * shown, found in `body` (the text now, which may have changed since, as a
+ * live note does). At the same offset when that line is still the same
+ * task, else on the one line that is; null when there is no such line, or
+ * more than one (nothing is ticked rather than the wrong task).
+ */
+export function toggleSeenTask(body: string, offset: number, seenLine: string, checked?: boolean): string | null {
+  if (taskLineAt(body, offset) === seenLine) return toggleTaskAt(body, offset, checked);
+  const starts: number[] = [];
+  for (let i = 0; i <= body.length; i = body.indexOf('\n', i) + 1) {
+    if (taskLineAt(body, i) === seenLine) starts.push(i);
+    if (body.indexOf('\n', i) === -1) break;
+  }
+  return starts.length === 1 ? toggleTaskAt(body, starts[0], checked) : null;
 }
 
 /**
  * A note's text for a list row: the body without the line its title came
- * from (when it did), read as plain text, at most `width` characters.
+ * from (when it did), read as plain text, at most `width` characters. Reads
+ * only as many lines as that takes.
  */
 export function bodyPreview(body: string | undefined, title: string, width = 140): string {
   if (!body) return '';
-  const lines = body.replace(FRONTMATTER, '').split('\n');
-  const first = lines.findIndex((line) => plainLine(line) !== '');
-  const rest = first >= 0 && plainLine(lines[first]).toLowerCase() === title.trim().toLowerCase() ? lines.slice(first + 1) : lines;
-  const text = rest.map(plainLine).filter(Boolean).join(' · ');
-  return text.length > width ? `${text.slice(0, width - 1).trimEnd()}…` : text;
+  const text = body.replace(FRONTMATTER, '');
+  const wanted = title.trim().toLowerCase();
+  const parts: string[] = [];
+  let length = 0;
+  let first = true;
+  for (let i = 0; i < text.length && length <= width;) {
+    const nl = text.indexOf('\n', i);
+    const end = nl === -1 ? text.length : nl;
+    // A very long line is read in part: no more than the row can show.
+    const plain = plainLine(text.slice(i, Math.min(end, i + width * 4)));
+    i = end + 1;
+    if (!plain) continue;
+    if (first) {
+      first = false;
+      const line = plain.toLowerCase();
+      // A long first line's title was cut (`noteTitleFrom`): it still is the title line.
+      if (line === wanted || (wanted.endsWith('…') && line.startsWith(wanted.slice(0, -1)))) continue;
+    }
+    parts.push(plain);
+    length += plain.length + 3;
+  }
+  const joined = parts.join(' · ');
+  return joined.length > width ? `${joined.slice(0, width - 1).trimEnd()}…` : joined;
 }

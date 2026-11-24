@@ -236,7 +236,7 @@ describe('NoteService', () => {
     const moved = await svc.move(scope, plan.note.id, 'projects/Plan');
     expect(moved?.slug).toBe('projects/plan');
     expect(moved?.title).toBe('Plan');
-    expect(moved?.frontmatter.aliases).toEqual(['plan']);
+    expect(moved?.frontmatter.movedFrom).toEqual(['plan']);
     // The link made before the move still points at the note…
     const edge = (id: string) => links.getOutgoing(userId, 'note', id).then((es) => es.find((e) => e.linkType === 'references'));
     expect((await edge(before.note.id))?.toId).toBe(plan.note.id);
@@ -252,11 +252,60 @@ describe('NoteService', () => {
 
     // Moving back drops the alias it would shadow, and a taken slug is refused.
     const back = await svc.move(scope, plan.note.id, 'archive/plan');
-    expect(back?.frontmatter.aliases).toEqual(['plan', 'projects/plan']);
+    expect(back?.frontmatter.movedFrom).toEqual(['plan', 'projects/plan']);
     const { NoteExistsError, InvalidSlugError } = await import('./notes');
     await expect(svc.move(scope, plan.note.id, 'plan')).rejects.toBeInstanceOf(NoteExistsError);
     await expect(svc.move(scope, plan.note.id, '///')).rejects.toBeInstanceOf(InvalidSlugError);
     expect(await svc.move(personalNoteScope(randomUUID()), plan.note.id, 'x')).toBeNull();
+  });
+
+  test('one note holds a moved slug, and no save can plant one', async () => {
+    const scope = personalNoteScope(userId);
+    const a = await svc.save({ scope, title: 'Alpha', body: 'a' });
+    const b = await svc.save({ scope, title: 'Beta', body: 'b' });
+    await svc.move(scope, a.note.id, 'x/alpha');
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(a.note.id);
+    // Another note moved into the slug Alpha left takes it as its own: the old link means it now.
+    await svc.move(scope, b.note.id, 'alpha');
+    await svc.move(scope, b.note.id, 'y/beta');
+    expect((await svc.getById(scope, a.note.id))?.frontmatter.movedFrom).toEqual([]);
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(b.note.id);
+
+    // A writer naming `movedFrom` in its frontmatter claims nothing, and keeps nothing it had.
+    const c = await svc.save({ scope, title: 'Gamma', body: 'c', frontmatter: { movedFrom: ['y/beta-old', 'alpha'], mood: 'ok' } });
+    expect(c.note.frontmatter).toEqual({ mood: 'ok' });
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(b.note.id);
+    const resaved = await svc.save({ scope, id: b.note.id, title: 'Beta', body: 'b2', frontmatter: { mood: 'fine' } });
+    expect(resaved.note.frontmatter).toEqual({ mood: 'fine', movedFrom: ['beta', 'alpha'] });
+  });
+
+  test('getOrCreateDaily never replaces a daily note written meanwhile, and refuses an impossible day', async () => {
+    const scope = personalNoteScope(userId);
+    const { NoteExistsError, normalizeDay } = await import('./notes');
+    // Another tab created the day's note between this one's read and its write.
+    const realStore = svc.store.bind(svc);
+    let raced = false;
+    const spy = vi.spyOn(svc, 'store').mockImplementation((sc) => {
+      const store = realStore(sc);
+      return {
+        ...store,
+        getById: store.getById.bind(store),
+        getBySlug: async (slug: string) => {
+          if (!raced && slug === 'daily/2026-03-01') {
+            raced = true;
+            spy.mockRestore();
+            await svc.save({ scope, slug, title: '2026-03-01', body: 'typed in the other tab', noteKind: 'daily' });
+            return null;
+          }
+          return store.getBySlug(slug);
+        },
+      } as ReturnType<typeof realStore>;
+    });
+    const daily = await svc.getOrCreateDaily(scope, '2026-03-01');
+    expect(daily.body).toBe('typed in the other tab');
+    expect(NoteExistsError).toBeDefined();
+    expect(() => normalizeDay('2026-02-31')).toThrow(/Invalid date/);
+    expect(normalizeDay('2028-02-29')).toBe('2028-02-29');
   });
 
   test('getOrCreateDaily is idempotent and stamps the date', async () => {

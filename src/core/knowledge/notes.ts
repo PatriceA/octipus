@@ -6,7 +6,7 @@ import { merge3, normalizeNewlines } from '@/core/docs/text-merge';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
-import { assertNoteAccess, getNoteRepository, noteAliases, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
+import { assertNoteAccess, getNoteRepository, MOVED_FROM, noteMovedFrom, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
 import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
@@ -166,6 +166,16 @@ export class InvalidSlugError extends Error {
   }
 }
 
+function withoutMovedFrom(frontmatter: Record<string, unknown>): Record<string, unknown> {
+  const { [MOVED_FROM]: _drop, ...rest } = frontmatter;
+  void _drop;
+  return rest;
+}
+
+function withMovedFrom(frontmatter: Record<string, unknown>, movedFrom: string[]): Record<string, unknown> {
+  return movedFrom.length > 0 ? { ...frontmatter, [MOVED_FROM]: movedFrom } : frontmatter;
+}
+
 /** A new daily note's text. */
 const dailyTemplate = (date: string) => `# ${date}\n\n## Notes\n\n## Tasks\n`;
 
@@ -205,6 +215,9 @@ export class NoteService {
   async save(input: SaveNoteInput): Promise<SaveNoteResult> {
     const { scope, title } = input;
     assertNoCredentialTemplates({ title: input.title, body: input.body, tags: input.tags, frontmatter: input.frontmatter });
+    // `movedFrom` is written by `move` alone: a writer cannot claim another
+    // note's old slug through its frontmatter.
+    const inputFrontmatter = input.frontmatter === undefined ? undefined : withoutMovedFrom(input.frontmatter);
     assertNoteAccess(scope, 'write');
     const store = this.store(scope);
     let body = input.body ?? '';
@@ -265,7 +278,8 @@ export class NoteService {
         ...(scope.kind === 'space' ? {} : { body, bodySha256: bodySha }),
         // Omitted: the stored frontmatter is left as it is, not written back
         // from the read above (a write to it since would be lost).
-        ...(input.frontmatter !== undefined ? { frontmatter: input.frontmatter } : {}),
+        // The note's own `movedFrom` stays whatever frontmatter is sent.
+        ...(inputFrontmatter !== undefined ? { frontmatter: withMovedFrom(inputFrontmatter, noteMovedFrom(existing.frontmatter)) } : {}),
         tags,
         noteKind: input.noteKind ?? existing.noteKind,
         noteDate: input.noteDate ?? existing.noteDate,
@@ -289,7 +303,7 @@ export class NoteService {
         title,
         body,
         bodySha256: bodySha,
-        frontmatter: input.frontmatter ?? {},
+        frontmatter: inputFrontmatter ?? {},
         tags,
         noteKind: input.noteKind ?? 'note',
         noteDate: input.noteDate ?? null,
@@ -595,7 +609,8 @@ export class NoteService {
   /**
    * Move a note to another slug: another folder (`projects/plan`), or
    * another name in its folder. The id, text and title stay; the old slug
-   * is kept in `frontmatter.aliases`, so every `[[link]]` to it still
+   * is kept in `frontmatter.movedFrom` (taken from any other note that held
+   * it: one note per moved slug), so every `[[link]]` to it still
    * resolves (`resolveSlug`: the edges already bound keep their target, a
    * link saved later binds through the alias), and links waiting for the
    * new slug bind now. Null when the scope does not reach the note.
@@ -613,9 +628,13 @@ export class NoteService {
     if (note.slug === slug) return this.withLive(scope, note);
     const taken = await store.getBySlug(slug);
     if (taken && taken.id !== note.id) throw new NoteExistsError(taken.id, slug);
-    const aliases = [...new Set([...noteAliases(note.frontmatter), note.slug])].filter((a) => a !== slug);
-    const moved = await store.update(note.id, { slug, frontmatter: { ...note.frontmatter, aliases } });
+    const movedFrom = [...new Set([...noteMovedFrom(note.frontmatter), note.slug])].filter((a) => a !== slug);
+    const moved = await store.update(note.id, { slug, frontmatter: { ...note.frontmatter, [MOVED_FROM]: movedFrom } });
     if (!moved) throw new Error(`Note ${note.id} vanished during move`);
+    // One note holds a moved slug: this one now holds the slug it left, and
+    // the slug it took is its own (an old link to either means this note).
+    await store.releaseMovedFrom(note.slug, note.id);
+    await store.releaseMovedFrom(slug, note.id);
     await this.links.resolveTo({ scope, toRef: slug, toType: SOURCE_PREFIX, toId: note.id });
     return this.withLive(scope, moved);
   }
@@ -641,15 +660,25 @@ export class NoteService {
     const slug = `daily/${date}`;
     const existing = await this.store(scope).getBySlug(slug);
     if (existing) return existing;
-    const result = await this.save({
-      scope,
-      slug,
-      title: date,
-      body: dailyTemplate(date),
-      noteKind: 'daily',
-      noteDate: date,
-    });
-    return result.note;
+    try {
+      const result = await this.save({
+        scope,
+        slug,
+        title: date,
+        body: dailyTemplate(date),
+        noteKind: 'daily',
+        noteDate: date,
+        // Created only while the day has no note: one written meanwhile (another
+        // tab, a capture) is never replaced by the template.
+        createOnly: true,
+      });
+      return result.note;
+    } catch (err) {
+      if (!(err instanceof NoteExistsError)) throw err;
+      const found = await this.store(scope).getById(err.noteId);
+      if (!found) throw new Error(`Daily note ${slug} vanished while opening it`);
+      return found;
+    }
   }
 
   /**
@@ -765,6 +794,14 @@ export class NoteService {
  * an explicit `day` derived in the user's timezone. Tracked for Tier 3.
  */
 export function normalizeDay(day: string): string {
+  // A calendar day as written must exist: `2026-02-31` is refused, not rolled into March.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (ymd) {
+    const [y, m, dd] = [Number(ymd[1]), Number(ymd[2]), Number(ymd[3])];
+    const check = new Date(Date.UTC(y, m - 1, dd));
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== dd) throw new Error(`Invalid date for daily note: ${day}`);
+    return day;
+  }
   const d = new Date(day);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid date for daily note: ${day}`);
   return d.toISOString().slice(0, 10);

@@ -24,10 +24,12 @@ labels reflect blast radius, not contract guarantees.
   opens on request.
 - **Notes: move without breaking links, and the day's note on request**
   ([API](docs/API.md#notes)). `POST /api/notes/:id/move {slug}` moves a note
-  to another folder or name; its old slug is kept in `frontmatter.aliases`
+  to another folder or name; its old slug is kept in `frontmatter.movedFrom` (one note per slug, never
+  taken from a client's frontmatter)
   and `[[links]]` resolve to the note at a slug, else to one moved away from
   it, so links written before or after the move keep working (an exact slug
-  always wins). `GET /api/notes/index` returns the aliases. `POST
+  always wins). `GET /api/notes/index` returns them (`movedFrom`); `GET /api/notes?preview=true`
+  lists a line of each note instead of its body. `POST
   /api/notes/daily {date}` returns the caller's daily note for that day,
   creating it the first time. A rename (a new title) never changes the slug.
 - **To-dos, after review** ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).

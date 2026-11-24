@@ -102,13 +102,21 @@ export function guestNoteIds(workspaceId: string, folders: readonly string[]): S
  */
 const withoutArchiveMarkers = sql`CASE WHEN ${notes.noteKind} = 'lesson' THEN ${notes.frontmatter} - 'archivedBy' - 'mergedInto' ELSE ${notes.frontmatter} END`;
 
-/** One row of the `[[wikilink]]` autocomplete index. `aliases`: slugs the note was moved away from (absent when none). */
-export interface NoteIndexEntry { id: string; title: string; slug: string; noteKind: string; aliases?: string[] }
+/** One row of the `[[wikilink]]` autocomplete index. `movedFrom`: slugs the note was moved away from (absent when none). */
+export interface NoteIndexEntry { id: string; title: string; slug: string; noteKind: string; movedFrom?: string[] }
 
-/** The slugs a note was moved away from (`frontmatter.aliases`), ignoring anything that is not a string list. */
-export function noteAliases(frontmatter: Record<string, unknown> | null | undefined): string[] {
-  const aliases = frontmatter?.aliases;
-  return Array.isArray(aliases) ? aliases.filter((a): a is string => typeof a === 'string' && a.length > 0) : [];
+/**
+ * The frontmatter key holding the slugs a note was moved away from. Only
+ * `NoteService.move` writes it (a save never takes it from its input), and a
+ * slug is held by one note at a time, so an old `[[link]]` has one meaning.
+ * Not Obsidian's `aliases`, which are display names.
+ */
+export const MOVED_FROM = 'movedFrom';
+
+/** The slugs a note was moved away from (`frontmatter.movedFrom`), ignoring anything that is not a string list. */
+export function noteMovedFrom(frontmatter: Record<string, unknown> | null | undefined): string[] {
+  const slugs = frontmatter?.[MOVED_FROM];
+  return Array.isArray(slugs) ? slugs.filter((a): a is string => typeof a === 'string' && a.length > 0) : [];
 }
 
 /** What `NoteRepository.list` (and a bound `NoteStore.list`) takes. */
@@ -230,9 +238,9 @@ export class NoteRepository {
 
   /**
    * The note a `[[link]]` to `slug` means: the note at that slug, else an
-   * active note that was moved away from it (its `frontmatter.aliases` holds
-   * the slug, `NoteService.move`), most recently edited first. An exact slug
-   * always wins over an alias. Same workspace rule as `getBySlug`.
+   * active note that was moved away from it (its `frontmatter.movedFrom`
+   * holds the slug, `NoteService.move`; one note holds a slug at a time). An
+   * exact slug always wins. Same workspace rule as `getBySlug`.
    */
   async resolveSlug(scope: NoteScope | string, workspaceId: string | null, slug: string): Promise<Note | null> {
     const exact = await this.getBySlug(scope, workspaceId, slug);
@@ -246,12 +254,27 @@ export class NoteRepository {
           ...owner(scope),
           space ? undefined : workspaceId === null ? isNull(notes.workspaceId) : inWorkspace(scope, workspaceId),
           isNull(notes.archivedAt),
-          sql`(${notes.frontmatter} -> 'aliases') @> ${JSON.stringify([slug])}::jsonb`,
+          sql`(${notes.frontmatter} -> ${MOVED_FROM}) @> ${JSON.stringify([slug])}::jsonb`,
         ),
       )
-      .orderBy(sql`${notes.workspaceId} IS NULL`, desc(notes.updatedAt))
+      // Deterministic even if two notes held the slug from before `move` kept it unique.
+      .orderBy(sql`${notes.workspaceId} IS NULL`, notes.createdAt, notes.id)
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  /**
+   * Take `slug` out of every other note's `movedFrom` in the scope: a moved
+   * slug is held by one note (`NoteService.move`). Returns how many changed.
+   */
+  async releaseMovedFrom(scope: NoteScope | string, slug: string, keepId: string, workspaceId?: string): Promise<number> {
+    const held = sql`(${notes.frontmatter} -> ${MOVED_FROM}) @> ${JSON.stringify([slug])}::jsonb`;
+    const result = await this.db
+      .update(notes)
+      .set({ frontmatter: sql`jsonb_set(${notes.frontmatter}, ${`{${MOVED_FROM}}`}::text[], (${notes.frontmatter} -> ${MOVED_FROM}) - ${slug}::text)` })
+      .where(and(...owner(scope), inWorkspace(scope, workspaceId), held, sql`${notes.id} <> ${keepId}`))
+      .returning({ id: notes.id });
+    return result.length;
   }
 
   /**
@@ -331,16 +354,16 @@ export class NoteRepository {
    */
   async listIndex(scope: NoteScope | string, workspaceId?: string): Promise<NoteIndexEntry[]> {
     const rows = await this.db
-      .select({ id: notes.id, title: notes.title, slug: notes.slug, noteKind: notes.noteKind, aliases: sql<unknown>`${notes.frontmatter} -> 'aliases'` })
+      .select({ id: notes.id, title: notes.title, slug: notes.slug, noteKind: notes.noteKind, movedFrom: sql<unknown>`${notes.frontmatter} -> ${MOVED_FROM}` })
       .from(notes)
       .where(and(...owner(scope), isNull(notes.archivedAt), inWorkspace(scope, workspaceId)))
       .orderBy(notes.title)
       .limit(2000);
     // The slugs a note was moved away from, so a client resolves an old
     // `[[link]]` as the server does (`resolveSlug`). Only on notes that have any.
-    return rows.map(({ aliases, ...row }) => {
-      const list = noteAliases({ aliases });
-      return list.length > 0 ? { ...row, aliases: list } : row;
+    return rows.map(({ movedFrom, ...row }) => {
+      const list = noteMovedFrom({ [MOVED_FROM]: movedFrom });
+      return list.length > 0 ? { ...row, movedFrom: list } : row;
     });
   }
 
@@ -423,6 +446,8 @@ export interface NoteStore {
   getBySlug(slug: string): Promise<Note | null>;
   /** The note a link to `slug` means: at that slug, else moved away from it (`NoteRepository.resolveSlug`). */
   resolveSlug(slug: string): Promise<Note | null>;
+  /** Take `slug` out of every other note's `movedFrom` (`NoteRepository.releaseMovedFrom`). */
+  releaseMovedFrom(slug: string, keepId: string): Promise<number>;
   list(opts?: NoteListOptions): Promise<Note[]>;
   query(opts?: Omit<Parameters<NoteRepository['query']>[1], 'workspaceId'>): Promise<Note[]>;
   listIndex(): Promise<NoteIndexEntry[]>;
@@ -454,6 +479,7 @@ export class PersonalNoteRepo implements NoteStore {
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids, this.ws); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }
   resolveSlug(slug: string) { return this.repo.resolveSlug(this.scope, this.scope.workspaceId, slug); }
+  releaseMovedFrom(slug: string, keepId: string) { return this.repo.releaseMovedFrom(this.scope, slug, keepId, this.ws); }
   list(opts: Parameters<NoteStore['list']>[0] = {}) { return this.repo.list(this.scope, { ...opts, workspaceId: this.ws }); }
   query(opts: Parameters<NoteStore['query']>[0] = {}) { return this.repo.query(this.scope, { ...opts, workspaceId: this.ws }); }
   listIndex() { return this.repo.listIndex(this.scope, this.ws); }
@@ -488,6 +514,7 @@ export class SpaceNoteRepo implements NoteStore {
   getByIds(ids: string[]) { return this.repo.getByIds(this.scope, ids); }
   getBySlug(slug: string) { return this.repo.getBySlug(this.scope, this.scope.workspaceId, slug); }
   resolveSlug(slug: string) { return this.repo.resolveSlug(this.scope, this.scope.workspaceId, slug); }
+  async releaseMovedFrom(slug: string, keepId: string) { this.write(); return this.repo.releaseMovedFrom(this.scope, slug, keepId); }
   list(opts: Parameters<NoteStore['list']>[0] = {}) { return this.repo.list(this.scope, opts); }
   query(opts: Parameters<NoteStore['query']>[0] = {}) { return this.repo.query(this.scope, opts); }
   listIndex() { return this.repo.listIndex(this.scope); }

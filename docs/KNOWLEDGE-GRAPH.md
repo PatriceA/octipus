@@ -124,10 +124,11 @@ pseudo-entity, not a row.
 A note's slug is fixed when it is created: changing its title renames it
 without touching the slug, so `[[links]]` to it are unaffected. Moving it to
 another folder or name (`NoteService.move`, `POST /api/notes/:id/move`) does
-change the slug; the old one is kept in `frontmatter.aliases`. Edges already
+change the slug; the old one is kept in `frontmatter.movedFrom` (written by
+`move` alone, and held by one note at a time). Edges already
 bound keep their `to_id`, ghost edges waiting for the new slug bind at once,
 and a ref resolves to the note at that exact slug, else to an active note
-holding it as an alias (`NoteRepository.resolveSlug`) — so a link written
+that was moved away from it (`NoteRepository.resolveSlug`) — so a link written
 with the old slug after the move binds too. An exact slug always wins: a new
 note created at an old slug takes the links saved after it.
 

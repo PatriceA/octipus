@@ -162,7 +162,7 @@ describe('moving a space note', () => {
     expect((await call('stranger', 'POST', `/api/notes/${note.id}/move`, { body: { slug: 'x' } })).status).toBe(404);
     const moved = await call('editor', 'POST', `/api/notes/${note.id}/move`, { body: { slug: 'archive/launch-plan' } });
     expect(moved.status).toBe(200);
-    expect((await moved.json()).note).toMatchObject({ slug: 'archive/launch-plan', frontmatter: { aliases: ['launch-plan'] } });
+    expect((await moved.json()).note).toMatchObject({ slug: 'archive/launch-plan', frontmatter: { movedFrom: ['launch-plan'] } });
     // Another member's link to the old slug still finds it.
     const linker = await createNote('owner', 'Linker', 'see [[Launch plan]]\n');
     const detail = await (await call('owner', 'GET', `/api/notes/${linker.id}`)).json();

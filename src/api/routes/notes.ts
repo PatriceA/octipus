@@ -10,6 +10,7 @@ import { getRevision, listRevisions } from '@/db/repositories/live-documents';
 import type { Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
+import { bodyPreview } from '@/shared/note-text';
 
 const logger = apiLogger.child({ component: 'notes-route' });
 
@@ -96,6 +97,11 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         search: query.q,
         limit: Math.min(500, Math.max(1, parseInt(query.limit ?? '100', 10))),
       });
+      // A list for display: a short line of each note's text instead of its
+      // whole body (bodies can be large, and a list of 500 of them heavy).
+      if (query.preview === 'true') {
+        return { notes: notes.map(({ body, ...row }) => ({ ...row, preview: bodyPreview(body, row.title) })), total: notes.length };
+      }
       return { notes, total: notes.length };
     },
     {
@@ -108,6 +114,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         /** Server-side search: every word in the title, slug, tags or body. */
         q: t.Optional(t.String({ maxLength: 200 })),
         limit: t.Optional(t.String()),
+        /** `true`: each note carries `preview` (a line of its text, without the title line) instead of `body`. */
+        preview: t.Optional(t.String()),
       }),
       detail: { tags: ['notes'] },
     },
@@ -254,15 +262,17 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       const { noteScope } = noteRepos(principal);
       const notes = getNoteService();
       try {
-        const note = await notes.getOrCreateDaily(noteScope, body.date);
-        return { note };
+        let note = await notes.getOrCreateDaily(noteScope, body.date);
+        // Asking for the day's note brings an archived one back (it would
+        // otherwise open read-only, and a capture could not be read there).
+        const restored = !!note.archivedAt;
+        if (restored) {
+          await notes.restore(noteScope, note.id);
+          note = (await notes.getById(noteScope, note.id)) ?? note;
+        }
+        return { note, ...(restored ? { restored } : {}) };
       } catch (err) {
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
-        // Another tab created the day's note meanwhile: that one is it.
-        if (err instanceof Error && /unique constraint|duplicate key/i.test(err.message)) {
-          const note = await notes.getBySlug(noteScope, `daily/${body.date}`);
-          if (note) return { note };
-        }
         throw err;
       }
     },
