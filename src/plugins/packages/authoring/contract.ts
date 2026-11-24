@@ -23,6 +23,7 @@ import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context'
 import { CRON_FIELDS } from '../contributions/cron';
 import { MAX_IN_FLIGHT, RATE_PER_MINUTE } from '../contributions/events';
 import { MAX_PROMPT_CHARS } from '../contributions/prompt';
+import { PLUGIN_ROLE_DENIED_TOOLS } from '@/core/agent/role-rules';
 import { MAX_CONCURRENT_RUNS } from '../contributions/schedules';
 import { DEFAULT_RUN_ROLE, MAX_RUN_OUTPUT_CHARS, MAX_RUNS_IN_FLIGHT, PLUGIN_RUN_TOOL_IDS, RUN_BURST, RUN_TIMEOUT_MS, RUNS_PER_HOUR } from '../host-agent';
 import { MAX_TOKEN_TTL_MS } from '../host-api';
@@ -148,6 +149,7 @@ export async function pluginApiContract(opts: {
       'commands, schedules, events and context name one of the package\'s own declared tools; context\'s tool must be "read".',
       'Command names and schedule ids are unique in the package; a command name may not be taken by Octipus, an extension or another installed package.',
       `prompt.file: a .md file inside the package (no .., no link out), at most ${MAX_PROMPT_CHARS} characters; not the manifest or ${SIGNATURE_FILE}.`,
+      `roles (apiVersion 1.3.0): at most 10; id is a fresh role id (not a built-in such as general or coding, not reserved such as root or system, not a lane name such as everyday, not another package's); prompt is a .md file like prompt.file; tools are host tool ids some built-in role already holds, never ${[...PLUGIN_ROLE_DENIED_TOOLS].join(', ')}; lane is a text lane.`,
       `server.command and server.args may not name ${SIGNATURE_FILE}; files they name must be in the package.`,
       'A setting may not collide with a secret: setting <key> becomes the variable OCTIPUS_SETTING_<KEY>.',
       'dashboards: [{ id, title, icon?, widgets: [{ id, type: stat|list|table|chart|text, title, tool, input?, refreshSeconds?, width? }] }] (at most 10 dashboards of 24 widgets): drawn by Octipus, no code of the package in the browser. A widget\'s tool is one of the package\'s own read tools, called as the user who opens the dashboard with the fixed input (its host token carries store:read only, never the user\'s Octipus data); it answers JSON (structured content or a text block) in the widget\'s shape: stat { value, label?, unit?, delta?, tone?, caption? }, list { items: [{ title, subtitle?, value?, tone?, link? }] }, table { columns: [{ key, label, align? }], rows: [{ values, tone?, link? }] }, chart { kind: bar|line|area|pie, x, series: [{ key, label }], points }, text { text }; each may add updatedAt. tone: good|warn|bad|neutral. A link { url, label? } is https to a host in network only, never a private address. Keep slow APIs behind a cache: the package\'s data directory (OCTIPUS_PLUGIN_DATA_DIR, shared by its tools, for outside data that is the same for every user), refreshed by a schedule or when stale.',
@@ -192,6 +194,7 @@ export async function pluginApiContract(opts: {
       events: EVENTS,
       prompt: 'Static markdown added to the system prompt of the named roles (all when left out) while the package is enabled.',
       context: `A read tool called before every turn with { query, role }; its text (at most ${MAX_CONTEXT_CHARS} characters, ${CONTEXT_TIMEOUT_MS} ms) rides the turn. Not in spaces or group threads.`,
+      roles: 'Agent roles agents can delegate to with spawn_child while the package is enabled: { id, displayName, description (one line, what the delegating model reads), prompt (.md file), tools, coreTools?, lane, spawns?, spawnedBy?, criticalRules?, readOnly?, limits? { maxTokens?, maxWallClockMs? } }. The prompt and criticalRules are fenced together as third-party text after the host\'s security rules; tool calls are authorized as the user the agent works for.',
     },
     limits: {
       maxPromptChars: MAX_PROMPT_CHARS,

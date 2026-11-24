@@ -26,6 +26,7 @@
 
 import { COMMAND_TOOLS, FILE_CHANGE_TOOLS } from '@/core/tool-executor';
 import { ROLE_CONFIGS } from './roles';
+import { isRegisteredRole } from './role-registry';
 import type { StageTemplate } from './templates';
 import type { AgentRole } from './types';
 
@@ -61,9 +62,10 @@ export function roleCapabilities(
   narrowTo?: string[],
 ): { writesFiles: boolean; runsCommands: boolean } {
   const config = ROLE_CONFIGS[role];
-  // An unknown role resolves to `general` at spawn time; mirror that here
-  // rather than reporting a role with no capabilities at all.
-  let toolIds = (config ?? ROLE_CONFIGS.general)?.toolIds ?? [];
+  // An unregistered role (removed, or its plugin disabled) has no
+  // capabilities: its spawn fails with `UnknownRoleError`, it never runs as
+  // `general`.
+  let toolIds = config?.toolIds ?? [];
   if (narrowTo?.length) {
     // A stage may name a GROUP (`shell`) or a single handler (`shell__run`) —
     // `spawnWorker` accepts both, so the same id must survive narrowing here or
@@ -89,6 +91,10 @@ export function stageContractErrors(stages: StageTemplate[]): string[] {
   for (let i = 0; i < stages.length; i++) {
     const s = stages[i];
     if (s.stageType === 'human_input') continue;
+    if (!isRegisteredRole(s.role)) {
+      errors.push(`stage ${i + 1} ("${s.name}") names role '${s.role}', which is not registered (removed, or its plugin package disabled)`);
+      continue;
+    }
     const caps = roleCapabilities(s.role, s.toolIds);
     if (s.producesArtifacts && !caps.writesFiles) {
       errors.push(

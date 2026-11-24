@@ -124,7 +124,8 @@ export class MessageRepository {
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
       .where(and(conditions,visibleMessages))
-      .orderBy(desc(messages.createdAt))
+      // Ties broken by id, as the history page's (createdAt, id) cursor reads them.
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(limit);
 
     return recent.reverse(); // Return in chronological order

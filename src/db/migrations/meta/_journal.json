@@ -1436,6 +1436,34 @@
       "when": 1795824000000,
       "tag": "0204_artifact_last_viewed",
       "breakpoints": true
+    },
+    {
+      "idx": 205,
+      "version": "7",
+      "when": 1795910400000,
+      "tag": "0205_skill_registry_installs",
+      "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1795996800000,
+      "tag": "0206_email_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1796083200000,
+      "tag": "0207_artifact_agent_refresh",
+      "breakpoints": true
+    },
+    {
+      "idx": 208,
+      "version": "7",
+      "when": 1796169600000,
+      "tag": "0208_runtime_role_fields",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ import {
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
   type PluginPackageView,
+  pluginRoleTerms,
 } from '@/shared/plugin-package';
 import { type PluginConsentResult, type PluginInstallPreview, STORE_HANDOVER_CONSENT_ID } from '@/shared/plugin-declarations';
 
@@ -229,6 +230,13 @@ export function describeContributions(p: PluginPackageView): string {
   if (c.prompt) {
     out.push(`  prompt   ${c.prompt.file}, added to the system prompt of ${c.prompt.roles ? c.prompt.roles.join(', ') : 'every'} agent of EVERY user:`);
     out.push(...(c.prompt.text ?? '(cannot be read)').split('\n').map((l) => `    | ${l}`));
+  }
+  for (const r of c.roles ?? []) {
+    out.push(`  role     ${r.id} ("${r.displayName}"), offered to EVERY user's agents to delegate to: ${r.description}`);
+    out.push(`           ${pluginRoleTerms(r)}`);
+    out.push(`           instructions (${r.prompt}), fenced as third-party text:`);
+    out.push(...(r.text ?? '(cannot be read)').split('\n').map((l) => `    | ${l}`));
+    for (const rule of r.criticalRules) out.push(`    | standing rule: ${rule}`);
   }
   return out.join('\n');
 }

@@ -354,6 +354,12 @@ describe('roles along the spawn chain', () => {
     expect(withEgressRoleChain(undefined, { role: 'general' })).toEqual({ egressRoleChain: ['general'] });
   });
 
+  test('a runtime-installed (custom) role id is a subject and a scope like a built-in one', () => {
+    const policy = egressPolicySchema.parse({ roles: { 'release-notes_2': { default: 'deny', rules: [{ action: 'allow', host: 'docs.example' }] } } });
+    expect(evaluateEgress(policy, { tool: 'websearch', role: 'release-notes_2' }, { host: 'docs.example', port: 443, scheme: 'https' }, ['93.184.216.34']).allowed).toBe(true);
+    expect(evaluateEgress(policy, { tool: 'websearch', role: 'release-notes_2' }, { host: 'other.example', port: 443, scheme: 'https' }, ['93.184.216.34'])).toMatchObject({ allowed: false, rule: 'role release-notes_2 default (deny)' });
+  });
+
   test('a child is judged under its own role and every ancestor\'s', () => {
     const policy = egressPolicySchema.parse({ roles: { coding: { default: 'deny' }, research: { rules: [{ action: 'allow', host: 'arxiv.org' }] } } });
     const target = { host: 'arxiv.org', port: 443, scheme: 'https' as const };

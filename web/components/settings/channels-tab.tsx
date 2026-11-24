@@ -205,6 +205,7 @@ function ChannelStatusList() {
     { type: 'slack', label: 'Slack' },
     { type: 'teams', label: 'Microsoft Teams' },
     { type: 'whatsapp', label: 'WhatsApp' },
+    { type: 'email', label: 'Email' },
     { type: 'webchat', label: 'Web Chat' },
   ];
 
@@ -266,6 +267,11 @@ const CHANNEL_GROUPS = [
     id: 'whatsapp',
     label: 'WhatsApp',
     prefix: 'whatsapp.',
+  },
+  {
+    id: 'emailChannel',
+    label: 'Email',
+    prefix: 'emailChannel.',
   },
 ];
 

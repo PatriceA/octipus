@@ -98,7 +98,12 @@ child to fetch it. The chain is carried by every spawn path: swarm children
 and the workers of pipeline stages, hook actions and the plugin host agent.
 
 A scheduled artifact refresh runs for no agent, so it has no role: only the
-global rules and `tools.artifacts` apply to it. A refresh a tool call
+global rules and `tools.artifacts` apply to it. An agent refresh of a Live
+Artifact is a `research` worker whose only tools are websearch's: its
+requests are judged as `websearch` under the `research` role.
+
+Runtime-installed (custom) roles are policy subjects like the built-in ones:
+`roles.<id>` takes any role id. A refresh a tool call
 triggers is judged as that call (its tool and role chain).
 
 ## Where it applies

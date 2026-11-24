@@ -539,6 +539,25 @@ export const multiuserConfigSchema = z.object({
 export const skillsConfigSchema = z.object({
   externalEnabled: z.boolean().default(true),
   externalDirectories: z.array(z.string()).default([]),
+  /**
+   * Skill registries to browse (docs/SKILL-EXCHANGE.md#registries): static
+   * https JSON indexes of signed skill bundles. None by default, and none is
+   * contacted unless listed here. `publishers` are names in
+   * `plugins.trustedPublishers` whose keys count for bundles from this
+   * registry; a bundle signed by any other key is not installed from it.
+   */
+  registries: z.array(z.object({
+    name: z.string().min(1).max(100).refine((v) => !/[\u0000-\u001f\u007f]/.test(v) && v.trim() === v, 'one line, no surrounding spaces'),
+    url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
+    publishers: z.array(z.string().min(1).max(100)).max(20).default([]),
+  }).strict()).max(20).default([]).superRefine((list, ctx) => {
+    const seen = new Set<string>();
+    list.forEach((r, i) => {
+      const key = r.name.toLowerCase();
+      if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `the registry name "${r.name}" is used twice; registry names are unique` });
+      seen.add(key);
+    });
+  }),
 });
 
 export const workspaceConfigSchema = z.object({
@@ -608,6 +627,33 @@ export const sessionsConfigSchema = z.object({
  */
 export const groupChannelsConfigSchema = z.object({
   unpromptedEnabled: z.boolean().default(false),
+});
+
+/**
+ * The inbound email channel (docs/CHANNELS.md#email): mail to a dedicated
+ * IMAP mailbox becomes a conversation, answered by mail. Off until enabled,
+ * and then only for allow-listed senders whose mail passed the receiving
+ * server's authentication, as reported under a trusted authserv-id.
+ */
+export const emailChannelConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /**
+   * `draft` (default): each answer is saved as a draft reply in the channel
+   * mailbox for a person to send. `send`: answers are sent at once.
+   */
+  replyMode: z.enum(['draft', 'send']).default('draft'),
+  /** The IMAP mail account (Mail → mailboxes) the channel reads and answers from: an admin's personal mailbox, with an SMTP server. */
+  accountId: z.string().default(''),
+  /** Addresses allowed to talk to Octipus by mail. Each must also be linked to an account (`link`). */
+  allowedSenders: z.array(z.string()).default([]),
+  /** The receiving server's authserv-id(s) whose Authentication-Results header is believed. Empty: nothing is accepted. */
+  trustedAuthservIds: z.array(z.string()).default([]),
+  /** How often the mailbox is checked for new mail. */
+  pollSeconds: z.number().int().min(15).max(3600).default(60),
+  /** Larger mail is not run as a turn; the sender is told so. */
+  maxMessageBytes: z.number().int().min(1024).max(25 * 1024 * 1024).default(10 * 1024 * 1024),
+  /** Mails one sender may start turns with per hour; more are dropped without an answer. */
+  maxPerSenderPerHour: z.number().int().min(1).max(1000).default(20),
 });
 
 /**
@@ -1097,6 +1143,7 @@ export const configSchema = z.object({
   heartbeat: heartbeatConfigSchema.prefault({}),
   sessions: sessionsConfigSchema.prefault({}),
   groupChannels: groupChannelsConfigSchema.prefault({}),
+  emailChannel: emailChannelConfigSchema.prefault({}),
   spaces: spacesConfigSchema.prefault({}),
   backup: backupConfigSchema.prefault({}),
   modules: modulesConfigSchema.prefault({}),
@@ -1136,6 +1183,7 @@ export type VaultSyncConfig = z.infer<typeof vaultSyncConfigSchema>;
 export type MultiuserConfig = z.infer<typeof multiuserConfigSchema>;
 export type CompactionConfig = z.infer<typeof compactionConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
+export type EmailChannelConfig = z.infer<typeof emailChannelConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;
 export type SwarmConfig = z.infer<typeof swarmConfigSchema>;

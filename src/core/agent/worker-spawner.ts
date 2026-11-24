@@ -46,6 +46,7 @@ import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import { asTrailingBlock, PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from './roles';
+import { resolveRole } from './role-registry';
 import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
@@ -377,8 +378,15 @@ async function spawnWorkerRecorded(
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
-  const agentRole = role as AgentRole;
+  // Through the registry: a stage or hook that names a role which has since
+  // been removed (its plugin disabled) fails here with `UnknownRoleError`,
+  // before anything is spent, instead of running as another role.
+  const agentRole = resolveRole(role);
   const roleConfig = getRoleConfig(agentRole);
+  // A runtime role's token limit only ever lowers the caller's cap.
+  const maxTokenBudget = roleConfig.limits?.maxTokens
+    ? Math.min(overrides?.maxTokenBudget ?? Number.POSITIVE_INFINITY, roleConfig.limits.maxTokens)
+    : overrides?.maxTokenBudget;
   await getMCPBridge().whenInitiallyConnected();
   let roleTools = getToolsForRole(agentRole);
 
@@ -985,8 +993,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       subtopic: overrides.swarmParent.subtopic,
       model: finalModel,
       budget: {
-        tokens: { cap: Math.min(lvl.tokens,overrides?.maxTokenBudget??Infinity), used: 0 },
-        wallClockMs: { cap: lvl.wallMs, startedAt: Date.now() },
+        tokens: { cap: Math.min(lvl.tokens,maxTokenBudget??Infinity), used: 0 },
+        wallClockMs: { cap: Math.min(lvl.wallMs, roleConfig.limits?.maxWallClockMs ?? Number.POSITIVE_INFINITY), startedAt: Date.now() },
         fanOut: { cap: lvl.fanOut, used: 0 },
         depth: 1,
       },
@@ -1095,7 +1103,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
     parentSignal: overrides?.swarmParent ? overrides.swarmParent.signal ?? agentManager.get(overrides.swarmParent.id)?.getAbortSignal() : undefined,
-    maxTokenBudget: overrides?.maxTokenBudget,
+    maxTokenBudget,
     // The pipeline puts `pipelineId`/`nodeKey` on the stage context; without
     // forwarding them the agent's own metadata is empty and the `plan` tool
     // answers "Not running inside a pipeline" — which silently disables every

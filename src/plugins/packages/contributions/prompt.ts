@@ -15,6 +15,7 @@
 import { open, realpath } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import type { PluginPromptDecl } from '@/shared/plugin-package';
+import { neutraliseFencedText } from '@/shared/plugin-fence';
 
 /** The most characters a prompt file may hold. */
 export const MAX_PROMPT_CHARS = 8_000;
@@ -66,8 +67,8 @@ export function boundPromptChars(pkg: string): number | null {
   return sections.get(pkg)?.text.length ?? null;
 }
 
-/** Angle brackets replaced, so the text cannot close its fence or open another. */
-const fence = (text: string) => text.replace(/</g, '‹').replace(/>/g, '›');
+/** Fence look-alikes neutralised, so the text cannot close its fence or open another. */
+const fence = neutraliseFencedText;
 
 /**
  * The sections for an agent of `role`, ordered by package name. Each is its
