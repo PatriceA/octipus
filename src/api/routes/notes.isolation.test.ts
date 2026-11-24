@@ -1,5 +1,5 @@
 import { personalNoteScope } from '@/db/repositories/note-repository';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -338,8 +338,16 @@ describe('Note search and the archive', () => {
   test('?archived=only lists the archived notes alone; restore brings one back; cross-tenant restore is 404', async () => {
     const a = await post(aliceApp, '/api/notes', { title: 'Old idea one', body: 'first' });
     const b = await post(aliceApp, '/api/notes', { title: 'Old idea two', body: 'second' });
-    await del(aliceApp, `/api/notes/${a.body.note.id}`);
-    await del(aliceApp, `/api/notes/${b.body.note.id}`);
+    // Pin the clock: two archives in a row can land in the same millisecond.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+      await del(aliceApp, `/api/notes/${a.body.note.id}`);
+      vi.setSystemTime(new Date('2030-01-01T00:00:00.001Z'));
+      await del(aliceApp, `/api/notes/${b.body.note.id}`);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const archive = await get(aliceApp, '/api/notes?archived=only');
     const ids = archive.body.notes.map((n: any) => n.id);
@@ -363,6 +371,67 @@ describe('Note search and the archive', () => {
     expect(after.body.notes.find((n: any) => n.id === b.body.note.id)).toBeDefined();
     const found = await get(aliceApp, '/api/notes?q=first');
     expect(found.body.notes.map((n: any) => n.id)).toContain(a.body.note.id);
+  });
+  test('notes archived in the same millisecond list in one stable order, whatever the limit', async () => {
+    const { queryRaw } = await import('@/db/postgres');
+    // Fixed ascending ids make storage order oppose the required descending order.
+    // Random ids could let the unfixed query pass by chance (one run in six).
+    const ids = [
+      '00000000-0000-4000-8000-000000000161',
+      '00000000-0000-4000-8000-000000000162',
+      '00000000-0000-4000-8000-000000000163',
+    ];
+    const stamp = '2030-01-02T00:00:00.000Z';
+    const search = 'qa-archive-tie-16';
+    try {
+      for (const [i, id] of ids.entries()) {
+        await queryRaw(
+          `INSERT INTO notes (id, user_id, workspace_id, slug, title, body, body_sha256)
+           VALUES ($1, $2, $3, $4, $4, '', $5)`,
+          [id, aliceId, aliceSideWs, `${search}-${i}`, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
+        );
+      }
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date(stamp));
+        for (const id of ids) {
+          expect((await del(aliceSideApp, `/api/notes/${id}`)).status).toBe(200);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const all = await get(aliceSideApp, `/api/notes?archived=only&q=${search}`);
+      expect(all.status).toBe(200);
+      expect(all.body.notes).toHaveLength(ids.length);
+      const rows = all.body.notes as { id: string; archivedAt: string; updatedAt: string }[];
+      expect(new Set(rows.map((n) => n.archivedAt))).toEqual(new Set([stamp]));
+      expect(new Set(rows.map((n) => n.updatedAt))).toEqual(new Set([stamp]));
+      const order = [...ids].reverse();
+      expect(rows.map((n) => n.id)).toEqual(order);
+      // Bounds include one row, exact size, oversized and a clamped zero.
+      for (const limit of [0, 1, 2, 3, 4]) {
+        const head = await get(aliceSideApp, `/api/notes?archived=only&q=${search}&limit=${limit}`);
+        expect(head.status).toBe(200);
+        expect(head.body.notes.map((n: { id: string }) => n.id)).toEqual(order.slice(0, Math.max(1, limit)));
+      }
+      expect((await get(aliceSideApp, `/api/notes?q=${search}`)).body.notes).toEqual([]);
+      expect((await get(aliceApp, `/api/notes?archived=only&q=${search}`)).body.notes).toEqual([]);
+      expect((await get(bobApp, `/api/notes?archived=only&q=${search}`)).body.notes).toEqual([]);
+      expect((await get(aliceSideApp, `/api/notes?archived=invalid&q=${search}`)).status).toBe(422);
+
+      // Diagnostic benchmark only; three rows do not establish production capacity.
+      const started = performance.now();
+      for (let i = 0; i < 20; i++) {
+        const repeated = await get(aliceSideApp, `/api/notes?archived=only&q=${search}&limit=2`);
+        expect(repeated.status).toBe(200);
+        expect(repeated.body.notes.map((n: { id: string }) => n.id)).toEqual(order.slice(0, 2));
+      }
+      console.log(`archive tie benchmark: 3 rows, 20 API lists, ${(performance.now() - started).toFixed(2)} ms`);
+    } finally {
+      vi.useRealTimers();
+      for (const id of ids) await queryRaw('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, aliceId]);
+    }
   });
 });
 
