@@ -168,7 +168,7 @@ describe('under an egress policy', () => {
     }
   }, 30_000);
 
-  test('repository config that runs a command or reroutes is refused; it never runs', async () => {
+  test('a repository upload-pack is refused (git takes its first value), and never runs; a repository proxy is refused under a policy', async () => {
     const { work } = repoPair('rerouting');
     const marker = join(dir, 'uploadpack-ran');
     git(work, 'config', 'remote.origin.uploadpack', `touch ${marker}; git-upload-pack`);
@@ -250,20 +250,109 @@ describe('no git run of the tool executes a program the repository names (with o
   }, 30_000);
 
   test.each([
-    ['a filter driver', (w: string, m: string) => { git(w, 'config', 'filter.x.clean', script('clean', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=x\n'); }, 'add', (w: string) => ({ path: w, files: 'f.txt' }), /filter\.x\.clean/],
-    ['a textconv driver', (w: string, m: string) => { git(w, 'config', 'diff.x.textconv', script('textconv', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt diff=x\n'); }, 'diff', (w: string) => ({ path: w }), /diff\.x\.textconv/],
-    ['a signing program', (w: string, m: string) => { git(w, 'config', 'commit.gpgsign', 'true'); git(w, 'config', 'gpg.program', script('gpg', m)); }, 'commit', (w: string) => ({ path: w, message: 'signed' }), /gpg\.program/],
-    ['an ssh command', (w: string, m: string) => { git(w, 'config', 'core.sshCommand', script('ssh', m)); }, 'status', (w: string) => ({ path: w }), /core\.sshcommand/],
-    ['a credential helper', (w: string, m: string) => { git(w, 'config', 'credential.helper', `!${script('cred', m)}`); }, 'status', (w: string) => ({ path: w }), /credential\.helper/],
-    ['an interactive pull rebase', (w: string, m: string) => { git(w, 'config', 'pull.rebase', 'interactive'); git(w, 'config', 'sequence.editor', script('seq', m)); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' }), /pull\.rebase/],
-  ])('%s at repository scope refuses the action', async (_what, arm, action, args, message) => {
-    const { work } = repoPair(`refuse-${Math.random().toString(36).slice(2)}`);
-    const marker = join(dir, `refuse-marker-${Math.random().toString(36).slice(2)}`);
+    ['a filter driver (LFS-like)', (w: string, m: string) => { for (const part of ['clean', 'smudge', 'process']) git(w, 'config', `filter.lfs.${part}`, script(part, m)); git(w, 'config', 'filter.lfs.required', 'true'); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=lfs\n'); }, 'add', (w: string) => ({ path: w, files: 'f.txt .gitattributes' })],
+    ['a filter driver on checkout', (w: string, m: string) => { git(w, 'config', 'filter.x.smudge', script('smudge', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=x\n'); git(w, '-c', 'core.hooksPath=/dev/null', '-c', 'filter.x.smudge=', 'add', '.gitattributes'); git(w, '-c', 'core.hooksPath=/dev/null', '-c', 'filter.x.smudge=', 'commit', '-qm', 'attr'); rmSync(join(w, 'f.txt')); }, 'checkout', (w: string) => ({ path: w, target: 'main' })],
+    ['a textconv driver', (w: string, m: string) => { git(w, 'config', 'diff.x.textconv', script('textconv', m)); git(w, 'config', 'diff.x.command', script('command', m)); writeFileSync(join(w, '.gitattributes'), 'f.txt diff=x\n'); }, 'diff', (w: string) => ({ path: w })],
+    ['a signing program', (w: string, m: string) => { git(w, 'config', 'commit.gpgsign', 'true'); git(w, 'config', 'gpg.program', script('gpg', m)); git(w, 'config', 'gpg.ssh.program', script('sshkeygen', m)); }, 'commit', (w: string) => ({ path: w, message: 'signed' })],
+    ['an ssh command', (w: string, m: string) => { git(w, 'config', 'core.sshCommand', script('ssh', m)); git(w, 'config', 'core.askPass', script('askpass', m)); }, 'status', (w: string) => ({ path: w })],
+    ['an interactive pull rebase', (w: string, m: string) => { git(w, 'config', 'pull.rebase', 'interactive'); git(w, 'config', 'sequence.editor', script('seq', m)); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' })],
+    ['an included file', (w: string, m: string) => { const inc = join(dir, `inc-${Math.random().toString(36).slice(2)}`); writeFileSync(inc, `[filter "x"]\n\tclean = ${script('incclean', m)}\n`); git(w, 'config', 'include.path', inc); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=x\n'); }, 'add', (w: string) => ({ path: w, files: 'f.txt' })],
+    ['a merge driver', (w: string, m: string) => { git(w, 'config', 'merge.x.driver', script('mergedrv', m)); writeFileSync(join(w, '.gitattributes'), '* merge=x\n'); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' })],
+  ])('%s at repository scope is neutralised: the action runs, the program never does', async (_what, arm, action, args) => {
+    const { work } = repoPair(`neutral-${Math.random().toString(36).slice(2)}`);
+    git(work, 'config', 'user.name', 't');
+    git(work, 'config', 'user.email', 't@e');
+    const marker = join(dir, `neutral-marker-${Math.random().toString(36).slice(2)}`);
     writeFileSync(join(work, 'f.txt'), 'x\n');
     git(work, '-c', 'core.hooksPath=/dev/null', 'add', 'f.txt');
+    git(work, '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'f');
+    writeFileSync(join(work, 'f.txt'), 'y\n');
+    if (action === 'commit') git(work, '-c', 'core.hooksPath=/dev/null', 'add', 'f.txt');
+    if (action === 'pull') git(work, '-c', 'core.hooksPath=/dev/null', 'checkout', '-q', '--', 'f.txt');
     arm(work, marker);
-    await expect((await handler(action)).execute(args(work) as Record<string, unknown>, context)).rejects.toThrow(message);
+    // A signing program reset to the operator's (here: none, so plain gpg) may fail to sign: that is fine.
+    await (await handler(action)).execute(args(work) as Record<string, unknown>, context).catch((e: Error) => { if (action !== 'commit') throw e; });
+    expect(existsSync(marker), 'a repository-named program ran').toBe(false);
+  }, 30_000);
+
+  test('a filter the repository defines is absent: the file is stored as it is (an LFS file stays its pointer)', async () => {
+    const { work } = repoPair('lfs-pointer');
+    git(work, 'config', 'filter.lfs.clean', 'sed s/^/CLEANED-/');
+    git(work, 'config', 'filter.lfs.required', 'true');
+    writeFileSync(join(work, '.gitattributes'), 'f.bin filter=lfs\n');
+    writeFileSync(join(work, 'f.bin'), 'version https://git-lfs.github.com/spec/v1\n');
+    await (await handler('add')).execute({ path: work, files: 'f.bin .gitattributes' }, context);
+    expect(git(work, 'show', ':f.bin')).toBe('version https://git-lfs.github.com/spec/v1\n');
+  }, 30_000);
+
+  test('the operator\'s own helpers and filters still run; the repository\'s never do', async () => {
+    const { work } = repoPair('operator');
+    const repoMarker = join(dir, 'operator-repo-marker');
+    const operatorMarker = join(dir, 'operator-own-marker');
+    // The same driver name, configured by both: the operator's program is the one that runs.
+    git(work, 'config', '--global', 'filter.op.clean', `${script('opclean', operatorMarker)}`);
+    git(work, 'config', 'filter.op.clean', script('repoclean', repoMarker));
+    writeFileSync(join(work, '.gitattributes'), 'g.txt filter=op\n');
+    writeFileSync(join(work, 'g.txt'), 'g\n');
+    try {
+      await (await handler('add')).execute({ path: work, files: 'g.txt .gitattributes' }, context);
+      expect(existsSync(repoMarker)).toBe(false);
+      expect(existsSync(operatorMarker)).toBe(true);
+    } finally { git(work, 'config', '--global', '--unset', 'filter.op.clean'); }
+  }, 30_000);
+
+  test('a credential helper: the repository\'s is dropped, the operator\'s is asked', async () => {
+    const { createServer } = await import('node:http');
+    const server = createServer((_req, res) => { res.writeHead(401, { 'www-authenticate': 'Basic realm="r"' }).end(); });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as { port: number }).port;
+    const { work } = repoPair('credentials');
+    const repoMarker = join(dir, 'cred-repo-marker');
+    const operatorMarker = join(dir, 'cred-operator-marker');
+    git(work, 'config', 'credential.helper', `!${script('repocred', repoMarker)}`);
+    git(work, 'config', '--global', 'credential.helper', `!${script('opcred', operatorMarker)}`);
+    git(work, 'remote', 'add', 'web', `http://127.0.0.1:${port}/r.git`);
+    try {
+      process.env.GIT_TERMINAL_PROMPT = '0';
+      await (await handler('pull')).execute({ path: work, remote: 'web', branch: 'main' }, context).catch(() => undefined);
+      expect(existsSync(repoMarker)).toBe(false);
+      expect(existsSync(operatorMarker)).toBe(true);
+    } finally {
+      delete process.env.GIT_TERMINAL_PROMPT;
+      git(work, 'config', '--global', '--unset', 'credential.helper');
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 30_000);
+
+  test.each([
+    ['core.gitProxy', (w: string, m: string) => git(w, 'config', 'core.gitProxy', script('gitproxy', m))],
+    ['remote.origin.vcs', (w: string) => git(w, 'config', 'remote.origin.vcs', 'evil')],
+    ['hook.x.command', (w: string, m: string) => { git(w, 'config', 'hook.x.command', script('hookcmd', m)); git(w, 'config', 'hook.x.event', 'pre-commit'); }],
+  ])('%s cannot be neutralised: the action is refused', async (key, arm) => {
+    const { work } = repoPair(`refuse-${Math.random().toString(36).slice(2)}`);
+    const marker = join(dir, `refuse-marker-${Math.random().toString(36).slice(2)}`);
+    arm(work, marker);
+    await expect((await handler('status')).execute({ path: work }, context)).rejects.toThrow(new RegExp(key.toLowerCase().replace(/\./g, '\\.')));
     expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+
+  test('a local push into a non-bare repository that checks files out runs none of its programs', async () => {
+    const { work } = repoPair('push-source');
+    const target = join(dir, 'push-target');
+    git(dir, 'clone', '-q', work, target);
+    const marker = join(dir, 'smudge-ran');
+    git(target, 'config', 'receive.denyCurrentBranch', 'updateInstead');
+    git(target, 'config', 'filter.evil.smudge', script('smudge', marker));
+    git(target, 'config', 'filter.evil.clean', 'cat');
+    writeFileSync(join(work, '.gitattributes'), '*.txt filter=evil\n');
+    writeFileSync(join(work, 'n.txt'), 'n\n');
+    git(work, '-c', 'core.hooksPath=/dev/null', 'add', '.gitattributes', 'n.txt');
+    git(work, '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'n');
+    git(target, 'checkout', '-q', 'HEAD~0');
+    git(target, 'checkout', '-q', '-B', 'other');
+    await (await handler('push')).execute({ path: work, remote: target, branch: 'HEAD:refs/heads/other' }, context);
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(target, 'n.txt'), 'utf8')).toBe('n\n');
   }, 30_000);
 });
 

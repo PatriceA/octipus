@@ -189,7 +189,7 @@ esac
       await expect(clone.execute({ repo: 'o/r' }, context)).resolves.toBeDefined();
       expect(existsSync(marker)).toBe(true);
       rmSync(marker);
-      await expect(clone.execute({ repo: '--upload-pack=touch /tmp/x' }, context)).rejects.toThrow(/must not start with "-"/);
+      await expect(clone.execute({ repo: '--upload-pack=touch /tmp/x' }, context)).rejects.toThrow(/must not start with "-"|Invalid repo/);
       expect(existsSync(marker)).toBe(false);
     } finally {
       process.env.PATH = previousPath;
@@ -230,7 +230,8 @@ describe('github: a host named by the model is judged before gh talks to it', ()
   ])('%s %j is refused and gh never runs', async (action, args) => {
     state.policy = egressPolicySchema.parse({ default: 'deny', rules: [{ action: 'allow', host: 'github.com' }] });
     const handler = (await handlers()).find((h) => h.name.endsWith(action))!;
-    await expect(handler.execute(args, context)).rejects.toThrow(/secret-data\.attacker\.example:443 \(https\) is denied/);
+    // A URL is not a repository outside repo_clone; a HOST/owner/name or a clone URL is judged.
+    await expect(handler.execute(args, context)).rejects.toThrow(/secret-data\.attacker\.example:443 \(https\) is denied|Invalid repo/);
     expect(called()).toBe('');
   });
 
@@ -246,6 +247,54 @@ describe('github: a host named by the model is judged before gh talks to it', ()
       await expect(handler.execute({ repo: 'o/r' }, context)).resolves.toBeDefined();
       expect(called()).toContain('issue list -R o/r');
     } finally { if (previous === undefined) delete process.env.GH_HOST; else process.env.GH_HOST = previous; }
+  });
+
+  test.each(['issue_view', 'issue_comment', 'issue_close', 'pr_view', 'pr_review', 'pr_merge', 'pr_comment', 'pr_diff', 'pr_checks', 'set_labels', 'set_milestone'])('%s refuses a number given as a URL; gh never runs', async (action) => {
+    const handler = (await handlers()).find((h) => h.name.endsWith(action))!;
+    await expect(handler.execute({ repo: 'octo/x', number: 'https://localhost/secret-data/r/issues/1', body: 'b', event: 'comment', add: 'l' }, context)).rejects.toThrow(/positive integer|Invalid number/);
+    expect(called()).toBe('');
+  });
+
+  test.each([
+    ['pr_create', { repo: 'o/r', title: 't', head: 'https://evil.example/x' }],
+    ['pr_create', { repo: 'o/r', title: 't', base: '--web' }],
+    ['pr_list', { repo: 'o/r', head: 'a..b' }],
+    ['workflow_run', { repo: 'o/r', workflow: 'https://evil.example/w.yml' }],
+    ['workflow_run', { repo: 'o/r', workflow: 'ci.yml', ref: 'main --x' }],
+    ['release_create', { repo: 'o/r', tag: 'v1 --draft' }],
+    ['repo_create', { name: 'https://evil.example/o/r' }],
+    ['repo_fork', { repo: 'o/r', org: 'evil.example/x' }],
+    ['run_view', { repo: 'o/r', run_id: 'https://evil.example/1' }],
+    ['job_log', { repo: 'o/r', job_id: '12/../x' }],
+    ['issue_list', { repo: 'o/r', state: 'open --jq .' }],
+    ['issue_list', { repo: 'o/r', limit: 'all' }],
+    ['pr_review', { repo: 'o/r', number: 1, event: 'web' }],
+    ['pr_merge', { repo: 'o/r', number: 1, method: 'admin' }],
+    ['issue_view', { repo: 'https://evil.example/o/r', number: 1 }],
+    ['issue_view', { repo: 'o/r/extra/parts', number: 1 }],
+  ])('%s %j is refused before gh runs', async (action, args) => {
+    const handler = (await handlers()).find((h) => h.name.endsWith(action))!;
+    await expect(handler.execute(args, context)).rejects.toThrow();
+    expect(called()).toBe('');
+  });
+
+  test('well-formed values reach gh: owner:branch heads, refs, workflows, integers', async () => {
+    const all = await handlers();
+    await all.find((h) => h.name.endsWith('pr_create'))!.execute({ repo: 'o/r', title: 'A title -- with dashes', body: '- a list item', head: 'someone:feature/x', base: 'main' }, context);
+    await all.find((h) => h.name.endsWith('workflow_run'))!.execute({ repo: 'o/r', workflow: 'ci.yml', ref: 'release/1.2' }, context);
+    await all.find((h) => h.name.endsWith('issue_view'))!.execute({ repo: 'o/r', number: '12' }, context);
+    const log = called();
+    expect(log).toContain('pr create -R o/r --title A title -- with dashes --body - a list item --base main --head someone:feature/x');
+    expect(log).toContain('workflow run ci.yml -R o/r --ref release/1.2');
+    expect(log).toContain('issue view 12 -R o/r');
+  });
+
+  test('get_file never hands gh an absolute URL', async () => {
+    writeFileSync(join(bin, 'gh'), `#!/bin/sh\necho "$@" >> "${calls}"\ncase "$*" in *vnd.github.raw*) echo raw-content ;; *) echo '{"type":"file","download_url":"https://evil.example/blob"}' ;; esac\n`);
+    const handler = (await handlers()).find((h) => h.name.endsWith('get_file'))!;
+    await expect(handler.execute({ repo: 'o/r', path: 'big.bin' }, context)).resolves.toMatchObject({ content: 'raw-content' });
+    expect(called()).not.toContain('evil.example');
+    expect(called()).toContain('api -H Accept: application/vnd.github.raw repos/o/r/contents/big.bin');
   });
 
   test('repo_list refuses a visibility outside its enum', async () => {

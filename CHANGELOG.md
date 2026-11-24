@@ -40,17 +40,30 @@ labels reflect blast radius, not contract guarantees.
   navigated to any URL. Both now go through the SSRF guard, so a source or
   capture of `localhost` or a LAN address is refused, with or without an
   egress policy.
-- **Breaking — repository hooks, fsmonitor, external diff and filter
-  drivers no longer run when the agent's git tool operates on a repo.** git
-  runs on the host, outside the shell sandbox, and a sandboxed command could
-  write `.git/config` or `.git/hooks` and then have `git.status` run its code
-  with the host's network. Every git run of the tool now has hooks,
-  fsmonitor, pagers, editors and `ext::` off (diff: `--no-ext-diff`), a local
-  push's receiving side runs without hooks, and a repository-scope setting
-  that would run a program (filter/diff/merge drivers, `gpg.program`,
-  `core.sshCommand`, credential helpers, includes, `pull.rebase=interactive`,
-  ...) refuses the action and names the key. The git `gh` starts gets the
-  same settings. The operator's global and system git config is unchanged.
+- **Breaking — repository hooks, fsmonitor, external diff, textconv and
+  filter drivers no longer run when the agent's git tool operates on a
+  repo.** git runs on the host, outside the shell sandbox, and a sandboxed
+  command could write `.git/config` or `.git/hooks` and then have
+  `git.status` run its code with the host's network. Every git run of the
+  tool now has hooks, fsmonitor, pagers, editors and `ext::` off (diff:
+  `--no-ext-diff --no-textconv`). The repository's own credential helpers,
+  filter and merge drivers, `core.sshCommand`, signing programs and similar
+  are neutralised on the command line — the operator's global/system values
+  are put back, so their helpers and LFS keep working, while a repository's
+  own LFS filter is treated as absent (files stay pointers). A few keys that
+  cannot be neutralised (`remote.<name>.uploadpack`/`receivepack`/`vcs`,
+  `core.gitProxy`, `core.alternateRefsCommand`, `gpg.ssh.defaultKeyCommand`,
+  config-based hooks) refuse the action and name the key. A push into a
+  repository on this machine runs its receive-pack the same way, so neither
+  its hooks nor a filter during `updateInstead` run. The git `gh` starts
+  gets the switch-offs. The operator's global and system git config is
+  unchanged.
+- **github tool values are validated before gh sees them.** Issue/PR
+  numbers, run and job ids are integers (a number given as a URL made gh
+  contact that host), enums are enforced, branches and tags are ref names,
+  `head` may be `owner:branch`, `repo` is `owner/name` or `HOST/owner/name`
+  (URLs only for `repo_clone`), and `get_file` no longer fetches the
+  absolute `download_url`.
 - **git and github tools refuse option-like values.** A branch, remote,
   URL, path, target or repository that starts with `-` is refused (refspecs
   such as `HEAD:main` and `+a:b` still work), and git's positionals follow

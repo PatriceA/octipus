@@ -1,4 +1,7 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { type ConfigEntry, neutralizingArgs, parseConfigListing, refusedKeys, shellQuote } from './repo-config';
 import { HARDENED_GIT_ARGS } from '@/security/git-hardening';
 import { toolLogger } from '@/utils/logger';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -104,7 +107,7 @@ export class GitTool extends BaseTool {
       }),
       async (args) => {
         // No external diff program, whatever the configuration says.
-        const gitArgs = ['diff', '--no-ext-diff'];
+        const gitArgs = ['diff', '--no-ext-diff', '--no-textconv'];
         if (args.staged) gitArgs.push('--staged');
         if (args.file) gitArgs.push('--', gitArgument(args.file, 'file'));
 
@@ -226,7 +229,8 @@ export class GitTool extends BaseTool {
         // A push to a repository on this machine runs ITS hooks in a
         // receive-pack that does not inherit our `-c` (git clears config for
         // the other side): that receive-pack gets hooks off itself.
-        if (await this.pushesLocally(remote, args.path as string)) gitArgs.splice(1, 0, `--receive-pack=git -c core.hooksPath=${HOOKS_OFF} receive-pack`);
+        const receivePack = await this.localReceivePack(remote, args.path as string);
+        if (receivePack) gitArgs.splice(1, 0, `--receive-pack=${receivePack}`);
 
         const result = await this.networkGit(gitArgs, args.path as string);
         return { success: true, output: result };
@@ -325,13 +329,34 @@ export class GitTool extends BaseTool {
     await enforceGitRemotes(urls);
   }
 
-  /** Whether any URL a push to `remote` goes to is a path on this machine. */
-  private async pushesLocally(remote: string, cwd: string): Promise<boolean> {
+  /**
+   * For a push to a repository on this machine, the receive-pack command to
+   * run there: git clears our `-c` for the receiving side, so it gets the
+   * same switch-offs and the receiving repository's own program-running
+   * settings neutralised (a filter would run when
+   * `receive.denyCurrentBranch=updateInstead` checks the files out). Refused
+   * when the receiving repository sets a key that cannot be neutralised.
+   * Null for a push that leaves this machine.
+   */
+  private async localReceivePack(remote: string, cwd: string): Promise<string | null> {
     const named = /^[A-Za-z0-9._-]+$/.test(remote) && gitRemoteTarget(remote) === null;
     const urls = named
       ? (await this.git(['remote', 'get-url', '--push', '--all', '--', remote], cwd).catch(() => remote)).split('\n').map((u) => u.trim()).filter(Boolean)
       : [remote];
-    return urls.some((url) => gitRemoteTarget(url) === null);
+    const local = urls.filter((url) => gitRemoteTarget(url) === null);
+    if (!local.length) return null;
+    const neutralize: string[] = [];
+    for (const url of local) {
+      const path = url.startsWith('file://') ? fileURLToPath(url) : resolve(cwd, url);
+      const entries = await this.repoConfig(path).catch((err: unknown) => {
+        toolLogger.debug({ err: (err as Error).message, path }, 'The receiving repository\'s config could not be read; hooks stay off');
+        return [] as ConfigEntry[];
+      });
+      const refused = refusedKeys(entries);
+      if (refused.length) throw new ToolNotExecutedError('git', `The repository this pushes into sets ${refused.join(', ')}, which would run a program on the host; not pushed.`);
+      neutralize.push(...neutralizingArgs(entries));
+    }
+    return ['git', ...HARDENED_GIT, ...neutralize, 'receive-pack'].map(shellQuote).join(' ');
   }
 
   /**
@@ -347,11 +372,7 @@ export class GitTool extends BaseTool {
     if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return this.git(args, cwd);
     // A clone reads no repository's configuration but the new one's.
     if (inRepo) {
-      const listing = await this.git(['config', '--list', '--show-scope'], cwd).catch((err: unknown) => {
-        toolLogger.debug({ err: (err as Error).message }, 'git config listing failed before a network action');
-        return '';
-      });
-      const risky = reroutingRepoConfig(listing);
+      const risky = reroutingRepoConfig(await this.repoConfig(cwd));
       if (risky.length) {
         throw new ToolNotExecutedError('git', `The repository's own git configuration sets ${risky.join(', ')}, which can reroute this ${args[0]} around the egress policy or run a command; it was not run. Remove those keys from .git/config.`);
       }
@@ -402,24 +423,41 @@ export class GitTool extends BaseTool {
    * Every git run of this tool. git runs on the host, outside the shell
    * sandbox, so nothing the repository says may make it run a program: the
    * model (or a sandboxed command) can write `.git/config` and `.git/hooks`.
-   * Hooks, fsmonitor, an external diff, pagers and editors are switched off
-   * on the command line (`HARDENED_GIT`), which outranks any config file; a
-   * repository-scope setting that runs a program and cannot be switched off
-   * that way refuses the action (`programRunningRepoConfig`). The operator's
-   * global and system configuration is trusted and left alone.
+   * Hooks, fsmonitor, pagers, editors and `ext::` are switched off on the
+   * command line (`HARDENED_GIT`); the repository's own program-running
+   * settings are neutralised with `-c`, the operator's values put back
+   * (src/tools/git/repo-config.ts); the few that cannot be neutralised refuse
+   * the action. The operator's global and system configuration is trusted.
    */
   private async git(args: string[], cwd: string): Promise<string> {
-    const listing = await this.runGit([...HARDENED_GIT, 'config', '--list', '--show-scope'], cwd).catch((err: unknown) => {
-      // Older git without --show-scope: the repository's own file, includes followed.
-      toolLogger.debug({ err: (err as Error).message }, 'git config --show-scope unavailable; reading the local config file');
-      return this.runGit([...HARDENED_GIT, 'config', '--local', '--includes', '--list'], cwd)
-        .then((out) => out.split('\n').filter(Boolean).map((line) => `local\t${line}`).join('\n'), () => '');
-    });
-    const risky = programRunningRepoConfig(listing);
-    if (risky.length) {
-      throw new ToolNotExecutedError('git', `The repository's own git configuration sets ${risky.join(', ')}, which would run a program on the host outside the sandbox; the git tool does not run in it. Remove those keys from .git/config (or run git through the sandboxed shell).`);
+    const entries = await this.repoConfig(cwd);
+    const refused = refusedKeys(entries);
+    if (refused.length) {
+      throw new ToolNotExecutedError('git', `The repository's own git configuration sets ${refused.join(', ')}, which would run a program on the host outside the sandbox and cannot be switched off; the git tool does not run in it. Remove those keys from .git/config (or run git through the sandboxed shell).`);
     }
-    return this.runGit([...HARDENED_GIT, ...args], cwd);
+    return this.runGit([...HARDENED_GIT, ...neutralizingArgs(entries), ...args], cwd);
+  }
+
+  /**
+   * The configuration git will read in `cwd`, with scopes. Older git without
+   * `--show-scope` (before 2.26): the repository's own file with includes,
+   * and its worktree file when `extensions.worktreeConfig` is set — refused
+   * when that cannot be read.
+   */
+  private async repoConfig(cwd: string): Promise<ConfigEntry[]> {
+    try {
+      return parseConfigListing(await this.runGit([...HARDENED_GIT, 'config', '--list', '--show-scope'], cwd));
+    } catch (err) {
+      toolLogger.debug({ err: (err as Error).message }, 'git config --show-scope unavailable; reading the repository\'s own config files');
+    }
+    const scoped = (scope: string, out: string) => parseConfigListing(out.split('\n').filter(Boolean).map((line) => `${scope}\t${line}`).join('\n'));
+    const local = scoped('local', await this.runGit([...HARDENED_GIT, 'config', '--local', '--includes', '--list'], cwd).catch(() => ''));
+    if (local.some((e) => e.key === 'extensions.worktreeconfig' && e.value.toLowerCase() === 'true')) {
+      const worktree = await this.runGit([...HARDENED_GIT, 'config', '--worktree', '--includes', '--list'], cwd).catch(() => null);
+      if (worktree === null) throw new ToolNotExecutedError('git', 'This repository has per-worktree configuration that this git cannot list; the git tool does not run in it.');
+      return [...local, ...scoped('worktree', worktree)];
+    }
+    return local;
   }
 
   private async runGit(args: string[], cwd: string): Promise<string> {
@@ -499,38 +537,20 @@ export class GitTool extends BaseTool {
 export const gitTool = new GitTool();
 
 /** `-c` settings for a git run that contacts a remote under an egress policy: no hooks, no `ext::` transport, no fsmonitor. */
-/** Where hooks are looked for when they must not run. */
-const HOOKS_OFF = process.platform === 'win32' ? 'NUL' : '/dev/null';
-
 /** Leading options on every git run of the tool (src/security/git-hardening.ts). */
 const HARDENED_GIT = HARDENED_GIT_ARGS;
 
 /**
- * Repository-scope settings that run a program and that a `-c` cannot
- * reliably switch off (a driver or helper by name, a command per remote):
- * refused for every action.
+ * Repository-scope keys that reroute a network run (under an egress policy):
+ * a proxy, an address override, another transport or helper, rebase and
+ * signing settings. Program-running keys are neutralised for every run
+ * already (src/tools/git/repo-config.ts).
  */
-const PROGRAM_KEY = /^(?:core\.(?:sshcommand|gitproxy|askpass|alternaterefscommand)|credential(?:\..+)?\.helper|gpg\.(?:.+\.)?(?:program|defaultkeycommand)|filter\..+\.(?:clean|smudge|process)|diff\..+\.(?:command|textconv)|merge\..+\.driver|remote\..+\.(?:uploadpack|receivepack|vcs)|uploadpack\.packobjectshook|submodule\..+\.update|submodule\.recurse|include(?:if\..+)?\.path|interactive\.difffilter)$/;
+const REROUTING_KEY = /^(?:https?\.proxy|http\..+\.proxy|http\.(?:.+\.)?curloptresolve|remote\..+\.(?:proxy|proxyauthmethod|vcs)|core\.gitproxy|protocol\..+|ssh\.variant|fetch\.recursesubmodules|rebase\..+|push\.gpgsign)$/;
 
-/**
- * The program-running keys set at repository (local/worktree) scope, plus
- * `pull.rebase=interactive`. Command scope (`-c`, GIT_CONFIG_COUNT) is this
- * tool's own and the operator's, never the repository's.
- */
-export function programRunningRepoConfig(listing: string): string[] {
-  const entries = listing.split('\n').map((line) => /^(local|worktree)\t([^=]+)=(.*)$/.exec(line)).filter((m): m is RegExpExecArray => !!m);
-  const keys = entries.filter((m) => PROGRAM_KEY.test(m[2].toLowerCase()) || (m[2].toLowerCase() === 'pull.rebase' && /^i(nteractive)?$/i.test(m[3].trim())))
-    .map((m) => m[2].toLowerCase());
-  return [...new Set(keys)];
-}
-
-/** Repository-scope keys that reroute a network run or run a command. */
-const REROUTING_KEY = /^(?:https?\.proxy|http\..+\.proxy|http\.(?:.+\.)?curloptresolve|remote\..+\.(?:proxy|proxyauthmethod|uploadpack|receivepack|vcs)|core\.(?:sshcommand|gitproxy|fsmonitor|hookspath|askpass|editor)|sequence\.editor|credential(?:\..+)?\.helper|protocol\..+|include(?:if\..+)?\.path|ssh\.variant|filter\..+\.(?:clean|smudge|process)|merge\..+\.driver|fetch\.recursesubmodules|submodule\.recurse|uploadpack\..+|pull\.rebase|rebase\..+|gpg\..+|push\.gpgsign)$/;
-
-/** The rerouting keys set at repository (local/worktree) scope in `git config --list --show-scope` output. */
-export function reroutingRepoConfig(listing: string): string[] {
-  const keys = listing.split('\n').map((line) => /^(local|worktree)\t([^=]+)=/.exec(line)).filter((m): m is RegExpExecArray => !!m).map((m) => m[2].toLowerCase());
-  return [...new Set(keys.filter((key) => REROUTING_KEY.test(key)))];
+/** The rerouting keys set at repository (local/worktree) scope. */
+export function reroutingRepoConfig(entries: ConfigEntry[]): string[] {
+  return [...new Set(entries.filter((e) => (e.scope === 'local' || e.scope === 'worktree') && REROUTING_KEY.test(e.key)).map((e) => e.key))];
 }
 
 /**

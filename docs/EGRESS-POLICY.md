@@ -215,17 +215,31 @@ the proxy, so a policy is applied before git starts:
   `.git/hooks`. Every run — status, diff, log, add, commit, checkout, reset,
   stash, pull, push, clone — gets `--no-pager`, hooks off
   (`core.hooksPath=/dev/null`), `core.fsmonitor=false`, editors that do
-  nothing, `protocol.ext.allow=never`, and diff gets `--no-ext-diff`; a push
-  to a repository on this machine runs that repository's receive-pack with
-  hooks off too. Repository-scope settings that run a program and cannot be
-  switched off on the command line — `core.sshCommand`, `core.gitProxy`,
-  `core.askPass`, `core.alternateRefsCommand`, credential helpers, `gpg`
-  programs, filter, diff (`command`/`textconv`) and merge drivers,
-  `remote.<name>.uploadpack`/`receivepack`/`vcs`, `submodule.*.update`,
-  `submodule.recurse`, includes, `interactive.diffFilter`,
-  `pull.rebase=interactive` — refuse the action, naming the keys. The git
-  that `gh` starts gets the same settings through `GIT_CONFIG_COUNT`. Global
-  and system configuration stays the operator's and is honoured.
+  nothing and `protocol.ext.allow=never`; diff also gets `--no-ext-diff
+  --no-textconv`.
+  - **Neutralised** (the action runs; the repository's program does not):
+    credential helpers (the list is reset, the operator's global/system
+    helpers are added back), filter drivers (each part the repository sets
+    is emptied and made not required, so git treats the filter as absent and
+    an LFS file stays its pointer; the operator's value for the same part is
+    put back instead), merge drivers, `core.sshCommand` (to the operator's or
+    `ssh`), `core.askPass`, `gpg.program` and `gpg.<format>.program` (to the
+    operator's or the default), `submodule.*.update`, `submodule.recurse`,
+    `interactive.diffFilter`, `pull.rebase=interactive`. Includes are not
+    refused: what they bring in is judged like the rest.
+  - **Refused** (the action does not run, the key is named), because no
+    command-line value switches them off: `remote.<name>.uploadpack` and
+    `receivepack` (git uses the first value, and a `-c` comes last),
+    `remote.<name>.vcs`, `core.gitProxy`, `core.alternateRefsCommand`,
+    `gpg.ssh.defaultKeyCommand`, config-based hooks (`hook.<name>.command`
+    / `.event`).
+  - **A push into a repository on this machine** runs that repository's
+    receive-pack with the same switch-offs and its own settings neutralised
+    (a filter would run when `receive.denyCurrentBranch=updateInstead`
+    checks files out); a refused key there refuses the push.
+  - The git that `gh` starts gets the switch-offs through
+    `GIT_CONFIG_COUNT`. Global and system configuration stays the
+    operator's and is honoured.
 
 Not judged: what git does after it starts (an HTTP redirect it follows,
 submodules, LFS endpoints); git is not routed through the proxy. gh's own
@@ -263,6 +277,18 @@ What the policy does not do, in one place:
   end to end here (bwrap was).
 - **Roles:** a role chain is as strong as the spawn paths that carry it (the
   swarm spawner and worker-spawner); a scheduled artifact refresh has no role.
+- **git configuration is read, then git runs:** a `.git/config` changed in
+  between (by a concurrent sandboxed command) is not seen. `core.worktree`
+  and a `.git` file pointing elsewhere make git read another directory's
+  configuration — which is then the configuration listed and judged, but the
+  files git touches are that directory's. git before 2.26 has no
+  `--show-scope`: the repository's own file and its worktree file are read
+  instead.
+- **github:** `get_file` no longer follows the `download_url` GitHub returns
+  (gh would contact whatever host it names): large files come from the same
+  relative contents endpoint as raw. In an SSH execution environment gh runs
+  on the remote host, and a bare `owner/name` is judged on the server's
+  `GH_HOST`/gh configuration, not the remote's.
 
 ## Refusals
 
