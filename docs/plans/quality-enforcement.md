@@ -172,3 +172,13 @@ warned on every run. Two lines.
 - T1.2: research child calls `write_file` → permission denial, counted in `receipt.permissionDenials`.
 - T1.4: point a text-only model at a screenshot tool; assert no base64 in the message and no budget blow-out.
 - Full suite (`bun test src scripts --timeout 30000`) + `bun run coverage:check` after each tier.
+
+## Update 2026-11-23: blocking evidence on the pipeline path
+
+The pipeline path now has the roadmap's `pre_verify` hooks: operator-declared
+commands per project folder (`agent.evidenceHooks`) that run through the same
+`command_exit_zero` gate as a stage `verifyCommand`, are stored as `pre_verify`
+evidence, and block a deliverable until they pass (bounded repair, then a
+failed run). See `docs/AGENT-ARCHITECTURE.md`. The swarm path is unchanged: a
+`spawn_child` caller still attaches its own `command_exit_zero` scorers, and
+operator hooks are not applied there.

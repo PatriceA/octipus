@@ -49,6 +49,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
   gw({ name: 'skills', description: 'Pick a skill and how it is used (Automatic, Always, This session); with arguments as before',
        argumentHint: '[<id or name> always|session|auto] [--global]' }),
+  gw({ name: 'model', description: 'Pick the root agent model for this session; with a name, switch to it; clear drops it',
+       argumentHint: '[<name>|clear|list]' }),
   gw({ name: 'status',    description: 'Show current session status and agents',            aliases: ['s'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
   { name: 'plan-hide', description: 'Collapse the expanded plan', source: 'tui' },

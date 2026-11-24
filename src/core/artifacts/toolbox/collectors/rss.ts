@@ -5,6 +5,7 @@
  * is identical, just discoverable by name now.
  */
 
+import { fetchGuarded } from '@/utils/sanitize';
 import { parseRss, type RssItem } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
@@ -38,7 +39,8 @@ export const rssCollector: ToolboxTool<Params, Result> = {
 
   async execute(params) {
     if (!params.url) throw new Error('art_collect_rss: missing `url`');
-    const res = await fetch(params.url, {
+    // Model-chosen URL: SSRF guard + egress policy on every hop.
+    const res = await fetchGuarded(params.url, {
       headers: { accept: 'application/rss+xml, application/xml' },
     });
     if (!res.ok) throw new Error(`rss ${res.status}: ${res.statusText}`);

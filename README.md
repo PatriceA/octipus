@@ -176,7 +176,7 @@ Highlights from the [roadmap](./ROADMAP.md):
 - **Measured workflow baselines** — run the opt-in live-provider suite and record its configuration and limits.
 - **Trajectory learning consumers** — labeled training pairs from recorded runs.
 - **Dynamic role definition from chat** — "define a role that does X with tools Y" → live role.
-- **Skill marketplace** — discover and install community skills from the web UI (export/import of signed bundles ships: [Skill exchange](docs/SKILL-EXCHANGE.md)).
+- **Skill marketplace** — ratings and a community index (export/import of signed bundles, and browsing operator-configured skill registries, ship: [Skill exchange](docs/SKILL-EXCHANGE.md)).
 - **Pipeline templates from natural language** — describe a workflow, get a runnable pipeline.
 - **First-class human-in-the-loop primitive** — wait-for-input nodes with form schemas.
 - **Mobile clients** — a Flutter client for iOS and Android lives in a separate repository, [PatriceA/mobile-octipus](https://github.com/PatriceA/mobile-octipus) (version 0.1.0, not yet released).
@@ -203,6 +203,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Ollama](docs/OLLAMA.md)** | Ollama models: size tiers, tool support, context length (`num_ctx`), lazy tool discovery, iGPU |
 | **[Direct Providers](docs/DIRECT-PROVIDERS.md)** | Caching, reasoning, tool schemas, usage and cost provenance |
 | **[Custom Providers](docs/CUSTOM-PROVIDERS.md)** | Direct OpenAI/Gemini-compatible endpoints |
+| **[Egress Policy](docs/EGRESS-POLICY.md)** | What tools may reach on the network: allow/deny by host, range, port and scheme, per tool and role; where it is enforced |
 | **[Configuration Precedence](docs/CONFIGURATION-PRECEDENCE.md)** | `.env`-bootstrap vs DB-runtime split |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search, tiered content, auto-indexing |

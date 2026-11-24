@@ -79,12 +79,13 @@ async function runReal(
   parentMetadata: Record<string, unknown>,
   childDepth: 1 | 2 = 2,
   scorers: Scorer[] = [],
+  parentRole?: string,
 ): Promise<ChildResult> {
   const spawner = new SwarmSpawner({} as never);
   return (spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }).runChildWithRetry({
     scorers,
     parent: { id: 'agent-1', rootSessionId: 's1', signal: new AbortController().signal },
-    parentContext: { userId: 'u1', sessionId: 's1', metadata: parentMetadata },
+    parentContext: { userId: 'u1', sessionId: 's1', metadata: parentMetadata, ...(parentRole ? { role: parentRole } : {}) },
     childDepth,
     childKind: childDepth === 2 ? 'subagent' : 'agent',
     childRole: 'coding',
@@ -422,6 +423,12 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
       expect(worktreeDirs()).toEqual(['cparent1']);
       expect(result.worktree).toBeUndefined();
       await removeWorktree(parentTree, { merged: true });
+    });
+
+    it('a child carries its ancestors\' roles for the egress policy', async () => {
+      await runReal('native-model', { egressRoleChain: ['general'] }, 2, [], 'coding');
+      expect(captured.metadata.length).toBeGreaterThan(0);
+      for (const md of captured.metadata) expect(md.egressRoleChain).toEqual(['general', 'coding']);
     });
 
     it('a native grandchild is routed into the worktree through projectPath', async () => {

@@ -83,6 +83,7 @@ import {
 import { declarationItems } from '@/shared/plugin-declarations';
 import { octipusRoot } from '@/utils/install-root';
 import { coreLogger } from '@/utils/logger';
+import { compareVersions } from '@/utils/semver';
 import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { checkInProcessBundle } from './in-process-bundle';
@@ -117,35 +118,8 @@ export class PluginPackageError extends Error {
   }
 }
 
-/**
- * Compare two semantic versions (`1.2.0`, `1.2.0-beta.1`): negative when `a`
- * is older. A pre-release is older than its release; pre-release identifiers
- * compare numerically when both are numbers, else as text.
- */
-export function compareVersions(a: string, b: string): number {
-  const [coreA, preA] = a.split(/-(.*)/s, 2);
-  const [coreB, preB] = b.split(/-(.*)/s, 2);
-  const na = coreA.split('.').map(Number);
-  const nb = coreB.split('.').map(Number);
-  for (let i = 0; i < 3; i++) if ((na[i] ?? 0) !== (nb[i] ?? 0)) return (na[i] ?? 0) - (nb[i] ?? 0);
-  if (!preA && !preB) return 0;
-  if (!preA) return 1;
-  if (!preB) return -1;
-  const pa = preA.split('.');
-  const pb = preB.split('.');
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if (pa[i] === undefined) return -1;
-    if (pb[i] === undefined) return 1;
-    if (pa[i] === pb[i]) continue;
-    const xa = /^\d+$/.test(pa[i]) ? Number(pa[i]) : null;
-    const xb = /^\d+$/.test(pb[i]) ? Number(pb[i]) : null;
-    if (xa !== null && xb !== null) return xa - xb;
-    if (xa !== null) return -1;
-    if (xb !== null) return 1;
-    return pa[i] < pb[i] ? -1 : 1;
-  }
-  return 0;
-}
+/** Kept here too: the plugin package modules import it from the service. */
+export { compareVersions };
 
 /** Where installed packages live. */
 export function pluginsRoot(): string {
@@ -954,7 +928,7 @@ export async function configure(
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
   if (change.approveContributions !== undefined) {
-    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt or context; there is nothing to approve`);
+    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt, context or roles; there is nothing to approve`);
     if (!isContentHash(change.approveContributions)) {
       throw new PluginPackageError('invalid',
         'approveContributions takes the contributions hash you reviewed ("sha256:<64 hex>", shown as contributions.hash), not true: what the package adds is approved only while it still hashes to it');

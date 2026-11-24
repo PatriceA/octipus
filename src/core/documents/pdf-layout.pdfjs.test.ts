@@ -7,7 +7,7 @@
  * filler items pdfjs inserts between two runs, which span the gap they sit in.
  */
 import { describe, expect, test } from 'vitest';
-import { type PdfTextItem, reconstructPageText } from './pdf-layout';
+import { joinPdfPages, type PdfPageText, type PdfTextItem, reconstructPage, reconstructPageText } from './pdf-layout';
 
 /** [text, x, y] drawn in 10pt Helvetica. */
 type Run = [string, number, number];
@@ -18,15 +18,20 @@ const esc = (s: string) => s.replace(/[\\()]/g, (c) => `\\${c}`);
 const runsContent = (runs: Run[]): string =>
   runs.map(([s, x, y]) => `BT /F1 10 Tf ${x} ${y} Td (${esc(s)}) Tj ET`).join('\n');
 
-/** A one-page PDF (US Letter) with this content stream; /F1 is Helvetica, /F2 Courier. */
-function buildPdf(content: string): Uint8Array {
+/** A PDF (US Letter) with one page per content stream; /F1 is Helvetica, /F2 Courier. */
+function buildPdf(contents: string[]): Uint8Array {
+  // Objects 1-4 are the catalog, the page tree and the two fonts; each page
+  // is then a page object followed by its content stream.
+  const pageRef = (p: number) => `${5 + p * 2} 0 R`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Pages /Kids [${contents.map((_, p) => pageRef(p)).join(' ')}] /Count ${contents.length} >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
+    ...contents.flatMap((content, p) => [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + p * 2} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+    ]),
   ];
   let out = '%PDF-1.4\n';
   const offsets: number[] = [];
@@ -44,13 +49,30 @@ function buildPdf(content: string): Uint8Array {
 async function extract(runs: Run[] | string): Promise<string> {
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const stream = typeof runs === 'string' ? runs : runsContent(runs);
-  const task = pdfjsLib.getDocument({ data: buildPdf(stream), verbosity: 0 });
+  const task = pdfjsLib.getDocument({ data: buildPdf([stream]), verbosity: 0 });
   const pdf = await task.promise;
   const page = await pdf.getPage(1);
   const content = await page.getTextContent();
   const text = reconstructPageText(content.items as PdfTextItem[]);
   await task.destroy();
   return text;
+}
+
+/** Every page, read in order with the table each leaves open, and joined: what the processor does. */
+async function extractPages(pages: Run[][]): Promise<string> {
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const task = pdfjsLib.getDocument({ data: buildPdf(pages.map(runsContent)), verbosity: 0 });
+  const pdf = await task.promise;
+  const read: PdfPageText[] = [];
+  let open: PdfPageText['openTable'] = null;
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const content = await (await pdf.getPage(p)).getTextContent();
+    const page = reconstructPage(content.items as PdfTextItem[], open);
+    open = page.openTable;
+    read.push(page);
+  }
+  await task.destroy();
+  return joinPdfPages(read);
 }
 
 describe('reconstructPageText on pdfjs output', () => {
@@ -119,6 +141,71 @@ describe('reconstructPageText on pdfjs output', () => {
         '| Starter | 5 | $10 |',
         '| Team | 25 | $45 |',
         '| Business | 100 | $160 |',
+      ].join('\n'),
+    );
+  });
+
+  /** Three cells per row at x = 50, 200, 350, rows 14pt apart from `top`. */
+  const tableRuns = (top: number, rows: Array<[string, string, string]>): Run[] =>
+    rows.flatMap(([a, b, c], k): Run[] => [
+      [a, 50, top - k * 14],
+      [b, 200, top - k * 14],
+      [c, 350, top - k * 14],
+    ]);
+
+  test('a table with no header row comes out under an empty header', async () => {
+    const text = await extract(
+      tableRuns(730, [
+        ['Starter', '5', '$10'],
+        ['Team', '25', '$45'],
+        ['Business', '100', '$160'],
+        ['Enterprise', '500', '$600'],
+      ]),
+    );
+    expect(text).toBe(
+      [
+        '| | | |',
+        '| --- | --- | --- |',
+        '| Starter | 5 | $10 |',
+        '| Team | 25 | $45 |',
+        '| Business | 100 | $160 |',
+        '| Enterprise | 500 | $600 |',
+      ].join('\n'),
+    );
+  });
+
+  test('a table continued on the next page without its header is one table', async () => {
+    const text = await extractPages([
+      [
+        ['Pricing', 50, 760],
+        ...tableRuns(730, [
+          ['Plan', 'Seats', 'Price'],
+          ['Starter', '5', '$10'],
+          ['Team', '25', '$45'],
+        ]),
+        ['1', 300, 40],
+      ],
+      [
+        ['2', 300, 770],
+        ...tableRuns(740, [
+          ['Business', '100', '$160'],
+          ['Enterprise', '500', '$600'],
+        ]),
+        ['Prices exclude tax.', 50, 690],
+      ],
+    ]);
+    expect(text).toBe(
+      [
+        'Pricing',
+        '',
+        '| Plan | Seats | Price |',
+        '| --- | --- | --- |',
+        '| Starter | 5 | $10 |',
+        '| Team | 25 | $45 |',
+        '| Business | 100 | $160 |',
+        '| Enterprise | 500 | $600 |',
+        '',
+        'Prices exclude tax.',
       ].join('\n'),
     );
   });

@@ -120,17 +120,46 @@ Not a model picker. Lanes stay bound by the admin.
 
 ## 5. Remaining webhook risks
 
-- A spawn that fails at `maxConcurrentAgents` still marks the delivery done, so
-  a redelivery is ignored and the event is lost (`webhook-delivery.ts:600-650`).
-  Release the claim when the action did not start an agent.
-- Cooldown and `maxExecutions` skips write no execution row
-  (`hooks/manager.ts:174-185`). Record them so a skipped event is visible.
-- Two concurrent first deliveries can each mint a hook session; only one is
-  saved (`actions.ts:334`). Make the persist conditional on `session_id IS NULL`
-  and use the stored value.
-- The session lock, run queue and merge windows are per process
-  (docs/WEBHOOKS.md). Multi-replica deployments need a shared lock before
-  ordering can be promised there.
+- **Closed.** A spawn that fails at `maxConcurrentAgents` still marks the
+  delivery done, so a redelivery is ignored and the event is lost. Now an
+  action refused before any agent existed reports `notStarted`, and
+  `fireWebhookHook` releases the claim, hands the cooldown / `maxExecutions`
+  reservation back and logs an `error` row (`webhook-delivery.ts`,
+  `manager.ts`). This first covered only the direct spawn
+  (`orchestrated: false`); an orchestrated hook's root agent refused at the cap
+  still completed the delivery with nothing in its session. The root turn now
+  reports that refusal as `TurnResult.notStarted` (`core/agent/service.ts`)
+  and the orchestrated path returns `notStarted` too (`hooks/actions.ts`). A
+  quota or spend-budget refusal of an orchestrated hook is still answered in
+  its session and completes the delivery, on purpose, and so is a turn that
+  had already stored its message (a room post, a plan's "go"). A scheduled
+  run refused this way sets a `Not started:` marker that no longer silences
+  the next real failure's notification, and the owner is told when the run
+  is lost (a recurring run, once per streak; a one-shot that gives up)
+  (`core/cron-runner.ts`). An `onlyOnChange` turn refused at the cap gives
+  back the check failures it carried (`forgetCheckStates`), so a redelivery
+  (no merge window) or the next red result is a change again. Tests:
+  `hooks/webhook-risks.test.ts`, `hooks/webhook-cap.test.ts`,
+  `hooks/event-changes.manager.test.ts`, `core/agent/limit-refusal.test.ts`,
+  `core/cron-runner.watch.test.ts`.
+- **Open.** An `onlyOnChange` merged turn (merge window over 0) refused at
+  the cap is lost: its deliveries were answered when the window opened, and
+  the merged turn is logged as an `error` row but not retried. Keeping the
+  deliveries' claims until the merged turn starts, or retrying the merged
+  turn, would close it.
+- **Closed.** Cooldown and `maxExecutions` skips write no execution row. Now a
+  targeted hook (webhook, schedule, heartbeat) logs a `skipped` row with
+  `cooldown`, `max_executions` or `not_reserved` and its detail
+  (`manager.ts` `recordSkip`), shown in the Hooks page's execution log and
+  returned by `GET /api/hooks/:id/executions`.
+- **Closed.** Two concurrent first deliveries can each mint a hook session;
+  only one is saved. Now the persist only fills an empty `session_id`
+  (`persistHookSessionId` in `actions.ts`); the loser drops the session it
+  created and uses the stored id, so both runs share one session in one
+  process and across processes.
+- **Open, on purpose.** The session lock, run queue and merge windows are per
+  process (docs/WEBHOOKS.md). Multi-replica deployments need a shared lock
+  before ordering can be promised there.
 
 ## Status
 

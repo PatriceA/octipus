@@ -184,6 +184,12 @@ does.
 
 Cost: no model tokens, only wall-clock time.
 
+Partly shipped 2026-11-23 as project evidence hooks (`agent.evidenceHooks`):
+operator-declared commands run before the QA turn, blocking, with their result
+recorded and handed to the auditor. They are project-wide, so inside a plan
+loop they run on the last item only, like `verifyCommand`. A check scoped to
+the files one item touched is still open.
+
 ## Out of scope
 
 - **Automatic rollback to the best attempt.** Rewriting a workspace without

@@ -1,4 +1,4 @@
--- The personal layer of a to-do is per user (review of 0205): in a space
+-- The personal layer of a to-do is per user (review of 0209): in a space
 -- every member has their own star, My Day and order. `task_user_state` holds
 -- one row per (task, user) that changed any of them; a missing row is "not
 -- starred, not in My Day, the task's default order" (tasks.sort_order). The
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS "task_user_state" (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "task_user_state_user_day_idx" ON "task_user_state" ("user_id", "my_day_on") WHERE "my_day_on" IS NOT NULL;
 --> statement-breakpoint
--- Move what 0205 stored on the shared row to its owner's state, then drop it.
+-- Move what 0209 stored on the shared row to its owner's state, then drop it.
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'tasks' AND column_name = 'important') THEN
     INSERT INTO "task_user_state" ("task_id", "user_id", "important", "my_day_on")

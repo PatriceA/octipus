@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
@@ -326,14 +326,28 @@ export async function claimDueHook(hook: Hook, nextRunAt: Date | null, oneShot: 
 export const ONE_SHOT_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * The prefix of a `lastError` that records a run refused before it started
+ * ({@link retryNotStartedHook}). Such a marker is not a failure streak: the
+ * next real failure still notifies (see fireClaimedScheduleHook).
+ */
+export const NOT_STARTED_PREFIX = 'Not started: ';
+
+/**
  * A scheduled run refused before it started any work (the agent cap, a quota
  * or a paused spend budget: `notStarted`). The error is recorded on the hook
- * rather than cleared. A recurring hook simply runs at its next time. A
- * one-shot was already disabled by {@link claimDueHook}, so it is re-enabled
- * with a retry time that backs off with the time since it was due (1 minute
- * up to 1 hour), for up to {@link ONE_SHOT_RETRY_WINDOW_MS}; after that it
- * stays disabled with the error. Only a row this tick left as it was (still
- * disabled, no next run) is re-enabled, so an edit or delete meanwhile wins.
+ * rather than cleared, as a {@link NOT_STARTED_PREFIX} marker. A one-shot was
+ * already disabled by {@link claimDueHook}, so it is re-enabled with a retry
+ * time that backs off with the time since it was due (1 minute up to 1 hour),
+ * for up to {@link ONE_SHOT_RETRY_WINDOW_MS}; after that it stays disabled
+ * with the error. Only a row this tick left as it was (still disabled, no next
+ * run) is re-enabled, so an edit or delete meanwhile wins.
+ *
+ * When the run is lost — a recurring hook's run (it is not retried; the hook
+ * runs at its next time) or a one-shot whose retries are over — `notify`
+ * tells the owner with a `schedule_failed` notification: for a recurring
+ * hook once per streak (only the refusal that sets lastError from empty),
+ * for a one-shot when it gives up. A one-shot still being retried tells
+ * nobody yet.
  */
 export async function retryNotStartedHook(
   hook: Hook,
@@ -341,6 +355,7 @@ export async function retryNotStartedHook(
   scheduledAt: string | undefined,
   error: string,
   now = new Date(),
+  notify?: ScheduleFireDeps['notify'],
 ): Promise<Date | null> {
   const due = scheduledAt ? new Date(scheduledAt).getTime() : now.getTime();
   const late = Math.max(0, now.getTime() - (Number.isFinite(due) ? due : now.getTime()));
@@ -348,14 +363,27 @@ export async function retryNotStartedHook(
     ? new Date(now.getTime() + Math.min(Math.max(late, 60_000), 60 * 60_000))
     : null;
   const lastError = retryAt
-    ? `Not started: ${error}. Retrying at ${retryAt.toISOString()}.`
-    : `Not started: ${error}`;
+    ? `${NOT_STARTED_PREFIX}${error}. Retrying at ${retryAt.toISOString()}.`
+    : `${NOT_STARTED_PREFIX}${error}`;
+  const db = getDb();
   if (retryAt) {
-    await getDb().update(hooks)
+    await db.update(hooks)
       .set({ isEnabled: true, nextRunAt: retryAt, lastError, updatedAt: now })
       .where(and(eq(hooks.id, hook.id), eq(hooks.isEnabled, false), isNull(hooks.nextRunAt)));
   } else {
-    await getDb().update(hooks).set({ lastError, updatedAt: now }).where(eq(hooks.id, hook.id));
+    // Atomic, like a failure streak: only the refusal that sets lastError
+    // from empty is the first of a recurring hook's streak.
+    const first = await db.update(hooks)
+      .set({ lastError, updatedAt: now })
+      .where(and(eq(hooks.id, hook.id), isNull(hooks.lastError)))
+      .returning({ id: hooks.id });
+    if (first.length === 0) await db.update(hooks).set({ lastError, updatedAt: now }).where(eq(hooks.id, hook.id));
+    if (notify && (oneShot || first.length > 0)) {
+      const what = oneShot
+        ? 'It was retried for 24 hours after its time and will not run.'
+        : 'This run was skipped; the schedule runs again at its next time.';
+      await notify(hook.userId, 'schedule_failed', `Scheduled task "${hook.name}" did not start`, `${error.slice(0, 200)} ${what}`, { hookId: hook.id, notStarted: true });
+    }
   }
   coreLogger.warn({ hookId: hook.id, name: hook.name, error, retryAt }, 'Scheduled hook refused before it started');
   return retryAt;
@@ -481,7 +509,7 @@ export async function fireClaimedScheduleHook(
       // and retried, not a failure of the schedule itself; no baseline.
       await finishWatch('unconfirmed');
       const scheduledAt = hook.triggerConfig?.scheduledAt as string | undefined;
-      await retryNotStartedHook(hook, !!scheduledAt && !cronExpression, scheduledAt, result?.result?.error ?? 'Refused before it started')
+      await retryNotStartedHook(hook, !!scheduledAt && !cronExpression, scheduledAt, result?.result?.error ?? 'Refused before it started', new Date(), deps.notify)
         .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Could not record the refused scheduled hook'));
       return 'not_run';
     }
@@ -518,9 +546,10 @@ export async function fireClaimedScheduleHook(
   try {
     // Once per failure streak: only the run that sets lastError from empty
     // notifies (atomic, so overlapping runs cannot both); a success clears it.
+    // A not-started marker is not a failure streak: replacing it notifies.
     const firstOfStreak = await db.update(hooks)
       .set({ lastError, updatedAt: new Date() })
-      .where(and(eq(hooks.id, hook.id), isNull(hooks.lastError)))
+      .where(and(eq(hooks.id, hook.id), or(isNull(hooks.lastError), like(hooks.lastError, `${NOT_STARTED_PREFIX}%`))))
       .returning({ id: hooks.id });
     if (firstOfStreak.length === 0) {
       await db.update(hooks).set({ lastError, updatedAt: new Date() }).where(eq(hooks.id, hook.id));

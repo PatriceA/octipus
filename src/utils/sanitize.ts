@@ -110,12 +110,22 @@ export function assertPublicAddress(ip: string | null | undefined): { ok: boolea
  * cert validation is unchanged. Throws on a blocked URL.
  */
 export async function fetchGuarded(url: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+  // Inside a tool call, a name the egress policy refuses outright is refused
+  // before it is resolved: the DNS query would already carry it out.
+  const egress = await import('@/security/egress-policy');
+  egress.precheckEgressUrl(url, 'fetch');
   const validation = await validateExternalUrl(url);
   if (!validation.valid) {
     throw new Error(`URL blocked (SSRF guard): ${validation.reason}`);
   }
 
   const addresses = validation.addresses ?? [];
+
+  // The operator's egress policy, inside a tool call: judged on the canonical
+  // host and the vetted addresses this hop will be pinned to. Each redirect
+  // hop below comes back through here, so a redirect is judged like the
+  // first request.
+  egress.enforceEgressForUrl(url, addresses, 'fetch');
 
   // Redirects must NOT be followed by the underlying fetch — the guard only
   // validated THIS hop. Force `redirect: 'manual'` and re-run the guard on each

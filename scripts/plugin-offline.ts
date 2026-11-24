@@ -42,6 +42,8 @@ import { extractTarGz, packageRootIn, TarError } from '@/plugins/packages/tar';
 import { checkPackageTree, PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_MANIFEST_FILE, type PluginManifest } from '@/shared/plugin-package';
 import { SkillBundleError, signBundle } from '@/skills/exchange';
+import { buildSkillIndex, bundleUrlProblem, type IndexInput, MAX_SKILL_INDEX_BYTES, SkillIndexError } from '@/skills/registry-index';
+import { SKILL_BUNDLE_FORMAT } from '@/shared/skill-exchange';
 
 /** What the offline commands need of the process: output, stdin, and a hidden prompt at a terminal. */
 export interface OfflineIo {
@@ -266,6 +268,92 @@ export async function signSkillBundleCommand(io: OfflineIo, argv: string[]): Pro
   }
 }
 
+/** The listing metadata file beside a bundle: `<name>.json` → `<name>.listing.json`. */
+const LISTING_SUFFIX = '.listing.json';
+
+/**
+ * `octi plugin build-skill-index <dir> --base-url <https://…/> [--out <file>] [--json]`:
+ * a skill registry index (docs/SKILL-EXCHANGE.md#the-index) of the skill
+ * bundles in <dir>. Each `*.json` that is a bundle needs a
+ * `<name>.listing.json` beside it ({ name, version, description?, tags?,
+ * author? }); its digest, content hash, skill names and signing key are read
+ * from the bundle itself. The bundle URL is <base-url> + its file name. The
+ * index is written to <dir>/index.json unless --out says otherwise; publish it
+ * and the bundles unchanged, on any static host. Symbolic links are never
+ * followed: a linked bundle is reported as skipped, a linked listing file
+ * refused. `generatedAt` is `SOURCE_DATE_EPOCH` when set (reproducible
+ * builds), else now.
+ */
+export async function buildSkillIndexCommand(io: OfflineIo, argv: string[]): Promise<number> {
+  let dir = '';
+  try {
+    const { values, positionals } = parse(argv, { 'base-url': { type: 'string' }, out: { type: 'string', short: 'o' }, json: { type: 'boolean' } });
+    if (positionals.length !== 1 || !values['base-url']) throw new UsageError('expected <dir> --base-url <https://host/path/> [--out <file>]');
+    dir = resolve(positionals[0]);
+    const baseUrl = values['base-url'] as string;
+    const baseProblem = bundleUrlProblem(baseUrl);
+    if (baseProblem) throw new UsageError(`--base-url ${baseUrl}: ${baseProblem}`);
+    if (!baseUrl.endsWith('/')) throw new UsageError('--base-url must end with "/" (the bundles\' folder)');
+    const epoch = process.env.SOURCE_DATE_EPOCH;
+    if (epoch !== undefined && !/^\d{1,12}$/.test(epoch)) throw new UsageError(`SOURCE_DATE_EPOCH "${epoch}" is not a number of seconds`);
+    const generatedAt = epoch === undefined ? new Date() : new Date(Number(epoch) * 1000);
+    const out = resolve(values.out as string | undefined ?? join(dir, 'index.json'));
+    const candidates = (await readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.name.endsWith('.json') && !e.name.endsWith(LISTING_SUFFIX) && join(dir, e.name) !== out)
+      .sort((a, b) => (a.name < b.name ? -1 : 1));
+    const inputs: IndexInput[] = [];
+    const skipped: string[] = [];
+    // A link could make the index list (and digest) a file from elsewhere: never followed.
+    for (const e of candidates) if (!e.isFile()) skipped.push(e.name);
+    const files = candidates.filter((e) => e.isFile()).map((e) => e.name);
+    for (const file of files) {
+      const bytes = await readFile(join(dir, file));
+      let format: unknown;
+      try {
+        format = (JSON.parse(bytes.toString('utf8')) as { format?: unknown } | null)?.format;
+      } catch {
+        format = undefined;
+      }
+      if (format !== SKILL_BUNDLE_FORMAT) {
+        skipped.push(file);
+        continue;
+      }
+      const listingFile = `${file.slice(0, -'.json'.length)}${LISTING_SUFFIX}`;
+      let listing: string;
+      try {
+        if (!(await lstat(join(dir, listingFile))).isFile()) throw new Refusal(`${listingFile} is not a regular file (a symbolic link is not followed)`);
+        listing = await readFile(join(dir, listingFile), 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Refusal(`${file}: no ${listingFile} beside it ({ "name", "version", "description"?, "tags"?, "author"? })`);
+        throw err;
+      }
+      inputs.push({ file, bytes, listing, bundleUrl: new URL(encodeURIComponent(file), baseUrl).toString() });
+    }
+    if (inputs.length === 0) throw new Refusal(`No skill bundle (*.json with "format": "${SKILL_BUNDLE_FORMAT}") in ${dir}`);
+    let index: ReturnType<typeof buildSkillIndex>;
+    try {
+      index = buildSkillIndex(inputs, generatedAt);
+    } catch (err) {
+      if (err instanceof SkillIndexError) throw new Refusal(err.message);
+      throw err;
+    }
+    const text = `${JSON.stringify(index, null, 2)}\n`;
+    if (Buffer.byteLength(text) > MAX_SKILL_INDEX_BYTES) throw new Refusal(`The index would be ${Buffer.byteLength(text)} bytes; a host reads at most ${MAX_SKILL_INDEX_BYTES}. Split the bundles across registries.`);
+    await writeFile(out, text, { mode: 0o644 });
+    const unsigned = index.entries.filter((e) => e.publisherKeyId === null).map((e) => `${e.name} ${e.version}`);
+    if (values.json) {
+      json(io, { out, entries: index.entries.length, unsigned, skipped });
+      return 0;
+    }
+    for (const file of skipped) io.err(`  · ${file}: not a skill bundle (or not a regular file), not indexed\n`);
+    if (unsigned.length > 0) io.err(`⚠ Unsigned, so no host installs them from a registry: ${unsigned.join(', ')}. Sign them with octi plugin sign-skill-bundle and build the index again.\n`);
+    io.out(`✅ Wrote ${out}\n   entries: ${index.entries.length}\n   Publish it and the bundles unchanged: each bundle must hash to its listed digest.\n`);
+    return 0;
+  } catch (err) {
+    return failure(io, 'build-skill-index', err, `No index was written${dir ? ` for ${dir}` : ''}.`);
+  }
+}
+
 /** `octi plugin sign-index <index.json> --key <file> [--passphrase-file <path|->] [--json]` */
 export async function signIndexCommand(io: OfflineIo, argv: string[]): Promise<number> {
   let file = '';
@@ -390,6 +478,12 @@ export async function permissionsCommand(io: OfflineIo, argv: string[]): Promise
     io.out(`  events:        ${list(c.events.map((x) => `${x.on} → ${x.tool}`))}\n`);
     io.out(`  prompt:        ${c.prompt ? `${c.prompt.file} (${roles(c.prompt.roles)}), sha256 ${c.prompt.sha256 ?? 'unreadable'}` : 'none'}\n`);
     io.out(`  context:       ${c.context ? `${c.context.tool} (${roles(c.context.roles)})` : 'none'}\n`);
+    for (const r of c.roles ?? []) {
+      io.out(`  role:          ${r.id} "${r.displayName}": ${r.description}; lane ${r.lane}; tools ${r.tools.join(', ')}${r.coreTools ? `; core ${r.coreTools.join(', ')}` : ''}`
+        + `${r.spawns ? `; spawns ${list(r.spawns)}` : ''}${r.spawnedBy ? `; spawned by ${list(r.spawnedBy)}` : ''}${r.readOnly ? '; read-only' : ''}`
+        + `${r.limits ? `; limits ${JSON.stringify(r.limits)}` : ''}; prompt sha256 ${r.promptSha256 ?? 'unreadable'}`
+        + `${r.criticalRules?.length ? `; rules ${JSON.stringify(r.criticalRules)}` : ''}\n`);
+    }
     io.out(`  pages:         ${list(p.pages.map((x) => `/${x.path} "${x.title}" → ${x.entry}`))}${p.ui ? `; ${p.ui.dir}/ sha256 ${p.ui.sha256 ?? 'unreadable'}` : ''}\n`);
     io.out(`  trustedInput: ${p.trustedInput ? 'yes' : 'no'}; maxProtection: ${p.maxProtection}\n`);
     return 0;

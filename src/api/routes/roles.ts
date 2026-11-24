@@ -1,11 +1,16 @@
 import { eq } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
-import { ROLE_CONFIGS, removeRoleInMemory, setRoleInMemory, unknownToolIds } from '@/core/agent/roles';
-import type { AgentRole, RoleConfig } from '@/core/agent/types';
+import { ROLE_CONFIGS, setRoleInMemory, unknownToolIds } from '@/core/agent/roles';
+import {
+  describeSource, isBuiltinRole, isRegisteredRole, isRoleLane, listRegisteredRoles, newRoleIdProblem, RoleDefinitionError,
+  registerRuntimeRole, roleSource, setUnloadedRole, unloadedRoleProblems, unregisterRuntimeRole,
+} from '@/core/agent/role-registry';
+import type { RoleConfig } from '@/core/agent/types';
 import { getDb } from '@/db/postgres';
-import { roles } from '@/db/schema/roles';
-import { canonicalTopic, TOPICS } from '@/models/topics';
+import { type Role, roles } from '@/db/schema/roles';
+import { roleDefinitionOfRow } from '@/db/seed-roles';
+import { canonicalTopic } from '@/models/topics';
 import { withoutRetiredToolIds } from '@/core/agent/retired-tools';
 import { apiLogger } from '@/utils/logger';
 
@@ -13,10 +18,11 @@ import { apiLogger } from '@/utils/logger';
  * Role routes — read, edit, create and delete roles at runtime.
  *
  * The file registry (`roles/<name>/config.ts`) is the default/fallback for the
- * sixteen shipped roles; the DB row is the runtime override, loaded into
- * ROLE_CONFIGS at boot by `loadRolesFromDb`. A row with NO folder is a role the
- * user created, and it joins the registry the same way — which is what makes
- * these routes more than a tool-allowlist editor.
+ * shipped roles; the DB row is the runtime override, loaded into ROLE_CONFIGS
+ * at boot by `loadRolesFromDb`. A row with NO folder is a role an operator
+ * created — a runtime role, checked by the role registry (`role-registry.ts`)
+ * on the way in and again at every boot. Roles a plugin package contributes
+ * are listed here too, read-only: they change with their package.
  *
  * Every write also updates the in-memory ROLE_CONFIGS, because that map is read
  * synchronously by `getToolsForRole` and the worker spawner: the mutation IS
@@ -29,9 +35,6 @@ import { apiLogger } from '@/utils/logger';
  * `spawn_child` (from `description`) or by the user with `/role`.
  */
 
-/** Role names are used as tool-enum values and topic-path segments. */
-const ROLE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;
-
 const trimmedList = (raw: unknown): string[] =>
   Array.isArray(raw) ? [...new Set(raw.map((s) => String(s).trim()).filter(Boolean))] : [];
 
@@ -39,24 +42,43 @@ const trimmedList = (raw: unknown): string[] =>
 /** The lane this role's work runs on, resolved the way the registry resolves it. */
 const laneOf = (defaultTopic: string): string => canonicalTopic(defaultTopic);
 
-/**
- * A lane a ROLE may run on: the text lanes, and nothing else.
- *
- * `TOPICS` also holds `ocr`, `vision` and `embedding` — model CLASSES, not
- * lanes — and `background`, which is where memory extraction and summarisation
- * run. A role bound to any of them resolves to a model that cannot serve a
- * tool-calling worker at all (`selectForWorker` in worker-spawner), so every
- * spawn of that role would fail. The UI's lane dropdown already filters to
- * `kind === 'text'`; this is the same rule where it is enforceable.
- */
-const isRoleLane = (defaultTopic: string): boolean =>
-  TOPICS.some((tp) => tp.value === laneOf(defaultTopic) && tp.kind === 'text');
+/** The optional runtime-role fields a body may carry. `null` clears a rule. */
+const spawnRule = t.Optional(t.Union([t.Array(t.String()), t.Null()]));
+const limitsBody = t.Optional(t.Union([
+  t.Object({ maxTokens: t.Optional(t.Number()), maxWallClockMs: t.Optional(t.Number()) }),
+  t.Null(),
+]));
+
+/** A refused definition as a response: 409 for a clash with what is registered, 400 otherwise. */
+function refusal(set: { status?: number | string }, err: unknown): { error: string; problems: string[] } {
+  if (err instanceof RoleDefinitionError) {
+    set.status = err.conflict ? 409 : 400;
+    return { error: err.problems.join('; '), problems: err.problems };
+  }
+  throw err;
+}
+
+/** Why a plugin's role cannot be changed here, or null. */
+function pluginOwned(role: string): string | null {
+  const source = roleSource(role);
+  return source?.kind === 'plugin'
+    ? `'${role}' is contributed by ${describeSource(source)}; change it there (disable or uninstall the package to remove it)`
+    : null;
+}
+
+/** Register an operator's row (or the row an edit would leave) as a runtime role; throws `RoleDefinitionError`. */
+function registerRow(row: Role): void {
+  // The tool REGISTRY was consulted by `unknownToolIds` already (open on a
+  // cold registry, as it always was); the registry still applies the ceiling.
+  registerRuntimeRole(roleDefinitionOfRow(row), { kind: 'admin' }, { checkRegisteredTools: false });
+}
 
 export const roleRoutes = new Elysia({ prefix: '/roles' })
   .use(apiContext)
 
-  // List roles with their current bindings (DB-backed, with the customized flag
-  // so the UI can show "overridden vs default").
+  // List the registered roles: the built-ins and operator roles with their
+  // stored row (the customized flag lets the UI show "overridden vs default"),
+  // and the roles enabled plugin packages contribute, which have no row.
   .get(
     '/',
     async ({ user, set }) => {
@@ -65,42 +87,84 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         return { error: 'Not authenticated' };
       }
       const db = getDb();
-      const rows = await db.select().from(roles);
+      const rows = new Map((await db.select().from(roles)).map((r) => [r.role, r]));
+      // An operator's row the boot load could not register: listed with why,
+      // so it can be edited back into shape or deleted rather than vanish.
+      const unloadedRows = [...rows.values()]
+        .filter((r) => !r.isSystem && !isRegisteredRole(r.role))
+        .map((r) => ({
+          role: r.role,
+          displayName: r.displayName ?? null,
+          description: r.description ?? '',
+          defaultTopic: r.defaultTopic,
+          lane: laneOf(r.defaultTopic),
+          toolIds: withoutRetiredToolIds((r.toolIds as string[]) ?? []),
+          coreToolIds: withoutRetiredToolIds((r.coreToolIds as string[]) ?? []),
+          readOnly: r.readOnly,
+          customized: r.customized,
+          isSystem: false,
+          source: 'admin' as const,
+          plugin: null,
+          spawns: r.spawns ?? null,
+          spawnedBy: r.spawnedBy ?? null,
+          limits: r.limits ?? null,
+          loaded: false,
+          problems: unloadedRoleProblems(r.role) ?? ['not registered'],
+          ...(user.isAdmin ? { systemPromptTemplate: r.systemPromptTemplate, criticalRules: (r.criticalRules as string[]) ?? [] } : {}),
+        }));
       return {
-        roles: rows
-          // The registry is what a spawn can actually reach: a role whose folder
-          // was removed leaves its row behind, and listing it offers an edit
-          // that PATCH then rejects. A user-created role IS in the registry
-          // (loadRolesFromDb puts it there), so this no longer filters those.
-          .filter((r) => ROLE_CONFIGS[r.role as AgentRole] !== undefined)
-          .map((r) => ({
-            role: r.role,
-            description: r.description ?? '',
-            defaultTopic: r.defaultTopic,
-            lane: laneOf(r.defaultTopic),
-            // A removed built-in tool still named in the row is not offered:
-            // the editor sends this list back on save.
-            toolIds: withoutRetiredToolIds((r.toolIds as string[]) ?? []),
-            coreToolIds: withoutRetiredToolIds((r.coreToolIds as string[]) ?? []),
-            readOnly: r.readOnly,
-            customized: r.customized,
-            isSystem: r.isSystem,
-            // The prompt and the standing rules are what an operator WROTE, and
-            // only an operator may edit them. Non-admins reach this route for
-            // the role NAMES alone (the skills page assigns by role, the
-            // pipeline editor picks one per step), so they get everything the
-            // page they are on can use and nothing it cannot.
-            ...(user.isAdmin
-              ? { systemPromptTemplate: r.systemPromptTemplate, criticalRules: (r.criticalRules as string[]) ?? [] }
-              : {}),
-          }))
+        // The registry is what a spawn can actually reach: a role whose folder
+        // was removed leaves its row behind, and listing it offers an edit
+        // that PATCH then rejects.
+        roles: listRegisteredRoles()
+          .filter(({ config, source }) => source.kind === 'plugin' || rows.has(config.role))
+          .map(({ config, source }) => {
+            const r = rows.get(config.role);
+            return {
+              role: config.role as string,
+              displayName: config.displayName ?? null,
+              description: (r ? r.description : config.description) ?? '',
+              defaultTopic: config.defaultTopic,
+              lane: laneOf(config.defaultTopic),
+              // A removed built-in tool still named in the row is not offered:
+              // the editor sends this list back on save.
+              toolIds: withoutRetiredToolIds(r ? ((r.toolIds as string[]) ?? []) : config.toolIds),
+              coreToolIds: withoutRetiredToolIds(r ? ((r.coreToolIds as string[]) ?? []) : config.coreToolIds ?? []),
+              readOnly: r ? r.readOnly : Boolean(config.readOnly),
+              customized: r?.customized ?? false,
+              isSystem: source.kind === 'builtin',
+              /** `builtin`, `admin` (an operator's row) or `plugin` (read-only here). */
+              source: source.kind,
+              plugin: source.kind === 'plugin' ? source.plugin : null,
+              spawns: config.spawns ?? null,
+              spawnedBy: config.spawnedBy ?? null,
+              limits: config.limits ?? null,
+              loaded: true,
+              problems: [] as string[],
+              // The prompt and the standing rules are what an operator (or an
+              // approved plugin) WROTE, and only an operator may read them back.
+              // Non-admins reach this route for the role NAMES alone (the skills
+              // page assigns by role, the pipeline editor picks one per step),
+              // so they get everything the page they are on can use and nothing
+              // it cannot.
+              ...(user.isAdmin
+                ? {
+                    systemPromptTemplate: r?.systemPromptTemplate ?? config.systemPromptTemplate,
+                    criticalRules: r ? ((r.criticalRules as string[]) ?? []) : config.criticalRules ?? [],
+                  }
+                : {}),
+            };
+          })
+          .concat(unloadedRows)
           .sort((a, b) => a.role.localeCompare(b.role)),
       };
     },
     { detail: { tags: ['roles'] } },
   )
 
-  // Create a role (admin-only). Everything a folder can set, set from the UI.
+  // Create a role (admin-only): a runtime role, checked by the role registry,
+  // which refuses a built-in or reserved id, an id another source owns, a tool
+  // no built-in role holds and a lane that is not a text lane.
   .post(
     '/',
     async ({ body, user, set }) => {
@@ -110,13 +174,24 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       }
 
       const name = String(body.role ?? '').trim().toLowerCase();
-      if (!ROLE_NAME.test(name)) {
-        set.status = 400;
-        return { error: 'role must be 2-32 chars: lowercase letters, digits, - or _, starting with a letter' };
-      }
-      if (ROLE_CONFIGS[name as AgentRole]) {
+      if (isRegisteredRole(name)) {
         set.status = 409;
-        return { error: `Role already exists: ${name}` };
+        return { error: `Role already exists: ${name} (registered by ${describeSource(roleSource(name) ?? { kind: 'builtin' })})` };
+      }
+      const db = getDb();
+      // A stored row that is not registered (it did not load) still owns its
+      // id: edit or delete it. Checked here so this is a 409, not the table's
+      // unique-constraint error.
+      const [stored] = await db.select({ role: roles.role }).from(roles).where(eq(roles.role, name)).limit(1);
+      if (stored) {
+        set.status = 409;
+        return { error: `A stored role already has the id ${name}; edit or delete it` };
+      }
+      // A new id only: a stored row that predates the reserved list keeps loading.
+      const reserved = /^[a-z][a-z0-9_-]{1,31}$/.test(name) ? newRoleIdProblem(name) : null;
+      if (reserved) {
+        set.status = 400;
+        return { error: reserved, problems: [reserved] };
       }
 
       const toolIds = trimmedList(body.toolIds);
@@ -134,14 +209,11 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         return { error: `unknown toolIds: ${unknown.join(', ')}` };
       }
       const defaultTopic = String(body.defaultTopic ?? 'everyday');
-      if (!isRoleLane(defaultTopic)) {
-        set.status = 400;
-        return { error: `defaultTopic must resolve to a text lane (got '${defaultTopic}')` };
-      }
 
       const row = {
         role: name,
         description: String(body.description ?? '').trim() || null,
+        displayName: String(body.displayName ?? '').trim() || null,
         toolIds,
         // Invariant: coreToolIds ⊆ toolIds, enforced here as well as at load.
         coreToolIds: trimmedList(body.coreToolIds).filter((id) => toolIds.includes(id)),
@@ -149,24 +221,27 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         readOnly: Boolean(body.readOnly),
         defaultTopic,
         systemPromptTemplate: prompt,
+        spawns: body.spawns ?? null,
+        spawnedBy: body.spawnedBy ?? null,
+        limits: body.limits ?? null,
         // The one field the UI cannot set: a user's role is never a system role,
         // and `isSystem` is what DELETE checks.
         isSystem: false,
         customized: true,
       };
-      const db = getDb();
-      const [created] = await db.insert(roles).values(row).returning();
-
-      setRoleInMemory(name as AgentRole, {
-        role: name as AgentRole,
-        toolIds,
-        coreToolIds: row.coreToolIds.length ? row.coreToolIds : undefined,
-        criticalRules: row.criticalRules.length ? row.criticalRules : undefined,
-        readOnly: row.readOnly || undefined,
-        description: row.description ?? undefined,
-        defaultTopic,
-        systemPromptTemplate: prompt,
-      });
+      // Registered first, so a definition the registry refuses never reaches the table.
+      try {
+        registerRow(row as Role);
+      } catch (err) {
+        return refusal(set, err);
+      }
+      let created: Role;
+      try {
+        [created] = await db.insert(roles).values(row).returning();
+      } catch (err) {
+        unregisterRuntimeRole(name, { kind: 'admin' });
+        throw err;
+      }
 
       apiLogger.info({ role: name, by: user.id }, 'Role created');
       return { role: created.role, lane: laneOf(defaultTopic) };
@@ -174,6 +249,7 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
     {
       body: t.Object({
         role: t.String(),
+        displayName: t.Optional(t.String()),
         description: t.Optional(t.String()),
         toolIds: t.Array(t.String()),
         coreToolIds: t.Optional(t.Array(t.String())),
@@ -181,6 +257,9 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         defaultTopic: t.Optional(t.String()),
         systemPromptTemplate: t.String(),
         readOnly: t.Optional(t.Boolean()),
+        spawns: spawnRule,
+        spawnedBy: spawnRule,
+        limits: limitsBody,
       }),
       detail: { tags: ['roles'] },
     },
@@ -196,10 +275,33 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       }
 
       const roleName = params.role;
-      const current = ROLE_CONFIGS[roleName as AgentRole];
-      if (!current) {
+      const owned = pluginOwned(roleName);
+      if (owned) {
+        set.status = 409;
+        return { error: owned };
+      }
+      const db = getDb();
+      const [row] = await db.select().from(roles).where(eq(roles.role, roleName)).limit(1);
+      // A registered role, or an operator's row that did not load (an edit is
+      // how it is repaired).
+      const repairable = !!row && !row.isSystem && unloadedRoleProblems(roleName) !== null;
+      if (!isRegisteredRole(roleName) && !repairable) {
         set.status = 404;
         return { error: `Unknown role: ${roleName}` };
+      }
+      if (!row) {
+        set.status = 404;
+        return { error: `Role row not found: ${roleName}` };
+      }
+      const current: Pick<RoleConfig, 'toolIds' | 'coreToolIds'> = isRegisteredRole(roleName)
+        ? ROLE_CONFIGS[roleName]
+        : { toolIds: (row.toolIds as string[]) ?? [], coreToolIds: (row.coreToolIds as string[]) ?? [] };
+      const builtin = isBuiltinRole(roleName);
+      // Spawn rules, limits and a display name belong to runtime roles: a
+      // built-in's place in the swarm is fixed by the code that ships it.
+      if (builtin && (body.spawns !== undefined || body.spawnedBy !== undefined || body.limits !== undefined || body.displayName !== undefined)) {
+        set.status = 400;
+        return { error: `'${roleName}' is a built-in role: spawns, spawnedBy, limits and displayName apply to runtime roles only` };
       }
 
       // `customized` on EVERY edit: it is what stops the boot seed resyncing
@@ -267,16 +369,49 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         updates.defaultTopic = body.defaultTopic;
         patch.defaultTopic = body.defaultTopic;
       }
+      if (body.displayName !== undefined) updates.displayName = body.displayName.trim() || null;
+      if (body.spawns !== undefined) updates.spawns = body.spawns;
+      if (body.spawnedBy !== undefined) updates.spawnedBy = body.spawnedBy;
+      if (body.limits !== undefined) updates.limits = body.limits;
 
-      const db = getDb();
-      const [updated] = await db.update(roles).set(updates).where(eq(roles.role, roleName)).returning();
+      // An operator's role is a runtime role: the edited whole is checked by
+      // the registry (and takes effect) before it is written, so an edit cannot
+      // take it where a create could not.
+      if (!builtin) {
+        try {
+          registerRow({ ...row, ...updates } as Role);
+        } catch (err) {
+          return refusal(set, err);
+        }
+      }
+      let updated: Role | undefined;
+      try {
+        [updated] = await db.update(roles).set(updates).where(eq(roles.role, roleName)).returning();
+      } catch (err) {
+        // The registry already took the edit; put the stored definition back.
+        // That can itself be refused (a row that never loaded): then the role
+        // is left out of the registry and listed as not loaded, never left
+        // registered with an edit the table does not hold.
+        if (!builtin) {
+          try {
+            registerRow(row);
+          } catch (restoreErr) {
+            unregisterRuntimeRole(roleName, { kind: 'admin' });
+            const problems = restoreErr instanceof RoleDefinitionError ? restoreErr.problems : [(restoreErr as Error).message];
+            setUnloadedRole(roleName, problems);
+            apiLogger.error({ role: roleName, err: restoreErr }, 'Role edit failed and the stored definition could not be restored to the registry');
+          }
+        }
+        throw err;
+      }
       if (!updated) {
         set.status = 404;
         return { error: `Role row not found: ${roleName}` };
       }
 
-      // Invalidate the in-memory cache so the next spawn picks it up.
-      setRoleInMemory(roleName as AgentRole, patch);
+      // Invalidate the in-memory cache so the next spawn picks it up (a
+      // runtime role was re-registered above).
+      if (builtin) setRoleInMemory(roleName, patch);
 
       apiLogger.info({ role: roleName, fields: Object.keys(updates), by: user.id }, 'Role updated');
       return {
@@ -293,22 +428,32 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
         coreToolIds: t.Optional(t.Array(t.String())),
         criticalRules: t.Optional(t.Array(t.String())),
         description: t.Optional(t.String()),
+        displayName: t.Optional(t.String()),
         defaultTopic: t.Optional(t.String()),
         systemPromptTemplate: t.Optional(t.String()),
         readOnly: t.Optional(t.Boolean()),
+        spawns: spawnRule,
+        spawnedBy: spawnRule,
+        limits: limitsBody,
       }),
       detail: { tags: ['roles'] },
     },
   )
 
-  // Delete a user-created role (admin-only). A system role has a folder behind
-  // it, so deleting the row would only resurrect it at the next boot seed.
+  // Delete an operator's role (admin-only). A system role has a folder behind
+  // it, so deleting the row would only resurrect it at the next boot seed; a
+  // plugin's role goes with its package.
   .delete(
     '/:role',
     async ({ params, user, set }) => {
       if (!user?.isAdmin) {
         set.status = 403;
         return { error: 'Admin access required' };
+      }
+      const owned = pluginOwned(params.role);
+      if (owned) {
+        set.status = 409;
+        return { error: owned };
       }
       const db = getDb();
       const [row] = await db.select().from(roles).where(eq(roles.role, params.role)).limit(1);
@@ -322,7 +467,10 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       }
 
       await db.delete(roles).where(eq(roles.role, params.role));
-      removeRoleInMemory(params.role as AgentRole);
+      // Agents already running as it finish; a stage, hook or child that names
+      // it later fails with `UnknownRoleError` rather than running as another role.
+      unregisterRuntimeRole(params.role, { kind: 'admin' });
+      setUnloadedRole(params.role, null);
 
       apiLogger.info({ role: params.role, by: user.id }, 'Role deleted');
       return { deleted: params.role };

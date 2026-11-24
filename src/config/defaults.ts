@@ -40,6 +40,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyOrigin: 'http://localhost:3000',
     executionEnvironments: [],
     shellSandbox: 'off',
+    egressPolicy: { default: 'allow', rules: [], tools: {}, roles: {}, requireEnforcement: false },
     shellSshAgent: false,
     companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },
     cliRuntimes: [],
@@ -100,6 +101,8 @@ export const defaultConfig: Partial<Config> = {
     hookTurnTimeoutMs: 36_000_000,
     /** Token pool for one pipeline run, summed over node visits. 0 = off. */
     pipelineTokenBudget: TOKEN_BUDGET_DEFAULTS.pipeline,
+    /** Project evidence hooks a pipeline runs before accepting work. None by default. */
+    evidenceHooks: [],
   },
   multiuser: {
     // Octipus is always multi-user — there is no single-user mode and no

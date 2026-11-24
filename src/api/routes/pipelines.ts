@@ -19,6 +19,7 @@ import {
   importRecipe,
   listAvailableTemplates,
   parseRecipeExport,
+  recipeStepRoleErrors,
 } from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
@@ -700,7 +701,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!user) return { error: 'Not authenticated' };
       const db = getDb();
       const steps = (body.steps || []).map(toStepConfig);
-      const stepErrors = validatePipelineStages(steps);
+      const stepErrors = [...validatePipelineStages(steps), ...recipeStepRoleErrors(steps)];
       if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
 
       let parameters;
@@ -745,7 +746,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
 
       const db = getDb();
       const steps = (body.steps || []).map(toStepConfig);
-      const stepErrors = validatePipelineStages(steps);
+      const stepErrors = [...validatePipelineStages(steps), ...recipeStepRoleErrors(steps)];
       if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
 
       let parameters;

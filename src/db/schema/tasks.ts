@@ -70,7 +70,7 @@ export const tasks = pgTable('tasks', {
   remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /**
-   * The series and order fields (to-do redesign, migrations 0205/0206).
+   * The series and order fields (to-do redesign, migrations 0209/0210).
    * `sortOrder` is the task's default position, ascending: minus its creation
    * time in ms, so the newest comes first; each user's own order, star and
    * My Day live in `task_user_state` (per user, so space members do not share
@@ -110,7 +110,7 @@ export interface TaskSourceRef {
 }
 
 /**
- * One user's personal layer on a task (migration 0206): their star, the day
+ * One user's personal layer on a task (migration 0210): their star, the day
  * they put it in My Day, their own position. No row = defaults.
  */
 export const taskUserState = pgTable('task_user_state', {
@@ -135,7 +135,7 @@ export const taskLists = pgTable('task_lists', {
 });
 
 /**
- * A to-do linked to a note (migration 0207): a note attached to the to-do,
+ * A to-do linked to a note (migration 0211): a note attached to the to-do,
  * or the note line it was made from. `anchor` is set for a line: the line
  * carries ` ^todo-<anchor>` (src/shared/note-todos.ts), and its tick follows
  * the to-do and the other way round (core/tasks/note-links.ts). Both ends
@@ -148,7 +148,7 @@ export const taskNoteLinks = pgTable('task_note_links', {
   taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
   noteId: uuid('note_id').references(() => notes.id, { onDelete: 'cascade' }).notNull(),
   anchor: text('anchor'),
-  /** The tick the line is owed: the to-do's write to it failed and is retried (migration 0208). Null when none. */
+  /** The tick the line is owed: the to-do's write to it failed and is retried (migration 0212). Null when none. */
   pendingChecked: boolean('pending_checked'),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

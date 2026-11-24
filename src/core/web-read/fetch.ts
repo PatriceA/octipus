@@ -65,7 +65,8 @@ export async function fetchArticle(url: string, signal?: AbortSignal): Promise<W
     });
   } catch (err) {
     const message = (err as Error).message ?? String(err);
-    throw new WebReadError(message, /SSRF guard|blocked/i.test(message));
+    // Refused by the SSRF guard or by the operator's egress policy.
+    throw new WebReadError(message, (err as Error).name === 'EgressDeniedError' || /SSRF guard|blocked/i.test(message));
   }
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});

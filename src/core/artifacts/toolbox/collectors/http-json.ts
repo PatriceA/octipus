@@ -4,6 +4,7 @@
  * payloads — non-JSON responses go through `art_collect_http_text`.
  */
 
+import { fetchGuarded } from '@/utils/sanitize';
 import { applyJsonPath, resolveVaultHeaders } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
@@ -65,7 +66,8 @@ export const httpJsonCollector: ToolboxTool<Params, unknown> = {
       principalId: ctx.principalId,
       workspaceId: ctx.workspaceId,
     });
-    const res = await fetch(params.url, {
+    // Model-chosen URL: SSRF guard + egress policy on every hop.
+    const res = await fetchGuarded(params.url, {
       method: params.method ?? 'GET',
       headers,
       body: params.body !== undefined ? JSON.stringify(params.body) : undefined,

@@ -24,10 +24,13 @@ let failNext = false;
 let unconfirmedNext = false;
 /** The run itself changes a watched source (adds a task to the board it watches). */
 let selfEditNext = false;
+/** The action is refused before any agent started (the agent cap). */
+let notStartedNext = false;
 vi.mock('@/hooks/actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/actions')>()),
   executeAction: vi.fn(async (hook: Hook) => {
     executed.push(hook.name);
+    if (notStartedNext) return { success: false, error: 'Maximum concurrent agents (3) reached', notStarted: true };
     if (failNext) return { success: false, error: 'The model provider is unreachable' };
     if (selfEditNext) await addTask(`Follow-up written by ${hook.name}`);
     return { success: true, data: { response: 'Nothing new.', orchestrated: true, outcome: unconfirmedNext ? null : 'success' } };
@@ -63,6 +66,7 @@ beforeEach(() => {
   failNext = false;
   unconfirmedNext = false;
   selfEditNext = false;
+  notStartedNext = false;
 });
 
 async function createHook(name: string, triggerConfig: Record<string, unknown>, action: 'spawn_agent' | 'notify' = 'spawn_agent'): Promise<string> {
@@ -237,5 +241,38 @@ describe('fireClaimedScheduleHook with watch', () => {
     failNext = true;
     expect(await fire(hookId)).toBe('failed');
     expect(await failureNotes('Flaky')).toHaveLength(2);
+  });
+
+  test('a recurring run refused at the agent cap tells the owner once, and does not silence a later real failure', async () => {
+    const hookId = await createHook('Capped', {});
+    notStartedNext = true;
+    expect(await fire(hookId)).toBe('not_run');
+    expect(await fire(hookId)).toBe('not_run');
+    let notes = await failureNotes('Capped');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe('Scheduled task "Capped" did not start');
+    expect((await hookRow(hookId)).lastError).toMatch(/^Not started: Maximum concurrent agents/);
+
+    // The next run starts and fails for real: that is a new failure, reported.
+    notStartedNext = false;
+    failNext = true;
+    expect(await fire(hookId)).toBe('failed');
+    notes = await failureNotes('Capped');
+    expect(notes.map((n) => n.title)).toEqual(['Scheduled task "Capped" did not start', 'Scheduled task "Capped" failed']);
+    // …and the failure streak is not repeated.
+    expect(await fire(hookId)).toBe('failed');
+    expect(await failureNotes('Capped')).toHaveLength(2);
+  });
+
+  test('a one-shot tells the owner when its retries give up, not while it is still retried', async () => {
+    const { retryNotStartedHook } = await import('./cron-runner');
+    const hookId = await createHook('One-off', {});
+    const notify = vi.fn(async () => {});
+    const row = await hookRow(hookId);
+    const now = new Date();
+    expect(await retryNotStartedHook(row, true, new Date(now.getTime() - 60_000).toISOString(), 'cap', now, notify)).not.toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    expect(await retryNotStartedHook(row, true, new Date(now.getTime() - 25 * 3600_000).toISOString(), 'cap', now, notify)).toBeNull();
+    expect(notify).toHaveBeenCalledWith(row.userId, 'schedule_failed', 'Scheduled task "One-off" did not start', expect.stringContaining('will not run'), { hookId, notStarted: true });
   });
 });

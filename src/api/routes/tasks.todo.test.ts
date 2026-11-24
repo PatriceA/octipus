@@ -1,5 +1,5 @@
 /**
- * The personal to-do layer (migration 0205) end to end on embedded Postgres:
+ * The personal to-do layer (migration 0209) end to end on embedded Postgres:
  * the API's new fields (star, manual order, My Day, repeat), capture through
  * `quick` and `/parse`, My Day's daily rollover and suggestions, a repeating
  * to-do's next occurrence (exactly once, by the user, the API or an agent's

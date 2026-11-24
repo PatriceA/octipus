@@ -22,6 +22,7 @@ import type { PluginContextDecl } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { actingContext, callPluginTool } from './call';
 import { lastLocalRun, recordRun } from './status';
+import { neutraliseFencedText } from '@/shared/plugin-fence';
 
 export const CONTEXT_TIMEOUT_MS = 3_000;
 export const MAX_CONTEXT_CHARS = 4_000;
@@ -53,7 +54,7 @@ export interface PluginContextOutcome {
 
 const NONE: PluginContextOutcome = { text: '', labelledBlocks: [] };
 
-const fence = (text: string) => text.replace(/</g, '‹').replace(/>/g, '›');
+const fence = neutraliseFencedText;
 
 /** The blocks of every package's context tool for this agent start. Never throws. */
 export async function runPluginContexts(input: PluginContextInput): Promise<PluginContextOutcome> {

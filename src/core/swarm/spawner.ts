@@ -1,4 +1,5 @@
 import type { ContextTurnHandle } from '@/core/context-hooks';
+import { EGRESS_ROLE_CHAIN_KEY, withEgressRoleChain } from '@/security/egress-policy';
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
 import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
@@ -23,6 +24,7 @@ import type { AgentRole } from '@/core/agent/types';
 import { stageChildMetadata } from '@/core/agent/worker-spawner';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from '@/core/agent/workspace-snapshot';
 import { recordSwarmSpawn } from '@/core/telemetry';
+import { withSpan } from '@/core/tracing';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
@@ -118,6 +120,7 @@ import {
 import { asLane } from '@/core/agent/lane-intent';
 import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
+import { clampToRoleLimits, spawnRefusal } from '@/core/agent/role-registry';
 import { isProviderQuotaError } from '@/core/errors/classification';
 import { inheritScope, writesWithheld } from '@/core/agent/context';
 import { withUntrustedGuidance } from '@/security/untrusted-envelope';
@@ -392,7 +395,17 @@ export class SwarmSpawner {
 
     let result: ChildResult;
     try {
-      result = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
+      result = await withSpan('agent.child', {
+        'octipus.agent.parent_id': parent.id,
+        'octipus.agent.role': childRole,
+        'octipus.agent.depth': childDepth,
+        'octipus.agent.planned': !!params.plan?.length,
+      }, async (span) => {
+        const child = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
+        span.setAttributes({ 'octipus.agent.child_status': child.status });
+        if (child.status !== 'ok' && child.status !== 'cache_hit') span.failWith(`child_${child.status}`);
+        return child;
+      });
     } catch (err) {
       await reportAfter('failed', (err as Error)?.message);
       throw err;
@@ -439,6 +452,14 @@ export class SwarmSpawner {
     // doesn't block the fan-out, but bad uses burn budget fast.
     const sameRoleDenial = checkSameRole(parent, childRole, childDepth);
     if (sameRoleDenial) return sameRoleDenial;
+
+    // ── Runtime role rules ──────────────────────────────────────────
+    // A runtime role may say which roles it spawns and which may spawn it, and
+    // the child role may have been removed (its plugin disabled) since the
+    // parent's menu was built. Either way the spawn is refused by name —
+    // never run as some other role.
+    const roleDenial = spawnRefusal(parent.role, childRole);
+    if (roleDenial) return this.denialResult(parent, `spawn_child refused: ${roleDenial}`);
 
     // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
     // The composed child message is already guarded downstream, but
@@ -594,6 +615,10 @@ export class SwarmSpawner {
       // Inside the try so a throw here also hits the release-and-rethrow below.
       syncParentTokenUsage(parent);
       budget = deriveChildBudget(parent.budget, childDepth);
+      // A runtime role's limits only ever lower what the depth default gave.
+      const clamped = clampToRoleLimits(childRole, { tokens: budget.tokens.cap, wallClockMs: budget.wallClockMs.cap });
+      budget.tokens.cap = clamped.tokens;
+      budget.wallClockMs.cap = clamped.wallClockMs ?? budget.wallClockMs.cap;
     } catch (err) {
       if (err instanceof InsufficientBudgetError) {
         coreLogger.warn(
@@ -877,9 +902,9 @@ export class SwarmSpawner {
     // that tail, and the fingerprint covers what precedes it. The marker line
     // carries no timestamp (the brief has the date), so the prefix stays stable.
     const childSystemPrompt = resumeKey
-      ? `${stablePrompt ?? ''}${canSpawnChildren ? `\n\n${buildDelegationGuidance()}` : ''}${KEYED_CHILD_VOLATILE_MARKER}${skillContext ? `\n\n${skillContext}` : ''}`.trim()
+      ? `${stablePrompt ?? ''}${canSpawnChildren ? `\n\n${buildDelegationGuidance(childRole)}` : ''}${KEYED_CHILD_VOLATILE_MARKER}${skillContext ? `\n\n${skillContext}` : ''}`.trim()
       : canSpawnChildren
-        ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
+        ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance(childRole)}`.trim()
         : systemPrompt;
 
     // Context-window gate (RC7): warn if the child's first-turn input already
@@ -1866,6 +1891,10 @@ export class SwarmSpawner {
           // write) holds at every depth: the strip above covers the file
           // writers, this covers the rest of the executor's rule (repo writes).
           ...inheritedRefusal(opts.parentContext),
+          // The egress policy judges a child under its own role AND every
+          // ancestor's, so a restricted parent cannot fetch through a child
+          // of a looser role (docs/EGRESS-POLICY.md#roles).
+          [EGRESS_ROLE_CHAIN_KEY]: withEgressRoleChain(undefined, opts.parentContext)[EGRESS_ROLE_CHAIN_KEY],
           ...(opts.fork ? forkMetadata(opts.fork, opts.parentContext) : {}),
         },
       });

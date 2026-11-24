@@ -4,6 +4,7 @@
  * raw payload is rarely useful by itself.
  */
 
+import { fetchGuarded } from '@/utils/sanitize';
 import { resolveVaultHeaders } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
@@ -51,7 +52,8 @@ export const httpTextCollector: ToolboxTool<Params, Result> = {
       principalId: ctx.principalId,
       workspaceId: ctx.workspaceId,
     });
-    const res = await fetch(params.url, {
+    // Model-chosen URL: SSRF guard + egress policy on every hop.
+    const res = await fetchGuarded(params.url, {
       method: params.method ?? 'GET',
       headers,
       body: params.body,

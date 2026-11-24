@@ -40,6 +40,7 @@
  * asks before it is written into a space.
  */
 import type { PermissionCheckResult } from './permissions';
+import { getRunContext } from '@/core/run-context';
 
 export type FlowMode = 'ask' | 'off';
 
@@ -361,6 +362,26 @@ export function markSharedAudience(sessionId: string): void {
   observeFlow(sessionId, { toolId: 'group-channel', action: 'transcript' }, { taints: ['suspicious'] });
 }
 
+/**
+ * A run that came in by email (docs/CHANNELS.md#email; the run's channel,
+ * not a mark on the session, so a later web-app turn in the same session is
+ * an ordinary one). A mail is forgeable, so a query is egress like a send
+ * there: once the session holds private data or credential material, any
+ * call that carries data out — a web search's query included — needs
+ * approval, which an email turn cannot get (it runs unattended), so it is
+ * refused. Whatever the mode.
+ */
+export function isEmailRun(): boolean {
+  return getRunContext()?.channel === 'email';
+}
+
+/** Why an email run's call is held back: any egress once it holds private data. Pure given the label. */
+export function emailEgressReason(label: FlowLabel, contract: FlowContract): string | undefined {
+  if (!contract.egress || !(label.private || label.secret)) return undefined;
+  const what = label.secret ? `credential material (${label.sources.secret})` : `private data (${label.sources.private})`;
+  return `flow guard: this conversation came in by email and read ${what}; nothing is sent or looked up outside from it`;
+}
+
 export function isSharedAudience(sessionId: string | undefined): boolean {
   return !!sessionId && (sharedAudience.has(sessionId) || uncertain.has(sessionId));
 }
@@ -571,14 +592,18 @@ export function applyFlowGuard(
   call: FlowCall,
   permission: PermissionCheckResult,
 ): PermissionCheckResult {
-  if (mode === 'off' || permission.level === 'DENY') return permission;
+  if (permission.level === 'DENY') return permission;
+  const email = isEmailRun();
+  if (mode === 'off' && !email) return permission;
   // Judge against what the session holds after this call too: `cat .env | curl …`
   // reads and sends in one step.
   const contract = classifyFlow(call);
   const label = { ...getFlowLabel(sessionId) };
   label.sources = { ...label.sources };
   for (const t of contract.taints) if (!label[t]) { label[t] = true; label.sources[t] = `${call.toolId}:${call.action}`; }
-  const reason = flowBlockReason(label, contract) ?? sharedAudienceReason(
+  const emailReason = email ? emailEgressReason(label, contract) : undefined;
+  if (mode === 'off' && !emailReason) return permission;
+  const reason = emailReason ?? flowBlockReason(label, contract) ?? sharedAudienceReason(
     isSharedAudience(sessionId), call, contract, !!sessionId && uncertain.has(sessionId) && !sharedAudience.has(sessionId));
   if (!reason) return permission;
   return { ...permission, level: 'ASK', allowed: false, requiresApproval: true, reason, source: 'flow-guard' };

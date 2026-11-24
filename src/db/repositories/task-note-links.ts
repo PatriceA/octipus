@@ -3,7 +3,7 @@ import { getDb } from '../postgres';
 import { type TaskNoteLink, taskNoteLinks } from '../schema/tasks';
 
 /**
- * Rows of `task_note_links` (migration 0207), unscoped: every caller reads
+ * Rows of `task_note_links` (migration 0211), unscoped: every caller reads
  * them for to-dos or a note its own scope already reached, and resolves the
  * other end through its scope again (core/tasks/note-links.ts). Nothing here
  * says whether a caller may see a link.

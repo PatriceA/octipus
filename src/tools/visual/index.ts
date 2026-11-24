@@ -99,8 +99,22 @@ export class VisualTool extends BaseTool {
     urls: Array<{ url: string; fullPage?: boolean }>,
     browserType: BrowserType,
   ): Promise<{ backend: CaptureBackend; shots: ScreenshotResult[] }> {
-    // Try Playwright
-    const cap = new ScreenshotCapture(browserType, true);
+    // Every URL is a model-chosen destination: the SSRF guard and the egress
+    // policy judge it before anything is opened (docs/EGRESS-POLICY.md).
+    const { validateExternalUrl } = await import('@/utils/sanitize');
+    const egressPolicy = await import('@/security/egress-policy');
+    for (const { url } of urls) {
+      egressPolicy.precheckEgressUrl(url, 'browser');
+      const validation = await validateExternalUrl(url);
+      if (!validation.valid) throw new Error(`URL blocked: ${validation.reason}`);
+      egressPolicy.enforceEgressForUrl(url, validation.addresses, 'browser');
+    }
+    // Under an active policy the page's own traffic (redirects, sub-resources)
+    // goes through the egress proxy; Chromium only, whose loopback bypass the
+    // proxy option can switch off.
+    const { browserEgressFor } = await import('@/security/browser-egress');
+    const egress = await browserEgressFor();
+    const cap = new ScreenshotCapture(egress ? 'chromium' : browserType, true, egress?.proxy);
     try {
       await cap.init();
       const shots: ScreenshotResult[] = [];
@@ -113,6 +127,14 @@ export class VisualTool extends BaseTool {
     } catch (err) {
       await cap.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       if (!isPlaywrightMissingError(err)) throw err;
+    } finally {
+      egress?.close();
+    }
+
+    // The extension drives the user's own browser: its redirects and
+    // sub-resources are not judged. Refused where the policy must be enforced.
+    if (egress && egressPolicy.activeEgressPolicy().requireEnforcement) {
+      throw new Error('Visual capture through the Browser Extension cannot be judged by the egress policy, and security.egressPolicy.requireEnforcement is set. Install the Playwright browsers instead.');
     }
 
     // Fall back to Browser Extension

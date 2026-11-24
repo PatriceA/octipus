@@ -59,6 +59,12 @@ export interface ShellEnvOptions {
   extraReadWrite?: string[];
   /** Read-only runtime or same-user workspace paths. */
   extraReadOnly?: string[];
+  /**
+   * This local process only carries the command to another machine (the SSH
+   * transport): the egress policy has no say over the remote host's network,
+   * and proxy variables here would mean nothing there.
+   */
+  remoteTransport?: boolean;
 }
 
 export interface ShellExecResult {

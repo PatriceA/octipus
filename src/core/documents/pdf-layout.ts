@@ -31,7 +31,16 @@
  *  - **Tables** are runs of rows whose cell gaps line up on the same x
  *    positions, whose cells are short, and whose cells share a left, right or
  *    centre edge per column. They come out as a Markdown table, since what
- *    reads them is a chunker and a language model.
+ *    reads them is a chunker and a language model. A table with no header row
+ *    is held to more: more rows, tighter alignment, a column of numbers, and
+ *    none of the shapes of a list, a form or a contents page. It comes out
+ *    under an empty header row, which Markdown requires and which claims
+ *    nothing about what the columns are.
+ *  - **Tables across a page break** are read with the page before in view
+ *    ({@link reconstructPage}): rows at the head of a page whose columns sit
+ *    where the previous page's closing table had them continue that table,
+ *    with or without a repeated header. Only a page number placed like one
+ *    (away from the table, off its columns) is dropped between the halves.
  *
  * Short cells against long lines is what tells a table from a two-column body:
  * both have a persistent gutter and row-aligned baselines. Anything in between
@@ -128,6 +137,14 @@ const MIN_TABLE_ROWS = 3;
 
 /** Fraction of a column's cells that must share its left, right or centre edge. */
 const MIN_TABLE_ALIGNED = 0.6;
+
+/**
+ * A table with no header row has only its grid to go on, so it needs more of
+ * one: this many rows, every one with two or more filled cells, and
+ * {@link MIN_HEADERLESS_ALIGNED} of every column's cells on one edge.
+ */
+const MIN_HEADERLESS_ROWS = 4;
+const MIN_HEADERLESS_ALIGNED = 0.8;
 
 /** A step this many page line pitches tall ends a table: it is a separate block. */
 const MAX_TABLE_ROW_STEP_RATIO = 2.5;
@@ -416,6 +433,17 @@ const LEADER = /(\.\s?){4,}|…|_{3,}/;
 const isNumberLike = (s: string): boolean =>
   /^[(+\-–−]?[$€£¥]?\s?\d[\d.,:/\-–\s]*[%)]?$/.test(s.trim()) || /^(?:[ivxlcdm]{1,6}|[IVXLCDM]{1,6})$/.test(s.trim());
 
+/** A roman numeral up to 89, as front matter and list markers use them. */
+const ROMAN = '(?=[ivxl])l?x{0,3}(?:ix|iv|v?i{0,3})';
+
+/** A numbered list's own marker — `1.`, `2)`, `(a)`, `iv.` — not a value. */
+const LIST_NUMBER = new RegExp(`^\\(?(?:\\d{1,3}|[a-z]|${ROMAN})[.)]$`, 'i');
+
+/** A page number on a line of its own (`7`, `- 7 -`, `Page 7 of 12`, `vii`): page furniture, not content. */
+const PAGE_NUMBER = new RegExp(`^[-–—\\s]*(?:page\\s+)?(?:\\d{1,4}|${ROMAN})(?:\\s*(?:of|/)\\s*\\d{1,4})?[-–—\\s]*$`, 'i');
+
+const ROMAN_ONLY = new RegExp(`^${ROMAN}$`, 'i');
+
 /** Escape a cell for a Markdown table: a pipe would end the cell. */
 const escapeCell = (s: string): string => s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 
@@ -427,20 +455,137 @@ interface TableCell {
 
 type Anchor = 'left' | 'right' | 'centre';
 
-/** The edge most of a column's cells share, and how many share it. */
-function columnAnchor(cells: TableCell[], tolerance: number): { anchor: Anchor; count: number } {
-  const edges: Record<Anchor, (c: TableCell) => number> = {
-    left: (c) => c.x0,
-    right: (c) => c.x1,
-    centre: (c) => (c.x0 + c.x1) / 2,
-  };
-  let best: { anchor: Anchor; count: number } = { anchor: 'left', count: 0 };
+const EDGES: Record<Anchor, (c: TableCell) => number> = {
+  left: (c) => c.x0,
+  right: (c) => c.x1,
+  centre: (c) => (c.x0 + c.x1) / 2,
+};
+
+/** One column of a table: the edge its cells share and where that edge is. */
+interface ColumnShape {
+  anchor: Anchor;
+  at: number;
+}
+
+/**
+ * What a page's closing table leaves for the next page to continue: where its
+ * columns are, which of them hold numbers, how far apart its rows sit, and
+ * its header row as emitted (null when it had none), so a header the next
+ * page repeats is recognised and not read as a row.
+ */
+export interface TableShape {
+  columns: ColumnShape[];
+  numeric: boolean[];
+  rowStep: number;
+  header: string | null;
+}
+
+/**
+ * A page number above or below a table sits further from it than its rows
+ * sit from each other by more than this. A number one row step away is a
+ * total or a carried-forward value, not page furniture.
+ */
+const PAGE_NUMBER_STEP_RATIO = 1.5;
+
+/**
+ * Whether `line` is page furniture next to `table`: one page number, set
+ * apart from the table's rows by more than {@link PAGE_NUMBER_STEP_RATIO}
+ * row steps (`step`), and on none of the table's column edges. A number in a
+ * column (a total under the Qty column, a value carried forward at the top
+ * of the next page) is content and stays; when in doubt, it stays.
+ */
+function isPageNumberBy(line: Line, table: TableShape, step: number, charWidth: number): boolean {
+  if (!PAGE_NUMBER.test(renderItems(line.items))) return false;
+  if (!(table.rowStep > 0) || step <= table.rowStep * PAGE_NUMBER_STEP_RATIO) return false;
+  const cell: TableCell = { text: '', x0: line.items[0].x, x1: Math.max(...line.items.map(right)) };
+  const tolerance = Math.max(charWidth, 1);
+  return !table.columns.some((col) => (['left', 'right', 'centre'] as const).some((a) => Math.abs(EDGES[a](cell) - col.at) <= tolerance));
+}
+
+/**
+ * The edge most of a column's cells share, where it is, and how many share it.
+ * On a tie the edge the cells sit on most exactly wins: numbers a digit apart
+ * in width are within tolerance on the left too, but only flush on the right.
+ */
+function columnAnchor(cells: TableCell[], tolerance: number): ColumnShape & { count: number } {
+  let best: ColumnShape & { count: number; spread: number } = { anchor: 'left', at: 0, count: 0, spread: 0 };
   for (const anchor of ['left', 'right', 'centre'] as const) {
-    const at = median(cells.map(edges[anchor]));
-    const count = cells.filter((c) => Math.abs(edges[anchor](c) - at) <= tolerance).length;
-    if (count > best.count) best = { anchor, count };
+    const at = median(cells.map(EDGES[anchor]));
+    const near = cells.map((c) => Math.abs(EDGES[anchor](c) - at)).filter((d) => d <= tolerance);
+    const spread = near.reduce((sum, d) => sum + d, 0);
+    if (near.length > best.count || (near.length === best.count && spread < best.spread)) {
+      best = { anchor, at, count: near.length, spread };
+    }
   }
-  return best;
+  return { anchor: best.anchor, at: best.at, count: best.count };
+}
+
+type Row = Array<TableCell | null>;
+
+const filled = (row: Row) => row.filter((c) => c !== null).length;
+
+/**
+ * Whether the first row reads as a header: in a column whose body is numbers,
+ * a first cell that is a number too (a page number, a list number, a value)
+ * says the first row is just another row — a list or a table of contents.
+ * Two columns are as often a key/value list as a table, so they need a first
+ * row with no digits in it over a column of numbers.
+ */
+function hasHeaderRow(rows: Row[], column: (c: number, from?: number) => TableCell[]): boolean {
+  const header = rows[0];
+  const numericBody = (c: number) => {
+    const body = column(c, 1);
+    return body.length > 0 && body.filter((cell) => isNumberLike(cell.text)).length * 2 > body.length;
+  };
+  const numericColumns = header.map((_, c) => c).filter(numericBody);
+  if (numericColumns.some((c) => header[c] !== null && isNumberLike(header[c].text))) return false;
+  if (header.length === 2) {
+    if (header.some((cell) => cell !== null && /\d/.test(cell.text))) return false;
+    if (numericColumns.length === 0) return false;
+  }
+  return true;
+}
+
+/** A column of page numbers: whole numbers (or roman numerals) that never go down. */
+function isPageColumn(cells: TableCell[]): boolean {
+  const texts = cells.map((cell) => cell.text.trim());
+  if (!texts.every((t) => /^\d{1,4}$/.test(t) || ROMAN_ONLY.test(t))) return false;
+  const arabic = texts.filter((t) => /^\d+$/.test(t)).map(Number);
+  return arabic.every((n, k) => k === 0 || n >= arabic[k - 1]);
+}
+
+/**
+ * Whether rows with no header row still hold up as a table. The grid is all
+ * there is to go on, so it has to be unmistakable, and none of the other
+ * things that also line up in columns:
+ *
+ *  - enough rows ({@link MIN_HEADERLESS_ROWS}), each with two or more cells,
+ *    and every column's cells on one edge ({@link MIN_HEADERLESS_ALIGNED});
+ *  - a column that is numbers all the way down: a grid of words with no
+ *    header is a list set in columns as often as it is data;
+ *  - with two columns, both of them numbers: a word beside a number is a
+ *    label and its value (`Total  420.00`) as often as it is a table row;
+ *  - not a numbered list (`1.`, `2.` down the first column);
+ *  - not a contents page: page numbers that only go up, beside words.
+ *
+ * Prose in columns never gets this far: its cells are too long.
+ */
+function isHeaderlessTable(rows: Row[], columns: number, column: (c: number) => TableCell[], strictlyAligned: boolean): boolean {
+  if (!strictlyAligned || rows.length < MIN_HEADERLESS_ROWS || rows.some((r) => filled(r) < 2)) return false;
+  const all = Array.from({ length: columns }, (_, c) => column(c));
+  const numeric = all.filter((cells) => cells.every((cell) => isNumberLike(cell.text)));
+  if (numeric.length === 0 || (columns === 2 && numeric.length < 2)) return false;
+  if (all[0].filter((cell) => LIST_NUMBER.test(cell.text.trim())).length * 2 >= all[0].length) return false;
+  const words = all.some((cells) => cells.every((cell) => !isNumberLike(cell.text)));
+  return !(words && isPageColumn(all[columns - 1]));
+}
+
+interface BuiltTable {
+  markdown: string[];
+  used: number;
+  shape: TableShape;
+  /** The rows continue the previous page's table: `markdown` is rows only, no header or separator. */
+  continued: boolean;
 }
 
 /**
@@ -448,13 +593,20 @@ function columnAnchor(cells: TableCell[], tolerance: number): { anchor: Anchor; 
  * hold up as one. `lines` all leave every gutter in `gutters` empty. Returns
  * how many of the lines the table used, since trailing lines that turn out to
  * be text below the table are given back.
+ *
+ * With `previous` (the table the page before ended with, when this run opens
+ * the page), rows whose columns sit where that table's did continue it: they
+ * may be as few as one, and need no header of their own. A first row equal to
+ * that table's header is the header repeated, and is dropped. A run with a
+ * header of its own is a new table that shares the columns, read without
+ * `previous`.
  */
-function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { markdown: string[]; used: number } | null {
+function buildTable(lines: Line[], gutters: Gutter[], charWidth: number, previous: TableShape | null): BuiltTable | null {
   const sorted = [...gutters].sort((a, b) => a.x0 - b.x0);
   const columns = sorted.length + 1;
   if (columns < 2) return null;
 
-  const grid: Array<Array<TableCell | null>> = lines.map((line) => {
+  const grid: Row[] = lines.map((line) => {
     const parts: Positioned[][] = Array.from({ length: columns }, () => []);
     for (const it of line.items) {
       const centre = it.x + it.width / 2;
@@ -466,7 +618,6 @@ function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { mark
       items.length === 0 ? null : { text: renderItems(items), x0: items[0].x, x1: Math.max(...items.map(right)) },
     );
   });
-  const filled = (row: Array<TableCell | null>) => row.filter((c) => c !== null).length;
 
   // A wrapped cell's second line sits closer to the line above than rows sit
   // to each other. Only measurable when rows are spaced wider than lines are:
@@ -481,7 +632,7 @@ function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { mark
   let used = lines.length;
   while (used > 0 && !continues[used - 1] && filled(grid[used - 1]) < 2) used--;
 
-  const rows: Array<Array<TableCell | null>> = [];
+  const rows: Row[] = [];
   for (let k = 0; k < used; k++) {
     const last = rows[rows.length - 1];
     if (!continues[k] || !last) {
@@ -497,28 +648,46 @@ function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { mark
     });
   }
 
-  const fullRows = rows.filter((r) => filled(r) >= 2).length;
-  if (fullRows < MIN_TABLE_ROWS || fullRows < rows.length * 0.6) return null;
+  if (rows.length === 0) return null;
 
+  const column = (c: number, from = 0) =>
+    rows.slice(from).map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
   const tolerance = Math.max(charWidth, 1);
-  const anchors: Anchor[] = [];
+
+  // Columns where the previous page's table had them: every column has a
+  // cell, and most of its cells sit on that column's edge.
+  const continuing =
+    previous !== null &&
+    previous.columns.length === columns &&
+    previous.columns.every((col, c) => {
+      const cells = column(c);
+      const on = cells.filter((cell) => Math.abs(EDGES[col.anchor](cell) - col.at) <= tolerance).length;
+      return cells.length > 0 && on >= Math.ceil(cells.length * MIN_TABLE_ALIGNED);
+    });
+
+  // A continuation can be a row or two at the head of a page: the table
+  // above vouches for its columns, so it is not asked to line up on its own.
+  const fullRows = rows.filter((r) => filled(r) >= 2).length;
+  if (fullRows < (continuing ? 1 : MIN_TABLE_ROWS) || fullRows < rows.length * 0.6) return null;
+
+  const anchors: ColumnShape[] = [];
+  let strictlyAligned = true;
   for (let c = 0; c < columns; c++) {
-    const cells = rows.map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
-    if (cells.length < 2) return null;
+    const cells = column(c);
+    if (cells.length < (continuing ? 1 : 2)) return null;
     // Long cells are prose in columns, not a table.
     if (median(cells.map((cell) => cell.text.length)) > MAX_TABLE_CELL_CHARS) return null;
-    const { anchor, count } = columnAnchor(cells, tolerance);
-    if (count < Math.ceil(cells.length * MIN_TABLE_ALIGNED)) return null;
-    anchors.push(anchor);
+    const { anchor, at, count } = columnAnchor(cells, tolerance);
+    if (!continuing && count < Math.ceil(cells.length * MIN_TABLE_ALIGNED)) return null;
+    if (count < Math.ceil(cells.length * MIN_HEADERLESS_ALIGNED)) strictlyAligned = false;
+    anchors.push({ anchor, at });
   }
 
   // A form's labels end in a colon: that is `label  value`, and the lines it
   // already came out as say so better than a table would.
-  const labels = rows.map((r) => r[0]).filter((cell): cell is TableCell => cell !== null);
+  const labels = column(0);
   if (labels.filter((cell) => cell.text.trimEnd().endsWith(':')).length * 2 >= labels.length) return null;
 
-  const column = (c: number, from = 0) =>
-    rows.slice(from).map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
   for (let c = 0; c < columns; c++) {
     const cells = column(c);
     // One short token down a whole column is a list marker (•, -, ☐), not data.
@@ -529,32 +698,52 @@ function buildTable(lines: Line[], gutters: Gutter[], charWidth: number): { mark
     if (cells.filter((cell) => LEADER.test(cell.text)).length * 2 >= cells.length) return null;
   }
 
-  // The first row has to be a header: in a column whose body is numbers, a
-  // first cell that is a number too (a page number, a list number, a value)
-  // says the first row is just another row — a list or a table of contents.
-  const header = rows[0];
-  const numericBody = (c: number) => {
-    const body = column(c, 1);
-    return body.length > 0 && body.filter((cell) => isNumberLike(cell.text)).length * 2 > body.length;
-  };
-  const numericColumns = Array.from({ length: columns }, (_, c) => c).filter(numericBody);
-  if (numericColumns.some((c) => header[c] !== null && isNumberLike(header[c].text))) return null;
+  const toRow = (r: Row) => `| ${r.map((cell) => (cell ? escapeCell(cell.text) : '')).join(' | ')} |`;
 
-  // Two columns are as often a key/value list as a table. Only take them as a
-  // table when the first row looks like a header — no digits in it — over a
-  // column of numbers.
-  if (columns === 2) {
-    if (header.some((cell) => cell !== null && /\d/.test(cell.text))) return null;
-    if (numericColumns.length === 0) return null;
+  if (continuing && previous) {
+    const repeated = previous.header !== null && toRow(rows[0]) === previous.header;
+    const body = rows.slice(repeated ? 1 : 0);
+    // Columns of numbers hold numbers here too, every cell of a row or two,
+    // most cells of more: a caption beside a year (`Figure 4  2024`) lines up
+    // with a two-column table but is not a row of it.
+    const sameTypes = previous.numeric.every((numeric, c) => {
+      if (!numeric) return true;
+      const cells = body.map((r) => r[c]).filter((cell): cell is TableCell => cell !== null);
+      const numbers = cells.filter((cell) => isNumberLike(cell.text)).length;
+      return body.length < MIN_TABLE_ROWS ? numbers === cells.length : numbers * 2 > cells.length;
+    });
+    // Rows enough to judge that open with a header of their own are a new
+    // table that shares the columns. One row cannot be judged that way, so
+    // only a table with a column of numbers, whose type the row matches,
+    // is continued by one.
+    const ownHeader = body.length >= 2 ? !repeated && hasHeaderRow(rows, column) : !previous.numeric.some(Boolean);
+    // A repeated header with no rows under it continues nothing.
+    if (body.length === 0 || !sameTypes || ownHeader) return buildTable(lines, gutters, charWidth, null);
+    return { markdown: body.map(toRow), used, shape: previous, continued: true };
   }
 
-  const toRow = (r: Array<TableCell | null>) => `| ${r.map((cell) => (cell ? escapeCell(cell.text) : '')).join(' | ')} |`;
-  const markdown = [
-    toRow(rows[0]),
-    `| ${anchors.map((a) => (a === 'right' ? '---:' : '---')).join(' | ')} |`,
-    ...rows.slice(1).map(toRow),
-  ];
-  return { markdown, used };
+  const isNumeric = (c: number, from: number) => {
+    const cells = column(c, from);
+    return cells.length > 0 && cells.filter((cell) => isNumberLike(cell.text)).length * 2 > cells.length;
+  };
+  const shape = (header: string | null): TableShape => ({
+    columns: anchors,
+    numeric: anchors.map((_, c) => isNumeric(c, header === null ? 0 : 1)),
+    rowStep,
+    header,
+  });
+  const separator = `| ${anchors.map((a) => (a.anchor === 'right' ? '---:' : '---')).join(' | ')} |`;
+  if (hasHeaderRow(rows, column)) {
+    const header = toRow(rows[0]);
+    const markdown = [header, separator, ...rows.slice(1).map(toRow)];
+    return { markdown, used, shape: shape(header), continued: false };
+  }
+  if (!isHeaderlessTable(rows, columns, column, strictlyAligned)) return null;
+  // Markdown has no table without a header row. An empty one says the columns
+  // have no names; invented ones (`Column 1`) would be embedded and searched
+  // as if the document said them.
+  const markdown = [`|${' |'.repeat(columns)}`, separator, ...rows.map(toRow)];
+  return { markdown, used, shape: shape(null), continued: false };
 }
 
 /** Cell gaps of a line as its own rendering sees them: wider than COLUMN_GAP_RATIO of its glyphs. */
@@ -562,17 +751,36 @@ function cellGaps(line: Line): Gutter[] {
   return lineGaps(line, charWidthOf(line.items) * COLUMN_GAP_RATIO);
 }
 
+/** What the sequences of one page share about tables, in reading order. */
+interface TableState {
+  /** The previous page's closing table, until the page's opening sequence has been read. */
+  previous: TableShape | null;
+  /** The page opened by continuing `previous`. */
+  continued: boolean;
+  /** The last table read on the page. */
+  last: TableShape | null;
+}
+
 /**
  * Lines read top to bottom, with runs that hold up as tables replaced by a
  * Markdown table set off by blank lines. Everything else is {@link renderFlow}.
+ *
+ * While `state.previous` is set, a table opening the sequence may continue
+ * it: its rows come out with no header or separator. Above them may sit one
+ * page number ({@link isPageNumberBy}); it is dropped when the rows continue
+ * the table, since it would otherwise sit in the middle of the joined table.
+ * Any other line above them, a number in a column included, means the rows
+ * do not open the page, and nothing is continued.
  */
-function renderSequence(lines: Line[], pitch: number, charWidth: number): string[] {
+function renderSequence(lines: Line[], pitch: number, charWidth: number, state: TableState): string[] {
   const out: string[] = [];
   const eps = charWidth * 0.25;
   let flowStart = 0;
   const flushFlow = (end: number) => {
     if (end > flowStart) out.push(...renderFlow(lines.slice(flowStart, end), pitch));
   };
+  const lead =
+    state.previous && lines.length > 1 && isPageNumberBy(lines[0], state.previous, lines[0].y - lines[1].y, charWidth) ? 1 : 0;
 
   let i = 0;
   let refusedEnd = 0;
@@ -610,7 +818,8 @@ function renderSequence(lines: Line[], pitch: number, charWidth: number): string
       j++;
     }
 
-    const table = j - i >= MIN_TABLE_ROWS ? buildTable(lines.slice(i, j), gutters, charWidth) : null;
+    const carry = i <= lead ? state.previous : null;
+    const table = j - i >= (carry ? 1 : MIN_TABLE_ROWS) ? buildTable(lines.slice(i, j), gutters, charWidth, carry) : null;
     if (!table) {
       // A refused run is retried from the next few lines (a caption-like line
       // with gaps of its own may sit above a real table), then skipped:
@@ -622,23 +831,39 @@ function renderSequence(lines: Line[], pitch: number, charWidth: number): string
       i = ++retries > MAX_TABLE_RETRIES ? Math.max(i + 1, refusedEnd) : i + 1;
       continue;
     }
-    flushFlow(i);
+    if (table.continued) state.continued = true;
+    else flushFlow(i);
     if (out.length > 0 && out[out.length - 1] !== '') out.push('');
     out.push(...table.markdown, '');
+    state.last = table.shape;
     i += table.used;
     flowStart = i;
   }
   flushFlow(lines.length);
   while (out.length > 0 && out[out.length - 1] === '') out.pop();
+  // Only the page's opening sequence can continue the page before.
+  state.previous = null;
   return out;
 }
 
+/** One page's text, and what it says about a table running across its edges. */
+export interface PdfPageText {
+  text: string;
+  /** The table the page ends with (nothing after it but one page number), for the next page to continue. */
+  openTable: TableShape | null;
+  /** The page opens with rows continuing the previous page's table: `text` starts with them, with no header. */
+  continuesTable: boolean;
+  /** The page number under `openTable`, the last line of `text`: dropped if the next page continues the table. */
+  footer: string | null;
+}
+
 /**
- * Rebuild one page's text from positioned items, preserving line breaks,
- * column/cell gaps and paragraph boundaries, reading column bands column by
- * column and tables as Markdown tables. Returns '' for an empty page.
+ * One page's text, as {@link reconstructPageText}, read knowing the table the
+ * previous page ended with (`previous`, that page's `openTable`), so rows at
+ * the head of this page that continue it come out as more of its rows. Pass
+ * the pages in order and join them with {@link joinPdfPages}.
  */
-export function reconstructPageText(items: PdfTextItem[]): string {
+export function reconstructPage(items: PdfTextItem[], previous: TableShape | null = null): PdfPageText {
   // Whitespace-only items are not text: pdfjs inserts one across a gap between
   // two runs, as wide as the gap itself, so measuring it as text closed every
   // column gutter and cell gap on a real PDF. It is still a statement that a
@@ -667,7 +892,7 @@ export function reconstructPageText(items: PdfTextItem[]): string {
     pendingSpace = false;
   }
 
-  if (positioned.length === 0) return '';
+  if (positioned.length === 0) return { text: '', openTable: null, continuesTable: false, footer: null };
 
   // Group into lines by baseline. PDF y grows UPWARD, so a page reads from the
   // highest y down.
@@ -695,7 +920,7 @@ export function reconstructPageText(items: PdfTextItem[]): string {
   // few hundred at one item per glyph); a producer that is gets the plain
   // line-by-line reading rather than a stalled worker.
   if (positioned.length > MAX_LAYOUT_ITEMS || lines.some((l) => l.items.length > MAX_LAYOUT_LINE_ITEMS)) {
-    return renderFlow(lines, pitch).join('\n').trim();
+    return { text: renderFlow(lines, pitch).join('\n').trim(), openTable: null, continuesTable: false, footer: null };
   }
 
   const out: string[] = [];
@@ -705,9 +930,10 @@ export function reconstructPageText(items: PdfTextItem[]): string {
     out.push(...rendered);
   };
 
+  const state: TableState = { previous, continued: false, last: null };
   let next = 0;
   for (const band of findColumnBands(lines, charWidth, pitch)) {
-    block(renderSequence(lines.slice(next, band.start), pitch, charWidth));
+    block(renderSequence(lines.slice(next, band.start), pitch, charWidth, state));
     // Column by column. A single newline between columns, not a blank line: a
     // paragraph running off the foot of one column continues at the top of
     // the next, and the chunker keeps a paragraph together.
@@ -716,7 +942,7 @@ export function reconstructPageText(items: PdfTextItem[]): string {
     const columns: string[] = [];
     for (const region of band.regions) {
       const regionPitch = region.length > 2 ? medianPitch(region) : pitch;
-      const rendered = renderSequence(region, regionPitch || pitch, charWidth);
+      const rendered = renderSequence(region, regionPitch || pitch, charWidth, state);
       const isRow = (l: string | undefined) => l?.startsWith('| ') === true;
       if (columns.length > 0 && (isRow(columns[columns.length - 1]) || isRow(rendered[0]))) columns.push('');
       columns.push(...rendered);
@@ -724,7 +950,54 @@ export function reconstructPageText(items: PdfTextItem[]): string {
     block(columns);
     next = band.end + 1;
   }
-  block(renderSequence(lines.slice(next), pitch, charWidth));
+  block(renderSequence(lines.slice(next), pitch, charWidth, state));
 
-  return out.join('\n').trim();
+  const text = out.join('\n').trim();
+  // The page ends with a table when nothing follows it but, at most, one
+  // page number set apart from it (see `isPageNumberBy`).
+  const last = lines[lines.length - 1];
+  const lastText = renderItems(last.items);
+  const footer =
+    state.last &&
+    lines.length > 1 &&
+    text.endsWith(`\n${lastText}`) &&
+    isPageNumberBy(last, state.last, lines[lines.length - 2].y - last.y, charWidth)
+      ? lastText
+      : null;
+  const body = footer === null ? text : text.slice(0, -footer.length).trimEnd();
+  const openTable = body.slice(body.lastIndexOf('\n') + 1).startsWith('| ') ? state.last : null;
+  return { text, openTable, continuesTable: state.continued, footer: openTable ? footer : null };
+}
+
+/**
+ * Rebuild one page's text from positioned items, preserving line breaks,
+ * column/cell gaps and paragraph boundaries, reading column bands column by
+ * column and tables as Markdown tables. Returns '' for an empty page.
+ */
+export function reconstructPageText(items: PdfTextItem[]): string {
+  return reconstructPage(items).text;
+}
+
+/**
+ * Pages read in order, as one text: pages apart by a blank line, except where
+ * a page continues the table the one before ended with. There the page
+ * number under the table (its `footer`, if any) is dropped and the rows
+ * follow on, so the table is one table, under its header, for the chunker to
+ * split and repeat. Nothing else is ever dropped.
+ */
+export function joinPdfPages(pages: PdfPageText[]): string {
+  const parts: string[] = [];
+  let before: PdfPageText | null = null;
+  for (const page of pages) {
+    if (!page.text) continue;
+    if (before && parts.length > 0 && page.continuesTable && page.text.startsWith('| ')) {
+      const above = parts[parts.length - 1];
+      const kept = before.footer === null ? above : above.slice(0, -before.footer.length).trimEnd();
+      parts[parts.length - 1] = `${kept}\n${page.text}`;
+    } else {
+      parts.push(page.text);
+    }
+    before = page;
+  }
+  return parts.join('\n\n');
 }

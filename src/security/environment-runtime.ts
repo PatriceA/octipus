@@ -56,7 +56,7 @@ export class SshShellOperations implements ShellOperations {
     }
     return this.local.exec(this.transport(), homedir(), {
       timeout: options.timeout, input: JSON.stringify({ command, pathDirectories: this.profile.pathDirectories, cwd: environmentCwd(this.profile, cwd, this.account), env: options.env, input: options.input }), signal: options.signal, onData: options.onData,
-      unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off',
+      unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off', remoteTransport: true,
     });
   }
   async spawnBackground(command: string, cwd: string, options: Parameters<ShellOperations['spawnBackground']>[2] = {}) {
@@ -65,7 +65,7 @@ export class SshShellOperations implements ShellOperations {
       if (!argv) throw new ToolNotExecutedError('shell', 'This command needs useShell:true for shell operators');
       command = argv.map(quoteRuntimeArg).join(' ');
     }
-    return this.local.spawnBackground(this.transport(), homedir(), { input: JSON.stringify({ command, pathDirectories: this.profile.pathDirectories, cwd: environmentCwd(this.profile, cwd, this.account), env: options?.env }), unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off', onExit: options?.onExit });
+    return this.local.spawnBackground(this.transport(), homedir(), { input: JSON.stringify({ command, pathDirectories: this.profile.pathDirectories, cwd: environmentCwd(this.profile, cwd, this.account), env: options?.env }), unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off', remoteTransport: true, onExit: options?.onExit });
   }
   async which(command: string) {
     if (!/^[a-zA-Z0-9_.+-]+$/.test(command)) throw new ToolNotExecutedError('shell', 'Use an executable name');

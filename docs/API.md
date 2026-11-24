@@ -215,7 +215,8 @@ by an agent naming it in `spawn_child`, off its one-line `description`.
 | PATCH | `/api/skills/:id` | Update skill |
 | DELETE | `/api/skills/:id` | Delete custom skill |
 | GET | `/api/skills/exchange/export?ids=a,b` | Export skills as one versioned JSON bundle with a content hash (unsigned: sign it offline with `octi plugin sign-skill-bundle`). See [Exchanging skills](SKILL-EXCHANGE.md#api). |
-| POST | `/api/skills/exchange/preview` | Read a bundle or the JSON of `GET /api/skills/export` (`{ bundle }`), a SKILL.md or that export's markdown (`{ skillMd }`) or, for admins, an https bundle (`{ url }`): its skills in full, signature, trust verdict and name collisions. Writes nothing. |
+| GET | `/api/skills/exchange/registry?q=&tag=` | The configured skill registries' listings (`skills.registries`; none by default, then nothing is fetched): newest version per name, listed signature status, installed version and whether an update is available. See [Registries](SKILL-EXCHANGE.md#registries). |
+| POST | `/api/skills/exchange/preview` | Read a bundle or the JSON of `GET /api/skills/export` (`{ bundle }`), a SKILL.md or that export's markdown (`{ skillMd }`), for admins an https bundle (`{ url }`), or a registry listing (`{ registry: { registry, name, version } }`): its skills in full, signature, trust verdict and name collisions. Writes nothing. |
 | POST | `/api/skills/exchange/install` | Install a previewed source: `contentHash` from the preview and a decision (`skip`, `rename`, `replace`) for every collision; audited. `409` on an undecided collision or a changed source. |
 
 ## Persona
@@ -1102,6 +1103,9 @@ outgoing-webhook CRUD API. See [Hooks](HOOKS.md) and [Webhooks](WEBHOOKS.md).
 | POST | `/api/artifacts/:id/data-sources` | Add data source |
 | DELETE | `/api/artifacts/:id/data-sources/:sourceId` | Remove data source |
 | POST | `/api/artifacts/:id/refresh` | Refresh artifact data |
+| GET | `/api/artifacts/:id/agent-refresh` | Owner only: the refresh instruction, schedule and last attempt ([agent refresh](ARTIFACTS.md#agent-refresh)) |
+| PUT | `/api/artifacts/:id/agent-refresh` | Owner only: set the instruction and/or `intervalMinutes` (60–10080, or null for manual only) |
+| POST | `/api/artifacts/:id/agent-refresh/run` | Owner only: start an agent refresh (202; 409 while one runs; 429 at the server's limit; 422 when refused) |
 | GET | `/api/artifacts/:id/data/:sourceName` | Get data from source |
 | POST | `/api/artifacts/:id/share-links` | Create share link |
 | GET | `/api/artifacts/:id/share-links` | List share links |

@@ -17,6 +17,9 @@ import { getFuzzyListTheme, getPalette, paletteForBackground, type PaletteName, 
 import { DEFAULT_SETTINGS_PATH, writeSetting } from './settings';
 import { configureLinks } from './links';
 import { hyperlinksEnabled } from '@/tui-kit/hyperlinks';
+import { isHistoryRow, OlderTurns, toChatMessage } from './older-turns';
+import { MentionSource } from './mentions';
+import { isModelList, modelCommand, modelItems, type ModelPick } from './pickers';
 import { isSessionRow, parseSkillList, SKILL_MODES, type SessionRow, sessionItems, sessionPreview, skillCommand, skillItems, type SkillRow } from './pickers';
 /**
  * OctipusTuiApp.
@@ -95,11 +98,6 @@ function newSessionId(): string {
   return randomUUID();
 }
 
-interface HistoryRow { role: 'user' | 'assistant'; content: string; at: string }
-const isHistoryRow = (v: unknown): v is HistoryRow => {
-  const r = v as HistoryRow | null;
-  return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
-};
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
 const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.transcript.dump', 'app.queue.edit', 'app.tools.toggle', 'app.history.search', 'app.copy.code', 'app.quit'] as const;
 
@@ -143,6 +141,8 @@ export class OctipusTuiApp {
   private readonly activity: ActivityLine;
   private readonly composer: Composer;
   private readonly subagents = new SubagentPanel();
+  /** Older turns of the session, paged in from the server as the reader scrolls up. */
+  private readonly older: OlderTurns;
   private lastStatus: string | null = null;
   private readonly overlays: OverlayController;
   /** Mutable: `/resume` re-points every later command and chat at another session. */
@@ -192,9 +192,9 @@ export class OctipusTuiApp {
   /** The picker open now (history, sessions, models, skills), if any. */
   private pickerHandle: OverlayHandle | null = null;
   /** The picker waiting for the gateway's list, if one is. */
-  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | null = null;
+  private loading: { command: 'sessions'; list: FuzzyList<SessionRow> } | { command: 'skills'; list: FuzzyList<SkillRow> } | { command: 'model'; list: FuzzyList<ModelPick> } | null = null;
   /** Lists a picker asked for and was closed before they came: their late results are dropped, not shown in the transcript. */
-  private readonly cancelledLists: Array<'sessions' | 'skills'> = [];
+  private readonly cancelledLists: Array<'sessions' | 'skills' | 'model'> = [];
   private readonly search?: TranscriptSearch;
   private readonly attention?: Attention;
   private themeSetting: ThemeSetting;
@@ -226,7 +226,9 @@ export class OctipusTuiApp {
     this.settingsPath = options.settingsPath ?? DEFAULT_SETTINGS_PATH;
     if (this.themeSetting !== 'auto') setPalette(this.themeSetting);
     this.sessionUsed = options.sessionId !== undefined;
-    this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
+    const mentions = new MentionSource(path => this.adapter.getJson(path), () => this.sessionId, text => this.pushMessage('system', `Error: ${text}`),
+      () => `${this.adapter.getWorkspace() ?? ''}\u0000${this.adapter.getIdentity()?.userId ?? ''}`);
+    this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd(), mentions: () => mentions.list() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
     this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) tui.setFocus(this.composer); });
@@ -234,6 +236,7 @@ export class OctipusTuiApp {
       this.showState();
       if (this.decisions.size) this.attention?.notify('A decision is waiting for you');
     };
+    this.older = new OlderTurns(this.messages, path => this.adapter.getJson(path), () => this.sessionId, () => tui.requestRender());
     this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
@@ -250,6 +253,7 @@ export class OctipusTuiApp {
     if (isViewportTUI(tui)) {
       // Alternate screen: every row is positioned absolutely, so a bad row damages only itself.
       this.transcript = createTranscriptView(this.messages);
+      this.transcript.requestContent = () => tui.requestRender();
       // The search reads the rendered rows: while it is open, render every message in memory.
       this.transcript.document.showAll = () => this.search?.isOpen() ?? false;
       tui.setLayoutRoot(new VStack([
@@ -641,7 +645,8 @@ export class OctipusTuiApp {
     const rows = Array.isArray(data) ? data.filter(isHistoryRow) : [];
     this.messages.reset();
     this.subagents.reset();
-    for (const m of rows) this.messages.push({ role: m.role, content: m.content, timestamp: new Date(m.at) });
+    for (const m of rows) this.messages.push(toChatMessage(m));
+    this.older.replayed(rows);
     this.messages.scrollToBottom();
     this.pushMessage('system', `Session ${this.sessionId.slice(0, 8)} · ${rows.length} message${rows.length === 1 ? '' : 's'} replayed.`);
   }
@@ -759,7 +764,7 @@ export class OctipusTuiApp {
           this.sessionId = fallback;
           return;
         }
-        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills');
+        const cancelled = this.cancelledLists.indexOf(event.name as 'sessions' | 'skills' | 'model');
         if (cancelled >= 0) {
           // The picker that asked was closed: keep the session list for `/resume <n>`, show nothing.
           this.cancelledLists.splice(cancelled, 1);
@@ -793,6 +798,7 @@ export class OctipusTuiApp {
           if (this.transcript) this.tui.requestRender(true);
           else this.tui.terminal.clearScreen();
           this.messages.reset();
+          this.older.reset();
           // Turns counted in THIS client reset; tokens and cost do not. They
           // come from the session's cost log, which /clear does not touch, so
           // zeroing them here just made the next turn's `session.stats` snap
@@ -1125,6 +1131,7 @@ export class OctipusTuiApp {
     if (this.queue.size) this.pushMessage('system', `${this.queue.drain().length} queued message(s) dropped: they were for the previous session.`);
     this.sessionId = id;
     this.sessionUsed = true;
+    this.older.reset();
     this.session.reset();
     // Not connected: replayed on connect instead.
     this.resumePending = !this.adapter.sendCommand('history');
@@ -1154,6 +1161,19 @@ export class OctipusTuiApp {
     this.loading = { command: 'skills', list };
   }
 
+  /** `/model` alone: pick the root agent's model for this session (the gateway's `/model <name>`). */
+  private openModelPicker(): void {
+    const list = this.openPicker<ModelPick>('Model for this session', [], choice => {
+      this.pushMessage('user', `/model ${modelCommand(choice)}`);
+      this.command('model', { value: modelCommand(choice) });
+    }, choice => choice.kind === 'clear'
+      ? 'Drop this session\'s choice: the root agent uses the configured default again.'
+      : `${choice.model.name}\nModel: ${choice.model.modelId}\nProvider: ${choice.model.provider}${choice.model.isDefault ? '\nThe configured default.' : ''}\nEnter switches the root agent to it for this session; agents it delegates to keep their lane's model.`, 'Loading models…');
+    if (!list) return;
+    if (!this.adapter.sendCommand('model')) { list.setItems([], 'Not connected: the models cannot be listed now.'); return; }
+    this.loading = { command: 'model', list };
+  }
+
   /** The list a picker was waiting for arrived (or failed). */
   private fillPicker(event: Extract<AgentSessionEvent, { kind: 'command.result' }>): void {
     const loading = this.loading;
@@ -1163,6 +1183,9 @@ export class OctipusTuiApp {
     if (loading.command === 'sessions') {
       this.sessionList = Array.isArray(event.data) ? event.data.filter(isSessionRow) : [];
       loading.list.setItems(sessionItems(this.sessionList, this.sessionId), 'No sessions yet.');
+    } else if (loading.command === 'model') {
+      if (isModelList(event.data)) loading.list.setItems(modelItems(event.data), 'No models you can use are enabled. Add one on the Models page.');
+      else loading.list.setItems([], typeof event.result === 'string' && event.result ? event.result : 'The server sent no model list: it may be older than this terminal client.');
     } else {
       const parsed = parseSkillList(typeof event.result === 'string' ? event.result : '');
       if ('unreadable' in parsed) loading.list.setItems([], parsed.unreadable || 'The server sent no skill list.');
@@ -1206,6 +1229,7 @@ export class OctipusTuiApp {
     // argument they go to the gateway as text (`/sessions list` lists).
     if (name === 'sessions' && !value) { this.openSessionPicker(); return; }
     if (name === 'skills' && !value) { this.openSkillPicker(); return; }
+    if (name === 'model' && !value) { this.openModelPicker(); return; }
 
     // `/cost` is deliberately absent: it goes to the gateway, which reads the
     // cost log — the same totals the status bar shows, plus the input/output/

@@ -265,6 +265,21 @@ describe('mail:read (Mail module)', () => {
     expect(res.body.inbox).toEqual({ provider: 'google', protectionLevel: 4 });
   });
 
+  test('the email channel\'s mailbox is not there for a package (docs/CHANNELS.md#email)', async () => {
+    const { getConfig, refreshConfigKey } = await import('@/config');
+    const before = getConfig().emailChannel.accountId;
+    refreshConfigKey('emailChannel.accountId', ALICE_ACCOUNT);
+    try {
+      const t = await token({ maxProtection: 4 });
+      expect((await hostApi('GET', '/mail/accounts', t, 'mailer')).body.accounts).toEqual([]);
+      expect((await hostApi('GET', '/mail/messages?limit=10', t, 'mailer')).body.messages).toEqual([]);
+      expect((await hostApi('GET', `/mail/messages?limit=10&accountId=${ALICE_ACCOUNT}`, t, 'mailer')).body.messages).toEqual([]);
+      expect((await hostApi('GET', `/mail/messages/${lvl1}`, t, 'mailer')).status).toBe(404);
+    } finally {
+      refreshConfigKey('emailChannel.accountId', before);
+    }
+  });
+
   test('the module off, or the user\'s rule denying it, refuses', async () => {
     fx.toolsOff.add('mail');
     const off = await hostApi('GET', '/mail/messages', await token(), 'mailer');
