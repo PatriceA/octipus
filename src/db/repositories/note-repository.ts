@@ -289,7 +289,9 @@ export class NoteRepository {
    * slug, tags or body (case-insensitive, anywhere in the text), with title
    * matches first. `archived: 'only'` lists the archived notes alone, most
    * recently archived first (the archive view); `includeArchived` adds them
-   * to the active ones.
+   * to the active ones. Notes equal on every sort key (two archived or saved
+   * in the same millisecond) fall back to id order, so the order and the
+   * limit/offset pages are stable.
    */
   async list(scope: NoteScope | string, opts: NoteListOptions & { workspaceId?: string } = {}): Promise<Note[]> {
     const conditions = [...owner(scope), inWorkspace(scope, opts.workspaceId)];
@@ -310,7 +312,7 @@ export class NoteRepository {
       .where(and(...conditions))
       // Lessons (written by a learning review) after the user's own notes: by
       // kind, or by the tag on a note written before lessons had a kind.
-      .orderBy(...order, desc(notes.pinned), sql`(${notes.noteKind} = 'lesson' OR 'session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt))
+      .orderBy(...order, desc(notes.pinned), sql`(${notes.noteKind} = 'lesson' OR 'session-learning' = ANY(${notes.tags})) ASC`, desc(notes.updatedAt), desc(notes.id))
       .limit(opts.limit ?? 50)
       .offset(opts.offset ?? 0);
   }
