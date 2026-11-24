@@ -833,7 +833,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 70 |
 | `api` | `security` | 191 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 32 |
+| `api` | `shared` | 33 |
 | `api` | `skills` | 9 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 81 |
