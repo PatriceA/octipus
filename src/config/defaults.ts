@@ -40,6 +40,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyOrigin: 'http://localhost:3000',
     executionEnvironments: [],
     shellSandbox: 'off',
+    egressPolicy: { default: 'allow', rules: [], tools: {}, roles: {}, requireEnforcement: false },
     shellSshAgent: false,
     companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },
     cliRuntimes: [],

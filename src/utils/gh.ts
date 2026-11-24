@@ -13,6 +13,7 @@
 import { spawn } from 'node:child_process';
 import { buildChildEnv } from '@/security/child-env';
 import { type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
+import { withHardenedGitEnv } from '@/security/git-hardening';
 
 const GH_KEEP_ENV = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
@@ -40,7 +41,10 @@ export function ghEnv(opts: Pick<RunGhOptions, 'token' | 'toolHome'> = {}): Reco
   const own = opts.token !== undefined || opts.toolHome !== undefined;
   const env = buildChildEnv({}, { keep: own ? [] : GH_KEEP_ENV });
   const out = opts.toolHome ? withToolHome(env, opts.toolHome) : env;
-  return opts.token ? { ...out, GH_TOKEN: opts.token } : out;
+  // The git gh starts (clone, a PR checkout) runs no hook, fsmonitor, pager
+  // or editor a repository names (src/security/git-hardening.ts).
+  const hardened = withHardenedGitEnv(out);
+  return opts.token ? { ...hardened, GH_TOKEN: opts.token } : hardened;
 }
 
 export function runGh(args: string[], opts: RunGhOptions = {}): Promise<string> {

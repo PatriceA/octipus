@@ -34,6 +34,13 @@ const MODULES_ELSEWHERE = 'Modules are switched in Settings → Modules (PUT /ap
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
 
+  // What the egress policy (security.egressPolicy) holds on this host, path by
+  // path, including where it is advice only (docs/EGRESS-POLICY.md).
+  .get('/egress', async ({ user, principal, set }) => {
+    if (!user?.isAdmin || !requireScope(principal, API_SCOPES.READ)) { set.status = 403; return { error: 'Admin access required' }; }
+    const { egressEnforcementStatus } = await import('@/security/shell-egress');
+    return egressEnforcementStatus();
+  })
   .get('/execution-environments', async ({ user, principal, set }) => {
     if (!user?.isAdmin || !requireScope(principal, API_SCOPES.READ)) { set.status = 403; return { error: 'Admin access required' }; }
     const environments = executionEnvironmentsSchema.parse(await getSettingsService().get('security.executionEnvironments') ?? []);

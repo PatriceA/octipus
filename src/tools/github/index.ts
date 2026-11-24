@@ -1,4 +1,13 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { toolLogger } from '@/utils/logger';
+import { lookup } from 'node:dns/promises';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { enforceGitRemotes, gitRemoteTarget } from '@/security/git-egress';
+import { withHardenedGitEnv } from '@/security/git-hardening';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive, enforceEgress, precheckEgressName } from '@/security/egress-policy';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentShellOptions, shellOperationsFor, quoteRuntimeArg } from '@/security/environment-runtime';
@@ -139,16 +148,6 @@ const DIFF_MAX_CHARS = 200_000;
 const LOG_DEFAULT_LINES = 200;
 const LOG_MAX_LINES = 2000;
 
-/** Whether a file-content URL points at a GitHub-owned host (SSRF guard). */
-export function isAllowedGitHubHost(urlStr: string): boolean {
-  try {
-    const host = new URL(urlStr).hostname;
-    return host === 'api.github.com' || host === 'github.com' || host.endsWith('.githubusercontent.com');
-  } catch {
-    return false;
-  }
-}
-
 export class GitHubTool extends BaseTool {
   readonly id = 'github';
   readonly name = 'GitHub';
@@ -200,7 +199,38 @@ export class GitHubTool extends BaseTool {
     execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>,
     options?: ToolExecutionOptions,
   ): void {
-    super.registerTool(name, description, parameters, (args, context) => this.caller.run(context, () => execute(args, context)), options);
+    super.registerTool(name, description, parameters, (args, context) => {
+      // Values gh takes as positionals (or splices into a flag) must not read
+      // as an option: `gh repo clone <repo> -- --upload-pack=<cmd>`-style
+      // injection. gh's cobra parser gives `--` a meaning of its own (git
+      // flags for repo clone), so the values are checked instead.
+      validateGhArgs(name, args);
+      // A `repo` naming a host (a URL, HOST/OWNER/REPO, host:path) makes gh
+      // call that host's API: judged before gh says anything to it.
+      return this.caller.run(context, async () => {
+        if (typeof args.repo === 'string') await judgeGhRepoHost(args.repo, context);
+        return execute(args, context);
+      });
+    }, options);
+  }
+
+  /**
+   * Under an active egress policy, the URLs `gh repo clone` will fetch, as gh
+   * resolves them in the environment the clone runs in: the repository's
+   * URL on its host (`gh repo view`), over the protocol gh is configured to
+   * use for that host (`git_protocol`), and the parent of a fork, which gh
+   * adds as `upstream` and fetches too.
+   */
+  private async ghCloneUrls(repo: string): Promise<string[]> {
+    const view = JSON.parse(await this.gh(['repo', 'view', repo, '--json', 'url,sshUrl,parent'])) as { url: string; sshUrl: string; parent?: { name?: string; owner?: { login?: string } } | null };
+    const host = new URL(view.url).host;
+    const protocol = (await this.gh(['config', 'get', 'git_protocol', '-h', host]).catch(() => '')).trim() || 'https';
+    const ssh = protocol === 'ssh';
+    const urls = [ssh ? view.sshUrl : `${view.url}.git`];
+    const owner = view.parent?.owner?.login;
+    const name = view.parent?.name;
+    if (owner && name) urls.push(ssh ? `git@${host}:${owner}/${name}.git` : `https://${host}/${owner}/${name}.git`);
+    return urls;
   }
 
   /**
@@ -217,7 +247,7 @@ export class GitHubTool extends BaseTool {
       if (!environment || !context) return runGh(args, opts);
       const home = environmentToolHome(context);
       const credentials = await environmentCredentialOptions(context, { ...environmentShellOptions(context), timeout: opts.timeoutMs ?? 120000, signal: getExecutionSignal(context),
-        env: home?.env, ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...environment.roots, ...(home ? [home.dir] : [])] });
+        env: withHardenedGitEnv(home?.env ?? {}), ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...environment.roots, ...(home ? [home.dir] : [])] });
       try {
         const result = credentials.mask(await shellOperationsFor(context, new LocalShellOperations()).exec(['gh', ...args].map(quoteRuntimeArg).join(' '), environment.roots[0], credentials.options));
         if (result.killed || (result.exitCode !== 0 && !opts.acceptExitCodes?.includes(result.exitCode ?? -1))) throw new Error(result.stderr || 'GitHub CLI did not complete');
@@ -247,6 +277,7 @@ export class GitHubTool extends BaseTool {
       visibility: { type: 'string', description: 'Filter by visibility', enum: ['public', 'private', 'all'], default: 'all' },
     }), async (args) => {
       const ghArgs = ['repo', 'list', '--json', 'name,owner,description,visibility,updatedAt,url', '--limit', String(args.limit || 30)];
+      if (args.visibility !== undefined && !['public', 'private', 'all'].includes(args.visibility as string)) throw new ToolNotExecutedError('github', 'visibility must be public, private or all');
       if (args.visibility && args.visibility !== 'all') ghArgs.push(`--${args.visibility}`);
       return JSON.parse(await this.gh(ghArgs));
     }, { permissionAction: 'read' });
@@ -276,13 +307,10 @@ export class GitHubTool extends BaseTool {
       if (data.content && data.encoding === 'base64') {
         content = Buffer.from(data.content, 'base64').toString('utf-8');
       } else if (data.download_url) {
-        // Files over ~1MB omit inline content; fetch the raw blob — but only
-        // from GitHub's own hosts (the URL comes from the API response; guard
-        // against a crafted/redirected value pointing elsewhere).
-        if (!isAllowedGitHubHost(data.download_url)) {
-          throw new Error('Refusing to fetch file content from a non-GitHub host');
-        }
-        content = await this.gh(['api', data.download_url]);
+        // Files over ~1MB omit inline content: the same relative contents
+        // endpoint, asked for the raw blob. Never the absolute download_url —
+        // gh would contact whatever host the response names.
+        content = await this.gh(['api', '-H', 'Accept: application/vnd.github.raw', endpoint]);
       } else {
         throw new Error(`No readable content returned for '${rawPath}'`);
       }
@@ -304,6 +332,8 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name or URL)', required: true },
       path: { type: 'string', description: 'Local destination path' },
     }), async (args) => {
+      // Judged by the egress policy first, on the URLs gh will clone from.
+      if (currentEgressSubject() && egressPolicyActive(activeEgressPolicy())) await enforceGitRemotes(await this.ghCloneUrls(args.repo as string));
       const ghArgs = ['repo', 'clone', args.repo as string];
       if (args.path) ghArgs.push(args.path as string);
       return { output: await this.gh(ghArgs) };
@@ -338,7 +368,7 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name)', required: true },
       number: { type: 'number', description: 'Issue number', required: true },
     }), async (args) => {
-      return JSON.parse(await this.gh(['issue', 'view', String(args.number), '-R', args.repo as string, '--json', 'number,title,state,body,author,labels,assignees,comments,createdAt,updatedAt']));
+      return JSON.parse(await this.gh(['issue', 'view', assertNumber(args.number, 'number'), '-R', args.repo as string, '--json', 'number,title,state,body,author,labels,assignees,comments,createdAt,updatedAt']));
     }, { permissionAction: 'read' });
 
     this.registerTool('issue_create', 'Create a GitHub issue', createParameterSchema({
@@ -360,7 +390,7 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'Issue number', required: true },
       body: { type: 'string', description: 'Comment body', required: true },
     }), async (args) => {
-      return { output: await this.gh(['issue', 'comment', String(args.number), '-R', args.repo as string, '--body', args.body as string]) };
+      return { output: await this.gh(['issue', 'comment', assertNumber(args.number, 'number'), '-R', args.repo as string, '--body', args.body as string]) };
     }, { permissionAction: 'write' });
 
     this.registerTool('issue_close', 'Close a GitHub issue', createParameterSchema({
@@ -368,7 +398,7 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'Issue number', required: true },
       reason: { type: 'string', description: 'Close reason', enum: ['completed', 'not planned'] },
     }), async (args) => {
-      const ghArgs = ['issue', 'close', String(args.number), '-R', args.repo as string];
+      const ghArgs = ['issue', 'close', assertNumber(args.number, 'number'), '-R', args.repo as string];
       if (args.reason) ghArgs.push('--reason', args.reason as string);
       return { output: await this.gh(ghArgs) };
     }, { permissionAction: 'manage' });
@@ -393,7 +423,7 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name)', required: true },
       number: { type: 'number', description: 'PR number', required: true },
     }), async (args) => {
-      return JSON.parse(await this.gh(['pr', 'view', String(args.number), '-R', args.repo as string, '--json', 'number,title,state,body,author,baseRefName,headRefName,reviews,comments,commits,files,additions,deletions,createdAt,updatedAt,mergeable,mergeStateStatus']));
+      return JSON.parse(await this.gh(['pr', 'view', assertNumber(args.number, 'number'), '-R', args.repo as string, '--json', 'number,title,state,body,author,baseRefName,headRefName,reviews,comments,commits,files,additions,deletions,createdAt,updatedAt,mergeable,mergeStateStatus']));
     }, { permissionAction: 'read' });
 
     this.registerTool('pr_create', 'Create a pull request', createParameterSchema({
@@ -418,7 +448,7 @@ export class GitHubTool extends BaseTool {
       event: { type: 'string', description: 'Review type', enum: ['approve', 'request-changes', 'comment'], required: true },
       body: { type: 'string', description: 'Review comment' },
     }), async (args) => {
-      const ghArgs = ['pr', 'review', String(args.number), '-R', args.repo as string, `--${args.event}`];
+      const ghArgs = ['pr', 'review', assertNumber(args.number, 'number'), '-R', args.repo as string, `--${args.event}`];
       if (args.body) ghArgs.push('--body', args.body as string);
       return { output: await this.gh(ghArgs) };
     }, { permissionAction: 'write' });
@@ -428,7 +458,7 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'PR number', required: true },
       method: { type: 'string', description: 'Merge method', enum: ['merge', 'squash', 'rebase'], default: 'merge' },
     }), async (args) => {
-      const ghArgs = ['pr', 'merge', String(args.number), '-R', args.repo as string, `--${args.method || 'merge'}`];
+      const ghArgs = ['pr', 'merge', assertNumber(args.number, 'number'), '-R', args.repo as string, `--${args.method || 'merge'}`];
       return { output: await this.gh(ghArgs) };
     }, { permissionAction: 'manage' });
 
@@ -437,7 +467,7 @@ export class GitHubTool extends BaseTool {
       number: { type: 'number', description: 'PR number', required: true },
       body: { type: 'string', description: 'Comment body', required: true },
     }), async (args) => {
-      return { output: await this.gh(['pr', 'comment', String(args.number), '-R', args.repo as string, '--body', args.body as string]) };
+      return { output: await this.gh(['pr', 'comment', assertNumber(args.number, 'number'), '-R', args.repo as string, '--body', args.body as string]) };
     }, { permissionAction: 'write' });
 
     // === The review loop: what a reviewer left, where CI broke, what to fix ===
@@ -656,7 +686,7 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name)', required: true },
       run_id: { type: 'string', description: 'Run ID', required: true },
     }), async (args) => {
-      return JSON.parse(await this.gh(['run', 'view', args.run_id as string, '-R', args.repo as string, '--json', 'databaseId,workflowName,status,conclusion,headBranch,event,jobs,createdAt,updatedAt']));
+      return JSON.parse(await this.gh(['run', 'view', assertNumber(args.run_id, 'run id'), '-R', args.repo as string, '--json', 'databaseId,workflowName,status,conclusion,headBranch,event,jobs,createdAt,updatedAt']));
     }, { permissionAction: 'read' });
 
     this.registerTool('workflow_run', 'Trigger a workflow', createParameterSchema({
@@ -680,3 +710,136 @@ function splitList(v: unknown): string[] {
 }
 
 export const githubTool = new GitHubTool();
+
+/**
+ * The host a `repo` argument names, or null for `owner/name` (gh's own host):
+ * a URL's host, `HOST/OWNER/REPO`'s first part, an scp-style remote's host.
+ */
+export function ghRepoHost(repo: string): string | null {
+  const value = repo.trim();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^[^/]+:/.test(value)) {
+    const target = gitRemoteTarget(value);
+    if (target === 'unjudgeable' || target === null) throw new ToolNotExecutedError('github', `Not a repository the egress policy can judge: ${value.slice(0, 120)}`);
+    return target.host;
+  }
+  const parts = value.split('/');
+  return parts.length === 3 ? parts[0] : null;
+}
+
+/**
+ * The host gh uses for an `owner/name`: GH_HOST, else the only host gh is
+ * logged in to (its hosts.yml), else github.com — as gh itself picks it.
+ */
+export function defaultGhHost(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.GH_HOST) return env.GH_HOST;
+  const dir = env.GH_CONFIG_DIR || join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'gh');
+  try {
+    const hosts = readFileSync(join(dir, 'hosts.yml'), 'utf8').split('\n').map((line) => /^([^\s#][^:]*):\s*$/.exec(line)?.[1]).filter((h): h is string => !!h);
+    if (hosts.length === 1) return hosts[0];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') toolLogger.debug({ err: (err as Error).message }, 'gh hosts.yml unreadable; assuming github.com');
+  }
+  return 'github.com';
+}
+
+/**
+ * Under an active egress policy, the API host a `repo` argument makes gh
+ * call, judged by name and then by address, before gh runs. A bare
+ * `owner/name` is judged on the host of the gh configuration the call runs
+ * with: in a space, the run's own tool home (no GH_HOST, the space's GitHub
+ * token: github.com); otherwise the server's.
+ */
+async function judgeGhRepoHost(repo: string, context: AgentContext): Promise<void> {
+  if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return;
+  const named = ghRepoHost(repo);
+  const target = { host: named ?? (context.space ? 'github.com' : defaultGhHost()), port: 443, scheme: 'https' as const };
+  precheckEgressName(target, 'github');
+  let addresses: string[] | undefined;
+  try { addresses = (await lookup(target.host, { all: true, verbatim: true })).map((a) => a.address); }
+  catch (err) { toolLogger.debug({ host: target.host, err: (err as Error).message }, 'Egress: a gh host does not resolve; judged by name alone'); }
+  enforceEgress(target, addresses, 'github');
+}
+
+/** A ref, branch or tag name, by git's rules (simplified, stricter): never an option, a URL or a path escape. */
+function assertGhRefName(value: string, what: string): void {
+  if (!value || value.startsWith('-') || value === '@' || /\.\.|@\{|\/\/|\/\.|[\s~^:?*[\\\x00-\x1f\x7f]|^\/|\/$|\.$|\.lock$/.test(value)) {
+    throw new ToolNotExecutedError('github', `Invalid ${what} '${value}'`);
+  }
+}
+
+/** A GitHub login or organization name. */
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+/** A repository name part. */
+const REPO_PART = /^[A-Za-z0-9_.-]{1,100}$/;
+
+function oneOf(values: readonly string[]): (v: string, key: string) => void {
+  return (v, key) => { if (!values.includes(v)) throw new ToolNotExecutedError('github', `${key} must be one of ${values.join(', ')}`); };
+}
+
+/**
+ * How every argument of every github action is constrained before it reaches
+ * gh's argv (docs/EGRESS-POLICY.md#git). Positionals and values gh could read
+ * as a URL or option are integers, enums, ref names, logins or `owner/name`;
+ * free text (title, body, notes, description, milestone, labels, assignee,
+ * path inside a repository) only ever goes in as the value of a flag or an
+ * API field that takes text.
+ */
+const GH_ARG_RULES: Record<string, (value: string, key: string, action: string) => void> = {
+  // owner/name, or HOST/owner/name (the host is judged before gh runs).
+  // URLs and host:path are accepted only by repo_clone, which judges them.
+  repo: (v, key, action) => {
+    if (action === 'repo_clone' && (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) || /^[^/]+:/.test(v))) return;
+    const parts = v.split('/');
+    const named = parts.length === 2 ? parts : parts.length === 3 ? parts.slice(1) : null;
+    if (!named || !named.every((p) => REPO_PART.test(p) && !p.startsWith('-')) || (parts.length === 3 && !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(parts[0]))) {
+      throw new ToolNotExecutedError('github', `Invalid ${key} '${v}' — expected owner/name or HOST/owner/name`);
+    }
+  },
+  number: (v, key) => { assertNumber(v, key); },
+  reply_to: (v, key) => { assertNumber(v, key); },
+  line: (v, key) => { assertNumber(v, key); },
+  run_id: (v, key) => { assertNumber(v, key); },
+  job_id: (v, key) => { assertNumber(v, key); },
+  limit: (v, key) => { const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 1000) throw new ToolNotExecutedError('github', `${key} must be an integer from 1 to 1000`); },
+  lines: (v, key) => { if (!/^\d+$/.test(v)) throw new ToolNotExecutedError('github', `${key} must be a positive integer`); },
+  state: oneOf(['open', 'closed', 'merged', 'all']),
+  event: oneOf(['approve', 'request-changes', 'comment']),
+  method: oneOf(['merge', 'squash', 'rebase']),
+  kind: oneOf(['issue', 'pr']),
+  reason: oneOf(['completed', 'not planned']),
+  side: oneOf(['RIGHT', 'LEFT']),
+  visibility: oneOf(['public', 'private', 'all']),
+  // A branch, or `owner:branch` for a head on a fork.
+  base: (v, key) => assertGhRefName(v, key),
+  head: (v, key) => {
+    const colon = v.indexOf(':');
+    if (colon >= 0) {
+      if (!LOGIN.test(v.slice(0, colon))) throw new ToolNotExecutedError('github', `Invalid ${key} '${v}' — expected branch or owner:branch`);
+      assertGhRefName(v.slice(colon + 1), key);
+    } else assertGhRefName(v, key);
+  },
+  ref: (v, key) => assertGhRefName(v, key),
+  tag: (v, key) => assertGhRefName(v, key),
+  org: (v, key) => { if (!LOGIN.test(v)) throw new ToolNotExecutedError('github', `Invalid ${key} '${v}'`); },
+  // repo_create's positional: name or owner/name.
+  name: (v, key) => {
+    const parts = v.split('/');
+    if (parts.length > 2 || !parts.every((p) => REPO_PART.test(p) && !p.startsWith('-'))) throw new ToolNotExecutedError('github', `Invalid ${key} '${v}'`);
+  },
+  // A workflow's name, file name or id: a positional of `gh workflow run`.
+  workflow: (v, key) => { if (!/^[A-Za-z0-9_][A-Za-z0-9 _.()-]{0,199}$/.test(v)) throw new ToolNotExecutedError('github', `Invalid ${key} '${v}'`); },
+  thread_id: (v, key) => { if (!/^[A-Za-z0-9_=-]+$/.test(v)) throw new ToolNotExecutedError('github', `Invalid ${key}`); },
+  // repo_clone's destination directory, or a file path inside a repository (an API field).
+  path: (v, key) => { if (v.trim().startsWith('-') || /[\x00-\x1f\x7f]/.test(v)) throw new ToolNotExecutedError('github', `The ${key} must not start with "-" or contain control characters`); },
+};
+
+/** Validate every argument an action got (unknown keys are free text the handler passes only as flag or field values). */
+export function validateGhArgs(action: string, args: Record<string, unknown>): void {
+  const bare = action.replace(/^github__/, '');
+  for (const [key, rule] of Object.entries(GH_ARG_RULES)) {
+    const value = args[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value !== 'string' && typeof value !== 'number') throw new ToolNotExecutedError('github', `${key} must be a string or number`);
+    rule(String(value).trim(), key, bare);
+  }
+}

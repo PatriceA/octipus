@@ -3,11 +3,15 @@ import { chromium, type Browser } from 'playwright';
 import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import { WebSearchTool } from './index';
 import { fetchGuarded } from '@/utils/sanitize';
+import { installedChromium } from '@/test-helpers/chromium';
 vi.mock('@/utils/sanitize', () => ({ fetchGuarded: vi.fn(), validateExternalUrl: async () => ({ valid: true }), assertPublicAddress: () => ({ ok: true }) }));
 
-describe('page extraction', () => {
+// Playwright's own browser build may not be downloaded (an upgrade): use an installed headless shell.
+const executable = installedChromium();
+
+describe.skipIf(!executable)('page extraction', () => {
   let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
+  beforeAll(async () => { browser = await chromium.launch({ headless: true, executablePath: executable }); });
   afterAll(async () => { await browser?.close(); });
   it('falls back from an empty content container without destroying the live DOM', async () => {
     const page = await browser.newPage();

@@ -688,7 +688,9 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     const { fetchArticle, WebReadError } = await import('@/core/web-read/fetch');
     let doc: Awaited<ReturnType<typeof fetchArticle>>;
     try {
-      doc = await fetchArticle(ctx.body.url);
+      // Judged by the egress policy as `plugin:<name>` (docs/EGRESS-POLICY.md).
+      const { withEgressSubject } = await import('@/security/egress-policy');
+      doc = await withEgressSubject({ tool: `plugin:${grant.plugin}`, userId: grant.userId }, () => fetchArticle(ctx.body.url));
     } catch (err) {
       // The package learns only that it was refused or failed, never why
       // (an address, a status, a size): no probing of what lies behind the guard.
