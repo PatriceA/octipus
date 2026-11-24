@@ -511,7 +511,9 @@ the pure helpers are in `src/shared/note-todos.ts`.
   merged into its live text. A client editing that note sees the new text on
   its next read; a save made from the older text is refused as `stale` (the web
   merges it with the change and saves again when the two do not touch the same
-  text).
+  text). The tick is the to-do's state, not anyone's text: it is written
+  directly also when an agent completed the to-do in a space that takes the
+  agent's note changes as proposals.
 - A note save that ticks or unticks a marked line completes or reopens its
   to-do. Only a line whose tick **changed** in that save counts: a marker that
   only appears (a line just made a to-do) or only disappears (a line deleted)

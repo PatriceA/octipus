@@ -104,6 +104,9 @@ test.describe('a note line made a to-do', () => {
     await reader.getByRole('button', { name: 'Make this line a to-do' }).click();
     await expect.poll(() => s.posts('/tasks/').at(-1)).toMatchObject({ title: 'Book the hotel', noteAnchor: expect.any(String) });
     await expect.poll(() => s.notes[0].body).toMatch(/- \[ \] Book the hotel \^todo-[a-z0-9]{8}/);
+    // Saved and read again: its chip names the new to-do (the view is drawn anew, so select after that).
+    await expect(reader.getByRole('button', { name: /To-do: Book the hotel/ })).toBeVisible();
+    await expect(page.getByTestId('note-save-status')).toContainText('Saved');
     // A selection: a to-do titled by it, the note attached.
     await reader.getByText('Ask the embassy about the visa rules.').selectText();
     await page.getByRole('button', { name: 'Make a to-do', exact: true }).click();
