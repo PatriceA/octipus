@@ -218,6 +218,9 @@ const SPACE_ACTING = [
   'POST /api/notes/:id/restore',
   // The day's note and a move to another slug: `noteRepos` → the space's notes, writes by editors and owners.
   'POST /api/notes/daily', 'POST /api/notes/:id/move',
+  // Today and note ↔ to-do links (core/tasks/note-links.ts): `contentRepos` on both ends; a link is made by a writer of
+  // the to-do who reaches the note, and read through the reader's scope on each side (task-note-links.isolation.test.ts).
+  'GET /api/notes/daily', 'POST /api/notes/:id/todos', 'POST /api/tasks/:id/notes', 'DELETE /api/tasks/:id/notes/:noteId',
   // Space notes (S3): revisions and the agent's edit proposals; 404 in a personal workspace.
   'GET /api/notes/proposals', 'POST /api/notes/proposals/:proposalId/accept', 'POST /api/notes/proposals/:proposalId/reject',
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
