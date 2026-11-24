@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-790 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+791 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -414,6 +414,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/notes/:id/suggestions` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/:id/todos` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/capture` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/daily` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/daily` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/index` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/proposals` | `src/api/routes/notes.ts` |
@@ -969,7 +970,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 161 |
+| `tools` | `core` | 165 |
 | `tools` | `db` | 43 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

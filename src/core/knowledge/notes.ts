@@ -673,6 +673,17 @@ export class NoteService {
    * existing user-level one (`getBySlug`'s fallback) — a new one is only
    * created when neither exists. In a space, the space's daily note.
    */
+  /**
+   * The daily note of a day if it exists (no note is created), and the text
+   * a new one starts from: a page can show the day before its note exists,
+   * and create it once something is written (`getOrCreateDaily`).
+   */
+  async findDaily(scope: NoteScope, day: string): Promise<{ note: Note | null; template: string }> {
+    const date = normalizeDay(day);
+    const note = await this.store(scope).getBySlug(`daily/${date}`);
+    return { note: note ? this.withLive(scope, note) : null, template: dailyTemplate(date) };
+  }
+
   async getOrCreateDaily(scope: NoteScope, day: string): Promise<Note> {
     const date = normalizeDay(day);
     const slug = `daily/${date}`;

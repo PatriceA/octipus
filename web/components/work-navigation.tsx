@@ -17,9 +17,10 @@ export function WorkNavigation() {
     ...(!remote ? [{ href: '/chat', label: 'Conversations' }] : []),
     ...(shared ? [{ href: '/rooms', label: 'Shared rooms' }] : []),
     ...(!remote ? [{ href: '/documents', label: 'Documents' }, { href: '/artifacts', label: 'Prototypes & apps' }] : []),
+    { href: '/today', label: 'Today' },
     { href: '/tasks', label: 'To-dos' },
   ].filter((item) => pageOn(item.href));
-  if (!['/chat', '/rooms', '/documents', '/artifacts', '/tasks', '/my-work'].some(path => pathname === path || pathname.startsWith(`${path}/`))) return null;
+  if (!['/chat', '/rooms', '/documents', '/artifacts', '/tasks', '/today', '/my-work'].some(path => pathname === path || pathname.startsWith(`${path}/`))) return null;
   return (
     <nav aria-label="Work navigation" className="shrink-0 border-b border-outline-variant/40 bg-surface-container-lowest px-3 py-2 font-sans">
       <div className="flex items-center gap-2 overflow-x-auto text-xs">

@@ -8,7 +8,7 @@ import { EventDialog } from '@/components/calendar/event-dialog';
 import { EventPopover } from '@/components/calendar/event-popover';
 import { AgendaView, MonthView } from '@/components/calendar/list-views';
 import {
-  buttonPrimary, buttonQuiet, type CalendarsResponse, type CalendarViewName, type EventDraft, eventKey, type EventsResponse, firstWeekday,
+  buttonPrimary, buttonQuiet, calendarEventsKey, type CalendarsResponse, type CalendarViewName, type EventDraft, eventKey, type EventsResponse, fetchCalendarEvents, firstWeekday,
   type NewEventSeed, rangeTitle, readerTimeZone, stepAnchor, today as todayOf, viewDays, VIEWS,
 } from '@/components/calendar/model';
 import { TimeGrid } from '@/components/calendar/time-grid';
@@ -17,7 +17,6 @@ import { PageHeader } from '@/components/ui/page-header';
 import { api, ApiError } from '@/lib/api';
 import { useWorkspace, useWorkspaceId } from '@/lib/workspace-context';
 import { calendarKey, type CalendarEvent, type CalendarInfo, type CalendarResponse, type RecurrenceScope } from '../../../src/shared/calendar';
-import { addDays } from '../../../src/shared/calendar-layout';
 import { DueTodos } from '@/components/todos/due-todos';
 
 export default function CalendarPage() {
@@ -100,13 +99,8 @@ function PersonalCalendar() {
       return { calendars: r.calendars ?? [], providers: r.providers ?? [], partial: r.partial === true, preferences: r.preferences ?? {}, microsoftSharedAccess: r.microsoftSharedAccess ?? null };
     },
   });
-  const eventsKey = useCallback((shown: string[]) => ['calendar-events', workspace, shown[0], shown.length] as const, [workspace]);
-  const fetchEvents = useCallback((shown: string[]) => {
-    const from = new Date(`${shown[0]}T00:00:00`);
-    const to = new Date(`${addDays(shown[shown.length - 1], 1)}T00:00:00`);
-    return api.get<Partial<EventsResponse>>(`/calendar/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
-      .then((r): EventsResponse => ({ ...r, events: r.events ?? [], providers: r.providers ?? [], partial: r.partial === true }));
-  }, []);
+  const eventsKey = useCallback((shown: string[]) => calendarEventsKey(workspace, shown), [workspace]);
+  const fetchEvents = fetchCalendarEvents;
   // The range on screen stays while the next one loads.
   const events = useQuery({ queryKey: eventsKey(days), queryFn: () => fetchEvents(days), staleTime: 60_000, placeholderData: keepPreviousData });
   // The ranges either side are fetched ahead, so stepping is instant.

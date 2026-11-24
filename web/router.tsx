@@ -78,6 +78,7 @@ const JoinRemoteSpacePage = lazy(() => import('./app/spaces/join-remote/page'));
 const RemoteSpacePage = lazy(() => import('./app/spaces/remote/page'));
 const SkillsProposalsPage = lazy(() => import('./app/skills/proposals/page'));
 const TasksPage = lazy(() => import('./app/tasks/page'));
+const TodayPage = lazy(() => import('./app/today/page'));
 const CasesPage = lazy(() => import('./app/cases/page'));
 const ContactsPage = lazy(() => import('./app/contacts/page'));
 const RecordsPage = lazy(() => import('./app/records/page'));
@@ -187,6 +188,7 @@ const router = createBrowserRouter([
       { path: 'spaces/join-remote', element: <JoinRemoteSpacePage /> },
       { path: 'spaces/remote', element: <RemoteSpacePage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'today', element: <TodayPage /> },
       { path: 'cases', element: <CasesPage /> },
       { path: 'contacts', element: <ContactsPage /> },
       { path: 'records', element: <RecordsPage /> },

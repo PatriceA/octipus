@@ -255,6 +255,23 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     { body: t.Object({ text: t.String(), date: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
   )
 
+  // The daily note of a day if there is one, without making it (`note` is
+  // null then), and the text a new one starts from (`template`): the Today
+  // page shows the day and creates its note on the first keystroke.
+  .get(
+    '/daily',
+    async ({ user, principal, query, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        return await getNoteService().findDaily(noteRepos(principal).noteScope, query.date);
+      } catch (err) {
+        if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
+        throw err;
+      }
+    },
+    { query: t.Object({ date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }) }), detail: { tags: ['notes'] } },
+  )
+
   // The daily note of a day (the client's own calendar day, `YYYY-MM-DD`),
   // created from the daily template the first time it is asked for.
   .post(

@@ -281,3 +281,17 @@ describe('a note line and its to-do follow each other', () => {
     expect(doneLine.body.tasks).toEqual([expect.objectContaining({ title: 'Book room', status: 'done' })]);
   });
 });
+
+describe('GET /notes/daily reads the day without making its note', () => {
+  test('null and the template before; the note after; never another user\'s', async () => {
+    const before = await json(await call('alice', 'GET', '/api/notes/daily?date=2026-11-24'));
+    expect(before).toMatchObject({ status: 200, body: { note: null, template: expect.stringContaining('2026-11-24') } });
+    // Reading made nothing.
+    expect((await json(await call('alice', 'GET', '/api/notes/daily?date=2026-11-24'))).body.note).toBeNull();
+    const made = await json(await call('alice', 'POST', '/api/notes/daily', { body: { date: '2026-11-24' } }));
+    expect(made.body.note.body).toBe(before.body.template);
+    expect((await json(await call('alice', 'GET', '/api/notes/daily?date=2026-11-24'))).body.note.id).toBe(made.body.note.id);
+    expect((await json(await call('bob', 'GET', '/api/notes/daily?date=2026-11-24'))).body.note).toBeNull();
+    expect((await call('alice', 'GET', '/api/notes/daily?date=24-11-2026')).status).toBe(422);
+  });
+});

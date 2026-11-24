@@ -14,6 +14,7 @@
 @import './workspace-design.css';
 @import './todos.css';
 @import './notes.css';
+@import './today.css';
 
 @custom-variant dark (&:is(.dark *));
 

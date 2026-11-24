@@ -28,6 +28,7 @@ import {
   Puzzle,
   Settings,
   Sparkles,
+  Sun,
   Tags,
   Telescope,
   Users,
@@ -71,6 +72,7 @@ interface NavGroup {
 
 const navGroups: NavGroup[] = [
   { label: 'Work', items: [
+    { name: 'Today', href: '/today', icon: Sun },
     { name: 'Workspace', href: '/', icon: LayoutDashboard },
     { name: 'Sessions', href: '/chat', icon: MessageSquare },
     { name: 'Companion', href: '/companion', icon: Sparkles },

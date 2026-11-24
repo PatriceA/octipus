@@ -50,8 +50,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Full-bleed pages manage their own layout/scroll edge-to-edge (no page
-  // padding, no entrance wrapper) — chat, rooms, email, the notes workspace and the to-dos.
-  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname === '/tasks' || pathname.startsWith('/plugins/');
+  // padding, no entrance wrapper) — chat, rooms, email, the notes workspace, the to-dos and Today.
+  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname === '/tasks' || pathname === '/today' || pathname.startsWith('/plugins/');
 
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">

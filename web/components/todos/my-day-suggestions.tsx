@@ -19,7 +19,16 @@ interface MyDayResponse {
  * with why. "+" adds one to today. Re-read whenever the list changes
  * (`version`), so an added one leaves the suggestions.
  */
-export function MyDaySuggestions({ version, canWrite, onAdd }: { version: string; canWrite: boolean; onAdd: (task: Todo) => void }) {
+export function MyDaySuggestions({ version, canWrite, onAdd, only, title = 'Suggestions', hideWhenEmpty = false }: {
+  version: string;
+  canWrite: boolean;
+  onAdd: (task: Todo) => void;
+  /** Only the to-dos left in My Day on an earlier day ("offered again", the Today page). */
+  only?: 'earlier';
+  title?: string;
+  /** Nothing to suggest: show nothing (rather than say so). */
+  hideWhenEmpty?: boolean;
+}) {
   const query = useQuery({
     queryKey: ['todos-my-day', version],
     queryFn: () => api.get<MyDayResponse>(`/tasks/my-day?tz=${encodeURIComponent(browserTimezone())}`),
@@ -30,10 +39,18 @@ export function MyDaySuggestions({ version, canWrite, onAdd }: { version: string
   const data = query.data;
   const error = query.error ? query.error.message : '';
   const load = () => void query.refetch();
-  const suggestions = (data?.suggestions ?? []).filter((s) => !added.has(s.id));
+  const suggestions = (data?.suggestions ?? []).filter((s) => !added.has(s.id) && (!only || s.bucket === only));
+  if (hideWhenEmpty && !error && suggestions.length === 0) return null;
+  const addAll = () => {
+    setAdded((a) => new Set([...a, ...suggestions.map((s) => s.id)]));
+    for (const t of suggestions) onAdd(t);
+  };
   return (
-    <section aria-label="Suggestions for My Day" data-testid="my-day-suggestions" className="mt-6">
-      <h2 className="todo-group-title inline-flex items-center gap-1.5"><Lightbulb className="h-4 w-4 text-accent" aria-hidden />Suggestions</h2>
+    <section aria-label={only ? title : 'Suggestions for My Day'} data-testid={only ? 'my-day-earlier' : 'my-day-suggestions'} className="mt-6">
+      <div className="flex items-center gap-2">
+        <h2 className="todo-group-title inline-flex flex-1 items-center gap-1.5"><Lightbulb className="h-4 w-4 text-accent" aria-hidden />{title}</h2>
+        {only && canWrite && suggestions.length > 1 && <button type="button" className="todo-tool" onClick={addAll}><Plus className="h-4 w-4" />Add all to today</button>}
+      </div>
       {error && (
         <p role="alert" className="flex items-center gap-2 px-1 text-sm text-error">
           Suggestions could not be loaded: {error}
