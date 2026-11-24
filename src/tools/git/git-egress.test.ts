@@ -332,7 +332,7 @@ describe('no git run of the tool executes a program the repository names (with o
     const { work } = repoPair(`refuse-${Math.random().toString(36).slice(2)}`);
     const marker = join(dir, `refuse-marker-${Math.random().toString(36).slice(2)}`);
     arm(work, marker);
-    await expect((await handler('status')).execute({ path: work }, context)).rejects.toThrow(new RegExp(key.toLowerCase().replace(/\./g, '\\.')));
+    await expect((await handler('status')).execute({ path: work }, context)).rejects.toThrow(key.toLowerCase());
     expect(existsSync(marker)).toBe(false);
   }, 30_000);
 
