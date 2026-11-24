@@ -1,6 +1,9 @@
 /**
  * Egress proxy — per-host network for sandboxed stdio servers (plugin
- * packages, docs/PLUGIN-PACKAGES.md#network).
+ * packages, docs/PLUGIN-PACKAGES.md#network) and for sandboxed shell
+ * commands under the operator's egress policy (`anyHost` + `decide`,
+ * src/security/shell-egress.ts, docs/EGRESS-POLICY.md). Whatever the list,
+ * `decide` (the policy) is asked too, and a deny wins.
  *
  * A manifest's `network: [hosts]` used to be a boolean: any host turned the
  * whole network on. This module narrows it to the declared hosts. One proxy
@@ -53,7 +56,9 @@ import { createServer as createHttpServer, type IncomingHttpHeaders, type Incomi
 import { connect as netConnect, createServer as createNetServer, isIP, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { EgressScheme } from '@/shared/egress-policy';
 import { PLUGIN_HOST_ALIAS } from '@/shared/plugin-package';
+import type { EgressDecide } from './egress-policy';
 import { coreLogger } from '@/utils/logger';
 import { assertPublicAddress, pinnedLookup } from '@/utils/sanitize';
 
@@ -140,8 +145,19 @@ export function stripHopByHop(headers: IncomingHttpHeaders): IncomingHttpHeaders
 export interface EgressProxyOptions {
   /** Who the traffic belongs to, for the refusal log (a package name). */
   label: string;
-  /** Declared host entries (see `parseAllowEntry`). */
+  /** Declared host entries (see `parseAllowEntry`). Ignored with `anyHost`. */
   allowed: readonly string[];
+  /**
+   * No declared list: any host on any port is a candidate and `decide` (the
+   * egress policy) alone says yes or no. The sandboxed shell's proxy.
+   */
+  anyHost?: boolean;
+  /**
+   * The operator's egress policy (src/security/egress-policy.ts), on top of
+   * the declared list: asked by name before resolving (a denied name is never
+   * looked up) and again with every resolved address. Deny wins.
+   */
+  decide?: EgressDecide;
   /** Also listen on a Unix socket, for a sandbox without network (not on Windows). */
   unixSocket?: boolean;
   /**
@@ -170,6 +186,14 @@ export interface EgressProxyOptions {
    * undeclared host.
    */
   hostApi?: { host: string; port: number };
+}
+
+/** Set on a 403 the egress policy (or the private-address guard) caused, so a browser tool can tell it from a site's own 403. */
+export const EGRESS_REFUSED_HEADER = 'x-octipus-egress-refused';
+
+/** A refusal reason as a header value (one line, printable ASCII). */
+function headerSafe(value: string): string {
+  return value.replace(/[^\x20-\x7e]/g, '?').slice(0, 300);
 }
 
 /** The only path prefix forwarded to the host API. */
@@ -231,6 +255,13 @@ export interface EgressProxy {
   socketPath: string | null;
   /** The directory holding the socket, to mount into a sandbox. */
   socketDir: string | null;
+  /**
+   * The secret a client of the Unix socket must send first, one line
+   * (`<token>\n`), before anything else: the socket's directory may be
+   * visible to another sandbox (firejail does not hide /run/user), and only
+   * the launcher this proxy was started for knows it (`OCTIPUS_BRIDGE_TOKEN`).
+   */
+  socketToken: string | null;
   close(): Promise<void>;
 }
 
@@ -245,12 +276,12 @@ const MAX_SOCKET_PATH = 100;
  * hide it, which the warning says.
  */
 function socketDirFor(parent: string | undefined, label: string): string {
-  const fits = (base: string) => join(base, 'egress-XXXXXX', 'proxy.sock').length < MAX_SOCKET_PATH;
+  const fits = (base: string) => join(base, `egress-${process.pid}-XXXXXX`, 'proxy.sock').length < MAX_SOCKET_PATH;
   for (const base of [parent, process.env.XDG_RUNTIME_DIR].filter((b): b is string => !!b)) {
     if (!fits(base)) continue;
     try {
       mkdirSync(base, { recursive: true, mode: 0o700 });
-      return mkdtempSync(join(base, 'egress-'));
+      return mkdtempSync(join(base, `egress-${process.pid}-`));
     } catch { /* try the next */ }
   }
   const tmp = fits(tmpdir()) ? tmpdir() : '/tmp';
@@ -258,7 +289,7 @@ function socketDirFor(parent: string | undefined, label: string): string {
   if (parent !== undefined) {
     coreLogger.warn({ pkg: label, dir: tmp }, 'Egress proxy socket falls back to the temp directory; firejail\'s --private-tmp may hide it from the sandbox');
   }
-  return mkdtempSync(join(tmp, 'octipus-egress-'));
+  return mkdtempSync(join(tmp, `octipus-egress-${process.pid}-`));
 }
 
 /** Start a proxy that lets through only `allowed`. */
@@ -273,6 +304,14 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     return s;
   };
 
+  const declared = (host: string, port: number) => options.anyHost === true || hostAllowed(allowed, host, port);
+  /** The policy's answer, or null when there is none or it allows. */
+  const policyRefusal = (host: string, port: number, scheme: EgressScheme, addresses?: readonly string[]): string | null => {
+    if (!options.decide) return null;
+    const decision = options.decide({ host, port, scheme }, addresses);
+    return decision.allowed ? null : `Egress policy denies ${decision.host}:${decision.port} (${decision.rule})`;
+  };
+
   const refuse = (host: string, port: number, kind: string) => {
     coreLogger.warn({ pkg: label, host, port, kind }, 'Plugin package network request refused: host not declared in its manifest');
   };
@@ -282,7 +321,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
    * address to connect to — the connection uses it, never the name, so a
    * second resolution (DNS rebinding) cannot swap in another — or why not.
    */
-  const vet = async (host: string, port: number, kind: string): Promise<{ ip: string } | { status: 403 | 502; message: string }> => {
+  const vet = async (host: string, port: number, kind: string, scheme: EgressScheme): Promise<{ ip: string } | { status: 403 | 502; message: string }> => {
     let addresses: string[];
     try {
       addresses = await resolveHost(host);
@@ -293,11 +332,15 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     if (!options.allowPrivateAddresses) {
       for (const address of addresses) {
         if (!assertPublicAddress(address).ok) {
-          coreLogger.warn({ pkg: label, host, port, address, kind }, 'Plugin package network request refused: declared host resolves to a private address');
+          coreLogger.warn({ pkg: label, host, port, address, kind }, 'Egress proxy request refused: host resolves to a private address');
           return { status: 403, message: `Host ${host} resolves to a private or reserved address (${address}); refused` };
         }
       }
     }
+    // The policy sees every address the name resolved to; the connection
+    // then goes to the first of them, which it has seen.
+    const refused = policyRefusal(host, port, scheme, addresses);
+    if (refused) return { status: 403, message: refused };
     return { ip: addresses[0] };
   };
 
@@ -351,15 +394,20 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       req.pipe(upstream);
       return;
     }
-    if (!hostAllowed(allowed, host, port)) {
+    const nameRefused = declared(host, port) ? policyRefusal(host, port, 'http') : null;
+    if (nameRefused) {
+      res.writeHead(403, { 'content-type': 'text/plain', [EGRESS_REFUSED_HEADER]: headerSafe(nameRefused) }).end(`${nameRefused}\n`);
+      return;
+    }
+    if (!declared(host, port)) {
       refuse(host, port, 'http');
       res.writeHead(403, { 'content-type': 'text/plain' }).end(`Host ${host}:${port} is not declared in this package's network list\n`);
       return;
     }
-    const vetted = await vet(host, port, 'http');
+    const vetted = await vet(host, port, 'http', 'http');
     if (res.destroyed) return;
     if (!('ip' in vetted)) {
-      res.writeHead(vetted.status, { 'content-type': 'text/plain' }).end(`${vetted.message}\n`);
+      res.writeHead(vetted.status, { 'content-type': 'text/plain', ...(vetted.status === 403 ? { [EGRESS_REFUSED_HEADER]: headerSafe(vetted.message) } : {}) }).end(`${vetted.message}\n`);
       return;
     }
     // The Host the server sees is the target's, never what the client sent
@@ -391,15 +439,21 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       return;
     }
     // The host API is plain HTTP through the proxy only: no tunnel to it, whatever is declared.
-    if (authority.host === PLUGIN_HOST_ALIAS || !hostAllowed(allowed, authority.host, authority.port)) {
+    if (authority.host === PLUGIN_HOST_ALIAS || !declared(authority.host, authority.port)) {
       refuse(authority.host, authority.port, 'connect');
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nHost not declared in this package\'s network list\n');
+      return;
+    }
+    // A tunnel's contents are opaque: it is judged as https (see docs/EGRESS-POLICY.md).
+    const nameRefused = policyRefusal(authority.host, authority.port, 'https');
+    if (nameRefused) {
+      client.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\n${nameRefused}\n`);
       return;
     }
     // Hold bytes a client sends before the tunnel is up (resolution is
     // async); `pipe` resumes it, and a refusal resumes it to see the close.
     client.pause();
-    const vetted = await vet(authority.host, authority.port, 'connect');
+    const vetted = await vet(authority.host, authority.port, 'connect', 'https');
     if (client.destroyed) return;
     if (!('ip' in vetted)) {
       client.resume();
@@ -439,10 +493,37 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   let unix: NetServer | null = null;
   let socketDir: string | null = null;
   let socketPath: string | null = null;
+  const socketToken = options.unixSocket && process.platform !== 'win32' ? randomBytes(32).toString('base64url') : null;
   if (options.unixSocket && process.platform !== 'win32') {
     socketDir = socketDirFor(options.socketParent, label);
     socketPath = join(socketDir, 'proxy.sock');
-    unix = createNetServer((socket) => server.emit('connection', socket));
+    const token = socketToken;
+    unix = createNetServer((socket) => {
+      // The first line must be this proxy's token; nothing is parsed before it.
+      let buffered = Buffer.alloc(0);
+      const timer = setTimeout(() => socket.destroy(), 5_000);
+      const onData = (chunk: Buffer) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        const newline = buffered.indexOf(0x0a);
+        if (newline < 0) { if (buffered.length > 256) socket.destroy(); return; }
+        socket.off('data', onData);
+        clearTimeout(timer);
+        const given = buffered.subarray(0, newline);
+        const known = Buffer.from(token as string);
+        if (given.length !== known.length || !timingSafeEqual(given, known)) {
+          coreLogger.warn({ pkg: label }, 'Egress proxy socket: a client without this proxy\'s token was refused');
+          socket.destroy();
+          return;
+        }
+        socket.pause();
+        const rest = buffered.subarray(newline + 1);
+        if (rest.length) socket.unshift(rest);
+        server.emit('connection', socket);
+        socket.resume();
+      };
+      socket.on('data', onData);
+      socket.on('error', () => socket.destroy());
+    });
     await new Promise<void>((resolve, reject) => {
       unix!.once('error', reject);
       unix!.listen(socketPath, () => { unix!.off('error', reject); resolve(); });
@@ -455,6 +536,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     port,
     socketPath,
     socketDir,
+    socketToken,
     close() {
       closed ??= (async () => {
         forgetKey();
@@ -476,20 +558,30 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
  * It listens on the namespace's own 127.0.0.1, forwards each connection to
  * the proxy's Unix socket, and runs the command with the proxy variables
  * pointing at it, passing stdio through and exiting with its code.
+ * `OCTIPUS_BRIDGE_NO_PROXY` in its environment becomes the command's
+ * `NO_PROXY` (and is not passed on); `OCTIPUS_BRIDGE_TOKEN` is the proxy's
+ * `socketToken`, sent first on every connection and not passed on either.
  */
 export const SANDBOX_BRIDGE_SOURCE = `
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const [sock, ...cmd] = process.argv.slice(1);
+const token = process.env.OCTIPUS_BRIDGE_TOKEN || '';
+delete process.env.OCTIPUS_BRIDGE_TOKEN;
 const srv = net.createServer((c) => {
   const u = net.connect(sock);
+  u.write(token + '\\n');
   c.pipe(u); u.pipe(c);
   c.on('error', () => u.destroy()); u.on('error', () => c.destroy());
   c.on('close', () => u.destroy()); u.on('close', () => c.destroy());
 });
 srv.listen(0, '127.0.0.1', () => {
   const url = 'http://127.0.0.1:' + srv.address().port;
-  const env = { ...process.env, NO_PROXY: '', no_proxy: '' };
+  // NO_PROXY: what the caller names in OCTIPUS_BRIDGE_NO_PROXY (the shell:
+  // the namespace's own loopback), else nothing bypasses the proxy.
+  const noProxy = process.env.OCTIPUS_BRIDGE_NO_PROXY || '';
+  const env = { ...process.env, NO_PROXY: noProxy, no_proxy: noProxy };
+  delete env.OCTIPUS_BRIDGE_NO_PROXY;
   for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) env[k] = url;
   const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env });
   for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(s, () => child.kill(s));

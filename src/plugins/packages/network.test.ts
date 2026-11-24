@@ -275,7 +275,7 @@ describe('egress proxy', () => {
           noProxy: process.env.NO_PROXY, sameAll: process.env.ALL_PROXY === process.env.HTTPS_PROXY })))();`;
       const argv = bridgedArgv([process.execPath, '-e', client], proxy.socketPath as string);
       const out = await new Promise<string>((resolve, reject) => {
-        const child = spawn(argv[0], argv.slice(1), { env: { PATH: process.env.PATH ?? '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(argv[0], argv.slice(1), { env: { PATH: process.env.PATH ?? '', OCTIPUS_BRIDGE_TOKEN: proxy.socketToken ?? '' }, stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', (c) => { stdout += c; });

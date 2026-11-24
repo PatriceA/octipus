@@ -35,7 +35,7 @@ describe('pipeline stage spawns', () => {
     }
     expect(calls.length).toBeGreaterThan(0);
     // Narrowed, never the caller's whole metadata object — see `pipelineMetadata`.
-    for (const call of calls) expect(call).toContain('contextMetadata: pipelineMetadata(');
+    for (const call of calls) expect(call).toContain('contextMetadata: withEgressRoleChain(pipelineMetadata(');
   });
 });
 

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { getConfig, resetConfig } from '@/config';
 import type { AgentContext } from '@/core/types';
@@ -91,7 +91,10 @@ test.skipIf(detectRunner()?.runner !== 'bwrap')('unmounted parent directories re
   getConfig().security.shellSandbox = 'required';
   const fs = WorkspaceFS.forAgent(context);
   const options = shellRunOptions(context, undefined, null);
-  const target = `/home/octipus-unmounted-${process.pid}`;
+  // Next to the home directory: its parent exists in the sandbox only as the
+  // synthetic parent of the user runtime mounts (~/.local/bin, ...), whatever
+  // the home is. A fixed /home/... does not exist at all when HOME is /root.
+  const target = join(dirname(homedir()), `octipus-unmounted-${process.pid}`);
   const result = await new LocalShellOperations().exec(`mkdir ${quote(target)}`, fs.root, options);
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).toMatch(/read-only|permission denied/i);

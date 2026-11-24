@@ -1,4 +1,5 @@
 import { codexContextReader, codexRuntimeInfo } from './cli-runtime-info';
+import { cliNativeToolsRefusal } from '@/security/egress-coverage';
 import { createManagedTemporaryDirectory, type ManagedTemporaryDirectory } from './temporary-directory';
 import { measureCliPayload } from './agent/cli-prompt-composition';
 import { clearContextFill, recordContextFill } from './agent/prompt-budget';
@@ -1168,6 +1169,9 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (!toolConfig) {
       throw new Error(`No CLI tool config found for model: ${this.context.model}`);
     }
+    // Vendor-native tools run inside the CLI, out of the egress policy's reach.
+    const nativeRefusal = cliNativeToolsRefusal(toolConfig.octipusToolsOnly === true);
+    if (nativeRefusal) throw new Error(nativeRefusal);
 
     // The row's settings and credential owner first: the quota key is per owner.
     const settings = await this.getCLISettings();

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-780 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+781 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -647,6 +647,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/companion-maintenance/test` | `src/api/routes/settings.ts` |
+| GET | `/api/settings/egress` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/execution-environments` | `src/api/routes/settings.ts` |
 | DELETE | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
@@ -824,7 +825,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 191 |
+| `api` | `security` | 193 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 32 |
 | `api` | `skills` | 10 |
@@ -850,7 +851,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
-| `config` | `shared` | 7 |
+| `config` | `shared` | 8 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
@@ -863,13 +864,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `models` | 153 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 256 |
+| `core` | `security` | 260 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 94 |
 | `core` | `skills` | 20 |
 | `core` | `tools` | 39 |
-| `core` | `utils` | 276 |
+| `core` | `utils` | 281 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 23 |
@@ -902,7 +903,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `utils` | 10 |
 | `mcp` | `config` | 2 |
 | `mcp` | `core` | 6 |
-| `mcp` | `security` | 9 |
+| `mcp` | `security` | 10 |
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `capabilities` | 2 |
@@ -924,14 +925,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 39 |
 | `security` | `api` | 1 |
-| `security` | `config` | 20 |
-| `security` | `core` | 42 |
-| `security` | `db` | 88 |
-| `security` | `mcp` | 2 |
+| `security` | `config` | 21 |
+| `security` | `core` | 43 |
+| `security` | `db` | 89 |
+| `security` | `mcp` | 3 |
 | `security` | `plugins` | 2 |
-| `security` | `shared` | 8 |
+| `security` | `shared` | 9 |
 | `security` | `tools` | 7 |
-| `security` | `utils` | 34 |
+| `security` | `utils` | 37 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 8 |
 | `services` | `core` | 10 |
@@ -959,17 +960,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 161 |
+| `tools` | `core` | 163 |
 | `tools` | `db` | 44 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 13 |
 | `tools` | `plugins` | 9 |
-| `tools` | `security` | 87 |
+| `tools` | `security` | 105 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 10 |
 | `tools` | `skills` | 7 |
-| `tools` | `utils` | 43 |
+| `tools` | `utils` | 46 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 7 |
 | `tui-editor` | `mcp` | 1 |
@@ -983,8 +984,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
-| `utils` | `security` | 3 |
+| `utils` | `security` | 5 |
 | `visual` | `models` | 1 |
+| `visual` | `security` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
 | `voice` | `config` | 8 |

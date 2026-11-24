@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildContentsEndpoint, isAllowedGitHubHost } from './index';
+import { buildContentsEndpoint } from './index';
 
 describe('buildContentsEndpoint', () => {
   test('builds a normal contents endpoint', () => {
@@ -27,19 +27,5 @@ describe('buildContentsEndpoint', () => {
     expect(() => buildContentsEndpoint('not-a-repo', 'x.md')).toThrow(/Invalid repo/);
     expect(() => buildContentsEndpoint('a/b/c', 'x.md')).toThrow(/Invalid repo/);
     expect(() => buildContentsEndpoint('../../x/y', 'x.md')).toThrow(/Invalid repo/);
-  });
-});
-
-describe('isAllowedGitHubHost', () => {
-  test('accepts GitHub-owned hosts', () => {
-    expect(isAllowedGitHubHost('https://raw.githubusercontent.com/a/b/main/f')).toBe(true);
-    expect(isAllowedGitHubHost('https://api.github.com/repos/a/b/contents/f')).toBe(true);
-    expect(isAllowedGitHubHost('https://github.com/a/b')).toBe(true);
-  });
-
-  test('rejects non-GitHub and malformed hosts', () => {
-    expect(isAllowedGitHubHost('https://evil.example/x')).toBe(false);
-    expect(isAllowedGitHubHost('https://raw.githubusercontent.com.evil.example/x')).toBe(false);
-    expect(isAllowedGitHubHost('not a url')).toBe(false);
   });
 });

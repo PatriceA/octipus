@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { htmlScrapeCollector } from './html-scrape';
 
 const ctx = { principalId: 'p', workspaceId: 'w' };
@@ -25,18 +25,11 @@ const SAMPLE_HTML = `
 </body></html>
 `;
 
-const originalFetch = globalThis.fetch;
-beforeAll(() => {
-  // @ts-expect-error stub
-  globalThis.fetch = async (_url: string) => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    text: async () => SAMPLE_HTML,
-    headers: new Headers({ 'content-type': 'text/html' }),
-  });
-});
-afterAll(() => { globalThis.fetch = originalFetch; });
+// The collector fetches through the SSRF guard (fetchGuarded); stub it there.
+vi.mock('@/utils/sanitize', async (orig) => ({
+  ...(await orig<typeof import('@/utils/sanitize')>()),
+  fetchGuarded: async () => new Response(SAMPLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
+}));
 
 describe('art_collect_html_scrape', () => {
   test('extracts repeating rows with text + attribute fields', async () => {

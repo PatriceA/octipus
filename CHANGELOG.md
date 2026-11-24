@@ -7,6 +7,70 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Egress policy for tools** ([docs](docs/EGRESS-POLICY.md)). Operators can
+  say what tools may reach on the network: `security.egressPolicy` with
+  allow/deny rules by host (exact, `*.domain` or `*`), address range, port
+  and scheme (`http`, `https`, `ssh`), a default (`allow`, unchanged
+  behaviour, or `deny`), and further rules per tool (`shell`, `websearch`,
+  `plugin:<name>`, `artifacts`, ...) and per agent role, a role holding along
+  the whole spawn chain. Deny wins; host names are compared in canonical form
+  (case, IDN, trailing dots, numeric and IPv6 spellings, userinfo), rules are
+  also checked against the addresses a request is pinned to, a name the
+  policy refuses outright is never resolved, and private and metadata
+  addresses stay blocked whatever a rule says. Enforced for web fetches
+  (every redirect hop), artifact data sources and collectors, browser,
+  websearch and visual pages (each browser context goes through an egress
+  proxy, so redirect hops and sub-resources are judged before they are sent),
+  plugin package proxies (on top of the manifest), and sandboxed shell
+  commands, which get an egress proxy instead of the host network under
+  bwrap/firejail and macOS sandbox-exec (their own loopback stays direct).
+  git clone/pull/push and `gh repo clone` are judged on the URL git will use
+  before it starts. Without a sandbox, shell commands are advisory only; the
+  tool actions the policy cannot judge (Docker, the browser extension,
+  `mcp_add_server`, CLI agents' native tools) are listed in the docs and at
+  `GET /api/settings/egress`, and `requireEnforcement: true` refuses them and
+  unconfined shell commands. Refusals return a clear error to the model and
+  are logged and audited (`permission_denied`, resource `egress`: host, port,
+  tool, role, rule; no payloads). No policy configured: no change, except
+  two fixes below.
+- **Breaking — artifact data sources and the visual tool no longer reach
+  private addresses.** `http`/`rss` artifact sources and the `art_collect_http_json`,
+  `_http_text`, `_html_scrape` and `_rss` collectors fetched a model-chosen
+  URL with a bare `fetch` (the cloud metadata address included); `visual`
+  navigated to any URL. Both now go through the SSRF guard, so a source or
+  capture of `localhost` or a LAN address is refused, with or without an
+  egress policy.
+- **Breaking — repository hooks, fsmonitor, external diff, textconv and
+  filter drivers no longer run when the agent's git tool operates on a
+  repo.** git runs on the host, outside the shell sandbox, and a sandboxed
+  command could write `.git/config` or `.git/hooks` and then have
+  `git.status` run its code with the host's network. Every git run of the
+  tool now has hooks, fsmonitor, pagers, editors and `ext::` off (diff:
+  `--no-ext-diff --no-textconv`). The repository's own credential helpers,
+  filter and merge drivers, `core.sshCommand`, signing programs and similar
+  are neutralised on the command line — the operator's global/system values
+  are put back, so their helpers and LFS keep working, while a repository's
+  own LFS filter is treated as absent (files stay pointers). A few keys that
+  cannot be neutralised (`remote.<name>.uploadpack`/`receivepack`/`vcs`,
+  `core.gitProxy`, `core.alternateRefsCommand`, `gpg.ssh.defaultKeyCommand`,
+  config-based hooks) refuse the action and name the key. A push into a
+  repository on this machine runs its receive-pack the same way, so neither
+  its hooks nor a filter during `updateInstead` run. The git `gh` starts
+  gets the switch-offs. The operator's global and system git config is
+  unchanged.
+- **github tool values are validated before gh sees them.** Issue/PR
+  numbers, run and job ids are integers (a number given as a URL made gh
+  contact that host), enums are enforced, branches and tags are ref names,
+  `head` may be `owner:branch`, `repo` is `owner/name` or `HOST/owner/name`
+  (URLs only for `repo_clone`), and `get_file` no longer fetches the
+  absolute `download_url`.
+- **git and github tools refuse option-like values.** A branch, remote,
+  URL, path, target or repository that starts with `-` is refused (refspecs
+  such as `HEAD:main` and `+a:b` still work), and git's positionals follow
+  `--`: `pull` with a branch of
+  `--upload-pack=<command>` ran that command on the server.
+- **Headless Chromium hardening.** The shared browser and `visual` run with
+  WebRTC limited to proxied UDP and QUIC off, with or without a policy.
 - **Project evidence hooks for pipelines** ([docs](docs/AGENT-ARCHITECTURE.md#qa-retry-loop)).
   New setting `agent.evidenceHooks` (default `[]`, nothing changes until set):
   `[{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]`.

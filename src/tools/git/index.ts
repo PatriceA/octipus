@@ -1,4 +1,12 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { type ConfigEntry, neutralizingArgs, parseConfigListing, refusedKeys, shellQuote } from './repo-config';
+import { HARDENED_GIT_ARGS } from '@/security/git-hardening';
+import { toolLogger } from '@/utils/logger';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
+import { activeEgressPolicy, currentEgressSubject, egressPolicyActive } from '@/security/egress-policy';
+import { enforceGitRemotes, gitRemoteTarget } from '@/security/git-egress';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentToolHome } from '@/security/environment-identity';
 import { executionEnvironmentFor } from '@/security/execution-environments';
@@ -75,7 +83,7 @@ export class GitTool extends BaseTool {
       }),
       async (args) => {
         const format = args.oneline ? '--oneline' : '--format=%H|%an|%ae|%at|%s';
-        const result = await this.git(['log', `-${args.count || 10}`, format], args.path as string);
+        const result = await this.git(['log', `-${gitCount(args.count ?? 10, 'count')}`, format], args.path as string);
 
         if (args.oneline) {
           return result.split('\n').filter(Boolean);
@@ -98,9 +106,10 @@ export class GitTool extends BaseTool {
         staged: { type: 'boolean', description: 'Show staged changes', default: false },
       }),
       async (args) => {
-        const gitArgs = ['diff'];
+        // No external diff program, whatever the configuration says.
+        const gitArgs = ['diff', '--no-ext-diff', '--no-textconv'];
         if (args.staged) gitArgs.push('--staged');
-        if (args.file) gitArgs.push(args.file as string);
+        if (args.file) gitArgs.push('--', gitArgument(args.file, 'file'));
 
         return this.git(gitArgs, args.path as string);
       },
@@ -149,7 +158,8 @@ export class GitTool extends BaseTool {
       }),
       async (args) => {
         if (args.name) {
-          const gitArgs = args.checkout ? ['checkout', '-b', args.name as string] : ['branch', args.name as string];
+          const name = gitRefName(args.name, 'branch name');
+          const gitArgs = args.checkout ? ['checkout', '-b', name] : ['branch', name];
           await this.git(gitArgs, args.path as string);
           return { created: args.name, checkedOut: args.checkout };
         }
@@ -172,7 +182,7 @@ export class GitTool extends BaseTool {
         target: { type: 'string', description: 'Branch name or commit hash', required: true },
       }),
       async (args) => {
-        await this.git(['checkout', args.target as string], args.path as string);
+        await this.git(['checkout', gitArgument(args.target, 'target')], args.path as string);
         return { checkedOut: args.target };
       },
       { permissionAction: 'write' }
@@ -187,10 +197,14 @@ export class GitTool extends BaseTool {
         branch: { type: 'string', description: 'Branch name' },
       }),
       async (args) => {
-        const gitArgs = ['pull', args.remote as string];
-        if (args.branch) gitArgs.push(args.branch as string);
+        // Every positional is checked (no leading `-`: `--upload-pack=<cmd>`
+        // would run a command here) and placed after `--`.
+        const remote = gitRemoteArgument(args.remote ?? 'origin');
+        const gitArgs = ['pull', '--', remote];
+        if (args.branch) gitArgs.push(gitRefspec(args.branch));
+        await this.judgeRemote('fetch', remote, args.path as string);
 
-        const result = await this.git(gitArgs, args.path as string);
+        const result = await this.networkGit(gitArgs, args.path as string);
         return { success: true, output: result };
       },
       { permissionAction: 'write' }
@@ -206,12 +220,19 @@ export class GitTool extends BaseTool {
         setUpstream: { type: 'boolean', description: 'Set upstream', default: false },
       }),
       async (args) => {
+        const remote = gitRemoteArgument(args.remote ?? 'origin');
         const gitArgs = ['push'];
         if (args.setUpstream) gitArgs.push('-u');
-        gitArgs.push(args.remote as string);
-        if (args.branch) gitArgs.push(args.branch as string);
+        gitArgs.push('--', remote);
+        if (args.branch) gitArgs.push(gitRefspec(args.branch));
+        await this.judgeRemote('push', remote, args.path as string);
+        // A push to a repository on this machine runs ITS hooks in a
+        // receive-pack that does not inherit our `-c` (git clears config for
+        // the other side): that receive-pack gets hooks off itself.
+        const receivePack = await this.localReceivePack(remote, args.path as string);
+        if (receivePack) gitArgs.splice(1, 0, `--receive-pack=${receivePack}`);
 
-        const result = await this.git(gitArgs, args.path as string);
+        const result = await this.networkGit(gitArgs, args.path as string);
         return { success: true, output: result };
       },
       { permissionAction: 'push' }
@@ -229,6 +250,7 @@ export class GitTool extends BaseTool {
         const gitArgs = ['stash'];
         const action = args.action as string || 'save';
 
+        if (!['save', 'pop', 'list', 'drop'].includes(action)) throw new ToolNotExecutedError('git', `Unknown stash action: ${action}`);
         if (action === 'save' && args.message) {
           gitArgs.push('push', '-m', args.message as string);
         } else {
@@ -251,7 +273,9 @@ export class GitTool extends BaseTool {
         target: { type: 'string', description: 'Commit to reset to', default: 'HEAD' },
       }),
       async (args) => {
-        const gitArgs = ['reset', `--${args.mode || 'mixed'}`, args.target as string || 'HEAD'];
+        const mode = (args.mode as string) || 'mixed';
+        if (!['soft', 'mixed', 'hard'].includes(mode)) throw new ToolNotExecutedError('git', `Unknown reset mode: ${mode}`);
+        const gitArgs = ['reset', `--${mode}`, gitArgument(args.target || 'HEAD', 'target')];
         const result = await this.git(gitArgs, args.path as string);
         return { mode: args.mode, target: args.target, output: result };
       },
@@ -267,16 +291,93 @@ export class GitTool extends BaseTool {
         depth: { type: 'number', description: 'Shallow clone depth' },
       }),
       async (args) => {
+        const url = gitArgument(args.url, 'url');
         const gitArgs = ['clone'];
-        if (args.depth) gitArgs.push('--depth', String(args.depth));
-        gitArgs.push(args.url as string);
-        if (args.path) gitArgs.push(args.path as string);
+        if (args.depth) gitArgs.push('--depth', gitCount(args.depth, 'depth'));
+        gitArgs.push('--', url);
+        if (args.path) gitArgs.push(gitArgument(args.path, 'path'));
+        await this.judgeRemote('fetch', url, '.');
 
-        const _result = await this.git(gitArgs, '.');
+        const _result = await this.networkGit(gitArgs, '.', false);
         return { cloned: args.url, path: args.path || (args.url as string).split('/').pop()?.replace('.git', '') };
       },
       { permissionAction: 'write' }
     );
+  }
+
+  /**
+   * Under an active egress policy, judge the URLs git is about to contact
+   * (src/security/git-egress.ts), as git will resolve them: `insteadOf`
+   * applied (`ls-remote --get-url`), and for a push the push URLs — a remote's
+   * `pushurl`s, or a URL rewritten by `pushInsteadOf`, which `ls-remote`
+   * does not apply. Asking git touches no network. No policy: no extra git
+   * call.
+   */
+  private async judgeRemote(direction: 'fetch' | 'push', remote: string, cwd: string): Promise<void> {
+    if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return;
+    const named = /^[A-Za-z0-9._-]+$/.test(remote) && gitRemoteTarget(remote) === null;
+    const lines = (out: string) => out.split('\n').map((line) => line.trim()).filter(Boolean);
+    const urls = lines(await this.git(['ls-remote', '--get-url', '--', remote], cwd));
+    if (direction === 'push') {
+      if (named) urls.push(...lines(await this.git(['remote', 'get-url', '--push', '--all', '--', remote], cwd)));
+      else {
+        const rules = lines(await this.git(['config', '--get-regexp', '^url\\..*\\.pushinsteadof$'], cwd).catch(() => ''));
+        const pushed = rewriteInsteadOf(remote, rules);
+        if (pushed) urls.push(pushed);
+      }
+    }
+    await enforceGitRemotes(urls);
+  }
+
+  /**
+   * For a push to a repository on this machine, the receive-pack command to
+   * run there: git clears our `-c` for the receiving side, so it gets the
+   * same switch-offs and the receiving repository's own program-running
+   * settings neutralised (a filter would run when
+   * `receive.denyCurrentBranch=updateInstead` checks the files out). Refused
+   * when the receiving repository sets a key that cannot be neutralised.
+   * Null for a push that leaves this machine.
+   */
+  private async localReceivePack(remote: string, cwd: string): Promise<string | null> {
+    const named = /^[A-Za-z0-9._-]+$/.test(remote) && gitRemoteTarget(remote) === null;
+    const urls = named
+      ? (await this.git(['remote', 'get-url', '--push', '--all', '--', remote], cwd).catch(() => remote)).split('\n').map((u) => u.trim()).filter(Boolean)
+      : [remote];
+    const local = urls.filter((url) => gitRemoteTarget(url) === null);
+    if (!local.length) return null;
+    const neutralize: string[] = [];
+    for (const url of local) {
+      const path = url.startsWith('file://') ? fileURLToPath(url) : resolve(cwd, url);
+      const entries = await this.repoConfig(path).catch((err: unknown) => {
+        toolLogger.debug({ err: (err as Error).message, path }, 'The receiving repository\'s config could not be read; hooks stay off');
+        return [] as ConfigEntry[];
+      });
+      const refused = refusedKeys(entries);
+      if (refused.length) throw new ToolNotExecutedError('git', `The repository this pushes into sets ${refused.join(', ')}, which would run a program on the host; not pushed.`);
+      neutralize.push(...neutralizingArgs(entries));
+    }
+    return ['git', ...HARDENED_GIT, ...neutralize, 'receive-pack'].map(shellQuote).join(' ');
+  }
+
+  /**
+   * A git run that contacts a remote. Under an active egress policy:
+   * repository-level configuration that could reroute it or run a command
+   * (a proxy, `uploadpack`/`receivepack`, `core.sshCommand`, a credential
+   * helper, filters, includes, `http.curloptResolve`, rebase and signing
+   * settings, ...) is refused — the model can write `.git/config`. Hooks,
+   * editors and `ext::` are off for every git run already (`git`). The
+   * operator's own global and system configuration is left alone.
+   */
+  private async networkGit(args: string[], cwd: string, inRepo = true): Promise<string> {
+    if (!currentEgressSubject() || !egressPolicyActive(activeEgressPolicy())) return this.git(args, cwd);
+    // A clone reads no repository's configuration but the new one's.
+    if (inRepo) {
+      const risky = reroutingRepoConfig(await this.repoConfig(cwd));
+      if (risky.length) {
+        throw new ToolNotExecutedError('git', `The repository's own git configuration sets ${risky.join(', ')}, which can reroute this ${args[0]} around the egress policy or run a command; it was not run. Remove those keys from .git/config.`);
+      }
+    }
+    return this.git(args, cwd);
   }
 
   /** The agent a git call runs for: every handler runs inside it (see `registerTool`). */
@@ -318,7 +419,48 @@ export class GitTool extends BaseTool {
     return this.caller.run(context, () => this.spawnPlan(args));
   }
 
+  /**
+   * Every git run of this tool. git runs on the host, outside the shell
+   * sandbox, so nothing the repository says may make it run a program: the
+   * model (or a sandboxed command) can write `.git/config` and `.git/hooks`.
+   * Hooks, fsmonitor, pagers, editors and `ext::` are switched off on the
+   * command line (`HARDENED_GIT`); the repository's own program-running
+   * settings are neutralised with `-c`, the operator's values put back
+   * (src/tools/git/repo-config.ts); the few that cannot be neutralised refuse
+   * the action. The operator's global and system configuration is trusted.
+   */
   private async git(args: string[], cwd: string): Promise<string> {
+    const entries = await this.repoConfig(cwd);
+    const refused = refusedKeys(entries);
+    if (refused.length) {
+      throw new ToolNotExecutedError('git', `The repository's own git configuration sets ${refused.join(', ')}, which would run a program on the host outside the sandbox and cannot be switched off; the git tool does not run in it. Remove those keys from .git/config (or run git through the sandboxed shell).`);
+    }
+    return this.runGit([...HARDENED_GIT, ...neutralizingArgs(entries), ...args], cwd);
+  }
+
+  /**
+   * The configuration git will read in `cwd`, with scopes. Older git without
+   * `--show-scope` (before 2.26): the repository's own file with includes,
+   * and its worktree file when `extensions.worktreeConfig` is set — refused
+   * when that cannot be read.
+   */
+  private async repoConfig(cwd: string): Promise<ConfigEntry[]> {
+    try {
+      return parseConfigListing(await this.runGit([...HARDENED_GIT, 'config', '--list', '--show-scope'], cwd));
+    } catch (err) {
+      toolLogger.debug({ err: (err as Error).message }, 'git config --show-scope unavailable; reading the repository\'s own config files');
+    }
+    const scoped = (scope: string, out: string) => parseConfigListing(out.split('\n').filter(Boolean).map((line) => `${scope}\t${line}`).join('\n'));
+    const local = scoped('local', await this.runGit([...HARDENED_GIT, 'config', '--local', '--includes', '--list'], cwd).catch(() => ''));
+    if (local.some((e) => e.key === 'extensions.worktreeconfig' && e.value.toLowerCase() === 'true')) {
+      const worktree = await this.runGit([...HARDENED_GIT, 'config', '--worktree', '--includes', '--list'], cwd).catch(() => null);
+      if (worktree === null) throw new ToolNotExecutedError('git', 'This repository has per-worktree configuration that this git cannot list; the git tool does not run in it.');
+      return [...local, ...scoped('worktree', worktree)];
+    }
+    return local;
+  }
+
+  private async runGit(args: string[], cwd: string): Promise<string> {
     const caller = this.caller.getStore();
     if (caller && executionEnvironmentFor(caller)) {
       const home = environmentToolHome(caller);
@@ -393,3 +535,76 @@ export class GitTool extends BaseTool {
 }
 
 export const gitTool = new GitTool();
+
+/** `-c` settings for a git run that contacts a remote under an egress policy: no hooks, no `ext::` transport, no fsmonitor. */
+/** Leading options on every git run of the tool (src/security/git-hardening.ts). */
+const HARDENED_GIT = HARDENED_GIT_ARGS;
+
+/**
+ * Repository-scope keys that reroute a network run (under an egress policy):
+ * a proxy, an address override, another transport or helper, rebase and
+ * signing settings. Program-running keys are neutralised for every run
+ * already (src/tools/git/repo-config.ts).
+ */
+const REROUTING_KEY = /^(?:https?\.proxy|http\..+\.proxy|http\.(?:.+\.)?curloptresolve|remote\..+\.(?:proxy|proxyauthmethod|vcs)|core\.gitproxy|protocol\..+|ssh\.variant|fetch\.recursesubmodules|rebase\..+|push\.gpgsign)$/;
+
+/** The rerouting keys set at repository (local/worktree) scope. */
+export function reroutingRepoConfig(entries: ConfigEntry[]): string[] {
+  return [...new Set(entries.filter((e) => (e.scope === 'local' || e.scope === 'worktree') && REROUTING_KEY.test(e.key)).map((e) => e.key))];
+}
+
+/**
+ * `url` rewritten by the longest matching `url.<base>.pushInsteadOf <prefix>`
+ * rule (`git config --get-regexp` lines), as git does for a push to a URL;
+ * null when none matches.
+ */
+export function rewriteInsteadOf(url: string, rules: string[]): string | null {
+  let best: { base: string; prefix: string } | null = null;
+  for (const line of rules) {
+    const m = /^url\.(.+)\.pushinsteadof\s+(.*)$/i.exec(line);
+    if (!m || !url.startsWith(m[2])) continue;
+    if (!best || m[2].length > best.prefix.length) best = { base: m[1], prefix: m[2] };
+  }
+  return best ? best.base + url.slice(best.prefix.length) : null;
+}
+
+/** A user-supplied git positional: a non-empty string that git cannot read as an option. */
+export function gitArgument(value: unknown, what: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new ToolNotExecutedError('git', `Missing ${what}`);
+  if (value.startsWith('-')) throw new ToolNotExecutedError('git', `The ${what} must not start with "-" (it would be read as a git option)`);
+  if (/[\x00-\x1f\x7f]/.test(value)) throw new ToolNotExecutedError('git', `The ${what} contains a control character`);
+  return value;
+}
+
+/** A branch or ref name, by `git check-ref-format`'s rules (simplified, stricter). */
+export function gitRefName(value: unknown, what: string): string {
+  const name = gitArgument(value, what);
+  if (name === '@' || /\.\.|@\{|\/\/|\/\.|[\s~^:?*[\\]|^\/|\/$|\.$|\.lock$/.test(name)) throw new ToolNotExecutedError('git', `Not a valid ${what}: ${name}`);
+  return name;
+}
+
+/**
+ * A branch or refspec for pull/push: `name`, or `[+]src:dst` with both sides
+ * valid ref names (`HEAD:main`, `+feature:feature`).
+ */
+export function gitRefspec(value: unknown): string {
+  const spec = gitArgument(value, 'branch');
+  const force = spec.startsWith('+') ? '+' : '';
+  const body = spec.slice(force.length);
+  const sides = body.split(':');
+  if (sides.length > 2) throw new ToolNotExecutedError('git', `Not a valid refspec: ${spec}`);
+  for (const side of sides) gitRefName(side, 'branch');
+  return spec;
+}
+
+/** A remote: a remote name, or a URL / path for git to resolve. */
+export function gitRemoteArgument(value: unknown): string {
+  return gitArgument(value, 'remote');
+}
+
+/** A positive integer argument (`-<count>`, `--depth`). */
+export function gitCount(value: unknown, what: string): string {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 1_000_000) throw new ToolNotExecutedError('git', `The ${what} must be a positive integer`);
+  return String(n);
+}

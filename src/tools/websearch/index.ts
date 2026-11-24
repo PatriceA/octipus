@@ -1,4 +1,5 @@
-import type { Browser, } from 'playwright';
+import type { Browser, BrowserContext } from 'playwright';
+import { assertNotRefusedByProxy, browserEgressFor, explainProxyFailure } from '@/security/browser-egress';
 import { sharedChromium } from '../browser/shared-chromium';
 import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import type { ToolManifest } from '@/core/types';
@@ -178,8 +179,18 @@ export class WebSearchTool extends BaseTool {
     return { query, resultCount: results.length, results };
   }
 
-  private createBrowserContext(browser: Browser) {
-    return browser.newContext({
+  /**
+   * A browser context for one search or page. Under an active egress policy it
+   * is routed through its own egress proxy (closed with the context), so the
+   * search engine, every redirect hop and every sub-resource are judged.
+   */
+  /** Contexts routed through an egress proxy (`createBrowserContext`). */
+  private readonly proxiedContexts = new WeakSet<BrowserContext>();
+
+  private async createBrowserContext(browser: Browser) {
+    const egress = await browserEgressFor();
+    const context = await browser.newContext({
+      ...(egress ? { proxy: egress.proxy } : {}),
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       locale: 'en-US',
       extraHTTPHeaders: {
@@ -193,6 +204,11 @@ export class WebSearchTool extends BaseTool {
         'Upgrade-Insecure-Requests': '1',
       },
     });
+    if (egress) {
+      this.proxiedContexts.add(context);
+      context.once('close', () => egress.close());
+    }
+    return context;
   }
 
   private async searchViaBrowser(query: string, maxResults: number): Promise<unknown> {
@@ -322,23 +338,37 @@ export class WebSearchTool extends BaseTool {
     const maxLength = (args.max_length as number) || 10000;
 
     const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
+    const egress = await import('@/security/egress-policy');
+    egress.precheckEgressUrl(url, 'browser');
     const validation = await validateExternalUrl(url);
     if (!validation.valid) {
       return { error: `URL blocked: ${validation.reason}` };
     }
+    egress.enforceEgressForUrl(url, validation.addresses, 'browser');
 
     const browser = await this.getOrCreateBrowser();
     const context = await this.createBrowserContext(browser);
     const page = await context.newPage();
 
     try {
-      const response = await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' });
+      const proxied = this.proxiedContexts.has(context);
+      let response: Awaited<ReturnType<typeof page.goto>>;
+      try { response = await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' }); }
+      catch (error) { throw proxied ? explainProxyFailure(error) : error; }
 
-      // Post-connect SSRF check: reject a rebind to a private IP that happened
-      // between validation and this navigation (Playwright can't be IP-pinned).
-      const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
-      if (!addrCheck.ok) {
-        return { error: `URL blocked: ${addrCheck.reason}` };
+      if (proxied) {
+        // The egress proxy judged and pinned every request before it was sent;
+        // serverAddr() would be the proxy's own address. Only its refusal counts.
+        assertNotRefusedByProxy(response);
+      } else {
+        // Post-connect SSRF check: reject a rebind to a private IP that happened
+        // between validation and this navigation (Playwright can't be IP-pinned).
+        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+        if (!addrCheck.ok) {
+          return { error: `URL blocked: ${addrCheck.reason}` };
+        }
+        // Every redirect hop and the serving address, against the egress policy.
+        await egress.assertBrowserNavigationAllowed(response);
       }
 
       // Let JS-heavy SPAs (fifa.com, most modern sites) actually render. A fixed
