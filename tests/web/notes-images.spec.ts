@@ -16,12 +16,11 @@ test.describe('notes — images', () => {
     await stubAllDefaults(authenticatedPage);
   });
 
-  /** Open the first note and switch the editor to split so both panes exist. */
+  /** Open the first note: it opens straight into the editor. */
   async function openNote(page: import('@playwright/test').Page) {
     await page.goto('/notes');
     await page.getByText('First note', { exact: false }).first().click();
-    await expect(page.getByRole('button', { name: /^split$/i })).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('button', { name: /^split$/i }).click();
+    await expect(page.locator('.cm-content')).toContainText('body text', { timeout: 10_000 });
   }
 
   test('pasting an image uploads it and inserts a markdown link', async ({ authenticatedPage: page }) => {
@@ -60,6 +59,7 @@ test.describe('notes — images', () => {
     await openNote(page);
     await page.locator('.cm-content').click();
     await page.keyboard.type('\n![shot](/api/documents/doc-img-1/raw)\n');
+    await page.getByRole('button', { name: 'Reading view' }).click();
 
     // Fetched by the API client (so credentials ride along), then shown as an
     // object URL — a plain `<img src="/api/…">` would never have been fetched
@@ -76,6 +76,7 @@ test.describe('notes — images', () => {
     await openNote(page);
     await page.locator('.cm-content').click();
     await page.keyboard.type('\n[Anthropic](https://www.anthropic.com)\n');
+    await page.getByRole('button', { name: 'Reading view' }).click();
 
     const link = page.getByRole('link', { name: 'Anthropic' });
     await expect(link).toBeVisible({ timeout: 10_000 });

@@ -277,7 +277,7 @@ test.describe('role-aware pages', () => {
     await page.getByText('First note').first().click();
     const reader = page.getByTestId('note-reader');
     await expect(reader).toContainText('body text');
-    await expect(reader).toContainText('read-only');
+    await expect(reader).toContainText('Read-only');
     await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
     await expect(page.locator('.cm-editor')).toHaveCount(0);
 

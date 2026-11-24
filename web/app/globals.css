@@ -13,6 +13,7 @@
 @import 'tailwindcss';
 @import './workspace-design.css';
 @import './todos.css';
+@import './notes.css';
 
 @custom-variant dark (&:is(.dark *));
 

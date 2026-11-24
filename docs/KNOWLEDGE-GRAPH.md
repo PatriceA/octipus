@@ -384,10 +384,19 @@ target to draw a line to.
 
 ### Web UI
 
-The graph lives *inside* the notes workspace as a view mode — notes and the
-graph are the same thing. `/notes` renders the workspace
-(`web/app/notes/notes-workspace.tsx`, `knowledge-graph.tsx`); `/graph`
-redirects to `/notes?view=graph` so old links keep working.
+`/notes` is a notepad (`web/app/notes/notes-workspace.tsx`): a list (Recent
+first with a line of each note, A–Z, or the folder tree; filters for pinned,
+daily notes, lessons and the archive), the open note as one live-preview
+editor (`markdown-codemirror.tsx` + `live-preview.ts`: the text stays
+markdown, its markup is hidden off the caret's line, `- [ ]` tasks are
+checkboxes and `[[links]]` open on click) with a reading view, and the links
+panel on request. A new note takes its title from its first line; a note
+whose title is its first line keeps following it (a rename: the slug never
+changes). Title, tags, kind, folder and pin are in the note's details menu;
+"Move to…" and dragging a note onto a folder call `POST /api/notes/:id/move`.
+The draft, autosave and live-note logic is `use-note-draft.ts`, so another
+page can embed the same editor. The graph is a view of the same page:
+`/graph` redirects to `/notes?view=graph` so old links keep working.
 
 ---
 

@@ -7,6 +7,21 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Web notes are a notepad.** A note opens straight into one live-preview
+  editor: headings, bold, lists, quotes, links, `[[wikilinks]]` and `#tags`
+  read as rendered while the text stays markdown, `- [ ]` tasks are
+  checkboxes (also in the reading view, and in live space notes, where a tick
+  is a live edit), and a click on a wikilink opens the note. A new note needs
+  no fields: its first line is its title (an existing note whose title is its
+  first line keeps following it; the slug never changes, so links hold).
+  Title, tags, kind, folder, location and pin are in a details menu. The page
+  is a sheet of paper without the terminal frame and prompt bar; the list is
+  Recent first with a line of each note (A–Z and folders too), daily notes
+  newest first, a **Today** button and a one-line capture box into today's
+  note, Move to… and drag onto a folder, the archive one tab away, session
+  learnings under their own filter (their tag hidden without it), back and
+  forward buttons, and keys N (new), / (search), T (today). The links panel
+  opens on request.
 - **Notes: move without breaking links, and the day's note on request**
   ([API](docs/API.md#notes)). `POST /api/notes/:id/move {slug}` moves a note
   to another folder or name; its old slug is kept in `frontmatter.aliases`

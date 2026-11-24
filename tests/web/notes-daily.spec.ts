@@ -81,15 +81,15 @@ test('the open note is in the address bar: reload, back and forward follow it', 
 test('search asks the server and finds a word that is only in a note body', async ({ authenticatedPage: page }) => {
   const stub = await stubNotes(page, structuredClone(NOTES));
   await page.goto('/notes');
-  await page.getByPlaceholder('search notes…').fill('bees');
+  await page.getByPlaceholder('Search notes').fill('bees');
   const hit = page.getByRole('button', { name: /Reading list/ });
   await expect(hit).toBeVisible();
   await expect(hit.getByTestId('note-snippet')).toContainText('bees');
   await expect(page.getByRole('button', { name: /Garden plan/ })).toHaveCount(0);
   expect(stub.searches).toContain('bees');
   // Archived notes are not search results.
-  await page.getByPlaceholder('search notes…').fill('lentil');
-  await expect(page.getByText('no matches')).toBeVisible();
+  await page.getByPlaceholder('Search notes').fill('lentil');
+  await expect(page.getByText('No matches')).toBeVisible();
 });
 
 test('the archive lists archived notes, opens one read-only, and restores it', async ({ authenticatedPage: page }) => {
@@ -97,15 +97,15 @@ test('the archive lists archived notes, opens one read-only, and restores it', a
   const stub = await stubNotes(page, notes);
   await page.goto('/notes');
   await expect(page.getByRole('button', { name: /Old recipe/ })).toHaveCount(0);
-  await page.getByRole('button', { name: 'archive', exact: true }).click();
+  await page.getByRole('tab', { name: 'Archive', exact: true }).click();
   await expect(page.getByRole('button', { name: /Garden plan/ })).toHaveCount(0);
   await page.getByRole('button', { name: /^Old recipe/ }).click();
   await expect(page.getByTestId('archived-note-banner')).toBeVisible();
   await expect(page.getByTestId('note-reader')).toContainText('Lentil soup');
   await page.getByRole('button', { name: 'Restore Old recipe' }).click();
   await expect.poll(() => stub.restored).toEqual(['n-3']);
-  await expect(page.getByText('the archive is empty')).toBeVisible();
-  await page.getByRole('button', { name: 'all', exact: true }).click();
+  await expect(page.getByText('The archive is empty')).toBeVisible();
+  await page.getByRole('tab', { name: 'All', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Old recipe/ })).toBeVisible();
 });
 
@@ -149,9 +149,8 @@ test('a new note never overwrites one at the same slug: the save is refused and 
   });
   await page.goto('/notes');
   await page.getByTitle('New note', { exact: true }).click();
-  await page.getByPlaceholder('Untitled note').fill('Old recipe');
-  await page.locator('.cm-content').fill('A different soup');
-  await expect(page.getByTestId('note-save-status')).toContainText('already exists (perhaps in the archive): change the title');
+  await page.locator('.cm-content').fill('Old recipe\nA different soup');
+  await expect(page.getByTestId('note-save-status')).toContainText('already exists (perhaps in the archive): change the first line or the title');
   expect(posts[0]).toMatchObject({ title: 'Old recipe', createOnly: true });
   expect(posts[0].id).toBeUndefined();
   await expect(page.locator('.cm-content')).toContainText('A different soup');
@@ -170,8 +169,7 @@ test('a draft never follows a workspace switch: nothing is posted with the other
   });
   await page.goto('/notes');
   await page.getByTitle('New note', { exact: true }).click();
-  await page.getByPlaceholder('Untitled note').fill('Private plan');
-  await page.locator('.cm-content').fill('salary negotiation notes');
+  await page.locator('.cm-content').fill('Private plan\nsalary negotiation notes');
   await expect(page.getByTestId('note-save-status')).toContainText('Not saved');
   expect(posts.every((p) => p.workspace === 'ws-1')).toBe(true);
   const tried = posts.length;
@@ -200,8 +198,7 @@ test('a new note whose first save lands after the page was left does not pull th
   });
   await page.goto('/notes');
   await page.getByTitle('New note', { exact: true }).click();
-  await page.getByPlaceholder('Untitled note').fill('Late note');
-  await page.locator('.cm-content').fill('typed quickly');
+  await page.locator('.cm-content').fill('Late note\ntyped quickly');
   await expect(page.getByTestId('note-save-status')).toHaveText('Saving…');
   await page.getByRole('link', { name: 'To-dos', exact: true }).click();
   await expect(page).toHaveURL(/\/tasks$/);
@@ -223,22 +220,22 @@ test('on a phone, Back from a new note saved on the way lands in the list', asyn
   });
   await page.goto('/notes');
   await page.getByTitle('New note', { exact: true }).click();
-  await page.getByPlaceholder('Untitled note').fill('Shopping');
-  // Straight to Back, the title still focused: Back saves it, then shows the list.
+  await page.keyboard.type('Shopping');
+  // Straight to Back, the first line still being typed: Back saves it, then shows the list.
   await page.getByRole('button', { name: 'Notes', exact: true }).click();
   await expect(page).toHaveURL(/\/notes$/);
-  await expect(page.getByPlaceholder('Untitled note')).toHaveCount(0);
+  await expect(page.locator('.cm-content')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Garden plan/ })).toBeVisible();
-  expect(notes.some((n) => n.id === 'n-new')).toBe(true);
+  expect(notes.find((n) => n.id === 'n-new')?.title).toBe('Shopping');
 });
 
 test('while a search is being typed the list filters locally, and clearing it shows every note at once', async ({ authenticatedPage: page }) => {
   await stubNotes(page, structuredClone(NOTES));
   await page.goto('/notes');
   await expect(page.getByRole('button', { name: /Reading list/ })).toBeVisible();
-  await page.getByPlaceholder('search notes…').fill('bees');
+  await page.getByPlaceholder('Search notes').fill('bees');
   await expect(page.getByTestId('note-snippet')).toContainText('bees');
-  await page.getByPlaceholder('search notes…').fill('');
+  await page.getByPlaceholder('Search notes').fill('');
   // No stale results in between: both notes are back straight away.
   await expect(page.getByRole('button', { name: /Garden plan/ })).toBeVisible({ timeout: 200 });
   await expect(page.getByRole('button', { name: /Reading list/ })).toBeVisible({ timeout: 200 });

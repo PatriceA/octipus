@@ -1,20 +1,21 @@
 'use client';
 
 import {
-  Bold, Check, CloudOff, Code, Columns2, ExternalLink, Eye, Hash, Heading1, Heading2, Image as ImageIcon,
-  Italic, Link2, List, Loader2, Pencil, Quote, Save, Star, Trash2, X,
+  Bold, BookOpen, Check, CloudOff, Heading2, Image as ImageIcon, Italic, Link2, List, ListChecks, Loader2, PencilLine, Save, Trash2,
 } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { Awareness } from 'y-protocols/awareness';
 import type { LiveNoteState } from '@/lib/live-note';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import NotesMarkdownEditor, { type MarkdownEditorHandle } from './markdown-codemirror';
+import { NoteDetailsMenu } from './note-details';
 import type { NoteIndexEntry, TagCount } from './types';
 import type { LiveNote } from './use-live-note';
 
-export type EditorMode = 'edit' | 'preview' | 'split';
+/** `edit`: the live-preview editor (click and type, the default). `read`: the rendered note. */
+export type EditorMode = 'edit' | 'read';
 
 /**
  * Where a personal note's autosave stands (the workspace saves the draft a
@@ -24,10 +25,16 @@ export type AutosaveStatus =
   | { status: 'idle' | 'saved' | 'saving' | 'unsaved' | 'untitled' }
   | { status: 'error'; error: string };
 
-interface EditorProps {
+export interface NoteEditorProps {
   selectedId: string | null;
   draftTitle: string;
+  /** A title set by hand; empty takes it from the first line again (`titleAuto`). */
   setDraftTitle: (v: string) => void;
+  /**
+   * The title is the first line's: no title field shows, the first line reads
+   * as the title, and editing it renames the note (its slug stays).
+   */
+  titleAuto?: boolean;
   draftBody: string;
   setDraftBody: (v: string) => void;
   draftTags: string[];
@@ -38,6 +45,8 @@ interface EditorProps {
   setDraftFolder: (v: string) => void;
   slug?: string;
   noteDate?: string | null;
+  /** When the note was last saved (a quiet "Edited …" line). */
+  updatedAt?: string;
   pinned: boolean;
   onTogglePin: () => void;
   mode: EditorMode;
@@ -46,15 +55,19 @@ interface EditorProps {
   saving: boolean;
   onSave: () => void;
   onArchive: () => void;
+  /** "Move to…" in the details menu; absent where a note cannot be moved. */
+  onMove?: () => void;
   noteIndex: NoteIndexEntry[];
   tags: TagCount[];
-  /** Open a linked note from a `[[wikilink]]` in the preview. */
-  onOpenSlug?: (slug: string) => void;
-  /** Filter by an inline `#tag` clicked in the preview. */
+  /** Open a linked note from a `[[wikilink]]` (its target as written). */
+  onOpenSlug?: (target: string) => void;
+  /** Filter by an inline `#tag` clicked in the note. */
   onTagClick?: (tag: string) => void;
+  /** A reading view's task checkbox: tick the task whose list item starts at `offset`. */
+  onToggleTask?: (offset: number, checked: boolean) => void;
   /**
    * The caller may not edit (a commenter or viewer in a space, or an
-   * archived space): the note shows as a preview with no editing controls.
+   * archived space): the note shows as a reading view with no editing controls.
    */
   readOnly?: boolean;
   /**
@@ -78,18 +91,27 @@ interface EditorProps {
    * host's to manage, so none of those controls show.
    */
   textOnly?: boolean;
+  /** Put the caret in the text when the editor mounts (a new note). */
+  autoFocus?: boolean;
+  /** Escape in the text: the page's shortcuts take over. */
+  onEscape?: () => void;
+  /** The top bar's start (Back to the list on a phone, back/forward between notes). */
+  leading?: ReactNode;
+  /** The top bar's end (the links panel toggle). */
+  trailing?: ReactNode;
+  /** Notices shown at the top of the page (an archived note, a kept draft). */
+  notices?: ReactNode;
 }
-
-const KINDS = ['note', 'daily', 'moc', 'literature'];
 
 function ToolBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       onMouseDown={(e) => e.preventDefault()} // keep the editor selection
       onClick={onClick}
-      className="p-1.5 rounded-xs text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
+      className="notes-icon-btn is-small"
     >
       {children}
     </button>
@@ -184,42 +206,53 @@ function AutosaveIndicator({ state, onRetry }: { state: AutosaveStatus; onRetry:
   if (state.status === 'idle') return null;
   if (state.status === 'error') {
     return (
-      <span data-testid="note-save-status" role="alert" className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-error">
-        <CloudOff size={12} className="shrink-0" />
-        <span className="truncate max-w-[16rem]" title={state.error}>Not saved: {state.error}</span>
+      <span data-testid="note-save-status" role="alert" className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-error">
+        <CloudOff size={13} className="shrink-0" />
+        <span className="truncate max-w-[18rem]" title={state.error}>Not saved: {state.error}</span>
         <button type="button" onClick={onRetry} className="shrink-0 underline underline-offset-2 hover:opacity-80">Retry</button>
       </span>
     );
   }
   const view = {
-    saved: { text: 'Saved', icon: <Check size={12} /> },
-    saving: { text: 'Saving…', icon: <Loader2 size={12} className="animate-spin" /> },
-    unsaved: { text: 'Unsaved', icon: null },
-    untitled: { text: 'Add a title to save', icon: null },
+    saved: { text: 'Saved', icon: <Check size={13} /> },
+    saving: { text: 'Saving…', icon: <Loader2 size={13} className="animate-spin" /> },
+    unsaved: { text: 'Editing', icon: null },
+    untitled: { text: 'Write a first line to save', icon: null },
   }[state.status];
   return (
-    <span data-testid="note-save-status" className="inline-flex shrink-0 items-center gap-1 text-[11px] text-on-surface-variant">
+    <span data-testid="note-save-status" className="inline-flex shrink-0 items-center gap-1 text-[12px] text-on-surface-variant">
       {view.icon} {view.text}
     </span>
   );
 }
 
-function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-1 rounded-xs text-[11px] transition-colors',
-        active ? 'bg-primary-container/50 text-primary' : 'text-on-surface-variant hover:bg-surface-container-high',
-      )}
-    >
-      {children}
-    </button>
-  );
+/** "Edited 5 minutes ago", for the quiet line under the title. */
+function editedText(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return 'Edited just now';
+  if (mins < 60) return `Edited ${mins} min ago`;
+  const sameDay = then.toDateString() === new Date().toDateString();
+  if (sameDay) return `Edited at ${then.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  return `Edited ${then.toLocaleDateString([], { day: 'numeric', month: 'short', year: then.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })}`;
 }
 
-export function NoteEditor(props: EditorProps) {
+/** A daily note's day, as a heading reads it ("Monday, 23 November"). */
+function dayLabel(date: string | null | undefined): string | null {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+/**
+ * The note as a page of paper: a quiet bar on top (status, reading view,
+ * details), then the title and the text in one live-preview editor. Click
+ * and type. Embeddable: everything it shows and does comes in as props
+ * (`useNoteDraft` supplies them for a page of the user's own notes).
+ */
+export function NoteEditor(props: NoteEditorProps) {
   const {
     selectedId, draftTitle, setDraftTitle, draftBody, setDraftBody, draftTags, setDraftTags,
     draftKind, setDraftKind, draftFolder, setDraftFolder, slug, noteDate, pinned, onTogglePin,
@@ -227,7 +260,8 @@ export function NoteEditor(props: EditorProps) {
   } = props;
   const readOnly = (props.readOnly ?? false) || (live?.synced === true && live.state.readOnly);
   const textOnly = props.textOnly ?? false;
-  const mode: EditorMode = readOnly ? 'preview' : requestedMode;
+  const titleAuto = (props.titleAuto ?? false) && !textOnly;
+  const mode: EditorMode = readOnly ? 'read' : requestedMode;
   const peers = usePeers(live);
   const collab = useMemo(
     () => (live?.synced ? { text: live.session.text, awareness: live.session.awareness } : undefined),
@@ -239,7 +273,6 @@ export function NoteEditor(props: EditorProps) {
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [tagInput, setTagInput] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const isNew = !selectedId;
 
@@ -280,17 +313,11 @@ export function NoteEditor(props: EditorProps) {
     }
   }
 
-  function addTag(raw: string) {
-    const t = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9/_-]/g, '');
-    if (t && !draftTags.includes(t)) setDraftTags([...draftTags, t]);
-    setTagInput('');
-  }
-
   const editor = (live && !collab) || props.liveLoading ? (
-    <div className="p-4 text-[12px] text-on-surface-variant inline-flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Opening the note…</div>
+    <div className="py-2 text-[13px] text-on-surface-variant inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Opening the note…</div>
   ) : (
     <NotesMarkdownEditor
-      key={collab ? `${live?.session.noteId}:${live?.version}` : 'plain'}
+      key={collab ? `${live?.session.noteId}:${live?.version}` : `plain:${selectedId ?? 'new'}`}
       ref={editorRef}
       collab={collab}
       value={draftBody}
@@ -299,69 +326,111 @@ export function NoteEditor(props: EditorProps) {
       getNotes={() => noteIndex}
       getTags={() => tags}
       onFiles={uploadImages}
+      onOpenWikilink={onOpenSlug}
+      onTag={onTagClick}
+      placeholder={titleAuto && !draftBody ? 'Start with a title, then write…' : 'Start writing…'}
+      onEscape={props.onEscape}
+      autoFocus={props.autoFocus}
     />
   );
 
-  const preview = draftBody.trim() ? (
-    <Markdown content={draftBody} className="max-w-none px-1" onWikilink={onOpenSlug} onTag={onTagClick} untrusted={textOnly} />
+  const reading = draftBody.trim() ? (
+    <Markdown
+      content={draftBody}
+      className="notes-prose"
+      onWikilink={onOpenSlug}
+      onTag={onTagClick}
+      untrusted={textOnly}
+      onToggleTask={readOnly ? undefined : props.onToggleTask}
+    />
   ) : (
-    <p className="text-[13px] text-on-surface-variant/60">
-      {readOnly ? (isNew ? 'Pick a note to read.' : 'This note is empty.') : 'Nothing to preview yet — switch to Edit to start writing.'}
+    <p className="text-[15px] text-on-surface-variant/70">
+      {isNew ? 'Pick a note to read.' : 'This note is empty.'}
     </p>
   );
 
-  if (readOnly) {
-    return (
-      <div className="h-full flex flex-col min-w-0" data-testid="note-reader">
-        <div className="flex items-center gap-2 px-5 pt-4 shrink-0">
-          <h2 className="flex-1 min-w-0 text-xl font-semibold truncate">{draftTitle || (isNew ? 'Notes' : '')}</h2>
-          <PresenceStack peers={peers} />
-          {live?.state.notice && <span className="text-[11px] text-error">{live.state.notice}</span>}
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border border-outline-variant/40 text-[11px] text-on-surface-variant">
-            <Eye size={12} /> read-only
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2 pb-2 shrink-0 text-[12px]">
-          {draftTags.map((t) => (
-            <span key={t} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-container/60 text-primary text-[11px]">
-              <Hash size={9} />{t}
-            </span>
-          ))}
-          {!isNew && (
-            <span className="inline-flex items-center gap-1 text-on-surface-variant/60 font-mono text-[11px]">
-              {draftKind} <span className="text-outline">·</span> {slug}
-              {noteDate && <span className="text-outline"> · {noteDate}</span>}
-            </span>
-          )}
-        </div>
-        <div className="flex-1 min-h-0 px-5 pb-5">
-          <div className="h-full overflow-y-auto term-frame rounded-xs p-4">{preview}</div>
-        </div>
-      </div>
-    );
-  }
+  const edited = editedText(props.updatedAt);
+  // Tags written in the text show there; the line above names the others.
+  const inlineTags = useMemo(() => new Set([...draftBody.matchAll(/(?:^|\s)#([a-zA-Z0-9_/-]*[a-zA-Z_/-][a-zA-Z0-9_/-]*)/g)].map((m) => m[1].toLowerCase())), [draftBody]);
+  const day = draftKind === 'daily' ? dayLabel(noteDate) : null;
+  // The meta line: the day (a daily note), where it is filed, when it was last edited, its tags.
+  const folder = slug && slug.includes('/') ? slug.slice(0, slug.lastIndexOf('/')) : null;
+  const meta = (
+    <div className="notes-meta">
+      {day && <span>{day}</span>}
+      {folder && draftKind !== 'daily' && <span title={slug}>in {folder}</span>}
+      {isNew && draftFolder && <span>in {draftFolder}</span>}
+      {edited && !isNew && <span>{edited}</span>}
+      {draftTags.filter((t) => !inlineTags.has(t)).map((t) => (
+        <button key={t} type="button" onClick={() => onTagClick?.(t)} className="notes-tag-chip">#{t}</button>
+      ))}
+      {readOnly && <span className="notes-badge">Read-only</span>}
+    </div>
+  );
 
+  const showTitleField = !titleAuto && (!readOnly || !!draftTitle);
+  const title = readOnly || textOnly ? (
+    draftTitle && !titleAuto ? <h1 className="notes-title">{draftTitle}</h1> : null
+  ) : showTitleField ? (
+    <input
+      value={draftTitle}
+      onChange={(e) => setDraftTitle(e.target.value)}
+      onFocus={() => props.onTitleEditing?.(true)}
+      onBlur={() => props.onTitleEditing?.(false)}
+      onKeyDown={(e) => {
+        // Enter goes on into the text, as on paper.
+        if (e.key === 'Enter') { e.preventDefault(); editorRef.current?.focus(); }
+      }}
+      placeholder="Untitled note"
+      aria-label="Title"
+      className="notes-title"
+    />
+  ) : null;
+
+  const canEdit = !readOnly;
   return (
-    <div className="h-full flex flex-col min-w-0">
-      {/* Title + actions */}
-      <div className="flex items-center gap-2 px-5 pt-4 shrink-0">
-        <input
-          value={draftTitle}
-          readOnly={textOnly}
-          onChange={(e) => setDraftTitle(e.target.value)}
-          onFocus={() => props.onTitleEditing?.(true)}
-          onBlur={() => props.onTitleEditing?.(false)}
-          placeholder="Untitled note"
-          className="flex-1 min-w-0 text-xl font-semibold bg-transparent outline-none placeholder:text-on-surface-variant/40"
-        />
+    <div className="notes-editor" data-testid={readOnly ? 'note-reader' : 'note-editor'}>
+      <div className="notes-bar">
+        {props.leading}
+        <div className="flex-1 min-w-0" />
+        {mode === 'edit' && canEdit && (
+          <div className="notes-format" role="toolbar" aria-label="Format">
+            <ToolBtn title="Bold (⌘B)" onClick={() => editorRef.current?.wrap('**')}><Bold size={15} /></ToolBtn>
+            <ToolBtn title="Italic (⌘I)" onClick={() => editorRef.current?.wrap('*')}><Italic size={15} /></ToolBtn>
+            <ToolBtn title="Heading" onClick={() => editorRef.current?.linePrefix('## ')}><Heading2 size={15} /></ToolBtn>
+            <ToolBtn title="Bullet list" onClick={() => editorRef.current?.linePrefix('- ')}><List size={15} /></ToolBtn>
+            <ToolBtn title="Checklist" onClick={() => editorRef.current?.linePrefix('- [ ] ')}><ListChecks size={15} /></ToolBtn>
+            <ToolBtn title="Link to a note ([[…]])" onClick={() => editorRef.current?.wrap('[[', ']]', 'Note title')}><Link2 size={15} /></ToolBtn>
+            <ToolBtn title="Image (or just paste / drop one)" onClick={() => fileInputRef.current?.click()}><ImageIcon size={15} /></ToolBtn>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                // Reset first so picking the SAME file twice still fires change.
+                e.target.value = '';
+                void uploadImages(picked);
+              }}
+            />
+            <span className="notes-bar-sep" />
+          </div>
+        )}
+        {uploadError && (
+          <button type="button" onClick={() => setUploadError(null)} title="Dismiss" className="text-[11px] text-error hover:opacity-80 truncate max-w-[12rem]">
+            {uploadError} ✕
+          </button>
+        )}
         <PresenceStack peers={peers} />
         {status && (
-          <span data-testid="live-status" className="inline-flex items-center gap-1 text-[11px] text-on-surface-variant" title={live?.state.savedAt ? `Saved ${new Date(live.state.savedAt).toLocaleTimeString()}` : undefined}>
+          <span data-testid="live-status" className="inline-flex shrink-0 items-center gap-1 text-[12px] text-on-surface-variant" title={live?.state.savedAt ? `Saved ${new Date(live.state.savedAt).toLocaleTimeString()}` : undefined}>
             {status.icon} {status.text}
           </span>
         )}
         {live && live.state.notice && live.state.status !== 'closed' && (
-          <span data-testid="live-notice" className="text-[11px] text-error max-w-[22rem] truncate" title={live.state.notice}>{live.state.notice}</span>
+          <span data-testid="live-notice" className="text-[11px] text-error max-w-[16rem] truncate" title={live.state.notice}>{live.state.notice}</span>
         )}
         {live && live.state.unmerged !== null && (
           <button
@@ -374,166 +443,70 @@ export function NoteEditor(props: EditorProps) {
               );
             }}
             title="Copy the text you had, to redo what did not merge"
-            className="px-2 py-1 rounded-xs border border-outline-variant/40 text-[11px] hover:bg-surface-container-high"
+            className="notes-text-btn"
           >
             Copy my version
           </button>
         )}
-        {!isNew && !textOnly && (
+        {props.autosave && !live && !textOnly && canEdit && <AutosaveIndicator state={props.autosave} onRetry={onSave} />}
+        {!textOnly && canEdit && (live || !props.autosave) && (
           <button
             type="button"
-            onClick={onTogglePin}
-            title={pinned ? 'Unpin' : 'Pin'}
-            className={cn('p-1.5 rounded-xs hover:bg-surface-container-high', pinned ? 'text-warning' : 'text-on-surface-variant')}
+            disabled={!(draftTitle || draftBody.trim()) || !dirty || saving}
+            onClick={onSave}
+            title={!dirty ? 'No changes' : live ? 'Save title, tags and kind (the text saves itself)' : 'Save (⌘S)'}
+            className={cn('notes-text-btn', !live && 'is-primary')}
           >
-            <Star size={16} className={pinned ? 'fill-warning/40' : ''} />
+            {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} {live ? 'Save details' : 'Save'}
           </button>
         )}
-        {props.autosave && !live && !textOnly && <AutosaveIndicator state={props.autosave} onRetry={onSave} />}
-        {!textOnly && (live || !props.autosave) && <button
-          type="button"
-          disabled={!draftTitle || !dirty || saving}
-          onClick={onSave}
-          title={!draftTitle ? 'Add a title first' : !dirty ? 'No changes' : live ? 'Save title, tags and kind (the text saves itself)' : 'Save (⌘S)'}
-          className={cn(
-            'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xs text-[13px] font-medium disabled:opacity-40',
-            live ? 'border border-outline-variant/40 text-on-surface' : 'bg-primary text-on-primary',
-          )}
-        >
-          {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} {live ? 'Save details' : 'Save'}
-        </button>}
-        {!isNew && !textOnly && (
+        {canEdit && (
           <button
             type="button"
-            onClick={onArchive}
-            title="Archive note"
-            className="p-1.5 rounded-xs border border-outline-variant/40 text-on-surface-variant hover:bg-surface-container-high hover:text-error"
+            onClick={() => setMode(mode === 'read' ? 'edit' : 'read')}
+            aria-pressed={mode === 'read'}
+            title={mode === 'read' ? 'Back to editing' : 'Reading view'}
+            aria-label={mode === 'read' ? 'Edit' : 'Reading view'}
+            className="notes-icon-btn"
           >
-            <Trash2 size={15} />
+            {mode === 'read' ? <PencilLine size={17} /> : <BookOpen size={17} />}
           </button>
         )}
-      </div>
-
-      {/* Properties bar: tags · kind · location/date */}
-      <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 pt-2 pb-2 shrink-0 text-[12px]', textOnly && 'hidden')}>
-        <div className="flex flex-wrap items-center gap-1">
-          {draftTags.map((t) => (
-            <span key={t} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-container/60 text-primary text-[11px]">
-              <Hash size={9} />{t}
-              <button type="button" onClick={() => setDraftTags(draftTags.filter((x) => x !== t))} className="hover:text-on-surface ml-0.5">
-                <X size={9} />
-              </button>
-            </span>
-          ))}
-          <input
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(tagInput); }
-              if (e.key === 'Backspace' && !tagInput && draftTags.length) setDraftTags(draftTags.slice(0, -1));
-            }}
-            list="note-tag-suggestions"
-            placeholder="+ tag"
-            className="w-20 bg-transparent outline-none text-[11px] placeholder:text-on-surface-variant/40"
+        {!isNew && !textOnly && canEdit && (
+          <button type="button" onClick={onArchive} title="Archive note" aria-label="Archive note" className="notes-icon-btn is-danger">
+            <Trash2 size={17} />
+          </button>
+        )}
+        {!textOnly && canEdit && (
+          <NoteDetailsMenu
+            isNew={isNew}
+            title={titleAuto ? '' : draftTitle}
+            titlePlaceholder={titleAuto ? draftTitle || 'From the first line' : 'From the first line'}
+            setTitle={setDraftTitle}
+            tags={draftTags}
+            setTags={setDraftTags}
+            tagSuggestions={tags}
+            kind={draftKind}
+            setKind={setDraftKind}
+            folder={draftFolder}
+            setFolder={setDraftFolder}
+            slug={slug}
+            noteDate={noteDate}
+            pinned={pinned}
+            onTogglePin={onTogglePin}
+            onMove={props.onMove}
+            onTitleEditing={props.onTitleEditing}
           />
-          <datalist id="note-tag-suggestions">
-            {tags.map((t) => <option key={t.tag} value={t.tag} />)}
-          </datalist>
-        </div>
-
-        <span className="text-outline">·</span>
-
-        <label className="inline-flex items-center gap-1 text-on-surface-variant">
-          kind
-          <select
-            value={draftKind}
-            onChange={(e) => setDraftKind(e.target.value)}
-            className="bg-surface-container-high border border-outline-variant/40 rounded-xs px-1 py-0.5 text-[11px] text-on-surface outline-none"
-          >
-            {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-          </select>
-        </label>
-
-        {isNew ? (
-          <label className="inline-flex items-center gap-1 text-on-surface-variant">
-            <span className="text-outline">·</span> folder
-            <input
-              value={draftFolder}
-              onChange={(e) => setDraftFolder(e.target.value)}
-              placeholder="e.g. projects/octipus"
-              className="w-40 bg-surface-container-high border border-outline-variant/40 rounded-xs px-1.5 py-0.5 text-[11px] outline-none placeholder:text-on-surface-variant/40"
-            />
-          </label>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-on-surface-variant/60 font-mono text-[11px]">
-            <span className="text-outline">·</span> {slug}
-            {noteDate && <span className="text-outline"> · {noteDate}</span>}
-          </span>
         )}
-
-        <div className="ml-auto flex items-center gap-0.5">
-          <ModeBtn active={mode === 'edit'} onClick={() => setMode('edit')}><Pencil size={12} /> edit</ModeBtn>
-          <ModeBtn active={mode === 'split'} onClick={() => setMode('split')}><Columns2 size={12} /> split</ModeBtn>
-          <ModeBtn active={mode === 'preview'} onClick={() => setMode('preview')}><Eye size={12} /> preview</ModeBtn>
-        </div>
+        {props.trailing}
       </div>
-
-      {/* Formatting toolbar (edit/split only) */}
-      {mode !== 'preview' && (
-        <div className="flex items-center gap-0.5 mx-5 mb-1.5 px-1 py-0.5 border border-outline-variant/40 rounded-xs bg-surface-container/50 shrink-0 overflow-x-auto">
-          <ToolBtn title="Bold" onClick={() => editorRef.current?.wrap('**')}><Bold size={14} /></ToolBtn>
-          <ToolBtn title="Italic" onClick={() => editorRef.current?.wrap('*')}><Italic size={14} /></ToolBtn>
-          <ToolBtn title="Inline code" onClick={() => editorRef.current?.wrap('`')}><Code size={14} /></ToolBtn>
-          <span className="w-px h-4 bg-outline-variant/40 mx-1" />
-          <ToolBtn title="Heading 1" onClick={() => editorRef.current?.linePrefix('# ')}><Heading1 size={14} /></ToolBtn>
-          <ToolBtn title="Heading 2" onClick={() => editorRef.current?.linePrefix('## ')}><Heading2 size={14} /></ToolBtn>
-          <ToolBtn title="Bullet list" onClick={() => editorRef.current?.linePrefix('- ')}><List size={14} /></ToolBtn>
-          <ToolBtn title="Quote" onClick={() => editorRef.current?.linePrefix('> ')}><Quote size={14} /></ToolBtn>
-          <span className="w-px h-4 bg-outline-variant/40 mx-1" />
-          <ToolBtn title="Link to a note ([[…]])" onClick={() => editorRef.current?.wrap('[[', ']]', 'Note Title')}><Link2 size={14} /></ToolBtn>
-          <ToolBtn title="Web link" onClick={() => editorRef.current?.wrap('[', '](https://)', 'link text')}><ExternalLink size={14} /></ToolBtn>
-          <ToolBtn title="Image (or just paste / drop one)" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14} /></ToolBtn>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            onChange={(e) => {
-              const picked = Array.from(e.target.files ?? []);
-              // Reset first so picking the SAME file twice still fires change.
-              e.target.value = '';
-              void uploadImages(picked);
-            }}
-          />
-          {uploadError && (
-            <button
-              type="button"
-              onClick={() => setUploadError(null)}
-              title="Dismiss"
-              className="ml-2 text-[10px] text-error hover:opacity-80"
-            >
-              {uploadError} ✕
-            </button>
-          )}
-          {dirty && !props.autosave && <span className="ml-auto pr-1 text-[10px] text-on-surface-variant/60">unsaved</span>}
-        </div>
-      )}
-
-      {/* Body — fills remaining height to the very bottom */}
-      <div className="flex-1 min-h-0 px-5 pb-5">
-        {mode === 'preview' && (
-          <div className="h-full overflow-y-auto term-frame rounded-xs p-4">{preview}</div>
-        )}
-        {mode === 'edit' && (
-          <div className="h-full term-frame rounded-xs overflow-hidden">{editor}</div>
-        )}
-        {mode === 'split' && (
-          <div className="h-full grid grid-cols-2 gap-3">
-            <div className="h-full term-frame rounded-xs overflow-hidden">{editor}</div>
-            <div className="h-full overflow-y-auto term-frame rounded-xs p-4">{preview}</div>
-          </div>
-        )}
+      {props.notices}
+      <div className="notes-scroll">
+        <article className="notes-sheet">
+          {title}
+          {meta}
+          {mode === 'read' ? <div className="notes-reading">{reading}</div> : <div className={cn('notes-body', titleAuto && 'is-title-first')}>{editor}</div>}
+        </article>
       </div>
     </div>
   );

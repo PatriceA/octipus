@@ -24,6 +24,8 @@ export interface NoteIndexEntry {
   title: string;
   slug: string;
   noteKind: string;
+  /** Slugs the note was moved away from (`POST /notes/:id/move`): a `[[link]]` to one still means it. */
+  aliases?: string[];
 }
 
 export interface TagCount {
@@ -70,5 +72,12 @@ export interface NoteListResponse {
   total: number;
 }
 
-/** `archived`: the archive view (archived notes, each with Restore). */
-export type NoteFilter = 'all' | 'pinned' | 'daily' | 'moc' | 'archived';
+/**
+ * What the list shows. `all` leaves out the notes a learning review wrote
+ * (kind `lesson`, or tagged `session-learning`) unless pinned; `learnings`
+ * shows only those. `archived`: the archive view (each with Restore).
+ */
+export type NoteFilter = 'all' | 'pinned' | 'daily' | 'moc' | 'learnings' | 'archived';
+
+/** How the list is laid out: most recently edited first, by title, or as the folder tree. */
+export type NoteSort = 'recent' | 'title' | 'folders';
