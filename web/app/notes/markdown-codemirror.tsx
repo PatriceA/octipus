@@ -77,6 +77,8 @@ interface Props {
   onEscape?: () => void;
   /** Take the focus on mount (a new note: click New and type). */
   autoFocus?: boolean;
+  /** Draw `![images]` in the text (false: text from another install, whose images never load). */
+  images?: boolean;
 }
 
 /**
@@ -223,7 +225,7 @@ const editorTheme = EditorView.theme({
 });
 
 const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function NotesMarkdownEditor(
-  { value, onChange, onSave, getNotes, getTags, onFiles, collab, onOpenWikilink, onTag, placeholder, onEscape, autoFocus },
+  { value, onChange, onSave, getNotes, getTags, onFiles, collab, onOpenWikilink, onTag, placeholder, onEscape, autoFocus, images = true },
   ref,
 ) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -305,14 +307,14 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
         },
       }),
       editorTheme,
-      livePreview(() => linksRef.current),
+      livePreview(() => linksRef.current, { images }),
       ...(placeholder ? [placeholderText(placeholder)] : []),
       // Bound once this document's manager exists (never another's).
       ...(collab && undoManager && undoManager.scope.includes(collab.text)
         ? [yCollab(collab.text, collab.awareness, { undoManager })]
         : []),
     ],
-    [collab, undoManager, placeholder],
+    [collab, undoManager, placeholder, images],
   );
   // Bound to a live document, the editor starts from its text and is then
   // driven by yCollab alone: a changing `value` prop would fight it.

@@ -2,6 +2,7 @@ import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/lang
 import type { Range } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { api } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Live preview for the notes editor: one surface that reads like the rendered
@@ -71,6 +72,58 @@ class TaskBox extends WidgetType {
   }
 }
 
+/**
+ * `![alt](src)` drawn as the picture. A `/api/…` source is fetched through
+ * the API client (credentials ride along, as `AuthedImage` does for the
+ * reading view) and shown from an object URL, revoked when the widget goes;
+ * another source loads as a plain image, as in the reading view.
+ */
+class ImageWidget extends WidgetType {
+  private url: string | null = null;
+
+  constructor(readonly src: string, readonly alt: string) {
+    super();
+  }
+
+  override eq(other: ImageWidget): boolean {
+    return other.src === this.src && other.alt === this.alt;
+  }
+
+  override toDOM(): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-np-image';
+    const img = document.createElement('img');
+    img.alt = this.alt;
+    img.loading = 'lazy';
+    wrap.appendChild(img);
+    if (this.src.startsWith('/api/')) {
+      wrap.dataset.state = 'loading';
+      api.getBlob(this.src.slice('/api'.length)).then(
+        (blob) => {
+          this.url = URL.createObjectURL(blob);
+          img.src = this.url;
+          wrap.dataset.state = 'ready';
+        },
+        (err: unknown) => {
+          console.warn('A note image could not be loaded', this.src, err);
+          wrap.dataset.state = 'failed';
+          wrap.textContent = `image unavailable${this.alt ? ` — ${this.alt}` : ''}`;
+        },
+      );
+    } else if (/^https?:\/\//i.test(this.src)) {
+      img.src = this.src;
+    } else {
+      wrap.textContent = this.alt || this.src;
+    }
+    return wrap;
+  }
+
+  override destroy(): void {
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = null;
+  }
+}
+
 /** A list's `-` drawn as a bullet. */
 class Bullet extends WidgetType {
   override eq(): boolean {
@@ -106,11 +159,29 @@ function inCode(view: EditorView, pos: number): boolean {
   return false;
 }
 
-function build(view: EditorView): DecorationSet {
+function build(view: EditorView, images: boolean): DecorationSet {
   const out: Range<Decoration>[] = [];
   const { state } = view;
   const active = activeLines(view);
   const isActive = (pos: number) => active.has(state.doc.lineAt(pos).number);
+  // A decoration that replaces text must stay inside one line: a plugin may
+  // not replace a line break (CodeMirror throws). Markdown constructs can span
+  // lines (a link's `](` on one line and its URL on the next), so every
+  // replaced range is checked here and left alone when it would cross one.
+  const oneLine = (from: number, to: number) => from < to && state.doc.lineAt(from).number === state.doc.lineAt(to).number;
+  const replace = (deco: Decoration, from: number, to: number) => {
+    if (oneLine(from, to)) out.push(deco.range(from, to));
+  };
+  // A mark may span lines, but never be empty.
+  const style = (deco: Decoration, from: number, to: number) => {
+    if (from < to) out.push(deco.range(from, to));
+  };
+  // Line styles of a block, for the lines of it that are on screen.
+  const blockLines = (cls: string, from: number, to: number, visFrom: number, visTo: number) => {
+    const first = state.doc.lineAt(Math.max(from, visFrom)).number;
+    const last = state.doc.lineAt(Math.min(to, visTo)).number;
+    for (let n = first; n <= last; n++) out.push(lineClass(cls).range(state.doc.line(n).from));
+  };
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -128,58 +199,62 @@ function build(view: EditorView): DecorationSet {
             if (isActive(node.from)) break;
             // `# ` — the mark and the space after it.
             const end = state.sliceDoc(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to;
-            if (state.doc.lineAt(node.from).from === node.from) out.push(hide.range(node.from, end));
+            if (state.doc.lineAt(node.from).from === node.from) replace(hide, node.from, end);
             break;
           }
           case 'StrongEmphasis':
-            out.push(mark('cm-np-strong').range(node.from, node.to));
+            style(mark('cm-np-strong'), node.from, node.to);
             break;
           case 'Emphasis':
-            out.push(mark('cm-np-em').range(node.from, node.to));
+            style(mark('cm-np-em'), node.from, node.to);
             break;
           case 'Strikethrough':
-            out.push(mark('cm-np-strike').range(node.from, node.to));
+            style(mark('cm-np-strike'), node.from, node.to);
             break;
           case 'EmphasisMark':
           case 'StrikethroughMark':
-            if (!isActive(node.from)) out.push(hide.range(node.from, node.to));
+            if (!isActive(node.from)) replace(hide, node.from, node.to);
             break;
           case 'InlineCode':
-            out.push(mark('cm-np-code').range(node.from, node.to));
+            style(mark('cm-np-code'), node.from, node.to);
             break;
           case 'CodeMark':
-            if (node.node.parent?.name === 'InlineCode' && !isActive(node.from)) out.push(hide.range(node.from, node.to));
+            if (node.node.parent?.name === 'InlineCode' && !isActive(node.from)) replace(hide, node.from, node.to);
             break;
-          case 'FencedCode': {
-            const first = state.doc.lineAt(node.from).number;
-            const last = state.doc.lineAt(node.to).number;
-            for (let n = first; n <= last; n++) out.push(lineClass('cm-np-codeblock').range(state.doc.line(n).from));
+          case 'FencedCode':
+            blockLines('cm-np-codeblock', node.from, node.to, from, to);
             return false;
-          }
-          case 'Blockquote': {
-            const first = state.doc.lineAt(node.from).number;
-            const last = state.doc.lineAt(node.to).number;
-            for (let n = first; n <= last; n++) out.push(lineClass('cm-np-quote').range(state.doc.line(n).from));
+          case 'Blockquote':
+            blockLines('cm-np-quote', node.from, node.to, from, to);
             break;
-          }
           case 'QuoteMark': {
             // `> ` reads as the quote's bar (drawn by the line style).
-            if (isActive(node.from)) out.push(mark('cm-np-mark').range(node.from, node.to));
-            else out.push(hide.range(node.from, state.sliceDoc(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to));
+            if (isActive(node.from)) style(mark('cm-np-mark'), node.from, node.to);
+            else replace(hide, node.from, state.sliceDoc(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to);
             break;
           }
           case 'HorizontalRule':
             out.push(lineClass('cm-np-hr').range(state.doc.lineAt(node.from).from));
-            if (!isActive(node.from)) out.push(mark('cm-np-hr-text').range(node.from, node.to));
+            if (!isActive(node.from)) style(mark('cm-np-hr-text'), node.from, node.to);
             break;
           case 'Link': {
             const marks = node.node.getChildren('LinkMark');
             const url = node.node.getChild('URL');
-            out.push(mark('cm-np-link', url ? { 'data-href': state.sliceDoc(url.from, url.to) } : undefined).range(node.from, node.to));
-            if (!isActive(node.from) && marks.length >= 2) {
-              out.push(hide.range(marks[0].from, marks[0].to));
-              out.push(hide.range(marks[1].from, node.to));
+            style(mark('cm-np-link', url ? { 'data-href': state.sliceDoc(url.from, url.to) } : undefined), node.from, node.to);
+            // Hidden only when the whole link is on one line (it may span lines).
+            if (!isActive(node.from) && marks.length >= 2 && oneLine(node.from, node.to)) {
+              replace(hide, marks[0].from, marks[0].to);
+              replace(hide, marks[1].from, node.to);
             }
+            return false;
+          }
+          case 'Image': {
+            // Drawn as the picture itself, off the caret's line (the source shows there).
+            const url = node.node.getChild('URL');
+            if (!images || !url || isActive(node.from) || !oneLine(node.from, node.to)) return false;
+            const marks = node.node.getChildren('LinkMark');
+            const alt = marks.length >= 2 ? state.sliceDoc(marks[0].to, marks[1].from) : '';
+            replace(Decoration.replace({ widget: new ImageWidget(state.sliceDoc(url.from, url.to), alt) }), node.from, node.to);
             return false;
           }
           case 'ListMark': {
@@ -188,15 +263,15 @@ function build(view: EditorView): DecorationSet {
             const text = state.sliceDoc(node.from, node.to);
             if (isActive(node.from) || !/^[-*+]$/.test(text)) break;
             // A task's bullet gives way to its checkbox; a plain item's is drawn as a dot.
-            if (task) out.push(hide.range(node.from, Math.min(node.to + 1, task.from)));
-            else out.push(BULLET.range(node.from, node.to));
+            if (task) replace(hide, node.from, Math.min(node.to + 1, task.from));
+            else replace(BULLET, node.from, node.to);
             break;
           }
           case 'Task': {
             const marker = node.node.getChild('TaskMarker');
             if (!marker) break;
             const checked = /x/i.test(state.sliceDoc(marker.from, marker.to));
-            out.push(Decoration.replace({ widget: new TaskBox(checked) }).range(marker.from, marker.to));
+            replace(Decoration.replace({ widget: new TaskBox(checked) }), marker.from, marker.to);
             out.push(lineClass(checked ? 'cm-np-task cm-np-task-done' : 'cm-np-task').range(state.doc.lineAt(node.from).from));
             break;
           }
@@ -220,39 +295,58 @@ function build(view: EditorView): DecorationSet {
         const pipe = inner.indexOf('|');
         const target = (pipe >= 0 ? inner.slice(0, pipe) : inner).split('#')[0].trim();
         const end = start + m[0].length;
-        out.push(mark('cm-np-wikilink', { 'data-wikilink': target }).range(start, end));
+        style(mark('cm-np-wikilink', { 'data-wikilink': target }), start, end);
         if (!lineActive) {
-          out.push(hide.range(start, start + 2 + (pipe >= 0 ? pipe + 1 : 0)));
-          out.push(hide.range(end - 2, end));
+          replace(hide, start, start + 2 + (pipe >= 0 ? pipe + 1 : 0));
+          replace(hide, end - 2, end);
         }
       }
       for (const m of line.text.matchAll(TAG_RE)) {
         const start = line.from + (m.index ?? 0) + m[1].length;
         // A heading's `#` is followed by a space and never matches; skip code.
         if (inCode(view, start)) continue;
-        out.push(mark('cm-np-tag', { 'data-tag': m[2] }).range(start, start + m[2].length + 1));
+        style(mark('cm-np-tag', { 'data-tag': m[2] }), start, start + m[2].length + 1);
       }
     }
   }
   return Decoration.set(out, true);
 }
 
-const decorations = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+/**
+ * The decorations, failing safe: should drawing them throw (a construct not
+ * foreseen above), the note shows as plain text and stays editable rather
+ * than the editor breaking. Logged, once per editor.
+ */
+function decorations(images: boolean) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet = Decoration.none;
+      failed = false;
 
-    constructor(view: EditorView) {
-      this.decorations = build(view);
-    }
-
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-        this.decorations = build(update.view);
+      constructor(view: EditorView) {
+        this.decorations = this.draw(view);
       }
-    }
-  },
-  { decorations: (v) => v.decorations },
-);
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          this.decorations = this.draw(update.view);
+        }
+      }
+
+      draw(view: EditorView): DecorationSet {
+        if (this.failed) return Decoration.none;
+        try {
+          return build(view, images);
+        } catch (err) {
+          this.failed = true;
+          console.error('Live preview failed; showing this note as plain text', err);
+          return Decoration.none;
+        }
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
+}
 
 /** Clicks on the drawn links. */
 function clicks(handlers: () => LivePreviewHandlers) {
@@ -307,7 +401,11 @@ const highlight = HighlightStyle.define([
   { tag: [tags.function(tags.variableName), tags.typeName, tags.className], color: 'var(--color-primary)' },
 ]);
 
-/** The live-preview extension set: decorations, link clicks and the paper colours. */
-export function livePreview(handlers: () => LivePreviewHandlers) {
-  return [decorations, clicks(handlers), syntaxHighlighting(highlight)];
+/**
+ * The live-preview extension set: decorations, link clicks and the paper
+ * colours. `images: false` leaves pictures as their markdown (text from
+ * another install, whose images are never loaded).
+ */
+export function livePreview(handlers: () => LivePreviewHandlers, opts: { images?: boolean } = {}) {
+  return [decorations(opts.images ?? true), clicks(handlers), syntaxHighlighting(highlight)];
 }

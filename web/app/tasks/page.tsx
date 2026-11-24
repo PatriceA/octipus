@@ -22,6 +22,7 @@ import {
 } from '../../../src/core/tasks/smart-lists';
 import { isActiveStatus } from '../../../src/core/tasks/status';
 import { toLookup } from '../../../src/core/tasks/structure';
+import { pageShortcutAllowed } from '@/lib/shortcut-guard';
 
 type View = 'list' | 'board';
 const VIEW_KEY = 'octipus.tasks.view';
@@ -273,7 +274,7 @@ function TodosPage() {
         keyState.current.open(null);
         return;
       }
-      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!pageShortcutAllowed(e)) return;
       if (e.key === 'n' && captureRef.current) { e.preventDefault(); captureRef.current.focus(); }
       else if (e.key === '/' && searchRef.current) { e.preventDefault(); searchRef.current.focus(); }
     };

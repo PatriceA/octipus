@@ -3,7 +3,7 @@
 import {
   ArrowDownAZ, CalendarDays, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, FolderTree, Hash, Loader2, Network, Plus, RotateCcw, Search, Send, Star, X,
 } from 'lucide-react';
-import { type DragEvent, useMemo, useState } from 'react';
+import { type DragEvent, memo, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { bodyPreview } from '../../../src/shared/note-text';
 import type { NoteFilter, NoteRow, NoteSort, TagCount } from './types';
@@ -208,12 +208,24 @@ interface TagCtx {
   setActiveTag: (t: string | null) => void;
 }
 
+/** Each row's line of text, worked out once per row the server sent (rows are replaced when they change). */
+const previews = new WeakMap<NoteRow, string>();
+function rowPreview(note: NoteRow): string {
+  if (note.preview !== undefined) return note.preview;
+  let line = previews.get(note);
+  if (line === undefined) {
+    line = bodyPreview(note.body, note.title);
+    previews.set(note, line);
+  }
+  return line;
+}
+
 function NoteRowButton({ note, depth = 0, ctx, snippet, compact = false }: { note: NoteRow; depth?: number; ctx: RowCtx; snippet?: string; compact?: boolean }) {
   const active = note.id === ctx.selectedId;
   const daily = note.noteKind === 'daily';
   const label = daily ? dailyLabel(note) : note.title || 'Untitled';
   const seen = isLesson(note) ? sightings(note) : null;
-  const preview = snippet ?? (compact ? '' : bodyPreview(note.body, note.title));
+  const preview = snippet ?? (compact ? '' : rowPreview(note));
   return (
     <button
       type="button"
@@ -352,7 +364,7 @@ function QuickCapture({ onCapture, onOpenDaily }: { onCapture: (text: string) =>
   );
 }
 
-export function NotesNavigator({
+export const NotesNavigator = memo(function NotesNavigator({
   notes, tags, isLoading, selectedId, filter, setFilter, sort = 'recent', setSort, search, setSearch, activeTag, setActiveTag, onOpen, onNew,
   onToday, onCapture, onOpenId, onGraph, onMoveTo, serverSearch = false, showArchive = false, onRestore, searchRef,
 }: NavigatorProps) {
@@ -588,4 +600,4 @@ export function NotesNavigator({
       </div>
     </div>
   );
-}
+});

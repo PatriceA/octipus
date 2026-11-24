@@ -66,8 +66,12 @@ export interface NoteEditorProps {
   onOpenSlug?: (target: string) => void;
   /** Filter by an inline `#tag` clicked in the note. */
   onTagClick?: (tag: string) => void;
-  /** A reading view's task checkbox: tick the task whose list item starts at `offset`. */
-  onToggleTask?: (offset: number, checked: boolean) => void;
+  /**
+   * A reading view's task checkbox: tick the task whose list item starts at
+   * `offset` of the drawn text, whose line read `seenLine`. Absent: the boxes
+   * cannot be ticked (a reader, or a space note not live yet).
+   */
+  onToggleTask?: (offset: number, checked: boolean, seenLine: string) => void;
   /**
    * The caller may not edit (a commenter or viewer in a space, or an
    * archived space): the note shows as a reading view with no editing controls.
@@ -334,6 +338,7 @@ export function NoteEditor(props: NoteEditorProps) {
       placeholder={titleAuto && !draftBody ? 'Start with a title, then write…' : 'Start writing…'}
       onEscape={props.onEscape}
       autoFocus={props.autoFocus}
+      images={!textOnly}
     />
   );
 

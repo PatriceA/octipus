@@ -8,6 +8,7 @@ import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
 import { pointsHere, remoteImage } from '@/lib/remote-content';
 import { localFileLink } from '../../../src/shared/local-file-link';
+import { taskLineAt } from '../../../src/shared/note-text';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -52,18 +53,26 @@ export function CodeBlock({ language, code }: { language: string; code: string }
 
 /** Where the task list item being drawn starts in the source text (its checkbox ticks the task there). */
 const TaskOffset = createContext<number | null>(null);
+/** The source text being drawn: a checkbox names the line it stands for. */
+const TaskSource = createContext('');
 
-/** A task's checkbox: ticks the task in the source when `onToggle` is given, else a quiet read-only mark. */
-function TaskCheckbox({ checked, onToggle }: { checked: boolean; onToggle?: (offset: number, checked: boolean) => void }) {
+/**
+ * A task's checkbox: ticks the task in the source when `onToggle` is given,
+ * else a quiet read-only mark. Also read-only when no task starts on its
+ * item's line in the source (nothing there to tick).
+ */
+function TaskCheckbox({ checked, onToggle }: { checked: boolean; onToggle?: (offset: number, checked: boolean, seenLine: string) => void }) {
   const offset = useContext(TaskOffset);
-  const live = !!onToggle && offset !== null;
+  const source = useContext(TaskSource);
+  const seenLine = offset === null ? null : taskLineAt(source, offset);
+  const live = !!onToggle && offset !== null && seenLine !== null;
   return (
     <input
       type="checkbox"
       checked={checked}
       disabled={!live}
       aria-label={checked ? 'Mark task not done' : 'Mark task done'}
-      onChange={live ? () => onToggle(offset, !checked) : undefined}
+      onChange={live ? () => onToggle(offset, !checked, seenLine) : undefined}
       className={cn('md-task-box mr-2 align-[-2px]', live && 'cursor-pointer')}
     />
   );
@@ -115,11 +124,12 @@ export function Markdown({
   onOpenFile?: (path: string) => void;
   /**
    * Makes `- [ ]` task checkboxes clickable: called with the offset in
-   * `content` where the task's list item starts and the state asked for
-   * (`toggleTaskAt` in src/shared/note-text.ts writes it). Without it the
-   * boxes show their state and cannot be clicked.
+   * `content` where the task's list item starts, the state asked for, and
+   * that line as `content` had it (`toggleSeenTask` in
+   * src/shared/note-text.ts finds it again in a text changed since).
+   * Without it the boxes show their state and cannot be clicked.
    */
-  onToggleTask?: (offset: number, checked: boolean) => void;
+  onToggleTask?: (offset: number, checked: boolean, seenLine: string) => void;
 }) {
   const enableInline = !!(onWikilink || onTag);
   // Component identity must survive polling and streaming renders. Defining
@@ -291,6 +301,7 @@ export function Markdown({
   }), [onWikilink, onTag, onOpenFile, untrusted, listing, onToggleTask]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
+      <TaskSource.Provider value={content}>
       <ReactMarkdown
         remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
         urlTransform={(url) => {
@@ -302,6 +313,7 @@ export function Markdown({
       >
         {content}
       </ReactMarkdown>
+      </TaskSource.Provider>
     </div>
   );
 }

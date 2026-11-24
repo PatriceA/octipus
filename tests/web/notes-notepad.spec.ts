@@ -43,7 +43,7 @@ async function stub(page: Page, notes: StubNote[]) {
   await page.route(/\/api\/notes(\/|\?|$)/, async (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname.replace(/^.*\/api\/notes/, '') || '/';
-    if (path === '/index') return json(route, 200, { notes: notes.map((n) => ({ id: n.id, title: n.title, slug: n.slug, noteKind: n.noteKind ?? 'note', ...(Array.isArray(n.frontmatter?.aliases) ? { aliases: n.frontmatter.aliases } : {}) })) });
+    if (path === '/index') return json(route, 200, { notes: notes.map((n) => ({ id: n.id, title: n.title, slug: n.slug, noteKind: n.noteKind ?? 'note', ...(Array.isArray(n.frontmatter?.movedFrom) ? { movedFrom: n.frontmatter.movedFrom } : {}) })) });
     if (path === '/tags') return json(route, 200, { tags: [] });
     if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
     if (path === '/daily' && req.method() === 'POST') {
@@ -66,7 +66,7 @@ async function stub(page: Page, notes: StubNote[]) {
       const { slug } = req.postDataJSON();
       calls.moves.push({ id: move[1], slug });
       const n = notes.find((x) => x.id === move[1]);
-      if (n) { n.frontmatter = { aliases: [n.slug] }; n.slug = slug; }
+      if (n) { n.frontmatter = { movedFrom: [n.slug] }; n.slug = slug; }
       return json(route, 200, { note: n && full(n) });
     }
     if (path === '/' && req.method() === 'POST') {
@@ -87,7 +87,7 @@ async function stub(page: Page, notes: StubNote[]) {
 const NOTES = (): StubNote[] => [
   { id: 'shop', title: 'Shopping', slug: 'shopping', body: 'Shopping\n- [ ] oat milk\n- [x] eggs\nSee [[Garden plan]] and [[old-plans/recipes|the recipes]]', updatedAt: new Date().toISOString() },
   { id: 'garden', title: 'Garden plan', slug: 'home/garden-plan', body: 'Plant tomatoes in May.', updatedAt: hoursAgo(30) },
-  { id: 'recipes', title: 'Recipes', slug: 'kitchen/recipes', body: 'Recipes\nLentil soup', updatedAt: hoursAgo(300), frontmatter: { aliases: ['old-plans/recipes'] } },
+  { id: 'recipes', title: 'Recipes', slug: 'kitchen/recipes', body: 'Recipes\nLentil soup', updatedAt: hoursAgo(300), frontmatter: { movedFrom: ['old-plans/recipes'] } },
   { id: 'd-old', title: '2026-01-02', slug: 'daily/2026-01-02', body: '# 2026-01-02\nold day', noteKind: 'daily', noteDate: '2026-01-02', updatedAt: hoursAgo(10) },
   { id: 'd-new', title: '2026-01-05', slug: 'daily/2026-01-05', body: '# 2026-01-05\nnewer day', noteKind: 'daily', noteDate: '2026-01-05', updatedAt: hoursAgo(400) },
 ];
@@ -217,4 +217,59 @@ test('a commenter in a space sees a note’s tasks as boxes they cannot tick', a
   await expect(reader).toContainText('oat milk');
   await expect(reader.getByRole('checkbox', { name: 'Mark task done' })).toBeDisabled();
   expect(calls.posts).toEqual([]);
+});
+
+test('a first line with a slash names the note, never a folder; Enter ends the wait for the first line', async ({ authenticatedPage: page }) => {
+  const notes = NOTES();
+  const calls = await stub(page, notes);
+  await page.route('**/api/notes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const input = route.request().postDataJSON();
+    calls.posts.push(input);
+    return json(route, 200, { note: { ...full({ id: 'n-slash', title: input.title, slug: 'notes-11-24', body: input.body, updatedAt: new Date().toISOString() }) } });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.keyboard.type('Notes 11/24');
+  const typedAt = Date.now();
+  await page.keyboard.press('Enter');
+  // Saved at the usual pause after Enter, not after the longer first-line wait.
+  await expect.poll(() => calls.posts.length, { timeout: 2000 }).toBe(1);
+  expect(Date.now() - typedAt).toBeLessThan(2400);
+  expect(calls.posts[0]).toMatchObject({ title: 'Notes 11/24', slug: 'Notes 11-24', createOnly: true });
+});
+
+test('a space note’s boxes cannot be ticked in the reading view before its live text has arrived', async ({ authenticatedPage: page }) => {
+  const SPACE = '0b9d3c55-5f2c-4c37-9a3e-6d1f00000004';
+  await page.addInitScript((id) => localStorage.setItem('octipus.activeWorkspace', id), SPACE);
+  const space = { id: SPACE, name: 'Launch', slug: 'launch', role: 'editor', memberCount: 2, archivedAt: null, createdBy: 'x', createdAt: '2026-11-01T00:00:00Z', funding: 'own' };
+  await page.route('**/api/spaces', (route) => json(route, 200, { spaces: [space] }));
+  await page.route(`**/api/spaces/${SPACE}`, (route) => json(route, 200, space));
+  // (The stubbed gateway never answers `doc.join`: the note never goes live.)
+  const calls = await stub(page, NOTES());
+  await page.goto('/notes?note=shop');
+  await page.getByRole('button', { name: 'Reading view' }).click();
+  const box = page.getByTestId('note-editor').getByRole('checkbox', { name: 'Mark task done' });
+  await expect(box).toBeDisabled();
+  expect(calls.posts).toEqual([]);
+});
+
+test('a held key or one pressed with a menu or dialog open is not a shortcut', async ({ authenticatedPage: page }) => {
+  const calls = await stub(page, NOTES());
+  await page.goto('/notes');
+  await expect(page.getByRole('button', { name: /^Shopping/ })).toBeVisible();
+  const press = (init: KeyboardEventInit) => page.evaluate((i) => { document.body.dispatchEvent(new KeyboardEvent('keydown', { ...i, bubbles: true, cancelable: true })); }, init);
+  await press({ key: 't', repeat: true });
+  await page.evaluate(() => {
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    menu.id = 'test-menu';
+    document.body.appendChild(menu);
+  });
+  await press({ key: 't' });
+  await page.waitForTimeout(400);
+  expect(calls.daily).toEqual([]);
+  await page.evaluate(() => document.getElementById('test-menu')?.remove());
+  await press({ key: 't' });
+  await expect.poll(() => calls.daily.length).toBe(1);
 });

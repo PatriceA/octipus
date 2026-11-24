@@ -44,8 +44,10 @@ test.describe('notes — images', () => {
     await expect.poll(() => uploads.length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(uploads[0]).toBe('POST');
     // The placeholder must be replaced by the real link, not left behind.
-    await expect(page.locator('.cm-content')).toContainText('/api/documents/doc-img-1/raw', { timeout: 10_000 });
-    await expect(page.locator('.cm-content')).not.toContainText('#upload-');
+    // (Read from the document: off the caret's line the editor draws the picture, not its markdown.)
+    const text = () => page.evaluate(() => (document.querySelector('.cm-content') as HTMLElement & { cmTile: { root: { view: { state: { doc: { toString(): string } } } } } }).cmTile.root.view.state.doc.toString());
+    await expect.poll(text, { timeout: 10_000 }).toContain('/api/documents/doc-img-1/raw');
+    expect(await text()).not.toContain('#upload-');
   });
 
   test('the preview renders the image through an authenticated fetch', async ({
@@ -85,4 +87,21 @@ test.describe('notes — images', () => {
     // Without rel=noopener the opened page gets a handle back to this one.
     await expect(link).toHaveAttribute('rel', /noopener/);
   });
+});
+
+test('an image in a note is drawn in the editor, fetched with the session', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  const rawReads: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/api/documents/doc-img-1/raw')) rawReads.push(r.url()); });
+  await page.goto('/notes');
+  await page.getByText('First note', { exact: false }).first().click();
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type('\n![shot](/api/documents/doc-img-1/raw)\nafter');
+  const img = page.locator('.cm-content .cm-np-image img[alt="shot"]');
+  await expect(img).toHaveAttribute('src', /^blob:/, { timeout: 10_000 });
+  expect(rawReads.length).toBeGreaterThan(0);
+  // On the caret's line the markdown shows, to edit it.
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.cm-content')).toContainText('/api/documents/doc-img-1/raw');
 });

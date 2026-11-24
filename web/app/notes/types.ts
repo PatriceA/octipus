@@ -15,6 +15,8 @@ export interface NoteRow {
   frontmatter?: Record<string, unknown>;
   /** The markdown; `GET /notes` returns it (search results show a line of it). */
   body?: string;
+  /** A line of the text instead of `body` (`GET /notes?preview=true`, the list). */
+  preview?: string;
   /** Set on an archived note (the archive view, or an archived note opened from it). */
   archivedAt?: string | null;
 }
@@ -25,7 +27,7 @@ export interface NoteIndexEntry {
   slug: string;
   noteKind: string;
   /** Slugs the note was moved away from (`POST /notes/:id/move`): a `[[link]]` to one still means it. */
-  aliases?: string[];
+  movedFrom?: string[];
 }
 
 export interface TagCount {

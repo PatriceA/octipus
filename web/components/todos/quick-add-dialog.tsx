@@ -8,6 +8,7 @@ import { usePageOn } from '@/lib/modules';
 import { useWorkspace } from '@/lib/workspace-context';
 import { CaptureChips, todoFromCapture, useCaptureParse } from './capture-bar';
 import { browserTimezone, type Todo } from './model';
+import { pageShortcutAllowed } from '@/lib/shortcut-guard';
 
 /** Dispatch on `window` to open the quick-add, optionally prefilled: `{ detail: { text } }`. */
 export const QUICK_ADD_TODO_EVENT = 'octipus:quick-add-todo';
@@ -15,22 +16,6 @@ export const QUICK_ADD_TODO_EVENT = 'octipus:quick-add-todo';
 /** Open the global quick-add from anywhere (the Ctrl+K menu, a button). */
 export function openQuickAddTodo(text = ''): void {
   window.dispatchEvent(new CustomEvent(QUICK_ADD_TODO_EVENT, { detail: { text } }));
-}
-
-/** True while the user is typing somewhere: a key there is text, not a shortcut. */
-function typingIn(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || !!el.closest('[contenteditable="true"], .cm-editor'));
-}
-
-/**
- * Something modal or a menu is open (a native dialog, the app's div-based
- * modals and portals, a file viewer, a menu or listbox): a Q there belongs
- * to it, so the quick-add stays shut.
- */
-function overlayOpen(): boolean {
-  // `.fixed.inset-0`: the app's own full-screen overlays that carry no role (viewers, pickers).
-  return !!document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]:not([hidden]), .fixed.inset-0');
 }
 
 /**
@@ -69,7 +54,7 @@ export function QuickAddTodo() {
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'q' || e.metaKey || e.ctrlKey || e.altKey || e.repeat || typingIn(e.target) || typingIn(document.activeElement) || overlayOpen()) return;
+      if (e.key.toLowerCase() !== 'q' || !pageShortcutAllowed(e)) return;
       e.preventDefault();
       start('');
     };

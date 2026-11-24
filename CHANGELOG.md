@@ -21,7 +21,10 @@ labels reflect blast radius, not contract guarantees.
   note, Move to… and drag onto a folder, the archive one tab away, session
   learnings under their own filter (their tag hidden without it), back and
   forward buttons, and keys N (new), / (search), T (today). The links panel
-  opens on request.
+  opens on request. Pictures are drawn in the editor (fetched with the
+  session, as in the reading view; never for a space on another install).
+  One-key shortcuts (Q, N, /, T) share one rule: never while typing, with a
+  key held, or with a dialog, menu or overlay open.
 - **Notes: move without breaking links, and the day's note on request**
   ([API](docs/API.md#notes)). `POST /api/notes/:id/move {slug}` moves a note
   to another folder or name; its old slug is kept in `frontmatter.movedFrom` (one note per slug, never

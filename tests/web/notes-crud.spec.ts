@@ -153,9 +153,12 @@ test('a title set by hand stays put while the first line changes, and clearing i
   await details.getByLabel('Add a tag').press('Enter');
   await expect.poll(() => posts.at(-1)?.tags).toEqual(['errands']);
   await details.getByLabel('Title').fill('');
-  // Empty: the title is the first line's again, and the title field goes.
-  await expect.poll(() => posts.at(-1)?.title).toBe('oat milk');
+  // Emptied while typed in: nothing is saved yet (it may be erased to write another).
+  await page.waitForTimeout(1200);
+  expect(posts.at(-1)?.title).toBe('Shop');
+  // Closed empty: the title is the first line's again, and the title field goes.
   await page.keyboard.press('Escape');
+  await expect.poll(() => posts.at(-1)?.title).toBe('oat milk');
   await expect(page.getByPlaceholder('Untitled note')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '#errands' })).toBeVisible();
 });
@@ -251,4 +254,69 @@ test('lesson notes are filtered by their kind or the tag, and a lesson seen more
   await expect(page.getByRole('button', { name: /^Deploy only on weekdays ×3/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Quote websites per page/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Quote websites per page ×/ })).toHaveCount(0);
+});
+
+test('a new note is not created from its first line while its title is erased in the details menu', async ({ authenticatedPage: page }) => {
+  const posts: any[] = [];
+  await page.route('**/api/notes**', async route => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname.replace(/\/$/, '');
+    if (req.method() === 'POST' && path === '/api/notes') {
+      const input = req.postDataJSON();
+      posts.push(input);
+      return json(route, 200, { note: { ...input, id: 'n-new', slug: 'x', bodySha256: sha(input.body), pinned: false, frontmatter: {}, archivedAt: null, updatedAt: new Date().toISOString() } });
+    }
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path === '/api/notes' || path.endsWith('/index')) return json(route, 200, { notes: [], total: 0 });
+    return json(route, 404, { error: 'Note not found' });
+  });
+  await page.goto('/notes');
+  await page.getByTitle('New note', { exact: true }).click();
+  await page.keyboard.type('Draft first line');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('body');
+  await page.getByRole('button', { name: 'Details' }).click();
+  const title = page.getByRole('dialog', { name: 'Note details' }).getByLabel('Title');
+  await title.pressSequentially('Real');
+  await title.fill('');
+  await page.waitForTimeout(1500);
+  expect(posts).toEqual([]);
+  await title.pressSequentially('Real title');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => posts[0]?.title).toBe('Real title');
+  expect(posts).toHaveLength(1);
+});
+
+test('saves queued while one is in flight are each made over the text the last one saved', async ({ authenticatedPage: page }) => {
+  let note = { id: 'n-q', title: 'Queue', slug: 'queue', body: 'Queue\nstart', bodySha256: sha('Queue\nstart'), noteKind: 'note', tags: [], pinned: false, frontmatter: {}, archivedAt: null, createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z' };
+  const posts: any[] = [];
+  await page.route('**/api/notes**', async route => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname.replace(/\/$/, '');
+    if (req.method() === 'POST' && path === '/api/notes') {
+      const input = req.postDataJSON();
+      posts.push(input);
+      // A slow server: the next autosave is queued meanwhile.
+      await new Promise((r) => setTimeout(r, 1500));
+      if (input.ifSha256 !== note.bodySha256) return json(route, 409, { error: 'stale', code: 'stale', currentSha256: note.bodySha256 });
+      note = { ...note, body: input.body, bodySha256: sha(input.body) };
+      return json(route, 200, { note });
+    }
+    if (path.endsWith('/tags')) return json(route, 200, { tags: [] });
+    if (path.endsWith('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path === '/api/notes' || path.endsWith('/index')) return json(route, 200, { notes: [note], total: 1 });
+    return json(route, 200, { ...note, backlinks: [], outgoing: [] });
+  });
+  await page.goto('/notes?note=n-q');
+  await expect(page.locator('.cm-content')).toContainText('start');
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type(' one');
+  await expect.poll(() => posts.length).toBe(1);
+  // Typed while the first save is still on its way.
+  await page.keyboard.type(' two');
+  await expect.poll(() => note.body, { timeout: 8000 }).toBe('Queue\nstart one two');
+  expect(posts[1].ifSha256).toBe(sha('Queue\nstart one'));
+  await expect(page.getByTestId('draft-notice')).toHaveCount(0);
 });

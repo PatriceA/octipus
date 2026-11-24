@@ -152,6 +152,10 @@
 .notes-prose .md-task-box:disabled { cursor: default; opacity: 0.8; }
 .notes-body .cm-np-task-done { color: var(--color-on-surface-variant); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--color-on-surface-variant) 55%, transparent); }
 
+.notes-body .cm-np-image { display: inline-block; max-width: 100%; vertical-align: top; font-size: 12px; color: var(--color-on-surface-variant); }
+.notes-body .cm-np-image img { display: block; max-width: 100%; max-height: 420px; border-radius: 8px; margin: 4px 0; }
+.notes-body .cm-np-image[data-state='loading'] { min-width: 120px; min-height: 60px; border-radius: 8px; background: var(--color-surface-container-high); }
+
 /* The reading view ------------------------------------------------------------ */
 .notes-reading { min-height: 45vh; }
 .notes-prose { font-size: 16px; line-height: 1.7; color: var(--color-on-surface); }

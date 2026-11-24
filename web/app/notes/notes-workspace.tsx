@@ -3,11 +3,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronLeft, ChevronRight, PanelRight, RotateCcw } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { localDay } from '@/components/todos/model';
 import { useUndoToast } from '@/components/ui/undo-toast';
 import { api, ApiError } from '@/lib/api';
 import { useGatewayMessages } from '@/lib/gateway-context';
+import { pageShortcutAllowed } from '@/lib/shortcut-guard';
 import { CTX_MAX, CTX_MIN, NAV_MAX, NAV_MIN, useNotesUiStore } from '@/lib/notes-ui-store';
 import { cn } from '@/lib/utils';
 import { KnowledgeGraph } from './knowledge-graph';
@@ -30,6 +31,9 @@ const watchPhone = (notify: () => void) => {
   return () => query.removeEventListener('change', notify);
 };
 
+const NO_NOTES: NoteRow[] = [];
+const NO_TAGS: TagCount[] = [];
+
 /** The navigator's search asks the server this long after the last keystroke. */
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -45,12 +49,6 @@ function notesHref(opts: { note?: string | null; graph?: boolean } = {}): string
 /** Client mirror of `slugify()` in src/core/knowledge/wikilink.ts: a `[[target]]`'s slug. */
 function slugOf(input: string): string {
   return input.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9/_-]/g, '').replace(/-{2,}/g, '-').replace(/\/{2,}/g, '/').replace(/^[-/]+|[-/]+$/g, '');
-}
-
-/** A typing target: the page's one-key shortcuts leave it alone. */
-function typing(target: EventTarget | null): boolean {
-  const el = target instanceof HTMLElement ? target : null;
-  return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || !!el.closest('.cm-editor'));
 }
 
 /**
@@ -143,7 +141,7 @@ export function NotesWorkspace() {
   });
   const { detail, live, liveSynced, personal, openArchived } = note;
 
-  const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId, activeTag], queryFn: () => api.get<NoteListResponse>(`/notes?limit=500${activeTag ? `&tag=${encodeURIComponent(activeTag)}` : ''}`) });
+  const list = useQuery<NoteListResponse>({ queryKey: ['notes', workspaceId, activeTag], queryFn: () => api.get<NoteListResponse>(`/notes?limit=500&preview=true${activeTag ? `&tag=${encodeURIComponent(activeTag)}` : ''}`) });
   // The archive view, and server-side search (titles, tags and bodies).
   const archivedQ = useQuery<NoteListResponse>({
     queryKey: ['notes', workspaceId, 'archived', searchQuery],
@@ -187,11 +185,11 @@ export function NotesWorkspace() {
   // the debounce runs (or just after clearing) the local filter shows instead.
   const serverSearchCurrent = searchQuery !== '' && searchQuery === search.trim();
   const searching = filter !== 'archived' && serverSearchCurrent;
-  const navNotes = filter === 'archived' ? archivedQ.data?.notes ?? [] : searching ? searchQ.data?.notes ?? [] : list.data?.notes ?? [];
+  const navNotes = (filter === 'archived' ? archivedQ.data?.notes : searching ? searchQ.data?.notes : list.data?.notes) ?? NO_NOTES;
   const navLoading = filter === 'archived' ? archivedQ.isLoading : searching ? searchQ.isLoading : list.isLoading;
   const notes = list.data?.notes ?? [];
   const noteIndex = noteIndexQ.data?.notes ?? [];
-  const tags = tagsQ.data?.tags ?? [];
+  const tags = tagsQ.data?.tags ?? NO_TAGS;
 
   const pin = useMutation({
     mutationFn: (vars: { id: string; pinned: boolean }) => api.patch(`/notes/${vars.id}/pin`, { pinned: vars.pinned }),
@@ -223,9 +221,9 @@ export function NotesWorkspace() {
   /** A `[[link]]` clicked: the note at that slug, else one moved away from it, else one of that title. */
   function openSlug(target: string) {
     const slug = slugOf(target);
-    const all: Array<{ id: string; slug: string; title: string; aliases?: string[] }> = [...notes, ...noteIndex];
+    const all: Array<{ id: string; slug: string; title: string; movedFrom?: string[] }> = [...notes, ...noteIndex];
     const found = all.find((n) => n.slug === slug)
-      ?? noteIndex.find((n) => n.aliases?.includes(slug))
+      ?? noteIndex.find((n) => n.movedFrom?.includes(slug))
       ?? all.find((n) => n.title.toLowerCase() === target.trim().toLowerCase());
     if (found) void selectNote(found.id);
     else setActionError(`No note “${target}” yet. Create it with New, and links to it will find it.`);
@@ -340,6 +338,23 @@ export function NotesWorkspace() {
     router.replace(v === 'graph' ? notesHref({ graph: true }) : notesHref({ note: selectedId }));
   }
 
+  // The list's actions, stable across renders: the list (memoised) is not
+  // drawn again on every keystroke in the note.
+  const navActions = useRef({ selectNote, openNew, openToday, capture, changeView, dropOnFolder, restoreNote });
+  useEffect(() => {
+    navActions.current = { selectNote, openNew, openToday, capture, changeView, dropOnFolder, restoreNote };
+  });
+  const nav = useMemo(() => ({
+    onOpen: (n: NoteRow) => void navActions.current.selectNote(n.id),
+    onOpenId: (id: string) => void navActions.current.selectNote(id),
+    onNew: (folder?: string) => void navActions.current.openNew(folder),
+    onToday: () => void navActions.current.openToday(),
+    onCapture: (text: string) => navActions.current.capture(text),
+    onGraph: () => void navActions.current.changeView('graph'),
+    onMoveTo: (n: NoteRow, folder: string) => void navActions.current.dropOnFolder(n, folder),
+    onRestore: (n: NoteRow) => void navActions.current.restoreNote(n.id, n.title, false),
+  }), []);
+
   // Keyboard: N a new note, / search, T today's note, Esc in the text lets
   // go of it (so these work). Never while typing in a field.
   const keysRef = useRef({ openNew, openToday, canWrite });
@@ -348,9 +363,7 @@ export function NotesWorkspace() {
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
-      // Not while a dialog or menu is open over the page.
-      if (document.querySelector('[aria-modal="true"], [role="dialog"]')) return;
+      if (!pageShortcutAllowed(e)) return;
       const k = keysRef.current;
       if (e.key === 'n' && k.canWrite) { e.preventDefault(); void k.openNew(); }
       else if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
@@ -525,16 +538,16 @@ export function NotesWorkspace() {
                 setSearch={setSearch}
                 activeTag={activeTag}
                 setActiveTag={setActiveTag}
-                onOpen={(n) => void selectNote(n.id)}
-                onOpenId={(id) => void selectNote(id)}
-                onNew={canWrite ? (folder) => void openNew(folder) : undefined}
-                onToday={canWrite ? () => void openToday() : undefined}
-                onCapture={canWrite ? capture : undefined}
-                onGraph={() => void changeView('graph')}
-                onMoveTo={canWrite ? (n, folder) => void dropOnFolder(n, folder) : undefined}
+                onOpen={nav.onOpen}
+                onOpenId={nav.onOpenId}
+                onNew={canWrite ? nav.onNew : undefined}
+                onToday={canWrite ? nav.onToday : undefined}
+                onCapture={canWrite ? nav.onCapture : undefined}
+                onGraph={nav.onGraph}
+                onMoveTo={canWrite ? nav.onMoveTo : undefined}
                 serverSearch={filter === 'archived' ? serverSearchCurrent : searching}
                 showArchive
-                onRestore={canWrite ? (n) => void restoreNote(n.id, n.title, false) : undefined}
+                onRestore={canWrite ? nav.onRestore : undefined}
                 searchRef={searchRef}
               />
             </aside>
@@ -573,7 +586,8 @@ export function NotesWorkspace() {
                   tags={tags}
                   onOpenSlug={openSlug}
                   onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
-                  onToggleTask={readOnly ? undefined : note.toggleTask}
+                  // A space note's boxes tick once its live session has synced (they would not be saved before).
+                  onToggleTask={readOnly || !note.canEditBody ? undefined : note.toggleTask}
                   readOnly={readOnly}
                   live={live}
                   liveLoading={isSpace && !!selectedId && !liveSynced}

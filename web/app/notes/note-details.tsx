@@ -1,7 +1,7 @@
 'use client';
 
 import { FolderInput, Hash, MoreHorizontal, Star, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { TagCount } from './types';
 
@@ -17,7 +17,8 @@ interface DetailsProps {
   /** The title set by hand ('' when it comes from the first line). */
   title: string;
   titlePlaceholder: string;
-  setTitle: (title: string) => void;
+  /** `typing`: the field is being typed in (an emptied title is not handed to the first line yet). */
+  setTitle: (title: string, typing?: boolean) => void;
   tags: string[];
   setTags: (tags: string[]) => void;
   tagSuggestions: TagCount[];
@@ -52,13 +53,24 @@ export function NoteDetailsMenu(props: DetailsProps) {
   const id = useId();
   const kinds = KINDS.some((k) => k.value === kind) ? KINDS : [...KINDS, { value: kind, label: kind }];
 
+  // Closing with the title emptied hands the title back to the first line
+  // (while the field was typed in, an emptied title stayed as it was: a new
+  // note is never created from what its first line happens to say then).
+  const { title, setTitle, onTitleEditing } = props;
+  const close = useCallback(() => {
+    setOpen(false);
+    // The title field goes with the menu, focused or not: it is no longer typed in.
+    onTitleEditing?.(false);
+    if (!title.trim()) setTitle('');
+  }, [title, setTitle, onTitleEditing]);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') close();
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -66,7 +78,7 @@ export function NoteDetailsMenu(props: DetailsProps) {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, close]);
 
   function addTag(raw: string) {
     const t = cleanTag(raw);
@@ -78,7 +90,7 @@ export function NoteDetailsMenu(props: DetailsProps) {
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? close() : setOpen(true))}
         aria-expanded={open}
         aria-haspopup="dialog"
         title="Details"
@@ -95,9 +107,12 @@ export function NoteDetailsMenu(props: DetailsProps) {
               id={`${id}-title`}
               value={props.title}
               placeholder={props.titlePlaceholder}
-              onChange={(e) => props.setTitle(e.target.value)}
+              onChange={(e) => props.setTitle(e.target.value, true)}
               onFocus={() => props.onTitleEditing?.(true)}
-              onBlur={() => props.onTitleEditing?.(false)}
+              onBlur={(e) => {
+                props.onTitleEditing?.(false);
+                if (!e.target.value.trim()) props.setTitle('');
+              }}
             />
           </label>
           <p className="notes-field-hint">Leave empty to use the first line. Renaming keeps links to the note working.</p>
@@ -147,7 +162,7 @@ export function NoteDetailsMenu(props: DetailsProps) {
               <div className="flex items-center gap-2 min-w-0">
                 <code className="notes-slug" title={props.slug}>{props.slug}</code>
                 {props.onMove && (
-                  <button type="button" className="notes-text-btn" onClick={() => { setOpen(false); props.onMove?.(); }}>
+                  <button type="button" className="notes-text-btn" onClick={() => { close(); props.onMove?.(); }}>
                     <FolderInput size={14} /> Move to…
                   </button>
                 )}

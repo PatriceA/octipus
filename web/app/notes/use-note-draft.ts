@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useWorkspaceId } from '@/lib/workspace-context';
 import { draftDiffers, latestNewNoteDraft, newDraftLocal, type NoteDraftBackup, noteDraftKey, readNoteDraft, removeNoteDraft, writeNoteDraft } from '@/lib/note-drafts';
-import { noteTitleFrom, toggleTaskAt } from '../../../src/shared/note-text';
+import { noteTitleFrom, toggleSeenTask, toggleTaskAt } from '../../../src/shared/note-text';
 import type { AutosaveStatus } from './note-editor';
 import type { NoteDetail, NoteRow, Suggestion } from './types';
 import { type LiveNote, useLiveNote } from './use-live-note';
@@ -30,8 +30,8 @@ import { type LiveNote, useLiveNote } from './use-live-note';
 const AUTOSAVE_MS = 800;
 /**
  * A new note waits this long while its first line (its title, and so its
- * slug) is still being typed; Enter, leaving the note or the page saves it
- * at once.
+ * slug) is still the only line being typed. Enter ends that wait (the usual
+ * `AUTOSAVE_MS` follows); leaving the note or the page saves it at once.
  */
 const FIRST_LINE_MS = 2500;
 
@@ -58,7 +58,14 @@ export function hasLink(body: string, title: string): boolean {
  * client's header before this page re-renders) or another account; it stays
  * in its own workspace's copy on this device. `local` names that copy.
  */
-interface DraftTarget { id: string | null; workspaceId: string | null; token: string | null; local: string }
+interface DraftTarget {
+  id: string | null;
+  workspaceId: string | null;
+  token: string | null;
+  local: string;
+  /** The body sha of this note's last save from here: the base of the next one. */
+  sha?: string;
+}
 
 function newTarget(id: string | null, local?: string): DraftTarget {
   return { id, workspaceId: api.getWorkspaceId(), token: api.getToken(), local: id ?? local ?? newDraftLocal() };
@@ -236,7 +243,13 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
         return false;
       }
       const creating = !snap.target.id;
-      const slug = creating && snap.folder.trim() ? `${snap.folder.trim()}/${snap.title}` : undefined;
+      // A title is a name, never a path: "Notes 11/24" is not a folder `notes-11`.
+      const name = snap.title.replace(/\//g, '-');
+      const folder = snap.folder.trim().replace(/^\/+|\/+$/g, '');
+      const slug = !creating ? undefined : folder ? `${folder}/${name}` : name !== snap.title ? name : undefined;
+      // The text this edit is saved over, read now (not when the save was
+      // queued: a save still in flight then has changed it since).
+      const base = current() ? savedRef.current.sha256 : snap.target.sha ?? snap.baseSha256;
       if (current()) setSaveState({ status: 'saving' });
       let note: NoteRow & { bodySha256: string };
       try {
@@ -245,7 +258,7 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
           // A new note never takes over one already at its slug (an archived one included).
           ...(creating ? { createOnly: true } : {}),
           // An edit is saved only over the text it was made from.
-          ...(!creating && snap.baseSha256 ? { ifSha256: snap.baseSha256 } : {}),
+          ...(!creating && base ? { ifSha256: base } : {}),
         }));
       } catch (err) {
         const code = err instanceof ApiError ? err.body.code : undefined;
@@ -264,6 +277,7 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
       const wasLocal = snap.target.local;
       snap.target.id = note.id;
       snap.target.local = note.id;
+      snap.target.sha = note.bodySha256;
       // The copy on this device is no longer needed, unless typing went on
       // (then it holds the newer text; a new note's moves under its id).
       const latest = draftRef.current;
@@ -391,7 +405,7 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
   // while that line is still the only one.
   const staleNotice = draftNotice?.kind === 'stale';
   const newTitleTyping = !noteId && !titleAuto && titleEditing;
-  const firstLineOpen = !noteId && titleAuto && !draftBody.trim().includes('\n');
+  const firstLineOpen = !noteId && titleAuto && !draftBody.trimStart().includes('\n');
   useEffect(() => {
     if (!personal || !canWrite || openArchived || !dirty || !draftTitle.trim() || staleNotice || newTitleTyping) return;
     const timer = setTimeout(() => { void persist(snapshot()); }, firstLineOpen ? FIRST_LINE_MS : AUTOSAVE_MS);
@@ -529,16 +543,27 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
       else apply();
       return true;
     }
+    // A space note's text is written live only: before its session syncs,
+    // a change here would never be saved (a space note does not autosave).
+    if (isSpace) return false;
     const after = next(draftRef.current.body);
     if (after === null) return false;
     setBody(after);
     return true;
-  }, [liveSession, liveSynced, setBody]);
+  }, [liveSession, liveSynced, setBody, isSpace]);
 
-  /** Tick or untick the task whose list item starts at `offset` (a reading view's checkbox). */
-  const toggleTask = useCallback((offset: number, checked: boolean) => {
-    editBody((body) => toggleTaskAt(body, offset, checked));
+  /**
+   * Tick or untick the task a reading view's checkbox stands for: the item
+   * at `offset` of the text it drew, whose line read `seenLine`. Applied to
+   * the text as it is now (a live note may have changed since the render):
+   * the same task, found again, or nothing.
+   */
+  const toggleTask = useCallback((offset: number, checked: boolean, seenLine?: string) => {
+    editBody((body) => (seenLine === undefined ? toggleTaskAt(body, offset, checked) : toggleSeenTask(body, offset, seenLine, checked)));
   }, [editBody]);
+
+  /** Whether the body can be written here now (a space note only once its live session has synced). */
+  const canEditBody = !isSpace || (!!liveSession && liveSynced);
 
   /** Link a suggested note from the body. A space note's text goes into its live document, or is saved naming its base. */
   const addLink = useCallback((s: Suggestion) => {
@@ -627,6 +652,7 @@ export function useNoteDraft({ noteId, isSpace, canWrite, onCreated, onSaved }: 
     saveNow,
     saveDetails: save,
     toggleTask,
+    canEditBody,
     editBody,
     addLink,
   };
