@@ -208,6 +208,9 @@ beforeEach(async () => {
   // What a package read for a user persists across its calls; each test starts afresh.
   const { executeRaw } = await import('@/db/postgres');
   await executeRaw(`DELETE FROM kv_store WHERE key LIKE 'plugin-read-level:%'`);
+  // The host API's per-package rate bucket is in-process; earlier tests must not drain it.
+  const { _resetRateLimits } = await import('@/core/artifacts/rate-limit');
+  _resetRateLimits();
 });
 
 afterAll(async () => {
