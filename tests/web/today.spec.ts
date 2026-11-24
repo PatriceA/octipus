@@ -146,4 +146,52 @@ test.describe('Today', () => {
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(390);
     expect(await page.locator('.today-scroll').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   });
+
+  test('an archived note for today stays archived until the user restores it or starts a fresh one', async ({ authenticatedPage: page }) => {
+    await stubGateway(page);
+    const daily = N('today-note', TODAY, `# ${TODAY}\nold words\n`, { slug: `daily/${TODAY}`, noteKind: 'daily', noteDate: TODAY, archivedAt: new Date().toISOString() });
+    const s = await serve(page, { notes: [daily] });
+    await page.goto('/today');
+    await expect(page.getByTestId('today-note-archived')).toContainText('in the archive');
+    expect(s.calls.filter((c) => c.path === '/notes/daily' && c.method === 'POST')).toEqual([]);
+    await page.getByRole('button', { name: 'Start a fresh one' }).click();
+    await expect(page.getByTestId('today-note').locator('.cm-content')).toContainText('Notes');
+    expect(s.posts('/notes/daily').at(-1)).toMatchObject({ fresh: true });
+    expect(s.notes.find((n) => n.id === 'today-note')).toMatchObject({ archivedAt: expect.any(String) });
+  });
+
+  test('archiving today\'s note then typing does not bring the archived one back', async ({ authenticatedPage: page }) => {
+    await stubGateway(page);
+    const daily = N('today-note', TODAY, `# ${TODAY}\nkept\n`, { slug: `daily/${TODAY}`, noteKind: 'daily', noteDate: TODAY });
+    const s = await serve(page, { notes: [daily] });
+    await page.goto('/today');
+    await expect(page.getByTestId('today-note').locator('.cm-content')).toContainText('kept');
+    await page.getByTestId('today-note').getByRole('button', { name: 'Archive note' }).click();
+    await expect(page.getByTestId('today-note-archived')).toBeVisible();
+    await page.getByRole('button', { name: 'Restore it' }).click();
+    await expect(page.getByTestId('today-note').locator('.cm-content')).toContainText('kept');
+    expect(s.posts('/notes/daily').at(-1)).toMatchObject({ restore: true });
+  });
+
+  test('after midnight the page writes into the new day\'s note, never yesterday\'s', async ({ authenticatedPage: page }) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const day = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const late = new Date(2026, 10, 24, 23, 59, 0);
+    const next = new Date(2026, 10, 25, 0, 1, 0);
+    await page.clock.install({ time: late });
+    await stubGateway(page);
+    const s = await serve(page);
+    await page.goto('/today');
+    await expect(page.getByTestId('today-note').locator('.cm-content')).toContainText('Notes');
+    await page.clock.runFor(2 * 60_000);
+    await expect(page.locator('.today-head p')).toContainText(next.toLocaleDateString('en-US', { day: 'numeric' }));
+    await expect.poll(() => s.calls.some((c) => c.method === 'GET' && c.path === '/notes/daily')).toBe(true);
+    const editor = page.getByTestId('today-note').locator('.cm-content');
+    await editor.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('new day');
+    await page.clock.runFor(2000);
+    await expect.poll(() => s.posts('/notes/daily').at(-1)?.date).toBe(day(next));
+    expect(s.posts('/notes/daily').map((b) => b.date)).not.toContain(day(late));
+  });
 });

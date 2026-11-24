@@ -57,6 +57,9 @@ export function useNoteTodos({ noteId, draft, isSpace, canWrite, onError, onOpen
   useGatewayMessages((message) => {
     if (message.type !== 'event' || !noteId || linked.length === 0) return;
     if (message.event.type !== 'tasks.changed' && message.event.type !== 'task.changed') return;
+    // Only a change of one of this note's to-dos: every other to-do of the workspace leaves the note alone.
+    const taskId = (message.event.payload as { taskId?: string } | undefined)?.taskId;
+    if (!taskId || !linked.some((t) => t.id === taskId)) return;
     if (changedTimer.current) clearTimeout(changedTimer.current);
     changedTimer.current = setTimeout(() => { void qc.invalidateQueries({ queryKey: ['note', noteId] }); }, 500);
   });
@@ -140,16 +143,14 @@ export function useNoteTodos({ noteId, draft, isSpace, canWrite, onError, onOpen
     }
   }, [noteId, draft, onError, refresh, open, editLine, showUndo, defaults]);
 
-  /** A linked line's box was ticked here (the editor, the reading view). */
-  const toggled = useCallback((anchor: string, checked: boolean) => {
-    const t = byAnchor.get(anchor);
-    // A personal note's save reaches the to-do; a space note's live text is saved later by the hub.
-    if (!t || !isSpace || t.status === 'archived' || (t.status === 'done') === checked) return;
-    api.patch(`/tasks/${t.id}`, { status: checked ? 'done' : 'open' }).then(
-      () => refresh(noteId),
-      (err: unknown) => onError(`The to-do did not follow the tick: ${err instanceof Error ? err.message : String(err)}`),
-    );
-  }, [byAnchor, isSpace, noteId, refresh, onError]);
+  /**
+   * A linked line's box was ticked here (the editor, the reading view). The
+   * server carries the tick to the to-do — a personal note's save, a live
+   * note's update as it reaches the hub — as the member who made it, in
+   * order: nothing is sent from here (two writers would race). The chips
+   * follow on the `tasks.changed` / `task.changed` that change sends.
+   */
+  const toggled = useCallback((_anchor: string, _checked: boolean) => undefined, []);
 
   /** Complete or reopen a linked to-do from the note's side (its context panel); its line follows on the server. */
   const setDone = useCallback(async (task: LinkedTask, done: boolean) => {

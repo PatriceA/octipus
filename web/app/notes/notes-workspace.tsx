@@ -265,8 +265,20 @@ export function NotesWorkspace() {
   /** Today's daily note, created from the template the first time (the user's own calendar day). */
   async function openToday() {
     setActionError(null);
+    const date = localDay(new Date());
     try {
-      const { note: daily } = await api.post<{ note: NoteRow }>('/notes/daily', { date: localDay(new Date()) });
+      let daily: NoteRow;
+      try {
+        ({ note: daily } = await api.post<{ note: NoteRow }>('/notes/daily', { date }));
+      } catch (err) {
+        // Archived by the user: it stays archived unless they say otherwise.
+        if (!(err instanceof ApiError && err.body.code === 'archived')) throw err;
+        if (window.confirm('Today’s note is in the archive. Restore it? (Cancel starts a fresh note for today.)')) {
+          ({ note: daily } = await api.post<{ note: NoteRow }>('/notes/daily', { date, restore: true }));
+        } else {
+          ({ note: daily } = await api.post<{ note: NoteRow }>('/notes/daily', { date, fresh: true }));
+        }
+      }
       invalidateAll();
       await selectNote(daily.id);
     } catch (err) {

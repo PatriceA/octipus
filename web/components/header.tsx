@@ -4,7 +4,7 @@ import { Bell, BookOpen, Brain, Cpu, KeyRound, ListTodo, Loader2, LogOut, Messag
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -78,7 +78,8 @@ export function Header() {
       void qc.invalidateQueries({ queryKey: ['notes'] });
       setCaptured({ text: 'Added to today’s note' });
     } catch (err) {
-      setCaptured({ text: `Not added to today’s note: ${err instanceof Error ? err.message : String(err)}`, error: true });
+      const archived = err instanceof ApiError && err.body.code === 'archived';
+      setCaptured({ text: archived ? 'Not added: today’s note is in the archive (restore it, or start a fresh one, from Today)' : `Not added to today’s note: ${err instanceof Error ? err.message : String(err)}`, error: true });
     }
   };
   const searchRef = useRef<HTMLDivElement>(null);

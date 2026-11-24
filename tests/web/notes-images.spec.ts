@@ -93,6 +93,12 @@ test('an image in a note is drawn in the editor, fetched with the session', asyn
   await stubAllDefaults(page);
   const rawReads: string[] = [];
   page.on('request', (r) => { if (r.url().includes('/api/documents/doc-img-1/raw')) rawReads.push(r.url()); });
+  // Count the object URLs the page makes: one per picture, not one per redraw.
+  await page.addInitScript(() => {
+    const create = URL.createObjectURL.bind(URL);
+    (window as unknown as { blobUrls: number }).blobUrls = 0;
+    URL.createObjectURL = (obj: Blob | MediaSource) => { (window as unknown as { blobUrls: number }).blobUrls++; return create(obj); };
+  });
   await page.goto('/notes');
   await page.getByText('First note', { exact: false }).first().click();
   await page.locator('.cm-content').click();
@@ -104,4 +110,13 @@ test('an image in a note is drawn in the editor, fetched with the session', asyn
   // On the caret's line the markdown shows, to edit it.
   await page.keyboard.press('ArrowUp');
   await expect(page.locator('.cm-content')).toContainText('/api/documents/doc-img-1/raw');
+  // The caret passing the line again and again redraws the picture from the one fetch, and no URL is left behind.
+  const before = rawReads.length;
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('ArrowDown');
+    await expect(img).toHaveAttribute('src', /^blob:/);
+    await page.keyboard.press('ArrowUp');
+  }
+  expect(rawReads.length).toBe(before);
+  expect(await page.evaluate(() => (window as unknown as { blobUrls: number }).blobUrls)).toBe(1);
 });

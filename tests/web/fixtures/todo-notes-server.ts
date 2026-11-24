@@ -178,8 +178,14 @@ export async function serve(page: Page, init: { tasks?: Row[]; notes?: Row[]; li
       const date = req.method() === 'GET' ? url.searchParams.get('date') : body?.date;
       let daily = s.notes.find((n) => n.slug === `daily/${date}`);
       if (req.method() === 'GET') return json(route, 200, { note: daily ? { ...noteFull(daily), backlinks: [], outgoing: [], linkedTasks: linkedTasks(daily.id) } : null, template: dailyTemplate(date) });
+      // An archived day's note stays archived unless asked (as the server does).
+      if (daily?.archivedAt) {
+        if (body?.restore) daily.archivedAt = null;
+        else if (body?.fresh) { daily.slug = `daily/${date}-archived-1`; daily = undefined; }
+        else return json(route, 409, { error: 'archived', code: 'archived', id: daily.id });
+      }
       if (!daily) {
-        daily = N('today-note', date, dailyTemplate(date), { slug: `daily/${date}`, noteKind: 'daily', noteDate: date });
+        daily = N(s.notes.some((n) => n.id === 'today-note') ? `today-note-${s.notes.length}` : 'today-note', date, dailyTemplate(date), { slug: `daily/${date}`, noteKind: 'daily', noteDate: date });
         s.notes.unshift(daily);
       }
       return json(route, 200, { note: noteFull(daily) });
@@ -211,6 +217,17 @@ export async function serve(page: Page, init: { tasks?: Row[]; notes?: Row[]; li
       return json(route, 200, { note: noteFull(n) });
     }
     if (path === '/') return json(route, 200, { notes: s.notes.filter((n) => !n.archivedAt).map(noteFull), total: s.notes.length });
+    const restore = /^\/([^/]+)\/restore$/.exec(path);
+    if (restore) {
+      const r = s.notes.find((x) => x.id === restore[1]);
+      if (r) r.archivedAt = null;
+      return json(route, r ? 200 : 404, r ? { restored: true } : { error: 'Note not found' });
+    }
+    if (req.method() === 'DELETE') {
+      const d = s.notes.find((x) => x.id === path.slice(1));
+      if (d) d.archivedAt = new Date().toISOString();
+      return json(route, d ? 200 : 404, d ? { deleted: true, hard: false } : { error: 'Note not found' });
+    }
     const n = s.notes.find((x) => x.id === path.slice(1));
     if (!n) return json(route, 404, { error: 'Note not found' });
     return json(route, 200, { ...noteFull(n), backlinks: [], outgoing: [], linkedTasks: linkedTasks(n.id) });

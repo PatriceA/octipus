@@ -51,7 +51,8 @@ export function TodoNotesField({ value, onChange, onBlur, canWrite, failed }: {
           }}
           className={cn('todo-notes-rendered', canWrite && 'is-editable')}
         >
-          <Markdown content={value} className="todo-notes-prose" />
+          {/* Untrusted: a to-do's notes may be written by an agent, a plugin or another member; no remote image loads by itself. */}
+          <Markdown content={value} className="todo-notes-prose" untrusted />
         </div>
       ) : (
         <textarea

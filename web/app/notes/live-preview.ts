@@ -167,15 +167,54 @@ class MakeTodo extends WidgetType {
   }
 }
 
+/** How long a picture no widget shows any more keeps its object URL (the caret passing its line redraws it). */
+const IMAGE_KEEP_MS = 30_000;
+
+/**
+ * The object URLs of `/api/…` pictures, one fetch per source however often
+ * its widget is drawn: each draw holds a reference (`acquireImage`) and
+ * gives it back when CodeMirror destroys that DOM (`releaseImage`); the URL
+ * is revoked once nothing has held it for `IMAGE_KEEP_MS`. A failed fetch
+ * is forgotten, so the next draw tries again.
+ */
+const imageUrls = new Map<string, { url: Promise<string>; refs: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+function acquireImage(src: string): Promise<string> {
+  let entry = imageUrls.get(src);
+  if (!entry) {
+    const url = api.getBlob(src.slice('/api'.length)).then((blob) => URL.createObjectURL(blob));
+    const made = { url, refs: 0, timer: null as ReturnType<typeof setTimeout> | null };
+    url.catch(() => { if (imageUrls.get(src) === made) imageUrls.delete(src); });
+    imageUrls.set(src, made);
+    entry = made;
+  }
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = null;
+  entry.refs++;
+  return entry.url;
+}
+
+function releaseImage(src: string): void {
+  const entry = imageUrls.get(src);
+  if (!entry) return;
+  entry.refs = Math.max(0, entry.refs - 1);
+  if (entry.refs > 0) return;
+  entry.timer = setTimeout(() => {
+    if (imageUrls.get(src) !== entry || entry.refs > 0) return;
+    imageUrls.delete(src);
+    entry.url.then((url) => URL.revokeObjectURL(url), () => undefined);
+  }, IMAGE_KEEP_MS);
+}
+
 /**
  * `![alt](src)` drawn as the picture. A `/api/…` source is fetched through
  * the API client (credentials ride along, as `AuthedImage` does for the
- * reading view) and shown from an object URL, revoked when the widget goes;
- * another source loads as a plain image, as in the reading view.
+ * reading view), once per source (`acquireImage`), and the reference is
+ * kept with the DOM the widget drew, given back when CodeMirror destroys
+ * that DOM — a URL that arrives after is never set on it. Another source
+ * loads as a plain image, as in the reading view.
  */
 class ImageWidget extends WidgetType {
-  private url: string | null = null;
-
   constructor(readonly src: string, readonly alt: string) {
     super();
   }
@@ -193,14 +232,17 @@ class ImageWidget extends WidgetType {
     wrap.appendChild(img);
     if (this.src.startsWith('/api/')) {
       wrap.dataset.state = 'loading';
-      api.getBlob(this.src.slice('/api'.length)).then(
-        (blob) => {
-          this.url = URL.createObjectURL(blob);
-          img.src = this.url;
+      wrap.dataset.src = this.src;
+      acquireImage(this.src).then(
+        (url) => {
+          // Destroyed meanwhile: the reference was given back; nothing to show.
+          if (wrap.dataset.destroyed) return;
+          img.src = url;
           wrap.dataset.state = 'ready';
         },
         (err: unknown) => {
           console.warn('A note image could not be loaded', this.src, err);
+          if (wrap.dataset.destroyed) return;
           wrap.dataset.state = 'failed';
           wrap.textContent = `image unavailable${this.alt ? ` — ${this.alt}` : ''}`;
         },
@@ -213,9 +255,11 @@ class ImageWidget extends WidgetType {
     return wrap;
   }
 
-  override destroy(): void {
-    if (this.url) URL.revokeObjectURL(this.url);
-    this.url = null;
+  override destroy(dom: HTMLElement): void {
+    if (dom.dataset.src && !dom.dataset.destroyed) {
+      dom.dataset.destroyed = '1';
+      releaseImage(dom.dataset.src);
+    }
   }
 }
 
@@ -422,9 +466,11 @@ function build(view: EditorView, images: boolean, handlers: () => LivePreviewHan
 }
 
 /**
- * The decorations, failing safe: should drawing them throw (a construct not
- * foreseen above), the note shows as plain text and stays editable rather
- * than the editor breaking. Logged, once per editor.
+ * The decorations. Should drawing them throw (a construct not foreseen in
+ * `build`), CodeMirror logs it and switches the plugin off ("CodeMirror
+ * plugin crashed"): the note shows as plain text and stays editable. No
+ * wrapper of our own: it could not catch what CodeMirror throws while it
+ * applies decorations, and the plugin's own update is already isolated.
  */
 function decorations(images: boolean, handlers: () => LivePreviewHandlers) {
   const plugin = ViewPlugin.fromClass(
@@ -432,7 +478,6 @@ function decorations(images: boolean, handlers: () => LivePreviewHandlers) {
       decorations: DecorationSet = Decoration.none;
       /** The line markers' chips: drawn, and one step for the caret (`atomicRanges`). */
       markers: DecorationSet = Decoration.none;
-      failed = false;
 
       constructor(view: EditorView) {
         this.draw(view);
@@ -446,15 +491,7 @@ function decorations(images: boolean, handlers: () => LivePreviewHandlers) {
       }
 
       draw(view: EditorView): void {
-        if (this.failed) return;
-        try {
-          ({ decorations: this.decorations, markers: this.markers } = build(view, images, handlers));
-        } catch (err) {
-          this.failed = true;
-          console.error('Live preview failed; showing this note as plain text', err);
-          this.decorations = Decoration.none;
-          this.markers = Decoration.none;
-        }
+        ({ decorations: this.decorations, markers: this.markers } = build(view, images, handlers));
       }
     },
     { decorations: (v) => v.decorations },

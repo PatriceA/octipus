@@ -14,7 +14,7 @@ import { openQuickAddTodo } from '@/components/todos/quick-add-dialog';
 import { TodoDetail } from '@/components/todos/todo-detail';
 import { type RowContext, TodoRow } from '@/components/todos/todo-row';
 import { type NewTodo, type TodosApi, useTodos } from '@/components/todos/use-todos';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { usePageOn } from '@/lib/modules';
 import { cn } from '@/lib/utils';
 import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
@@ -104,7 +104,8 @@ function Today() {
             </div>
             {pageOn('/notes') && (
               <div className="today-col today-note-col">
-                <TodayNote day={day} isSpace={isSpace} canWrite={canWrite} todos={todos} onOpenTask={open} />
+                {/* A new day is a new note: everything of yesterday's (its draft saved to it) goes with the old key. */}
+                <TodayNote key={day} day={day} isSpace={isSpace} canWrite={canWrite} todos={todos} onOpenTask={open} />
               </div>
             )}
           </div>
@@ -364,13 +365,15 @@ function TodayNote({ day, isSpace, canWrite, todos, onOpenTask }: {
     // A personal note is made by its first save; a space note by "Start today's note".
     create: isSpace ? undefined : makeDaily,
   });
+  // The day's note is in the archive: it stays there unless the user says otherwise (no seed, no auto-restore).
+  const archivedId = !noteId && daily.data?.note?.archivedAt ? daily.data.note.id : null;
   // No note yet: the day's template, shown (not saved) until something is typed.
   const seeded = useRef(false);
   useEffect(() => {
-    if (!daily.data || found || noteId || seeded.current || isSpace) return;
+    if (!daily.data || daily.data.note || noteId || seeded.current || isSpace) return;
     seeded.current = true;
     note.startNew(undefined, { title: day, body: daily.data.template, kind: 'daily' });
-  }, [daily.data, found, noteId, isSpace, note, day]);
+  }, [daily.data, noteId, isSpace, note, day]);
 
   const noteTodos = useNoteTodos({
     noteId,
@@ -402,7 +405,25 @@ function TodayNote({ day, isSpace, canWrite, todos, onOpenTask }: {
       if (!noteId) setNoteId(res.id);
       void qc.invalidateQueries({ queryKey: ['note', res.id] });
     } catch (err) {
-      setError(`Could not add the line: ${err instanceof Error ? err.message : String(err)}`);
+      setError(err instanceof ApiError && err.body.code === 'archived'
+        ? 'Today’s note is in the archive: restore it, or start a fresh one, to add to it.'
+        : `Could not add the line: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  /** Today's note is archived: bring it back, or start a fresh one beside it. */
+  const fromArchive = async (how: 'restore' | 'fresh') => {
+    setStarting(true);
+    setError(null);
+    try {
+      const made = (await api.post<{ note: NoteDetail }>('/notes/daily', { date: day, [how]: true })).note;
+      setNoteId(made.id);
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['note-daily', workspaceId, day] });
+    } catch (err) {
+      setError(`Could not ${how === 'restore' ? 'restore' : 'start'} today’s note: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -474,6 +495,16 @@ function TodayNote({ day, isSpace, canWrite, todos, onOpenTask }: {
             <p role="alert">Today’s note could not be read: {daily.error instanceof Error ? daily.error.message : 'unavailable'}</p>
             <button type="button" className="notes-text-btn" onClick={() => void daily.refetch()}><RefreshCw size={14} />Try again</button>
           </div>
+        ) : archivedId ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-on-surface-variant" data-testid="today-note-archived">
+            <p>Today’s note is in the archive.</p>
+            {canWrite && (
+              <div className="flex flex-wrap justify-center gap-2">
+                <button type="button" className="notes-text-btn is-primary" disabled={starting} onClick={() => void fromArchive('restore')}>Restore it</button>
+                <button type="button" className="notes-text-btn" disabled={starting} onClick={() => void fromArchive('fresh')}>Start a fresh one</button>
+              </div>
+            )}
+          </div>
         ) : isSpace && !noteId ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-on-surface-variant">
             <p>This space has no note for today yet.</p>
@@ -524,7 +555,7 @@ function TodayNote({ day, isSpace, canWrite, todos, onOpenTask }: {
           />
         )}
       </div>
-      {canWrite && !daily.isLoading && !daily.isError && (!isSpace || noteId) && (
+      {canWrite && !daily.isLoading && !daily.isError && !archivedId && (!isSpace || noteId) && (
         <form className="today-jot" onSubmit={(e) => { e.preventDefault(); void capture(); }}>
           <input value={jot} onChange={(e) => setJot(e.target.value)} placeholder="Jot a line into today’s note…" aria-label="Jot a line into today’s note" maxLength={2000} />
           <button type="submit" disabled={!jot.trim()} className="notes-text-btn"><CornerDownLeft size={14} />Add</button>
