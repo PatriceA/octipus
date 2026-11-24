@@ -513,6 +513,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PIPELINE_TOKEN_BUDGET',
   },
   {
+    key: 'agent.evidenceHooks',
+    category: 'agent',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Project evidence hooks: [{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]. A hook applies to every pipeline run whose working folder is root or contains it (in a whole-workspace session, every project\'s hooks run), and runs in root, argv only and under the shell tool\'s permission and sandbox, before the pipeline accepts a deliverable. A failing hook sends the work back for repair; still failing after the repair limit, the run fails.',
+    isSecret: false,
+  },
+  {
     key: 'agent.hookTurnTimeoutMs',
     category: 'agent',
     valueType: 'number',

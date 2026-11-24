@@ -501,6 +501,23 @@ export interface ScorerContext {
    * child that writes through `shell__run` reads as having changed nothing.
    */
   filesTouched?: number | null;
+  /**
+   * Run the command in this folder instead of the context's own. Only for a
+   * caller that has already checked it lies at or below that folder
+   * (`evidence-hooks.ts`): moving the directory through `projectPath` instead
+   * would also change which execution environment the context selects.
+   */
+  cwd?: string;
+  /**
+   * Handed the raw result of every `command_exit_zero` command that actually
+   * ran, pass or fail. The gate itself only says pass or why it failed; a
+   * caller that records the run as evidence (`evidence-hooks.ts`) needs the
+   * exit code, the timeout flag and the output of a PASSING run too, and
+   * reading them here keeps it on this one execution path instead of a second
+   * runner beside it. Not called for a command that was refused or never
+   * started.
+   */
+  onCommandResult?: (result: { exitCode: number | null; timedOut: boolean; signal?: string | null; stdout: string; stderr: string }) => void;
 }
 
 /**
@@ -1051,7 +1068,7 @@ async function evaluate(
       const fs = scorerWorkspace(ctx);
       const context = scorerAgentContext(ctx);
       const environment = executionEnvironmentFor(context);
-      const cwd = environment ? (await import('@/security/environment-runtime')).resolveEnvironmentCwd(undefined, context) : ctx.projectPath ?? fs?.resolveOptional('.');
+      const cwd = ctx.cwd ?? (environment ? (await import('@/security/environment-runtime')).resolveEnvironmentCwd(undefined, context) : ctx.projectPath ?? fs?.resolveOptional('.'));
       if (!cwd) {
         return {
           scorer: label,
@@ -1138,6 +1155,9 @@ async function evaluate(
         let res;
         try { res = credentials.mask(await shellOperationsFor(context, new LocalShellOperations()).exec(repaired, cwd, credentials.options)); }
         catch (error) { throw credentials.maskError(error); }
+        if (!res.aborted && !ctx.signal?.aborted) {
+          ctx.onCommandResult?.({ exitCode: res.exitCode, timedOut: res.timedOut === true, signal: res.signal ?? null, stdout: res.stdout, stderr: res.stderr });
+        }
         if (res.exitCode === 0) return null;
 
         // How it ended, not just that it did. `exitCode` is null for a killed

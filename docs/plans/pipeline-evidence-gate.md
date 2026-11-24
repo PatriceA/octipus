@@ -152,6 +152,22 @@ Phase B is what makes it bite on the default `agents`-lane config. Landing A
 without B leaves CLI stages ungated but must not make them *falsely* fail — see
 Risk.
 
+## Since then: project evidence hooks (2026-11-23)
+
+Phases A and B gate on what a stage *did* (files changed, commands run).
+Neither says whether the result builds or passes its tests. That part now
+exists as **project evidence hooks** (`src/core/agent/evidence-hooks.ts`,
+setting `agent.evidenceHooks`): commands an operator declares per project
+folder, run by the pipeline before an auditor stage is asked, recorded as
+`pre_verify` rows beside the QA verdict, and blocking. A failing hook sends its
+output back to the stage the auditor's `qa_fail` edge points at, at most
+`EVIDENCE_REPAIR_LIMIT` (2) times per plan item; after that the run ends
+`failed`. A run with no auditor stage runs them once before it completes. The
+current behaviour is described in `docs/AGENT-ARCHITECTURE.md` (QA Retry Loop).
+
+Where this plan's wording and the code differ, the code wins: the file paths
+above name `src/core/orchestrator/`, which is now `src/core/agent/`.
+
 ## Related
 
 - `docs/plans/quality-enforcement.md` — what the gate does on the swarm path.
