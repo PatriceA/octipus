@@ -242,8 +242,13 @@ All three landed. What each actually became:
   are each already a single pure module with its own tests; moving them behind
   the waterfall would buy a directory, not a property, and would put five
   load-bearing checks through a rewrite for it. Left where they are, on purpose.
-  Still open: egress rules (there is secret scrubbing on tool results, but no
-  declarative allow/deny for what a tool may reach).
+  **Egress rules shipped (2026-11-24):** `security.egressPolicy` declares what
+  a tool may reach by host, port and scheme, per tool and per role, enforced
+  on tool fetches, browser pages, sandboxed shell commands and git remotes;
+  `GET /api/settings/egress` reports what is enforced, partial or not covered
+  on this host (`docs/EGRESS-POLICY.md`). Not covered: Docker and
+  `test_container`, the browser extension, MCP servers the model adds and CLI
+  agents' native tools (refused only under `requireEnforcement`).
 - **Per-node token budgets in the graph — SHIPPED (2026-08-20).** Two bounds,
   because they answer different questions. A template step may declare
   `maxTokens`, persisted on the node row and handed to the worker as its cap —
@@ -432,7 +437,7 @@ All three landed. What each actually became:
 - **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails. Plan: [docs/plans/workroom-and-swarm-federation.md](docs/plans/workroom-and-swarm-federation.md) — Part 1 is the in-instance multi-model Workroom with a lease watchdog, Part 2 the LAN/internet peer federation with a fixed, non-grantable host-control policy.
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
 - **Voice — remaining polish.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
-- **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker — mounted as a provider behind the wave-1 waterfall rather than branched into the tool loop.
+- **Sandboxed tool execution.** Shell commands already run in their own sandboxed process (bwrap, firejail or sandbox-exec under `security.shellSandbox`), with an enforced egress policy since 2026-11-24, and the git tool no longer runs programs a repository names. Still open: per-command resource limits, a per-worker sandbox identity, moving in-process tools (browser, fetch) out, and the original goal — WASI / lightweight VM isolation per worker — mounted as a provider behind the wave-1 waterfall rather than branched into the tool loop.
 - **Plugin signing & permissions — signing and remote install SHIPPED.** Plugin packages are pinned by content hash, signed, checked against `plugins.trustedPublishers` and `plugins.revokedKeys` (required under `plugins.requireSignature`), installable from a URL or registry, and approved by an admin before they run ([docs/PLUGIN-PACKAGES.md](docs/PLUGIN-PACKAGES.md)). Still open: files dropped into `~/.octipus/extensions` are a development path that is not pinned, signed or approved, and `extensions.trusted` for them is deprecated rather than removed.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering; the wave-3 regression gate is the headless half of the same machinery.
