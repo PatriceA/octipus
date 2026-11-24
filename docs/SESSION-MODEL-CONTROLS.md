@@ -54,3 +54,11 @@ Concurrent stale edits are rejected; refresh before saving them again.
 
 The [Context inspector](CONTEXT-INSPECTOR.md) separately shows what each agent
 read. A full run's token spend is not the current context size.
+
+### Picking a CLI model
+
+The session editor and Models page share a catalog dropdown. Choose a named
+model or keep **Use configured default**, which shows the inherited model.
+Existing saved IDs remain visible if the vendor catalog no longer lists them.
+**Enter a custom model ID…** opens a separate field only when needed. A failed
+session catalog request offers **Retry catalog** and does not erase your choice.

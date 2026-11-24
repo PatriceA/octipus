@@ -125,16 +125,15 @@ test.describe('models page', () => {
     const picker = page.locator('select').filter({ has: page.locator('option[value="grok-account-model"]') });
     await expect(picker).toHaveCount(1);
     await expect(page.getByText('Grok plan usage unavailable; check /usage inside Grok.', { exact: true })).toBeVisible();
-    await expect(picker.locator('option')).toHaveCount(2);
+    await expect(picker.locator('option')).toHaveCount(3);
     await expect(page.locator('option[value="api-only-model"]')).toHaveCount(0);
     await page.getByTitle('Edit model').click();
     const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
     await expect(modal.getByText(/Grok Build uses this session/)).toBeVisible();
     await expect(modal.getByText('Permission Mode', { exact: true })).toHaveCount(0);
     await expect(modal.getByText('Allowed Tools', { exact: true })).toHaveCount(0);
-    await modal.getByPlaceholder('(vendor default)').fill('grok-account-model');
-    await expect(modal.locator('datalist option')).toHaveCount(1);
-    await expect(modal.locator('datalist option')).toHaveAttribute('value', 'grok-account-model');
+    await modal.getByRole('combobox', { name: 'Model (Grok Build)' }).selectOption('grok-account-model');
+    await expect(modal.locator('option[value="grok-account-model"]')).toHaveCount(1);
     await modal.getByRole('button', { name: 'Save Changes' }).click();
     await expect.poll(() => saved).toBeTruthy();
     expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'grok-account-model', inheritApiKeys: false } } });
@@ -167,8 +166,8 @@ test.describe('models page', () => {
       await expect(page.locator('option[value="coding-plan-model"]')).toHaveCount(1);
       await page.getByTitle('Edit model').click();
       const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
-      await expect(modal.locator('datalist option[value="coding-plan-model"]')).toHaveCount(1);
-      await modal.getByPlaceholder('(vendor default)').fill('coding-plan-model');
+      await expect(modal.locator('option[value="coding-plan-model"]')).toHaveCount(1);
+      await modal.getByRole('combobox', { name: `Model (${spec.name})` }).selectOption('coding-plan-model');
       await modal.getByRole('button', { name: 'Save Changes' }).click();
       await expect.poll(() => saved).toBeTruthy();
       expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'coding-plan-model' } } });
@@ -197,7 +196,7 @@ test.describe('models page', () => {
     const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
     await expect(modal.getByText(/Antigravity uses this session/)).toBeVisible();
     await expect(modal.getByText('Permission Mode', { exact: true })).toHaveCount(0);
-    await modal.getByPlaceholder('(vendor default)').fill('vendor-model-a');
+    await modal.getByRole('combobox', { name: 'Model (Antigravity)' }).selectOption('vendor-model-a');
     await modal.getByPlaceholder('Leave empty', { exact: true }).fill('--effort max');
     await modal.getByRole('button', { name: 'Save Changes' }).click();
     await expect.poll(() => saved).toBeTruthy();
@@ -233,4 +232,29 @@ test.describe('models page', () => {
     // This test intentionally does not assert empty consoleErrors; it asserts the app still renders.
     void consoleErrors;
   });
+});
+
+
+test('CLI status custom models save on blur instead of on every keystroke', async ({ authenticatedPage: page }) => {
+  const model = { id: 'cli-custom', name: 'custom-cli', provider: 'cli', modelId: 'cli/grok-build',
+    isEnabled: true, isDefault: false, supportsVision: false, supportsTools: false, supportsStreaming: false,
+    contextWindow: 200000, maxTokens: 16384, topics: [], priority: 80, costPerInputToken: 0, costPerOutputToken: 0, metadata: {} };
+  let saves = 0;
+  let saved: Record<string, unknown> | undefined;
+  await page.route('**/api/models', route => json(route, 200, { models: [model] }));
+  await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{ name: 'Grok Build', available: true, modelPatterns: ['cli/grok-build'], models: [], quota: null }] }));
+  await page.route('**/api/models/custom-cli', route => {
+    saves++;
+    saved = route.request().postDataJSON() as Record<string, unknown>;
+    return json(route, 200, model);
+  });
+  await page.goto('/models');
+  await page.getByText('CLI tools · configuration and status', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Model for Grok Build', exact: true }).selectOption('__custom__');
+  const custom = page.getByRole('textbox', { name: 'Custom Model for Grok Build' });
+  await custom.fill('new-vendor-model');
+  expect(saves).toBe(0);
+  await custom.press('Tab');
+  await expect.poll(() => saves).toBe(1);
+  expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'new-vendor-model' } } });
 });

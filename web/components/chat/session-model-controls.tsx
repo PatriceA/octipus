@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { CliModelPicker } from '@/components/models/cli-model-picker';
 import type {
   SessionCliBinding,
   SessionCliOverride,
@@ -196,7 +197,6 @@ function OverrideForm({
         `/sessions/${encodeURIComponent(sessionId)}/model-controls/catalog?modelName=${encodeURIComponent(binding.modelName)}`,
       ),
   });
-  const listId = `cli-model-${binding.topic}-${binding.modelName}`.replace(/[^a-zA-Z0-9_-]/g, '-');
   return (
     <form
       onSubmit={(e) => {
@@ -206,29 +206,22 @@ function OverrideForm({
       className="space-y-2"
     >
       {binding.modelSelectable !== false && (
-        <label className="block">
-          Model
-          <input
-            aria-label={`Model for ${binding.topic} ${binding.modelName}`}
+        <div>
+          <p>Model</p>
+          <CliModelPicker
+            label={`Model for ${binding.topic} ${binding.modelName}`}
             value={model}
-            onChange={(e) => setModel(e.target.value)}
-            list={listId}
-            maxLength={200}
-            placeholder={binding.model ?? 'Use CLI default'}
+            onChange={setModel}
+            models={catalog.data?.models.length ? catalog.data.models : binding.models}
+            defaultLabel={`Use configured default${binding.model ? ` (${binding.model})` : ' (vendor default)'}`}
             className="mt-1 w-full bg-surface-container border border-outline-variant rounded-sm p-2"
           />
-        </label>
+        </div>
       )}
-      <datalist id={listId}>
-        {(catalog.data?.models ?? binding.models).map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-          </option>
-        ))}
-      </datalist>
       {(catalog.data?.error || catalog.isError) && (
         <p className="text-on-surface-variant">
-          {catalog.data?.error ?? 'Model catalog unavailable.'} You can enter a model identifier.
+          {catalog.data?.error ?? 'Model catalog unavailable.'} Configured choices are preserved.{' '}
+          <button type="button" className="underline" onClick={() => void catalog.refetch()}>Retry catalog</button>
         </p>
       )}
       {!!binding.efforts.length && (

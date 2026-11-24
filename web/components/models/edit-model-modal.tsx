@@ -1,5 +1,6 @@
 'use client';
 
+import { CliModelPicker } from './cli-model-picker';
 import { ProviderSettingsFields } from './provider-settings-fields';
 import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -596,21 +597,13 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">
                   Model {cliTool ? `(${cliTool.name})` : cliKind ? `(${cliKind})` : ''}
                 </label>
-                <input
-                  type="text"
-                  list={cliKind ? `cli-models-${cliKind}` : undefined}
+                <CliModelPicker
+                  label={`Model (${cliTool?.name ?? cliKind ?? 'CLI'})`}
                   value={formData.cliModel}
-                  onChange={(e) => setFormData({ ...formData, cliModel: e.target.value })}
-                  placeholder="(vendor default)"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
+                  onChange={value => setFormData({ ...formData, cliModel: value })}
+                  models={discoveredCliModels}
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                 />
-                {discoveredCliModels.length > 0 && cliKind && (
-                  <datalist id={`cli-models-${cliKind}`}>
-                    {discoveredCliModels.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}{m.tier ? ` · ${m.tier}` : ''}</option>
-                    ))}
-                  </datalist>
-                )}
                 <p className="text-xs text-on-surface-variant mt-1">
                   Pass-through to the CLI binary. Leave empty to use the vendor default.
                 </p>
