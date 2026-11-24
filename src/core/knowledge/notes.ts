@@ -115,6 +115,13 @@ export interface SaveNoteInput {
    * re-embed the whole note each time. The result says `indexQueued`.
    */
   deferIndex?: boolean;
+  /**
+   * The write is a to-do's tick reaching its note line
+   * (core/tasks/note-links.ts): the note's to-dos are not reconciled with
+   * it again. Every other save completes or reopens the to-dos whose lines
+   * it ticked or unticked.
+   */
+  skipTaskSync?: boolean;
 }
 
 /** A deferred re-index (`SaveNoteInput.deferIndex`) runs this long after the note's last save. */
@@ -323,6 +330,12 @@ export class NoteService {
       }
     }
 
+    // A ticked or unticked line made a to-do: the to-do follows (never fails the save).
+    if (existing && !input.skipTaskSync && existing.body !== body) {
+      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+      await reconcileNoteTasks(scope, note.id, existing.body, body);
+    }
+
     const links = await this.relink(scope, note, parsed, tags, input.createdByAgentId ?? null);
 
     // 3. Re-index (degrades loudly if no embedding model).
@@ -507,6 +520,11 @@ export class NoteService {
     const previousBodyTags = new Set(previousBody === undefined ? [] : parseLinks(stripFrontmatter(previousBody)).tags);
     const tags = [...new Set([...note.tags.filter((tag) => !previousBodyTags.has(tag)), ...parsed.tags])];
     const current = (await this.notes.update(scope, noteId, { tags })) ?? note;
+    // Lines ticked by typing in the live text since the last refresh: their to-dos follow.
+    if (previousBody !== undefined && previousBody !== note.body) {
+      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+      await reconcileNoteTasks(scope, noteId, previousBody, note.body);
+    }
     await withProviderUsageContext(
       { userId: editorUserId, workspaceId: row.workspaceId, funding: 'install', accountingMetadata: { noteId, purpose: 'live-note-reindex' } },
       async () => {

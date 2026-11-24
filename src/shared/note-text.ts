@@ -10,6 +10,8 @@
  *   - `bodyPreview`: a note's text for a list row, without its title line.
  */
 
+import { TODO_MARKER_TAIL } from './note-todos';
+
 /** The longest title taken from a first line; the rest of the line stays in the body only. */
 export const TITLE_MAX = 120;
 
@@ -22,6 +24,8 @@ const LINE_MARKERS = /^(?:\s*(?:#{1,6}\s+|>\s*|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]
 /** The text of a line of markdown as it reads: markers, emphasis and link syntax dropped. */
 function plainLine(line: string): string {
   return line
+    // A line made a to-do ends in its marker (note-todos.ts): not part of what it reads.
+    .replace(TODO_MARKER_TAIL, '')
     .replace(LINE_MARKERS, '')
     // [[target|shown]] and [[target]] read as their shown text.
     .replace(/\[\[([^\]|]*)\|([^\]]*)\]\]/g, '$2')

@@ -11,6 +11,8 @@ import type { Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 import { bodyPreview } from '@/shared/note-text';
+import { linkedTasksOf, makeTodosFromNote, NoteLinkError, withLinkedNotes } from '@/core/tasks/note-links';
+import { auditTaskMutation } from '@/core/tasks/audit';
 
 const logger = apiLogger.child({ component: 'notes-route' });
 
@@ -379,7 +381,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           endpoint: { type: e.toType ?? 'note', ref: e.toRef, resolved: false },
         };
       });
-      return { ...note, backlinks: backlinksView, outgoing: outgoingView };
+      // The to-dos linked to it that the reader can open (made from its lines, or attached).
+      const linkedTasks = await linkedTasksOf(repos, note.id);
+      return { ...note, backlinks: backlinksView, outgoing: outgoingView, linkedTasks };
     },
     { detail: { tags: ['notes'] } },
   )
@@ -509,6 +513,35 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { detail: { tags: ['notes'] } },
+  )
+
+  // Make to-dos of the note's task lines that are not to-dos yet: every
+  // unticked one, or the 0-based `lines` given. Each line is marked in the
+  // note (` ^todo-…`) and linked; `marked: false` (with `reason`) when the
+  // note could not take the marks, and the to-dos are linked to it as
+  // attachments instead.
+  .post(
+    '/:id/todos',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const repos = noteRepos(principal);
+      try {
+        const made = await makeTodosFromNote(repos, params.id, { lines: body?.lines });
+        const actor = principal.actorUserId ?? principal.userId;
+        await Promise.all(made.tasks.map((task) => auditTaskMutation({
+          userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'status'],
+          actor: actor !== task.userId ? { kind: 'user', id: actor, onBehalfOf: task.userId } : { kind: 'user', id: actor }, runId: null,
+        })));
+        return { tasks: await withLinkedNotes(repos, made.tasks), marked: made.marked, ...(made.reason ? { reason: made.reason } : {}) };
+      } catch (err) {
+        if (err instanceof NoteLinkError) { set.status = 404; return { error: err.message }; }
+        throw err;
+      }
+    },
+    {
+      body: t.Optional(t.Object({ lines: t.Optional(t.Array(t.Integer({ minimum: 0 }), { maxItems: 200 })) })),
+      detail: { tags: ['notes'] },
+    },
   )
 
   // Undo an archive: the note is back in lists, search and recall. 404 when

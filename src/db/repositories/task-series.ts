@@ -6,7 +6,9 @@
  * occurrence; to end a series, stop its repeat). The next occurrence is a
  * new open task: same title, notes, list, priority, assignee, source and
  * rule, its steps copied open (deleted steps are not), each user's star and
- * order copied (not My Day), due one step on in the series' zone.
+ * order copied (not My Day), its notes attached (not the note line it was
+ * made from: that line stays with its own occurrence, ticked), due one step
+ * on in the series' zone.
  *
  * Exactly once: the next id is claimed on the finished row
  * (`repeat_next_id IS NULL`, still finished) in the same transaction as the
@@ -30,6 +32,7 @@ import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { taskComments } from '../schema/task-comments';
 import { type Task, tasks, taskUserState } from '../schema/tasks';
+import { copyLinksSql } from './task-note-links';
 
 /** How long after it was made an untouched next occurrence may still be taken back by a reopen. */
 export const RETRACT_WINDOW_MS = 10 * 60_000;
@@ -111,6 +114,7 @@ export async function spawnNextOccurrence(finished: Task, opts: { claim: boolean
     if (states.length > 0) {
       await tx.insert(taskUserState).values(states.map((s) => ({ taskId: nextId, userId: s.userId, important: s.important, sortOrder: s.sortOrder })));
     }
+    await tx.execute(copyLinksSql(finished.id, nextId));
     return { claimed, next };
   });
 }

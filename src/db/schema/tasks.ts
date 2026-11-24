@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { TaskRepeat } from '@/core/tasks/repeat';
 import { users } from './users';
 import { workspaces } from './organizations';
+import { notes } from './notes';
 
 /**
  * Personal tasks / todos (feature #6). Distinct from `recurring_tasks` (cron
@@ -133,8 +134,31 @@ export const taskLists = pgTable('task_lists', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * A to-do linked to a note (migration 0207): a note attached to the to-do,
+ * or the note line it was made from. `anchor` is set for a line: the line
+ * carries ` ^todo-<anchor>` (src/shared/note-todos.ts), and its tick follows
+ * the to-do and the other way round (core/tasks/note-links.ts). Both ends
+ * are in one scope (a user's personal to-dos and notes, or one space's): a
+ * link is made only where the caller reaches both, and read only through
+ * the reader's own scope on each side, so it never shows a note (or a
+ * to-do) to someone who cannot open it.
+ */
+export const taskNoteLinks = pgTable('task_note_links', {
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
+  noteId: uuid('note_id').references(() => notes.id, { onDelete: 'cascade' }).notNull(),
+  anchor: text('anchor'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.taskId, table.noteId] }),
+  noteIdx: index('task_note_links_note_idx').on(table.noteId),
+  anchorIdx: uniqueIndex('task_note_links_anchor_uidx').on(table.noteId, table.anchor).where(sql`${table.anchor} IS NOT NULL`),
+}));
+
 export type Task = typeof tasks.$inferSelect;
 /** A task as one user sees it: the row plus their personal layer (`sortOrder` theirs when they set one). */
 export type TaskView = Task & { important: boolean; myDayOn: string | null };
 export type TaskUserState = typeof taskUserState.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
+export type TaskNoteLink = typeof taskNoteLinks.$inferSelect;

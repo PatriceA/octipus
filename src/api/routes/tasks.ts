@@ -5,6 +5,7 @@ import { disableRoleHeartbeatHook, ensureRoleHeartbeatHook } from '@/core/heartb
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { myDay, myDayDate } from '@/core/tasks/my-day';
+import { type LinkedNote, linkNote, NoteLinkError, unlinkNote, withLinkedNotes } from '@/core/tasks/note-links';
 import { nextActions } from '@/core/tasks/next';
 import { parseQuickAdd, quickAddDueAt } from '@/core/tasks/quick-add';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
@@ -15,7 +16,8 @@ import { ACTIVE_TASK_STATUSES, assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS,
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { parseTaskDate, rememberDeviceTimezone, resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
-import { contentRepos } from '@/db/repositories/content';
+import { type ContentRepos, contentRepos } from '@/db/repositories/content';
+import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
 import type { NewTask } from '@/db/schema/tasks';
 import { API_SCOPES } from '@/security/scopes';
 import { isAuthenticated, requireScope, type Principal } from '@/security/principal';
@@ -144,6 +146,41 @@ function anyGiven(fields: object): boolean {
   return Object.values(fields).some((v) => v !== undefined);
 }
 
+/** A link refused by `core/tasks/note-links.ts`, as a status and body; null for any other error. */
+function noteLinkError(err: unknown, set: { status?: number | string }): { error: string; code: string } | null {
+  if (!(err instanceof NoteLinkError)) return null;
+  set.status = err.code === 'not_found' ? 404 : err.code === 'invalid' ? 400 : 409;
+  return { error: err.message, code: err.code };
+}
+
+/** List rows with the notes each links to that the reader can open (`linkedNotes`). */
+async function withNotes<T extends { tasks: { id: string }[] }>(repos: ContentRepos, result: T): Promise<Omit<T, 'tasks'> & { tasks: (T['tasks'][number] & { linkedNotes: LinkedNote[] })[] }> {
+  return { ...result, tasks: await withLinkedNotes(repos, result.tasks) };
+}
+
+/** One row with its `linkedNotes`. */
+async function oneWithNotes<T extends { id: string }>(repos: ContentRepos, row: T): Promise<T & { linkedNotes: LinkedNote[] }> {
+  return (await withLinkedNotes(repos, [row]))[0];
+}
+
+/**
+ * A new note for a to-do: `title` as its first line, at the slug of the
+ * title (or, when a note holds that one, the title with a short suffix).
+ */
+async function newNoteFor(repos: ContentRepos, title: string): Promise<string> {
+  const notes = getNoteService();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const slug = attempt === 0 ? title : `${title} ${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      const saved = await notes.save({ scope: repos.noteScope, title, slug, body: `${title}\n\n`, createOnly: true, deferIndex: true });
+      return saved.note.id;
+    } catch (err) {
+      if (!(err instanceof NoteExistsError)) throw err;
+    }
+  }
+  throw new Error('Could not find a free name for the note');
+}
+
 /** A manual sort position: any finite number. */
 function sortOrderValue(value: number): number {
   if (!Number.isFinite(value)) throw new Error('sortOrder must be a finite number');
@@ -187,7 +224,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         const limit = query?.limit ? Math.max(1, Math.min(200, Number.parseInt(query.limit, 10) || 200)) : 200;
         const { timezone, ranked } = await nextActions(principal, { category: query?.category, tz: query?.tz, limit });
         const viewed = await repo.withState(ranked.map((r) => r.task));
-        return { timezone, ...(await withLeases(viewed.map((task, i) => ({ ...task, bucket: ranked[i].bucket, reason: ranked[i].reason })))) };
+        return { timezone, ...(await withNotes(contentRepos(principal), await withLeases(viewed.map((task, i) => ({ ...task, bucket: ranked[i].bucket, reason: ranked[i].reason }))))) };
       }
       let dueBefore: Date | undefined;
       if (query?.due === 'today') {
@@ -208,7 +245,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           repo.listOwn({ ...filter, status: query.status, limit, offset }),
           repo.countOwn({ ...filter, status: query.status }),
         ]);
-        return { ...(await withLeases(await repo.withState(rows))), page: { total, offset, limit, hasMore: offset + rows.length < total } };
+        return { ...(await withNotes(contentRepos(principal), await withLeases(await repo.withState(rows)))), page: { total, offset, limit, hasMore: offset + rows.length < total } };
       }
       // No status: every active task, then one page of the done ones (most
       // recently finished first). A shared cap over both let finished tasks
@@ -221,7 +258,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         repo.countOwn({ ...filter, status: 'done' }),
       ]);
       return {
-        ...(await withLeases(await repo.withState([...active, ...done]))),
+        ...(await withNotes(contentRepos(principal), await withLeases(await repo.withState([...active, ...done])))),
         done: { total: doneTotal, offset: doneOffset, limit: doneLimit, hasMore: doneOffset + done.length < doneTotal },
       };
     },
@@ -259,7 +296,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
       return {
         timezone: day.timezone,
         date: day.date,
-        tasks: day.tasks,
+        tasks: await withLinkedNotes(contentRepos(principal), day.tasks),
         suggestions: day.suggestions.map((s) => ({ ...s.task, bucket: s.bucket, reason: s.reason })),
       };
     },
@@ -449,7 +486,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 404;
         return { error: 'Task not found' };
       }
-      return (await repo.withState([task]))[0];
+      return oneWithNotes(contentRepos(principal), (await repo.withState([task]))[0]);
     },
     {
       params: t.Object({ id: t.String() }),
@@ -492,10 +529,23 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           source: 'user',
         };
-        const repo = contentRepos(principal).tasks;
+        const repos = contentRepos(principal);
+        const repo = repos.tasks;
         // Checked before anything is written: a bad sort order is a 400, not a half-made to-do.
         const sortOrder = body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined;
+        if (body.noteAnchor !== undefined && !body.noteId) throw new Error('noteAnchor needs noteId');
+        // The note it is made from must be in reach before anything is written.
+        if (body.noteId && !(await repos.notes.getById(body.noteId))) throw new NoteLinkError('not_found', 'Note not found');
         const task = await repo.create(values, { tz: body.tz });
+        if (body.noteId) {
+          try {
+            await linkNote(repos, { taskId: task.id, noteId: body.noteId, anchor: body.noteAnchor ?? null });
+          } catch (err) {
+            // Not linked (that line is already another to-do): nothing is made.
+            await repo.delete(task.id);
+            throw err;
+          }
+        }
         await auditUserTaskMutation(principal, task, 'create', changedTaskFields(values));
         // The creator's own layer: star, My Day, position.
         const important = body.important ?? quick?.important ?? undefined;
@@ -504,10 +554,13 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           myDayOn: body.myDay ? (await myDayDate(user.id, body.tz)).date : undefined,
           sortOrder,
         };
-        return anyGiven(personal) ? await repo.setPersonal(task.id, personal) : (await repo.withState([task]))[0];
+        const view = anyGiven(personal) ? await repo.setPersonal(task.id, personal) : (await repo.withState([task]))[0];
+        return view ? oneWithNotes(repos, view) : view;
       } catch (err) {
         // A role refusal keeps its status (403 / 409) through the error handler.
         if (err instanceof SpaceError) throw err;
+        const refused = noteLinkError(err, set);
+        if (refused) return refused;
         set.status = 400;
         return { error: (err as Error).message };
       }
@@ -538,6 +591,14 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         assigneeRef: t.Optional(t.String({ maxLength: 200 })),
         /** Browser zone; decides which day a bare `YYYY-MM-DD` dueAt ends on. */
         tz: t.Optional(t.String({ maxLength: 64 })),
+        /** A note to link the new to-do to (one the caller reaches; 404 otherwise). */
+        noteId: t.Optional(t.String({ format: 'uuid' })),
+        /**
+         * With `noteId`: the to-do is made from the note line that carries
+         * ` ^todo-<noteAnchor>` (the client writes the marker into the note;
+         * src/shared/note-todos.ts). 409 when that line is already another to-do.
+         */
+        noteAnchor: t.Optional(t.String({ pattern: '^[a-z0-9]{6,16}$' })),
       }),
       detail: { tags: ['tasks'] },
     }
@@ -605,11 +666,12 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           const op = body.status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
           await auditUserTaskMutation(principal, updated, op, change);
         }
+        const repos = contentRepos(principal);
         if (anyGiven(personal)) {
           const viewed = await repo.setPersonal(params.id, personal);
-          return viewed ? { ...viewed, ...updated, important: viewed.important, myDayOn: viewed.myDayOn, sortOrder: viewed.sortOrder } : updated;
+          return oneWithNotes(repos, viewed ? { ...viewed, ...updated, important: viewed.important, myDayOn: viewed.myDayOn, sortOrder: viewed.sortOrder } : updated);
         }
-        return (await repo.withState([updated]))[0];
+        return oneWithNotes(repos, (await repo.withState([updated]))[0]);
       } catch (err) {
         // A role refusal keeps its status (403 / 409) through the error handler.
         if (err instanceof SpaceError) throw err;
@@ -757,6 +819,69 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     {
       params: t.Object({ id: t.String() }),
       body: t.Object({ body: t.String({ minLength: 1, maxLength: 10_000 }) }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // Link a note to a to-do: an existing one (`noteId`), or a new one made
+  // for it (`title`; its first line is the title). Idempotent; needs write
+  // access to the to-do; a note out of reach is 404. Answers the note as the
+  // to-do shows it.
+  .post(
+    '/:id/notes',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      if (!body.noteId === !body.title) {
+        set.status = 400;
+        return { error: 'Give noteId or title' };
+      }
+      const repos = contentRepos(principal);
+      try {
+        repos.can('write');
+        let noteId = body.noteId;
+        if (body.title) {
+          const task = await repos.tasks.findById(params.id);
+          if (!task) throw new NoteLinkError('not_found', 'Task not found');
+          noteId = await newNoteFor(repos, body.title.trim());
+        }
+        const note = await linkNote(repos, { taskId: params.id, noteId: noteId as string });
+        return { note };
+      } catch (err) {
+        if (err instanceof SpaceError) throw err;
+        const refused = noteLinkError(err, set);
+        if (refused) return refused;
+        throw err;
+      }
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        noteId: t.Optional(t.String({ format: 'uuid' })),
+        title: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+      }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // Unlink a note from a to-do (the note, and any line of it, stay as they are).
+  .delete(
+    '/:id/notes/:noteId',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      if (!(await unlinkNote(contentRepos(principal), params.id, params.noteId))) {
+        set.status = 404;
+        return { error: 'Link not found' };
+      }
+      return { unlinked: true };
+    },
+    {
+      params: t.Object({ id: t.String(), noteId: t.String({ format: 'uuid' }) }),
       detail: { tags: ['tasks'] },
     }
   )

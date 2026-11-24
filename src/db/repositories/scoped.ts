@@ -1619,6 +1619,15 @@ export class TaskRepo {
       }
     }
     this.afterWrite(row, previous);
+    // Between done and not done: the note lines it was made from follow
+    // (core/tasks/note-links.ts). Awaited, so the response comes after the
+    // note has its tick; never fails the write.
+    const ticked = result.closedFrom !== null && row.status === 'done' ? true
+      : reopening && previous?.status === 'done' && isActiveStatus(row.status) ? false : null;
+    if (ticked !== null) {
+      const { syncNoteLines } = await import('@/core/tasks/note-links');
+      await syncNoteLines(this.principal, row, ticked);
+    }
     return row;
   }
 
