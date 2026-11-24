@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { isAllDayDue, isListKey, listCounts, listMembers, listTitle, orderBetween, plannedGroup, renumbered, splitList, type ListableTask } from './smart-lists';
+import { isAllDayDue, isListKey, listCounts, listMembers, listTitle, orderBetween, plannedGroup, renumbered, splitList, todayParts, type ListableTask } from './smart-lists';
 
 const TODAY = '2026-11-23';
 type Row = ListableTask & { title: string };
@@ -101,4 +101,35 @@ test('list keys and titles', () => {
   expect(isListKey('next')).toBe(false);
   expect(listTitle('list:Shopping')).toBe('Shopping');
   expect(listTitle('planned')).toBe('Planned');
+});
+
+describe('todayParts', () => {
+  const now = new Date('2026-11-23T12:00:00Z');
+  test('overdue, due today and picked, each to-do once; finished today of those', () => {
+    const parts = todayParts([
+      row('late', { dueAt: '2026-11-20T23:59:59.999Z', myDayOn: TODAY }),
+      row('later-late', { dueAt: '2026-11-22T10:00:00Z' }),
+      row('due-now', { dueAt: '2026-11-23T15:00:00Z', myDayOn: TODAY }),
+      row('picked-b', { myDayOn: TODAY, sortOrder: 5 }),
+      row('picked-a', { myDayOn: TODAY, sortOrder: 1 }),
+      row('yesterday-pick', { myDayOn: '2026-11-22' }),
+      row('tomorrow', { dueAt: '2026-11-24T23:59:59.999Z' }),
+      row('step', { parentId: 'picked-a', myDayOn: TODAY }),
+      row('done-picked', { status: 'done', myDayOn: TODAY, completedAt: '2026-11-23T08:00:00Z' }),
+      row('done-due', { status: 'done', dueAt: '2026-11-23T23:59:59.999Z', completedAt: '2026-11-23T10:00:00Z' }),
+      row('done-other', { status: 'done', completedAt: '2026-11-23T11:00:00Z' }),
+      row('done-yesterday', { status: 'done', myDayOn: '2026-11-22', completedAt: '2026-11-22T11:00:00Z' }),
+      row('deleted', { status: 'archived', myDayOn: TODAY }),
+    ], now, 'UTC');
+    expect(ids(parts.overdue)).toEqual(['late', 'later-late']);
+    expect(ids(parts.due)).toEqual(['due-now']);
+    expect(ids(parts.picked)).toEqual(['picked-a', 'picked-b']);
+    expect(ids(parts.done)).toEqual(['done-due', 'done-picked']);
+  });
+
+  test('the day is the user\'s: late evening in their zone is still today', () => {
+    const evening = new Date('2026-11-24T02:00:00Z');
+    const parts = todayParts([row('due', { dueAt: '2026-11-23T23:59:59.999-05:00' })], evening, 'America/New_York');
+    expect(ids(parts.due)).toEqual(['due']);
+  });
 });

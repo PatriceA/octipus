@@ -2,7 +2,9 @@ import {taskSourceRef,taskProvenance,observeTaskProvenance} from '@/core/tasks/p
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
-import { myDayDate } from '@/core/tasks/my-day';
+import { myDay, myDayDate } from '@/core/tasks/my-day';
+import { type LinkedNote, linkedNotesOf, linkNote, makeTodosFromNote, NoteLinkError } from '@/core/tasks/note-links';
+import { todayParts } from '@/core/tasks/smart-lists';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { normalizeRepeat, REPEAT_UNITS } from '@/core/tasks/repeat';
 import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
@@ -46,6 +48,7 @@ export class TasksTool extends BaseTool {
         { name: 'complete_task', description: 'Mark a task as done', parameters: {}, returns: 'The completed task' },
         { name: 'checkout_task', description: 'Claim a task so no other agent works it (or release the claim)', parameters: {}, returns: 'The claimed task, or who holds it' },
         { name: 'add_task_comment', description: 'Leave a comment (progress, hand-off, question) on a task', parameters: {}, returns: 'The comment' },
+        { name: 'todos_from_note', description: 'Make to-dos of a note\'s task lines, each linked to its line', parameters: {}, returns: 'The created tasks' },
       ],
     };
   }
@@ -53,32 +56,48 @@ export class TasksTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'list_tasks',
-      'List the user\'s tasks. Optional: status ("open"|"in_progress"|"done"|"archived"; default: open and in progress) and dueToday (only tasks due by end of today). Sub-tasks are nested under their parent as `children`; a task that cannot start yet says why in `waiting` (blocked by an open task, or sub-tasks still open). view "next" returns active tasks ranked in next-action order (in progress → overdue → due today → high priority → new from email/research → due this week → backlog → waiting), each with a one-line reason.',
+      'List the user\'s tasks. Optional: status ("open"|"in_progress"|"done"|"archived"; default: open and in progress) and dueToday (only tasks due by end of today). Sub-tasks are nested under their parent as `children`; a task that cannot start yet says why in `waiting` (blocked by an open task, or sub-tasks still open). view "next" returns active tasks ranked in next-action order (in progress → overdue → due today → high priority → new from email/research → due this week → backlog → waiting), each with a one-line reason. view "today" answers "what is on my plate today": overdue, due today and My Day (the Today page), what was finished today, and yesterday\'s unfinished My Day picks (`earlierMyDay`). A task linked to notes lists them in `linkedNotes` (id, title; `line: true` when it was made from a line of that note) — read one with the notes tool.',
       createParameterSchema({
         status: { type: 'string', description: 'Filter by status; "all" for every status', enum: [...TASK_STATUSES, 'all'] },
         dueToday: { type: 'boolean', description: 'Only tasks due by end of today' },
         category: { type: 'string', description: 'Filter to a category/list (e.g. "Shopping"); "none" for uncategorized' },
-        view: { type: 'string', description: '"next" = open tasks in next-action order with a reason each', enum: ['next'] },
+        view: { type: 'string', description: '"next" = open tasks in next-action order with a reason each; "today" = overdue, due today and My Day', enum: ['next', 'today'] },
         assigneeKind: { type: 'string', description: 'Only tasks assigned to this kind of assignee', enum: [...TASK_ASSIGNEE_KINDS] },
         assigneeRef: { type: 'string', description: 'Only tasks assigned to this user / role / node id' },
         limit: { type: 'number', description: 'Max tasks to return for view "next" (default 10)' },
       }),
       async (args, context) => {
         const principal = agentPrincipal(context);
+        const repos = contentRepos(principal);
         if (args.view === 'next') {
           const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 10)));
           // An agent is offered only what it may work now: no future occurrence of a series.
           const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit, workableOnly: true });
           observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,ranked.map(row=>row.task)));
-          const viewed = await contentRepos(principal).tasks.withState(ranked.map((r) => r.task));
-          return { timezone, tasks: ranked.map((r, i) => ({ ...summarize(viewed[i]), bucket: r.bucket, reason: r.reason })) };
+          const viewed = await repos.tasks.withState(ranked.map((r) => r.task));
+          const notes = await linkedNotesOf(repos, viewed.map((t) => t.id));
+          return { timezone, tasks: ranked.map((r, i) => ({ ...summarize(viewed[i], notes), bucket: r.bucket, reason: r.reason })) };
+        }
+        if (args.view === 'today') {
+          const day = await myDay(principal);
+          const rows = await repos.tasks.withState(await repos.tasks.listOwn({ statuses: [...ACTIVE_TASK_STATUSES, 'done'], limit: 5000 }));
+          const parts = todayParts(rows, new Date(), day.timezone);
+          const earlier = day.suggestions.filter((sg) => sg.bucket === 'earlier').map((sg) => sg.task);
+          const shown = [...parts.overdue, ...parts.due, ...parts.picked, ...parts.done, ...earlier];
+          observeTaskProvenance(context.sessionId, await taskProvenance(context.userId, shown));
+          const notes = await linkedNotesOf(repos, shown.map((t) => t.id));
+          const list = (xs: SummarizableTask[]) => xs.map((t) => summarize(t, notes));
+          return {
+            date: day.date, timezone: day.timezone,
+            overdue: list(parts.overdue), dueToday: list(parts.due), myDay: list(parts.picked), doneToday: list(parts.done), earlierMyDay: list(earlier),
+          };
         }
         let dueBefore: Date | undefined;
         if (args.dueToday) {
           dueBefore = new Date();
           dueBefore.setHours(23, 59, 59, 999);
         }
-        const repo = contentRepos(principal).tasks;
+        const repo = repos.tasks;
         const status = args.status as string | undefined;
         const [tasks, active] = await Promise.all([
           repo.listOwn({
@@ -93,7 +112,8 @@ export class TasksTool extends BaseTool {
         ]);
         observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,[...tasks,...active]));
         const lookup = toLookup(active);
-        return { tasks: nestTasks(await repo.withState(tasks)).map((t) => summarizeTree(t, lookup)) };
+        const notes = await linkedNotesOf(repos, tasks.map((t) => t.id));
+        return { tasks: nestTasks(await repo.withState(tasks)).map((t) => summarizeTree(t, lookup, notes)) };
       },
       { requiresPermission: true, permissionAction: 'read' },
     );
@@ -117,10 +137,14 @@ export class TasksTool extends BaseTool {
         assigneeKind: { type: 'string', description: 'Assign to a user, a role (any agent of it) or a swarm node', enum: [...TASK_ASSIGNEE_KINDS] },
         assigneeRef: { type: 'string', description: 'The user / role / node id the task is assigned to (with assigneeKind)' },
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
+        noteId: { type: 'string', description: 'Attach this note to the task (a note id from the notes tool)' },
       }),
       async (args, context) => {
         const principal = agentPrincipal(context);
         try {
+          const noteId = idOrNull(args.noteId);
+          // The note must be in reach before anything is written.
+          if (noteId && !(await contentRepos(principal).notes.getById(noteId))) return { error: 'Note not found' };
           const values = {
             title: args.title as string,
             notes: (args.notes as string | undefined) ?? null,
@@ -136,15 +160,17 @@ export class TasksTool extends BaseTool {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
           };
-          const repo = contentRepos(principal).tasks;
+          const repos = contentRepos(principal);
+          const repo = repos.tasks;
           const task = await repo.create(values);
           await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
+          if (noteId) await linkNote(repos, { taskId: task.id, noteId });
           // Star and My Day are the user's own layer (their zone's today, as stored).
           const view = await repo.setPersonal(task.id, {
             important: args.important === true ? true : undefined,
             myDayOn: args.myDay === true ? (await myDayDate(principal.userId)).date : undefined,
           });
-          return { created: true, task: summarize(view ?? task) };
+          return { created: true, task: summarize(view ?? task, await linkedNotesOf(repos, [task.id])) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -327,7 +353,48 @@ export class TasksTool extends BaseTool {
       },
       { requiresPermission: true, permissionAction: 'write' },
     );
+
+    this.registerTool(
+      'todos_from_note',
+      'Make to-dos from a note: each `- [ ]` line of it that is not a to-do yet becomes one, titled by the line, and the line is marked as linked (ticking either side then ticks the other). Use this, not create_task per line, when asked to make to-dos from a note. Pass `lines` (0-based line numbers) to make only those (a ticked line then becomes a done to-do). Lines already linked are skipped. Where the note takes your changes as proposals (a shared space in suggest mode), the to-dos are made with the note attached and its lines are left unmarked.',
+      createParameterSchema({
+        noteId: { type: 'string', description: 'Note id (from the notes tool)', required: true },
+        lines: { type: 'array', description: 'Only these 0-based line numbers', items: { type: 'number' } },
+      }),
+      async (args, context) => {
+        const principal = agentPrincipal(context);
+        const repos = contentRepos(principal);
+        const lines = Array.isArray(args.lines) ? args.lines.map((n) => Math.trunc(Number(n))).filter((n) => Number.isFinite(n) && n >= 0) : undefined;
+        try {
+          const made = await makeTodosFromNote(repos, String(args.noteId ?? ''), {
+            lines,
+            markLines: !(await notesAreProposals(context)),
+            source: 'agent',
+            sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
+          });
+          await Promise.all(made.tasks.map((t) => auditAgentTaskMutation(context, t.id, 'create', ['title', 'status'])));
+          const notes = await linkedNotesOf(repos, made.tasks.map((t) => t.id));
+          return {
+            created: made.tasks.length,
+            tasks: made.tasks.map((t) => summarize(t, notes)),
+            linesMarked: made.marked,
+            ...(made.reason ? { notice: `The note's lines were not marked: ${made.reason}` } : {}),
+          };
+        } catch (err) {
+          if (err instanceof NoteLinkError) return { error: err.message };
+          throw err;
+        }
+      },
+      { requiresPermission: true, permissionAction: 'write' },
+    );
   }
+}
+
+/** A shared space that takes the agent's note changes as proposals (suggest mode): its notes' text is not the agent's to change. */
+async function notesAreProposals(context: AgentContext): Promise<boolean> {
+  if (!context.space) return false;
+  const { agentEditModeOf } = await import('@/core/spaces/service');
+  return (await agentEditModeOf(context.space.workspaceId)) === 'suggest';
 }
 
 /** The repeat argument of create_task / update_task. */
@@ -462,7 +529,13 @@ interface SummarizableTask {
   important?: boolean; repeat?: unknown; myDayOn?: string | null; repeatNextId?: string | null;
 }
 
-function summarize(t: SummarizableTask) {
+/** A note as a task summary names it: `line` when the task was made from a line of it. */
+function noteRef(n: LinkedNote) {
+  return { id: n.id, title: n.title, ...(n.anchor ? { line: true } : {}), ...(n.archived ? { archived: true } : {}) };
+}
+
+function summarize(t: SummarizableTask & { id: string }, notes?: ReadonlyMap<string, LinkedNote[]>) {
+  const linked = notes?.get(t.id) ?? [];
   return {
     id: t.id,
     title: t.title,
@@ -484,6 +557,7 @@ function summarize(t: SummarizableTask) {
     repeat: t.repeat ?? null,
     myDayOn: t.myDayOn ?? null,
     repeatNextId: t.repeatNextId ?? null,
+    ...(linked.length > 0 ? { linkedNotes: linked.map(noteRef) } : {}),
   };
 }
 
@@ -494,12 +568,12 @@ type TaskSummary = ReturnType<typeof summarize> & { waiting: string | null; chil
  * Top-level order is the list's (priority, due, newest first); sub-tasks
  * read in the order they were added, which for a plan is the plan's order.
  */
-function summarizeTree(node: Nested<SummarizableTask & { createdAt: Date }>, lookup: ReadonlyMap<string, SummarizableTask>): TaskSummary {
+function summarizeTree(node: Nested<SummarizableTask & { createdAt: Date }>, lookup: ReadonlyMap<string, SummarizableTask>, notes?: ReadonlyMap<string, LinkedNote[]>): TaskSummary {
   const children = [...node.children].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   return {
-    ...summarize(node),
+    ...summarize(node, notes),
     waiting: waitingReason(waitingOn(node, lookup)),
-    children: children.map((c) => summarizeTree(c, lookup)),
+    children: children.map((c) => summarizeTree(c, lookup, notes)),
   };
 }
 

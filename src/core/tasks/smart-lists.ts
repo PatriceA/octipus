@@ -11,6 +11,9 @@
  *   archived   archived (the deleted ones; they can be restored)
  *   list:<name>  one user list (`category`)
  *
+ * and the Today page's parts (`todayParts`): what is overdue, due today and
+ * picked into My Day, and what of that was finished today.
+ *
  * A to-do's steps are its children; they show inside it, not as rows, except
  * a child whose parent is not in the set (done and paged out, or archived),
  * which stays a row so nothing disappears. Active rows are in manual order
@@ -167,4 +170,45 @@ export function orderBetween(above: number | null | undefined, below: number | n
 /** Fresh, evenly spaced orders for `count` rows in their current order, starting where the first one was. */
 export function renumbered(count: number, start = 0): number[] {
   return Array.from({ length: count }, (_, i) => Math.round(start) + i * 1024);
+}
+
+/** The Today page's to-dos (`todayParts`). */
+export interface TodayParts<T> {
+  /** Active, due before today. Earliest first. */
+  overdue: T[];
+  /** Active, due today. Earliest first. */
+  due: T[];
+  /** Active, in My Day today and not overdue or due today. Manual order. */
+  picked: T[];
+  /** Finished today, of those that were due by today or in My Day today. Latest first. */
+  done: T[];
+}
+
+/**
+ * What the Today page shows, by calendar day in `tz` (the web and the tasks
+ * tool's `view: "today"` agree on it): each active to-do once, overdue
+ * before due today before picked. Steps fold into their to-do as in a list.
+ */
+export function todayParts<T extends ListableTask>(tasks: readonly T[], now: Date, tz: string): TodayParts<T> {
+  const ids = new Set(tasks.map((t) => t.id));
+  const rows = tasks.filter((t) => !t.parentId || !ids.has(t.parentId));
+  const today = localDateIn(now.getTime(), tz);
+  const parts: TodayParts<T> = { overdue: [], due: [], picked: [], done: [] };
+  const byDue = (a: T, b: T) => ms(a.dueAt) - ms(b.dueAt) || byManualOrder(a, b);
+  for (const t of rows) {
+    const group = t.dueAt != null ? plannedGroup(t.dueAt, now, tz) : null;
+    if (isActiveStatus(t.status)) {
+      if (group === 'earlier') parts.overdue.push(t);
+      else if (group === 'today') parts.due.push(t);
+      else if (inMyDay(t, today)) parts.picked.push(t);
+    } else if (t.status === 'done' && t.completedAt != null && localDateIn(ms(t.completedAt), tz) === today
+      && (inMyDay(t, today) || group === 'earlier' || group === 'today')) {
+      parts.done.push(t);
+    }
+  }
+  parts.overdue.sort(byDue);
+  parts.due.sort(byDue);
+  parts.picked.sort(byManualOrder);
+  parts.done.sort(byCompletion);
+  return parts;
 }
