@@ -252,6 +252,16 @@ Measurement (Testing §3) lands with Phase 1, not after all three. A gate whose
 rejection rate nobody watches is the same unverified claim this plan exists to
 stop.
 
+## Since then: evidence hooks run before the auditor (2026-11-23)
+
+The gates here judge the auditor's *report*. Project evidence hooks
+(`agent.evidenceHooks`, `src/core/agent/evidence-hooks.ts`) now run before an
+auditor stage is asked at all. While a hook fails, the auditor is not asked
+and the work goes back for repair on its own budget, so an accountable pass
+can no longer stand over a failing test suite or build. When the hooks pass,
+their results reach the auditor as ground truth. File paths above name
+`src/core/orchestrator/`; the code now lives in `src/core/agent/`.
+
 ## Related
 
 - `docs/plans/pipeline-evidence-gate.md` — the producer-side gate this builds on.

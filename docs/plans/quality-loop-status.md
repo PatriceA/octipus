@@ -771,6 +771,18 @@ Not measured live: no paid model was run for this change. The next real
 pipeline run should show `verdict_repair` spawns in the run log and a
 `no verdict` line in `run-health.ts` where there were misses.
 
+## Update 2026-11-23: evidence hooks
+
+A green pipeline could still mean "the auditor wrote an accountable pass";
+nothing ran the project's own tests unless a template carried a
+`verifyCommand`, and even then the result was only shown to the auditor. Now an
+operator can declare evidence hooks per project folder (`agent.evidenceHooks`).
+They run before the auditor; a failure goes back to the implementer with its
+output (2 repairs per item, `EVIDENCE_REPAIR_LIMIT`), and is never escalated to
+a person who could continue anyway: still failing, the run is `failed`. Results
+are `pre_verify` rows in `verification_evidence`. Not measured live: no real
+install has run a pipeline with hooks yet.
+
 ## What is actually next
 
 1. ~~**Make the QA verdict contract stick**~~ — see the 2026-11-22 update

@@ -146,6 +146,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '30000000000', 10),
       smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || String(TOKEN_BUDGET_DEFAULTS.pipeline), 10),
+      evidenceHooks: [], // no env form: the `agent.evidenceHooks` setting owns it
       lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',
       nativeToolSearch: process.env.AGENT_NATIVE_TOOL_SEARCH !== 'false',
       turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '36000000', 10),

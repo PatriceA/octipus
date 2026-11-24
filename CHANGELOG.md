@@ -7,6 +7,28 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Project evidence hooks for pipelines** ([docs](docs/AGENT-ARCHITECTURE.md#qa-retry-loop)).
+  New setting `agent.evidenceHooks` (default `[]`, nothing changes until set):
+  `[{"name":"test","command":"npm test","root":"/abs/project","timeoutMs":120000}]`.
+  A hook applies to every run whose working folder (where the pipeline's
+  stages run commands) is `root` or contains it, and runs in `root`. In a
+  broad working folder, such as a whole workspace, every project's hooks run
+  and any of them can block the run; a failure names the hook and its root.
+  Run project work in a session scoped to the project. All hooks' timeouts
+  together may not exceed 30 minutes. Not supported yet on remote (SSH) execution environments. The pipeline runs the hooks
+  before its QA stage is asked (on the last plan item in a loop), and again
+  before it reports `completed` whenever the work changed since, the QA stage
+  was skipped, or there is none. When hooks are configured but none applies,
+  the run summary says so. Commands run like a stage `verifyCommand`: argv only, shell tool
+  policy, the user's `shell.execute` permission, the shell sandbox, a timeout.
+  Each result is a `pre_verify` row in `verification_evidence` (command, exit
+  code, duration, timeout flag, last ~2000 characters of output), shown by
+  `GET /api/verification/:sessionId` and the agent page. A failing hook sends
+  the work back to the implementing stage with the output, at most 2 times per
+  plan item; still failing, the run ends `failed`, and a QA pass cannot
+  override it. A hook that did not run (refused, misconfigured, rooted above
+  the stage folder, or a root that changed during the run) pauses the run as
+  environment-blocked; resuming after an end-of-run pause runs only the check.
 - **Agent roles can be installed at runtime.** A plugin package can contribute
   agent roles (`roles` in the manifest, apiVersion 1.3.0): an id, a prompt file,
   tools, a lane, spawn rules and limits, registered while the package is enabled
