@@ -341,6 +341,32 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     return { autoApproveRecovery: updated.preferences?.autoApproveRecovery === true };
   }, { body: t.Object({ autoApproveRecovery: t.Boolean() }) })
 
+  // The zone of the user's day (to-dos, My Day, repeats, `/todo`; see
+  // core/tasks/timezone.ts). `source`: `device` — a client reporting where it
+  // is, applied only by the rules of `rememberDeviceTimezone` (never over a
+  // zone chosen in Settings, never a fixed offset over a named zone); `user`
+  // — chosen in Settings, always written, and devices stop overwriting it;
+  // `follow` — written and devices may update it again.
+  .put('/timezone', async ({ user, principal, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Authentication required' }; }
+    if (principal.actorUserId) { set.status = 403; return { error: 'Not available while acting as another user.' }; }
+    const { isValidTimezone } = await import('@/core/tasks/rank');
+    if (!isValidTimezone(body.timezone)) { set.status = 400; return { error: `Unknown time zone "${body.timezone}"` }; }
+    if (body.source === 'device') {
+      const { rememberDeviceTimezone } = await import('@/core/tasks/timezone');
+      await rememberDeviceTimezone(user.id, body.timezone);
+    } else {
+      await userRepository.setTimezone(user.id, body.timezone, body.source === 'user' ? 'user' : 'device');
+    }
+    const fresh = await userRepository.findById(user.id);
+    return { timezone: fresh?.preferences?.timezone ?? null, timezoneSource: fresh?.preferences?.timezoneSource ?? null };
+  }, {
+    body: t.Object({
+      timezone: t.String({ minLength: 1, maxLength: 64 }),
+      source: t.Union([t.Literal('device'), t.Literal('user'), t.Literal('follow')]),
+    }),
+  })
+
   // Get current user
   .get(
     '/me',

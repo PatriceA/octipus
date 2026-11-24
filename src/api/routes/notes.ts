@@ -3,13 +3,16 @@ import { apiContext } from '@/api/context';
 import { acceptProposal, listNoteProposals, rejectProposal } from '@/core/docs/edit-proposals';
 import { getConfig } from '@/config';
 import { NoteTooLargeError, StaleWriteError, sha256Hex } from '@/core/docs/hub';
-import { getNoteService } from '@/core/knowledge/notes';
+import { getNoteService, InvalidSlugError, NoteArchivedError, NoteExistsError } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { type ContentRepos, contentRepos } from '@/db/repositories/content';
 import { getRevision, listRevisions } from '@/db/repositories/live-documents';
 import type { Principal } from '@/security/principal';
-import { SpaceError } from '@/security/space-access';
+import { can, SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
+import { bodyPreview } from '@/shared/note-text';
+import { healNoteLines, linkedTasksOf, makeTodosFromNote, NoteLinkError, withLinkedNotes } from '@/core/tasks/note-links';
+import { auditTaskMutation } from '@/core/tasks/audit';
 
 const logger = apiLogger.child({ component: 'notes-route' });
 
@@ -92,8 +95,15 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         kind: query.kind,
         tag: query.tag,
         includeArchived: query.includeArchived === 'true',
+        archived: query.archived,
+        search: query.q,
         limit: Math.min(500, Math.max(1, parseInt(query.limit ?? '100', 10))),
       });
+      // A list for display: a short line of each note's text instead of its
+      // whole body (bodies can be large, and a list of 500 of them heavy).
+      if (query.preview === 'true') {
+        return { notes: notes.map(({ body, ...row }) => ({ ...row, preview: bodyPreview(body, row.title) })), total: notes.length };
+      }
       return { notes, total: notes.length };
     },
     {
@@ -101,7 +111,13 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         kind: t.Optional(t.String()),
         tag: t.Optional(t.String()),
         includeArchived: t.Optional(t.String()),
+        /** `only`: the archived notes alone, most recently archived first. */
+        archived: t.Optional(t.Literal('only')),
+        /** Server-side search: every word in the title, slug, tags or body. */
+        q: t.Optional(t.String({ maxLength: 200 })),
         limit: t.Optional(t.String()),
+        /** `true`: each note carries `preview` (a line of its text, without the title line) instead of `body`. */
+        preview: t.Optional(t.String()),
       }),
       detail: { tags: ['notes'] },
     },
@@ -123,10 +139,21 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           tags: body.tags,
           frontmatter: body.frontmatter,
           baseSha256: body.baseSha256,
+          createOnly: body.createOnly,
+          ifSha256: body.ifSha256,
+          // An editor saves on every pause: embed once the note is quiet.
+          deferIndex: true,
+          // An admin acting as the user: the to-dos this save ticks are audited to them, for the user.
+          ...(principal.actorUserId && principal.actorUserId !== principal.userId ? { actor: { userId: principal.actorUserId, onBehalfOf: principal.userId } } : {}),
         });
         return result;
       } catch (err) {
         if (err instanceof SpaceError) throw err;
+        // A create-only save found a note (active or archived) at its slug: nothing written.
+        if (err instanceof NoteExistsError) {
+          set.status = 409;
+          return { error: `A note already exists at ${err.slug}`, code: 'exists', id: err.noteId, slug: err.slug };
+        }
         const refused = liveWriteError(err, set);
         if (refused) return refused;
         // Update of a non-existent / non-owned note → 404 (no enumeration).
@@ -147,6 +174,17 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
         /** Space notes: the sha of the body this edit was made from. */
         baseSha256: t.Optional(t.String({ pattern: '^[0-9a-f]{64}$' })),
+        /**
+         * Without an `id`, a save whose slug names an existing note (archived
+         * ones included) updates that note. `true` refuses that: 409 `exists`.
+         */
+        createOnly: t.Optional(t.Boolean()),
+        /**
+         * Personal notes: save only while the stored body still has this sha
+         * (the one the edit was made from); otherwise 409 `stale` with
+         * `currentSha256`, and nothing is written.
+         */
+        ifSha256: t.Optional(t.String({ pattern: '^[0-9a-f]{64}$' })),
       }),
       detail: { tags: ['notes'] },
     },
@@ -210,6 +248,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         const note = await getNoteService().capture(noteRepos(principal).noteScope, body.text, body.date);
         return { id: note.id, slug: note.slug };
       } catch (err) {
+        if (err instanceof NoteArchivedError) {
+          set.status = 409;
+          return { error: err.message, code: 'archived', id: err.noteId };
+        }
         const refused = liveWriteError(err, set);
         if (refused) return refused;
         if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
@@ -217,6 +259,63 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { body: t.Object({ text: t.String(), date: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
+  )
+
+  // The daily note of a day if there is one, without making it (`note` is
+  // null then), and the text a new one starts from (`template`): the Today
+  // page shows the day and creates its note on the first keystroke.
+  .get(
+    '/daily',
+    async ({ user, principal, query, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        return await getNoteService().findDaily(noteRepos(principal).noteScope, query.date);
+      } catch (err) {
+        if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
+        throw err;
+      }
+    },
+    { query: t.Object({ date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }) }), detail: { tags: ['notes'] } },
+  )
+
+  // The daily note of a day (the client's own calendar day, `YYYY-MM-DD`),
+  // created from the daily template the first time it is asked for. A day
+  // whose note is archived answers 409 `archived` (nothing written) unless
+  // asked explicitly: `restore` brings it back, `fresh` starts a new one
+  // (the archived note steps aside).
+  .post(
+    '/daily',
+    async ({ user, principal, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const { noteScope } = noteRepos(principal);
+      const notes = getNoteService();
+      try {
+        const found = await notes.findDaily(noteScope, body.date);
+        if (found.note?.archivedAt) {
+          if (body.restore) {
+            await notes.restore(noteScope, found.note.id);
+            return { note: (await notes.getById(noteScope, found.note.id)) ?? found.note, restored: true };
+          }
+          if (body.fresh) return { note: await notes.startFreshDaily(noteScope, body.date), fresh: true };
+          set.status = 409;
+          return { error: 'The day\'s note is archived: restore it, or start a fresh one', code: 'archived', id: found.note.id };
+        }
+        return { note: await notes.getOrCreateDaily(noteScope, body.date) };
+      } catch (err) {
+        if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
+        throw err;
+      }
+    },
+    {
+      body: t.Object({
+        date: t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }),
+        /** The day's note is archived: bring it back. */
+        restore: t.Optional(t.Boolean()),
+        /** The day's note is archived: start a new one (the archived one steps aside). */
+        fresh: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['notes'] },
+    },
   )
 
   // ── Edit proposals (space notes, §7.4) ────────────────────────────
@@ -275,6 +374,10 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     async ({ user, principal, params, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const repos = noteRepos(principal);
+      // Ticks its lines are owed by their to-dos (a write that failed) are
+      // made first, by a reader who may write: line and to-do come back together.
+      const mayWrite = repos.kind === 'personal' || (can(repos.role, 'write') && !principal.spaceArchived);
+      if (mayWrite) await healNoteLines(repos.noteScope, params.id, principal.userId);
       // A space note open in an editor reads as its live text and sha (§7.3).
       const note = await getNoteService().getById(repos.noteScope, params.id);
       if (!note) { set.status = 404; return { error: 'Note not found' }; }
@@ -319,7 +422,9 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
           endpoint: { type: e.toType ?? 'note', ref: e.toRef, resolved: false },
         };
       });
-      return { ...note, backlinks: backlinksView, outgoing: outgoingView };
+      // The to-dos linked to it that the reader can open (made from its lines, or attached).
+      const linkedTasks = await linkedTasksOf(repos, note.id);
+      return { ...note, backlinks: backlinksView, outgoing: outgoingView, linkedTasks };
     },
     { detail: { tags: ['notes'] } },
   )
@@ -449,6 +554,75 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { detail: { tags: ['notes'] } },
+  )
+
+  // Make to-dos of the note's task lines that are not to-dos yet: every
+  // unticked one, or the 0-based `lines` given. Each line is marked in the
+  // note (` ^todo-…`) and linked; `marked: false` (with `reason`) when the
+  // note could not take the marks, and the to-dos are linked to it as
+  // attachments instead.
+  .post(
+    '/:id/todos',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const repos = noteRepos(principal);
+      try {
+        const made = await makeTodosFromNote(repos, params.id, { lines: body?.lines });
+        const actor = principal.actorUserId ?? principal.userId;
+        await Promise.all(made.tasks.map((task) => auditTaskMutation({
+          userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'status'],
+          actor: actor !== task.userId ? { kind: 'user', id: actor, onBehalfOf: task.userId } : { kind: 'user', id: actor }, runId: null,
+        })));
+        return { tasks: await withLinkedNotes(repos, made.tasks), marked: made.marked, ...(made.reason ? { reason: made.reason } : {}) };
+      } catch (err) {
+        if (err instanceof NoteLinkError) { set.status = 404; return { error: err.message }; }
+        throw err;
+      }
+    },
+    {
+      body: t.Optional(t.Object({ lines: t.Optional(t.Array(t.Integer({ minimum: 0 }), { maxItems: 200 })) })),
+      detail: { tags: ['notes'] },
+    },
+  )
+
+  // Undo an archive: the note is back in lists, search and recall. 404 when
+  // the scope does not reach it; a note that is not archived is left as is.
+  .post(
+    '/:id/restore',
+    async ({ user, principal, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const ok = await getNoteService().restore(noteRepos(principal).noteScope, params.id);
+      if (!ok) { set.status = 404; return { error: 'Note not found' }; }
+      logger.info({ noteId: params.id, userId: user.id }, 'note restored via API');
+      return { restored: true };
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  // Move a note to another slug (another folder, or another name). Its old
+  // slug stays an alias, so links to it keep resolving (NoteService.move).
+  .post(
+    '/:id/move',
+    async ({ user, principal, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const note = await getNoteService().move(noteRepos(principal).noteScope, params.id, body.slug);
+        if (!note) { set.status = 404; return { error: 'Note not found' }; }
+        return { note };
+      } catch (err) {
+        if (err instanceof NoteExistsError) {
+          set.status = 409;
+          return { error: `A note already exists at ${err.slug}`, code: 'exists', id: err.noteId, slug: err.slug };
+        }
+        if (err instanceof InvalidSlugError) { set.status = 400; return { error: err.message, code: 'invalid_slug' }; }
+        if (err instanceof Error && /unique constraint|duplicate key/i.test(err.message)) {
+          set.status = 409;
+          return { error: 'A note with this slug already exists', code: 'exists' };
+        }
+        throw err;
+      }
+    },
+    { body: t.Object({ slug: t.String({ minLength: 1, maxLength: 300 }) }), detail: { tags: ['notes'] } },
   )
 
   .patch(

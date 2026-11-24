@@ -96,6 +96,15 @@ describe('NotesTool', () => {
     expect(res.suggestions).toEqual([]);
   });
 
+  test('read_note by a slug the note was moved away from finds it', async () => {
+    const n = (await call('write_note', { title: 'Roadmap', body: 'q1' })) as { id: string };
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { personalNoteScope } = await import('@/db/repositories/note-repository');
+    await getNoteService().move(personalNoteScope(userId), n.id, 'plans/roadmap');
+    const read = (await call('read_note', { slug: 'roadmap' })) as { id: string; slug: string };
+    expect(read).toMatchObject({ id: n.id, slug: 'plans/roadmap' });
+  });
+
   test('read_note requires id or slug', async () => {
     await expect(call('read_note', {})).rejects.toThrow(/requires id or slug/);
   });
@@ -126,5 +135,17 @@ describe('NotesTool', () => {
 
   test('sync_vault fails loud when vault sync is disabled', async () => {
     await expect(call('sync_vault', { direction: 'export' })).rejects.toThrow(/disabled/i);
+  });
+
+  test('read_note names the to-dos made from its lines, with their line marker', async () => {
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { personalNoteScope } = await import('@/db/repositories/note-repository');
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { agentPrincipal } = await import('@/security/principal');
+    const { makeTodosFromNote } = await import('@/core/tasks/note-links');
+    const note = (await getNoteService().save({ scope: personalNoteScope(userId), title: 'Ideas for links', body: 'Ideas for links\n- [ ] Try the thing', deferIndex: true })).note;
+    const made = await makeTodosFromNote(contentRepos(agentPrincipal({ userId, workspaceId: null })), note.id);
+    const result = await call('read_note', { id: note.id }) as { linkedTasks: unknown[] };
+    expect(result.linkedTasks).toEqual([{ id: made.tasks[0].id, title: 'Try the thing', status: 'open', dueAt: null, line: expect.stringMatching(/^\^todo-[a-z0-9]{8}$/) }]);
   });
 });

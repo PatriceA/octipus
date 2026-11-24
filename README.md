@@ -117,7 +117,7 @@ Release history and upgrade notes: [Changelog](CHANGELOG.md) · [GitHub releases
 | **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub, and external MCP bridges. The standalone MCP server exposes 83 tools across 23 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@earendil-works/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
-| **Enrichment** | Deep Research (the Research example plugin: report with source references → Documents), To-Do list, Email triage, Hardware-aware onboarding |
+| **Enrichment** | Deep Research (the Research example plugin: report with source references → Documents), To-dos and notes linked both ways (a note line becomes a to-do and their ticks follow each other) with a Today page (to-dos, calendar, daily note), Email triage, Hardware-aware onboarding |
 | **Automation** | Hooks, webhooks, cron tasks, plugin system |
 | **Eval** | Provider conformance suite, 16 built-in assertion types, red-team plugins (5 attacks, 49 cases) |
 | **Security** | WebAuthn passkeys, TOTP 2FA, JWT sessions, encrypted vault, audit log |

@@ -166,8 +166,8 @@ has no chunks and cannot be shown, so only `updated_at` keeps it.
 
 ### What you can do
 
-- **Read it.** Lesson notes are on the Notes page, grouped under **Session
-  learnings** (`×N` after the title when more than one review saw it). Agents
+- **Read it.** Lesson notes are on the Notes page, under the **Learnings**
+  filter (`×N` after the title when more than one review saw it). Agents
   get them through recall, labelled `Lesson "<title>"`, when the recall hook
   searches **lessons** ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md#recall-settings));
   `search_notes` finds them too. The notes index does not list or count them.
@@ -430,11 +430,12 @@ The chat inspector's **Learning** disclosure lists the latest 30 checks, reasons
 Checks created after deployment run automatically; existing long sessions can be reviewed using **Check recent work**. Existing skill proposals and patches still need approval on the Skills page.
 
 In the Notes navigator, unpinned lesson notes (`note_kind = 'lesson'`, or the
-`session-learning` tag on a note from before lessons had a kind) appear in a
-collapsed **Session learnings** group below ordinary notes, with `×N` after a
-lesson seen in more than one review. Search and explicit tag filters
-show matching learning notes normally. A user pin keeps a learning visible, and
-the automatic tag is listed after ordinary tags regardless of its count.
+`session-learning` tag on a note from before lessons had a kind) are left out
+of the personal list and shown under their own **Learnings** filter (with a
+count), with `×N` after a lesson seen in more than one review. Search shows
+matching learning notes normally. A user pin keeps a learning in the ordinary
+list, and the automatic `session-learning` tag is listed only while the
+Learnings filter is on.
 
 Note listing prioritizes pins and ordinary notes before lessons (by kind or
 by the tag) before applying the page limit. Selecting a tag queries that tag on the server,

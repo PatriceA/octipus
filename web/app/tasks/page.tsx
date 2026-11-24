@@ -1,1307 +1,574 @@
 'use client';
 
+import { CalendarDays, CircleCheck, Columns3, Home, Lightbulb, List, Menu, Pencil, RefreshCw, RotateCcw, Search, Star, Sun, Trash2, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { blockedText, subtaskProgress, TaskBoard } from '@/components/tasks/task-board';
 import { RemoteTasks } from '@/components/tasks/remote-tasks';
-import { ArrowLeft, ArrowRight, Columns3, CornerDownRight, List, Lock, NotebookPen, Pencil, Plus, RefreshCw, Ruler, Sparkles, Tag, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AssigneeChip,
-  AssigneeEditor,
-  type AssigneeFilter,
-  type AssigneePatch,
-  type BoardFields,
-  CommentsThread,
-  CommentsToggle,
-  LeaseBadge,
-  matchesAssigneeFilter,
-  ReleaseClaimButton,
-  RoleAgentsPanel,
-} from '@/components/tasks/work-board';
-import { PageHeader } from '@/components/ui/page-header';
+import { type AssigneeFilter, matchesAssigneeFilter, RoleAgentsPanel } from '@/components/tasks/work-board';
+import { CaptureBar } from '@/components/todos/capture-bar';
+import { ListsRail } from '@/components/todos/lists-rail';
+import { localToday, type Todo } from '@/components/todos/model';
+import { MyDaySuggestions } from '@/components/todos/my-day-suggestions';
+import { TodoDetail } from '@/components/todos/todo-detail';
+import { type RowContext, TodoRow } from '@/components/todos/todo-row';
+import { type NewTodo, useTodos } from '@/components/todos/use-todos';
 import { api } from '@/lib/api';
-import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
+import { cn } from '@/lib/utils';
 import { useWorkspace, useWorkspaceAccess, useWorkspaceId } from '@/lib/workspace-context';
-import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
-import { isActiveStatus, TASK_STATUS_TITLE, type TaskStatus } from '../../../src/core/tasks/status';
-import { type Nested, nestTasks, toLookup, waitingOn, waitingReason } from '../../../src/core/tasks/structure';
+import {
+  isListKey, type ListKey, listCounts, listMembers, listTitle, orderBetween, PLANNED_GROUP_TITLE, type PlannedGroup,
+  plannedGroup, renumbered, SMART_LISTS, type SmartList, splitList,
+} from '../../../src/core/tasks/smart-lists';
+import { isActiveStatus } from '../../../src/core/tasks/status';
+import { toLookup } from '../../../src/core/tasks/structure';
+import { pageShortcutAllowed } from '@/lib/shortcut-guard';
 
-interface Task extends BoardFields {
-  id: string;
-  title: string;
-  notes?: string | null;
-  status: TaskStatus;
-  priority: number;
-  category?: string | null;
-  estimate?: string | null;
-  parentId?: string | null;
-  blockedBy?: string[] | null;
-  dueAt?: string | null;
-  completedAt?: string | null;
-  source: string;
-  createdAt: string;
-  /** Present only on the `?view=next` response. */
-  bucket?: NextBucket;
-  reason?: string;
-}
-
-const PRIORITY = ['none', 'low', 'medium', 'high'] as const;
-type GroupBy = 'next' | 'priority' | 'due' | 'category' | 'none';
 type View = 'list' | 'board';
-/** The board's lanes, left to right. Archived stays out of the way, as in the list. */
-const BOARD_COLUMNS: readonly TaskStatus[] = ['open', 'in_progress', 'done'];
 const VIEW_KEY = 'octipus.tasks.view';
-/** How often the list re-reads while the page is visible, so agent progress shows up. */
-const REFRESH_MS = 30_000;
-/** A burst of `task.changed` events re-reads the board once, this long after the last. */
-const TASK_CHANGED_DEBOUNCE_MS = 400;
+const LIST_KEY = 'octipus.todos.list';
+/** Completed row is shown for a beat before it moves to the done part. */
+const COMPLETE_MS = 420;
+const DRAG_TYPE = 'application/x-octipus-todo';
 
-/** Patchable fields a row can edit inline (besides notes/status). */
-type TaskPatch = Partial<Pick<Task, 'title' | 'notes' | 'status' | 'priority' | 'category' | 'dueAt' | 'estimate' | 'assigneeKind' | 'assigneeRef'>>;
-
-function readView(): View {
+function readLocal<T>(key: string, fallback: T, parse: (raw: string) => T): T {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'list';
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : parse(raw);
   } catch {
-    return 'list';
+    return fallback;
+  }
+}
+function writeLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* per-viewer convenience only */
   }
 }
 
-/** One-line "why can't I start this" for a task, judged against everything on the page. */
-function waitingText(task: Task, lookup: ReadonlyMap<string, Task>): string | null {
-  return waitingReason(waitingOn(task, lookup));
-}
-
-/** Sub-task progress for a parent: done out of all, or null when it has none. */
-function subtaskProgress(task: Task, all: readonly Task[]): { done: number; total: number } | null {
-  const kids = all.filter((t) => t.parentId === task.id);
-  if (kids.length === 0) return null;
-  return { done: kids.filter((t) => !isActiveStatus(t.status)).length, total: kids.length };
-}
-
-function browserTimezone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-function priorityClasses(p: number): string {
-  if (p >= 3) return 'text-error';
-  if (p === 2) return 'text-primary';
-  if (p === 1) return 'text-on-surface-variant';
-  return 'text-on-surface-variant/60';
-}
-
-/**
- * Parse a task dueAt to epoch ms. Date-only strings (`YYYY-MM-DD`, which the
- * tasks tool accepts) are interpreted in LOCAL time at noon — `new Date(...)`
- * would read them as UTC midnight, pushing same-day tasks into "Overdue" for
- * users west of UTC. Returns NaN for unparseable values.
- */
-function dueMs(dueAt: string): number {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
-    const [y, m, d] = dueAt.split('-').map(Number);
-    return new Date(y, m - 1, d, 12, 0, 0, 0).getTime();
-  }
-  return new Date(dueAt).getTime();
-}
-
-function dueLabel(dueAt?: string | null): { text: string; overdue: boolean } | null {
-  if (!dueAt) return null;
-  const ms = dueMs(dueAt);
-  if (Number.isNaN(ms)) return null;
-  const overdue = ms < Date.now();
-  return { text: new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), overdue };
-}
-
-/** Bucket open tasks into ordered, labelled groups for the chosen grouping. */
-function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: string; tasks: Task[] }[] {
-  if (by === 'none') {
-    return [{ key: 'open', title: `Open (${tasks.length})`, tasks }];
-  }
-
-  if (by === 'next') {
-    // The server ranked these (`?view=next`); keep its order inside each
-    // bucket. A task the ranked response did not cover (it never happens
-    // after a complete fetch, but a stale merge could) lands in Backlog
-    // rather than vanishing.
-    return NEXT_BUCKET_ORDER
-      .map((key) => ({ key: `n:${key}`, title: NEXT_BUCKET_TITLE[key], tasks: tasks.filter((t) => (t.bucket ?? 'backlog') === key) }))
-      .filter((g) => g.tasks.length > 0)
-      .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
-  }
-
-  if (by === 'priority') {
-    const order = [3, 2, 1, 0];
-    return order
-      .map((p) => ({
-        key: `p${p}`,
-        title: PRIORITY[p].charAt(0).toUpperCase() + PRIORITY[p].slice(1),
-        tasks: tasks.filter((t) => t.priority === p),
-      }))
-      .filter((g) => g.tasks.length > 0)
-      .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
-  }
-
-  if (by === 'category') {
-    // Distinct categories, alphabetical, with "Uncategorized" pinned last.
-    const named = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort(
-      (a, b) => a.localeCompare(b),
-    );
-    const groups = named.map((c) => ({
-      key: `c:${c}`,
-      title: c,
-      tasks: tasks.filter((t) => (t.category?.trim() || '') === c),
-    }));
-    const uncategorized = tasks.filter((t) => !t.category?.trim());
-    if (uncategorized.length > 0) groups.push({ key: 'c:', title: 'Uncategorized', tasks: uncategorized });
-    return groups.filter((g) => g.tasks.length > 0).map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
-  }
-
-  // by === 'due' — Overdue / Today / This week / Later / No date. Boundaries
-  // are wall-clock day-ends (not rolling 24h windows) so "This week" means
-  // "by the end of the 7th day", consistent across DST.
-  const now = Date.now();
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999);
-  const endOfWeek = new Date();
-  endOfWeek.setDate(endOfWeek.getDate() + 7);
-  endOfWeek.setHours(23, 59, 59, 999);
-  const bucket = (t: Task): string => {
-    if (!t.dueAt) return 'none';
-    const d = dueMs(t.dueAt);
-    if (Number.isNaN(d)) return 'none';
-    if (d < now) return 'overdue';
-    if (d <= endOfToday.getTime()) return 'today';
-    if (d <= endOfWeek.getTime()) return 'week';
-    return 'later';
-  };
-  const defs: { key: string; title: string }[] = [
-    { key: 'overdue', title: 'Overdue' },
-    { key: 'today', title: 'Today' },
-    { key: 'week', title: 'This week' },
-    { key: 'later', title: 'Later' },
-    { key: 'none', title: 'No date' },
-  ];
-  return defs
-    .map((d) => ({ key: d.key, title: d.title, tasks: tasks.filter((t) => bucket(t) === d.key) }))
-    .filter((g) => g.tasks.length > 0)
-    .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
-}
-
+/** The page is "To-dos": personal lists after Microsoft To Do, the board for spaces and agents. */
 export default function TasksPage() {
   // A space on another install: its tasks through the remote source (federation §8.3).
   const { activeWorkspace } = useWorkspace();
-  if (activeWorkspace?.kind === 'remote') return <RemoteTasks key={activeWorkspace.id} remote={activeWorkspace} />;
-  return <LocalTasksPage key={activeWorkspace?.id ?? 'personal'} />;
+  if (activeWorkspace?.kind === 'remote') return <div className="h-full overflow-y-auto p-6"><RemoteTasks key={activeWorkspace.id} remote={activeWorkspace} /></div>;
+  return <TodosPage key={activeWorkspace?.id ?? 'personal'} />;
 }
 
-function LocalTasksPage() {
+function TodosPage() {
+  const router = useRouter();
+  const params = useSearchParams();
   const workspaceId = useWorkspaceId();
   const { activeWorkspace } = useWorkspace();
-  // A space's board is live (coworking §9.3): `task.changed` from the gateway.
-  const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
-  const gateway = useGateway();
-  const gatewayStatus = useGatewayStatus();
-  // Commenters and viewers in a space (and everyone in an archived one)
-  // see the board without create, edit or drag; commenters still comment.
+  const isSpace = activeWorkspace?.kind === 'shared';
+  // Commenters and viewers in a space (and everyone in an archived one) read
+  // without create, edit or drag; commenters still comment.
   const { canWrite, canComment } = useWorkspaceAccess();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [newTitle, setNewTitle] = useState('');
-  const [newPriority, setNewPriority] = useState(0);
-  const [newCategory, setNewCategory] = useState('');
-  const [newDue, setNewDue] = useState('');
-  const [newRole, setNewRole] = useState('');
+  // My Day, the star and the order are each member's own, so a space has them too.
+  const smartLists: readonly SmartList[] = SMART_LISTS;
+
+  const requested = params.get('list');
+  const current: ListKey = isListKey(requested)
+    ? requested
+    : readLocal<ListKey>(`${LIST_KEY}.${workspaceId ?? 'personal'}`, isSpace ? 'all' : 'my-day', (raw) => (isListKey(raw) ? raw : isSpace ? 'all' : 'my-day'));
+  const selectedId = params.get('task');
+  const [view, setView] = useState<View>(() => readLocal(VIEW_KEY, 'list', (raw) => (raw === 'board' ? 'board' : 'list')));
+  const todos = useTodos({ withArchived: current === 'archived' });
+  const { tasks, archived } = todos;
+  const [query, setQuery] = useState('');
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
+  const [completing, setCompleting] = useState<Set<string>>(new Set());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; edge: 'before' | 'after' } | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>('all');
-  // Role names for the assignee pickers, from the roles registry.
   const [roleNames, setRoleNames] = useState<string[]>([]);
-  const [groupBy, setGroupBy] = useState<GroupBy>('next');
-  const [view, setView] = useState<View>(readView);
+  const captureRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const today = localToday();
+
+  const href = useCallback((list: ListKey, task?: string | null) => {
+    const q = new URLSearchParams({ list });
+    if (task) q.set('task', task);
+    return `/tasks?${q.toString()}`;
+  }, []);
+  const selectList = (key: ListKey) => {
+    writeLocal(`${LIST_KEY}.${workspaceId ?? 'personal'}`, key);
+    setRailOpen(false);
+    setQuery('');
+    setShowCompleted(false);
+    router.push(href(key, null));
+  };
+  const open = useCallback((task: Todo | null) => router.replace(href(current, task?.id ?? null)), [current, href, router]);
   const chooseView = (v: View) => {
     setView(v);
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      /* per-viewer convenience only */
-    }
+    writeLocal(VIEW_KEY, v);
   };
-
-  // "next" is ranked server-side (bucket + reason per task, day boundaries in
-  // the browser's timezone); the ranked list only carries open tasks, so the
-  // done section still comes from the plain list. Both requests go out at
-  // once, and a response from an earlier fetch is dropped so a slow reply
-  // cannot overwrite a newer one.
-  const fetchSeq = useRef(0);
-  // Local writes (see `write` below): how many are in flight, and a version
-  // bumped as each starts and as each ends. A read that overlapped a write,
-  // the 30s poll above all, may carry the server's state from before it, so
-  // it is dropped rather than allowed to undo an optimistic edit; the
-  // write's own re-read, started after it ended, is the one that lands.
-  // A dropped read is never simply lost: if every write has settled it reads
-  // again at once, else `dropped` makes the last write to settle read again
-  // (even one that would not, like a notes save).
-  const writes = useRef({ pending: 0, version: 0, dropped: false });
-  const fetchTasks = useCallback(() => {
-    const load = async (): Promise<void> => {
-      const seq = ++fetchSeq.current;
-      const version = writes.current.version;
-      try {
-        const tz = browserTimezone();
-        const [data, next] = await Promise.all([
-          api.get<{ tasks: Task[]; serverNow?: string }>('/tasks'),
-          groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
-        ]);
-        if (seq !== fetchSeq.current) return;
-        const w = writes.current;
-        if (w.pending > 0) {
-          w.dropped = true;
-          return;
-        }
-        if (w.version !== version) {
-          // A write started and ended while this read was out; it is stale,
-          // but nothing is in flight now, so a fresh read is safe.
-          void load();
-          return;
-        }
-        // Leases are judged on the server's clock: remember how far ours is off.
-        const serverMs = data.serverNow ? Date.parse(data.serverNow) : Number.NaN;
-        const serverSkewMs = Number.isNaN(serverMs) ? 0 : serverMs - Date.now();
-        let all = (data.tasks || []).map((t) => ({ ...t, serverSkewMs }));
-        if (next) {
-          const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
-          all = all
-            .map((t) => (ranked.has(t.id) ? { ...t, bucket: ranked.get(t.id)!.bucket, reason: ranked.get(t.id)!.reason } : t))
-            .sort((a, b) => (ranked.get(a.id)?.rank ?? Infinity) - (ranked.get(b.id)?.rank ?? Infinity));
-        }
-        setTasks(all);
-        setError('');
-      } catch (err) {
-        if (seq === fetchSeq.current) setError((err as Error).message);
-      } finally {
-        if (seq === fetchSeq.current) setLoading(false);
-      }
-    };
-    return load();
-    // A workspace switch re-creates the loader: the list is another workspace's.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- not read inside; its change re-creates the loader
-  }, [groupBy, workspaceId]);
-
-  useEffect(() => {
-    // Load once on mount (and when the grouping changes the query).
-    fetchTasks();
-  }, [fetchTasks]);
-
-  // A space's board refetches on `task.changed` (every member's and agent's
-  // writes), joined with `space.subscribe` on every (re)connect; a personal
-  // board has no such event and re-reads every 30s while the tab is visible.
-  // Both re-read at once when the tab comes back into view.
-  useEffect(() => {
-    if (spaceId && gatewayStatus === 'connected') gateway.send({ type: 'space.subscribe', spaceId });
-  }, [gateway, spaceId, gatewayStatus]);
-  // Debounced: an agent's bulk edit sends one event per task, and the
-  // board re-reads the whole list once after the burst, not once per task.
-  const changedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (changedTimer.current) clearTimeout(changedTimer.current);
-  }, []);
-  useGatewayMessages((message) => {
-    if (!spaceId || message.type !== 'event' || message.event.type !== 'task.changed') return;
-    const payload = message.event.payload as { workspaceId?: string };
-    if (payload.workspaceId !== spaceId) return;
-    if (changedTimer.current) clearTimeout(changedTimer.current);
-    changedTimer.current = setTimeout(() => {
-      changedTimer.current = null;
-      fetchTasks();
-    }, TASK_CHANGED_DEBOUNCE_MS);
-  });
-  // Keyed on `live`, not on the raw status: while the gateway is down it
-  // cycles connecting/disconnected on every backoff retry (from 1s), and a
-  // timer re-armed on each flip would never reach 30s, so the poll never ran.
-  const live = !!spaceId && gatewayStatus === 'connected';
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState === 'visible') fetchTasks();
-    };
-    const timer = live ? null : setInterval(tick, REFRESH_MS);
-    document.addEventListener('visibilitychange', tick);
-    return () => {
-      if (timer) clearInterval(timer);
-      document.removeEventListener('visibilitychange', tick);
-    };
-  }, [fetchTasks, live]);
 
   useEffect(() => {
     let cancelled = false;
     api.get<{ roles: { role: string }[] }>('/roles')
-      .then((data) => {
-        if (!cancelled) setRoleNames((data.roles ?? []).map((r) => r.role));
-      })
-      .catch(() => {
-        /* the pickers fall back to the roles already on tasks */
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((data) => { if (!cancelled) setRoleNames((data.roles ?? []).map((r) => r.role)); })
+      .catch(() => { /* the pickers fall back to the roles already on to-dos */ });
+    return () => { cancelled = true; };
   }, []);
 
-  // Every task write goes through here: the optimistic local change, the
-  // request, then a fresh read (always after a failure, which also undoes the
-  // optimistic change). See `writes` above for why the counter.
-  const write = async (optimistic: (() => void) | null, request: () => Promise<unknown>, refetch = true, throwOnError = false) => {
-    const w = writes.current;
-    w.pending++;
-    w.version++;
-    optimistic?.();
-    let failed = false;
-    let failure: unknown;
-    try {
-      await request();
-    } catch (err) {
-      failed = true;
-      failure = err;
-      setError((err as Error).message);
-    } finally {
-      w.pending--;
-      w.version++;
-    }
-    if (refetch || failed || (w.pending === 0 && w.dropped)) {
-      w.dropped = false;
-      await fetchTasks();
-    }
-    if (failed && throwOnError) throw failure;
-    return !failed;
+  const lists = useMemo(() => {
+    const named = new Set(tasks.filter((t) => t.category && t.status !== 'archived').map((t) => t.category as string));
+    for (const l of todos.savedLists) named.add(l);
+    if (current.startsWith('list:')) named.add(current.slice(5));
+    return [...named].sort((a, b) => a.localeCompare(b));
+  }, [tasks, todos.savedLists, current]);
+  const counts = useMemo(() => listCounts(tasks, today), [tasks, today]);
+  const lookup = useMemo(() => toLookup(tasks), [tasks]);
+  const pickableRoles = useMemo(() => {
+    const assigned = tasks.filter((t) => t.assigneeKind === 'role' && t.assigneeRef).map((t) => t.assigneeRef as string);
+    return [...new Set([...roleNames, ...assigned])].sort((a, b) => a.localeCompare(b));
+  }, [tasks, roleNames]);
+  const createList = (name: string) => {
+    void todos.createList(name);
+    selectList(`list:${name}`);
   };
 
-  // `opts.title`/`opts.category` come from a per-group inline add (grouping by
-  // category) so the new task lands in that group; the top quick-add passes
-  // neither and uses its own inputs (which it then clears).
-  const addTask = async (opts?: { title?: string; category?: string }) => {
-    const title = (opts?.title ?? newTitle).trim();
-    if (!title) return;
-    await write(null, async () => {
-      await api.post('/tasks', {
-        title,
-        priority: opts?.title ? 0 : newPriority,
-        category: (opts?.category ?? newCategory).trim() || undefined,
-        dueAt: opts?.title ? undefined : newDue || undefined,
-        ...(!opts?.title && newRole ? { assigneeKind: 'role', assigneeRef: newRole } : {}),
-        // The date picker sends a bare day; the server ends it in THIS zone.
-        tz: browserTimezone(),
-      });
-      if (!opts?.title) {
-        setNewTitle('');
-        setNewPriority(0);
-        setNewCategory('');
-        setNewDue('');
-        setNewRole('');
+  const all = current === 'archived' ? archived : tasks;
+  const searching = query.trim().length > 0;
+  const members = useMemo(() => {
+    if (searching) {
+      const q = query.trim().toLowerCase();
+      return [...tasks, ...archived].filter((t) => t.status !== 'archived' && `${t.title}\n${t.notes ?? ''}\n${t.category ?? ''}`.toLowerCase().includes(q));
+    }
+    return listMembers(all, current, today);
+  }, [all, archived, current, query, searching, tasks, today]);
+  const { active, done } = useMemo(() => splitList(members), [members]);
+  const selected = selectedId ? [...tasks, ...archived].find((t) => t.id === selectedId) ?? null : null;
+
+  // Rows in the order shown (for keyboard moves and drag), with Planned grouped by day.
+  const sections = useMemo((): { key: string; title: string | null; rows: Todo[] }[] => {
+    if (current === 'completed' || current === 'archived') return [{ key: 'rows', title: null, rows: current === 'archived' ? members : done }];
+    if (current === 'planned' && !searching) {
+      const groups = new Map<PlannedGroup, Todo[]>();
+      for (const t of [...active].sort((a, b) => Date.parse(a.dueAt as string) - Date.parse(b.dueAt as string))) {
+        const g = plannedGroup(t.dueAt as string, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+        groups.set(g, [...(groups.get(g) ?? []), t]);
       }
-    });
+      return (Object.keys(PLANNED_GROUP_TITLE) as PlannedGroup[]).filter((g) => groups.has(g)).map((g) => ({ key: g, title: PLANNED_GROUP_TITLE[g], rows: groups.get(g)! }));
+    }
+    return [{ key: 'rows', title: null, rows: active }];
+  }, [active, current, done, members, searching]);
+  const doneShown = current !== 'completed' && current !== 'archived' && done.length > 0;
+  const visible = [...sections.flatMap((s) => s.rows), ...(doneShown && (showCompleted || searching) ? done : [])];
+  const manualOrder = canWrite && !searching && current !== 'planned' && current !== 'completed' && current !== 'archived';
+
+  // ── Actions ──────────────────────────────────────────────────────────
+  const listDefaults = (): Partial<NewTodo> => {
+    if (current === 'my-day') return { myDay: true };
+    if (current === 'important') return { important: true };
+    if (current === 'planned') return { dueAt: today };
+    if (current.startsWith('list:')) return { category: current.slice(5) };
+    return {};
+  };
+  const add = (todo: NewTodo) => {
+    const defaults = listDefaults();
+    // A new to-do goes to the top of the list it was typed in.
+    const top = active[0]?.sortOrder;
+    return todos.create({ ...defaults, ...todo, ...(todo.category === undefined && defaults.category ? { category: defaults.category } : {}), ...(top !== undefined ? { sortOrder: top - 1 } : {}) });
+  };
+  const toggle = (task: Todo) => {
+    if (task.status === 'done' || completing.has(task.id)) {
+      if (task.status === 'done') void todos.toggle(task);
+      return;
+    }
+    // A beat of the ticked checkbox, then it moves to Completed.
+    setCompleting((s) => new Set(s).add(task.id));
+    setTimeout(() => {
+      setCompleting((s) => {
+        const n = new Set(s);
+        n.delete(task.id);
+        return n;
+      });
+      void todos.toggle(task);
+    }, COMPLETE_MS);
+  };
+  const reorder = async (draggedId: string, targetId: string, edge: 'before' | 'after') => {
+    const rows = sections.flatMap((s) => s.rows).filter((t) => isActiveStatus(t.status));
+    const dragged = rows.find((t) => t.id === draggedId) ?? tasks.find((t) => t.id === draggedId);
+    if (!dragged || draggedId === targetId) return;
+    const rest = rows.filter((t) => t.id !== draggedId);
+    const at = rest.findIndex((t) => t.id === targetId);
+    if (at < 0) return;
+    const index = edge === 'before' ? at : at + 1;
+    const value = orderBetween(rest[index - 1]?.sortOrder, rest[index]?.sortOrder);
+    if (value !== null) {
+      await todos.update(dragged, { sortOrder: value });
+      return;
+    }
+    // No room between the neighbours: number the whole list afresh.
+    const ordered = [...rest.slice(0, index), dragged, ...rest.slice(index)];
+    const orders = renumbered(ordered.length, ordered[0]?.sortOrder ?? 0);
+    for (const [i, t] of ordered.entries()) {
+      if (t.sortOrder !== orders[i]) await todos.update(t, { sortOrder: orders[i] }, { refetch: i === ordered.length - 1 });
+    }
+  };
+  const dropOnList = (key: ListKey, id: string) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    if (key.startsWith('list:')) {
+      const name = key.slice(5);
+      if ((task.category ?? '') === name) return;
+      const before = task.category ?? null;
+      void todos.update(task, { category: name });
+      todos.showUndo(`Moved “${task.title}” to ${name}`, () => { void todos.update({ ...task, category: name }, { category: before }); });
+    } else if (key === 'my-day') void todos.update(task, { myDay: true });
+    else if (key === 'important') void todos.update(task, { important: true });
+    else if (key === 'completed' && isActiveStatus(task.status)) toggle(task);
   };
 
-  // Generic field patch (priority/category/dueAt) used by the inline row editor.
-  // Optimistic so the row reflects the change before the request resolves.
-  const updateFields = async (task: Task, patch: TaskPatch, throwOnError = false) => {
-    // An assignee clear sends only the null kind; mirror the server locally.
-    if (patch.assigneeKind === null) patch = { ...patch, assigneeRef: null };
-    return write(
-      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t))),
-      () => api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch),
-      true, throwOnError,
-    );
+  // ── Keyboard ─────────────────────────────────────────────────────────
+  const focusRow = (id: string | undefined) => {
+    if (!id) return;
+    setFocusedId(id);
+    rowRefs.current.get(id)?.focus();
   };
-
-  // Status moves (the checkbox, the board's drag and arrows, the row's status
-  // picker) all go through here. Optimistic so a dragged card lands at once.
-  const setStatus = async (task: Task, status: TaskStatus) => {
-    if (task.status === status) return;
-    await write(
-      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, status } : t))),
-      () => api.patch(`/tasks/${task.id}`, { status }),
-    );
+  const rowKeys = (task: Todo) => (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    const i = visible.findIndex((t) => t.id === task.id);
+    // Alt+Up / Alt+Down move the to-do itself (the keyboard's drag).
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const neighbour = visible[e.key === 'ArrowUp' ? i - 1 : i + 1];
+      if (manualOrder && isActiveStatus(task.status) && neighbour && isActiveStatus(neighbour.status)) {
+        void reorder(task.id, neighbour.id, e.key === 'ArrowUp' ? 'before' : 'after');
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusRow(visible[i + 1]?.id); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focusRow(visible[i - 1]?.id); }
+    else if (e.key === 'Home') { e.preventDefault(); focusRow(visible[0]?.id); }
+    else if (e.key === 'End') { e.preventDefault(); focusRow(visible.at(-1)?.id); }
+    else if (e.key === ' ' && canWrite) { e.preventDefault(); toggle(task); }
+    else if (e.key === 'Enter') { e.preventDefault(); open(task); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && canWrite && task.status !== 'archived') {
+      e.preventDefault();
+      focusRow((visible[i + 1] ?? visible[i - 1])?.id);
+      todos.remove(task);
+      if (selectedId === task.id) open(null);
+    }
   };
+  // Read through refs: the listener is registered once, and a key pressed
+  // right after a row opened must already see it open.
+  const keyState = useRef({ selectedId, open });
+  useEffect(() => { keyState.current = { selectedId, open }; });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = !!target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+      if (e.key === 'Escape' && keyState.current.selectedId && !document.querySelector('dialog[open]')) {
+        // Typing: Escape leaves the field first (a detail field), or is the field's own (capture, search).
+        if (typing) {
+          if (target?.closest('[data-testid="todo-detail"]')) target.blur();
+          return;
+        }
+        keyState.current.open(null);
+        return;
+      }
+      if (!pageShortcutAllowed(e)) return;
+      if (e.key === 'n' && captureRef.current) { e.preventDefault(); captureRef.current.focus(); }
+      else if (e.key === '/' && searchRef.current) { e.preventDefault(); searchRef.current.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
-  const toggleDone = (task: Task) => setStatus(task, task.status === 'done' ? 'open' : 'done');
-
-  const updateNotes = async (task: Task, notes: string) => {
-    // Optimistic: update local state immediately so the prop reflects the new
-    // value before the request resolves. This also makes a redundant second
-    // save (e.g. blur + click) a no-op against the saver's own equality guard.
-    await write(
-      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, notes } : t))),
-      () => api.patch(`/tasks/${task.id}`, { notes }),
-      false,
-    );
-  };
-
-  // The user is the boss of the board: a forced release frees a claim an
-  // agent holds (or left behind), and the task goes back to open.
-  const releaseClaim = (task: Task) => write(null, () => api.post(`/tasks/${task.id}/release`, { force: true }));
-
-  const deleteTask = async (id: string) => {
-    if (!confirm('Delete this task?')) return;
-    await write(null, () => api.delete(`/tasks/${id}`));
-  };
-
-  if (loading) {
+  // ── Render ───────────────────────────────────────────────────────────
+  if (todos.loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
+      <div className="flex h-full items-center justify-center">
+        <RefreshCw className="h-6 w-6 animate-spin text-on-surface-variant" aria-label="Loading to-dos" />
       </div>
     );
   }
 
-  // The assignee filter narrows what is shown; blockers and parents still
-  // resolve against every task (`lookup` below).
-  const shown = tasks.filter((t) => matchesAssigneeFilter(t, assigneeFilter));
-  const openTasks = shown.filter((t) => isActiveStatus(t.status));
-  const done = shown.filter((t) => t.status === 'done');
-  const openGroups = groupOpenTasks(openTasks, groupBy);
-  // Blockers and parents are looked up across every task on the page, so a
-  // blocked task says so whichever group its blocker sits in.
-  const lookup = toLookup(tasks);
-  // Existing categories across all tasks — offered for reuse in inputs so the
-  // user doesn't have to remember exact spellings (the QA: "how should I know
-  // all the titles").
-  const categories = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort(
-    (a, b) => a.localeCompare(b),
-  );
-  const assignedRoles = [...new Set(tasks.filter((t) => t.assigneeKind === 'role' && t.assigneeRef).map((t) => t.assigneeRef!))].sort(
-    (a, b) => a.localeCompare(b),
-  );
-  const pickableRoles = [...new Set([...roleNames, ...assignedRoles])].sort((a, b) => a.localeCompare(b));
-  const assignmentKey = tasks.map((t) => `${t.id}:${t.assigneeKind ?? ''}:${t.assigneeRef ?? ''}:${t.status}`).join('|');
-  const actions: RowActions = {
-    onToggle: toggleDone,
-    onSetStatus: setStatus,
-    onDelete: deleteTask,
-    onUpdateNotes: updateNotes,
-    onUpdateFields: updateFields,
-    onRelease: releaseClaim,
-    onEdit: setEditingTask,
-    canWrite,
-    canComment,
+  const rowCtx: RowContext = { showList: !current.startsWith('list:'), showMyDay: current !== 'my-day', showAssignee: isSpace, today };
+  const tabbable = focusedId && visible.some((t) => t.id === focusedId) ? focusedId : visible[0]?.id;
+  const renderRow = (task: Todo) => {
+    const draggable = manualOrder && isActiveStatus(task.status);
+    return (
+      <TodoRow
+        key={task.id}
+        ref={(el) => { if (el) rowRefs.current.set(task.id, el); else rowRefs.current.delete(task.id); }}
+        task={task}
+        ctx={rowCtx}
+        steps={subtaskProgress(task, tasks)}
+        waiting={blockedText(task, lookup)}
+        selected={selectedId === task.id}
+        completing={completing.has(task.id)}
+        canWrite={canWrite && task.status !== 'archived'}
+        canStar={task.status !== 'archived'}
+        draggable={draggable}
+        dropEdge={dropAt?.id === task.id ? dropAt.edge : null}
+        tabIndex={tabbable === task.id ? 0 : -1}
+        onFocus={() => setFocusedId(task.id)}
+        onKeyDown={rowKeys(task)}
+        onToggle={() => toggle(task)}
+        onToggleImportant={() => void todos.update(task, { important: !task.important })}
+        onOpen={() => open(selectedId === task.id ? null : task)}
+        dragProps={canWrite && task.status !== 'archived' ? {
+          onDragStart: (e) => {
+            e.dataTransfer.setData(DRAG_TYPE, task.id);
+            e.dataTransfer.setData('text/plain', task.title);
+            e.dataTransfer.effectAllowed = 'move';
+            setDragging(task.id);
+          },
+          onDragEnd: () => { setDragging(null); setDropAt(null); },
+          onDragOver: (e) => {
+            if (!dragging || !draggable || dragging === task.id) return;
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+            if (dropAt?.id !== task.id || dropAt.edge !== edge) setDropAt({ id: task.id, edge });
+          },
+          onDrop: (e) => {
+            e.preventDefault();
+            const id = e.dataTransfer.getData(DRAG_TYPE) || dragging;
+            const edge = dropAt?.edge ?? 'after';
+            setDragging(null);
+            setDropAt(null);
+            if (id) void reorder(id, task.id, edge);
+          },
+        } : undefined}
+      />
+    );
   };
 
+  const title = searching ? 'Search' : listTitle(current);
+  const HeadingIcon = searching ? Search : current === 'my-day' ? Sun : current === 'important' ? Star : current === 'planned' ? CalendarDays : current === 'completed' ? CircleCheck : current === 'archived' ? RotateCcw : current === 'all' ? Home : List;
+  const subtitle = current === 'my-day' && !searching
+    ? new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+    : current === 'archived' && !searching ? 'Deleted to-dos. Open one to restore it.' : null;
+  const canCapture = canWrite && !searching && current !== 'completed' && current !== 'archived';
+  const suggestionsShown = current === 'my-day' && !searching && (showSuggestions || active.length === 0) && canWrite;
+
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="tasks"
-        description="your to-do list — agents can add, complete, and surface to-do items here"
+    <div className="todo-page">
+      <ListsRail
+        smart={smartLists}
+        counts={counts}
+        lists={lists}
+        current={current}
+        onSelect={selectList}
+        onDrop={dropOnList}
+        onCreateList={createList}
+        canWrite={canWrite}
+        open={railOpen}
+        onClose={() => setRailOpen(false)}
       />
+      <div className="todo-main">
+        <div className="todo-main-scroll">
+          <div className={cn('todo-main-inner', view === 'board' && '!max-w-[1280px]')}>
+            {/* A div, not <header>: the app shell pads every header on phones for its own menu button. */}
+            <div className="todo-heading">
+              <div className="min-w-0 flex-1">
+                <h1 className="flex items-center gap-2.5">
+                  {view === 'board' ? <Columns3 className="h-6 w-6 shrink-0 text-primary" aria-hidden /> : <HeadingIcon className="h-6 w-6 shrink-0 text-primary" aria-hidden />}
+                  {view === 'board' ? 'Board' : title}
+                </h1>
+                {subtitle && view === 'list' && <p>{subtitle}</p>}
+              </div>
+              {view === 'list' && current.startsWith('list:') && canWrite && !searching && (
+                <ListActions name={current.slice(5)} lists={lists}
+                  onRename={(to) => { todos.renameList(current.slice(5), to); router.replace(href(`list:${to}`, selectedId)); }}
+                  onDelete={() => { todos.deleteList(current.slice(5)); selectList('all'); }} />
+              )}
+            </div>
+            <div className="todo-toolbar">
+              <button type="button" className="todo-tool todo-rail-toggle" aria-label="Show lists" onClick={() => setRailOpen(true)}><Menu className="h-5 w-5" /></button>
+              {view === 'list' && (
+                <label className="todo-search">
+                  <Search className="h-4 w-4 shrink-0 text-on-surface-variant" aria-hidden />
+                  <input ref={searchRef} type="search" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search to-dos" placeholder="Search" />
+                  {searching && <button type="button" aria-label="Clear search" onClick={() => setQuery('')}><X className="h-4 w-4 text-on-surface-variant" /></button>}
+                </label>
+              )}
+              <span className="todo-spacer" />
+              {view === 'list' && current === 'my-day' && canWrite && (
+                <button type="button" className="todo-tool" aria-pressed={showSuggestions} aria-label="Suggestions" title="Suggestions for today" onClick={() => setShowSuggestions((v) => !v)} data-testid="my-day-suggestions-toggle">
+                  <Lightbulb className="h-4 w-4" /><span className="todo-tool-label">Suggestions</span>
+                </button>
+              )}
+              <div role="group" aria-label="View" className="inline-flex gap-0.5">
+                <button type="button" className="todo-tool" aria-pressed={view === 'list'} aria-label="List view" title="List" data-testid="tasks-view-list" onClick={() => chooseView('list')}><List className="h-4 w-4" /><span className="todo-tool-label">List</span></button>
+                <button type="button" className="todo-tool" aria-pressed={view === 'board'} aria-label="Board view" title="Board" data-testid="tasks-view-board" onClick={() => chooseView('board')}><Columns3 className="h-4 w-4" /><span className="todo-tool-label">Board</span></button>
+              </div>
+            </div>
 
-      {error && (
-        <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
-        </div>
-      )}
-
-      <RoleAgentsPanel refreshKey={assignmentKey} />
-
-      {/* Quick add */}
-      <datalist id="task-categories">
-        {categories.map((c) => <option key={c} value={c} />)}
-      </datalist>
-      {canWrite && <div className="flex flex-wrap gap-2" data-testid="task-quick-add">
-        <input
-          type="text"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && addTask()}
-          placeholder="Add a task…"
-          className="flex-1 min-w-[12rem] rounded-full border border-outline-variant/20 bg-surface px-4 py-2 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
-        />
-        <input
-          type="text"
-          list="task-categories"
-          value={newCategory}
-          onChange={(e) => setNewCategory(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && addTask()}
-          placeholder="Category…"
-          title="Optional list/category, e.g. Shopping or Car"
-          className="w-36 rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
-        />
-        <input
-          type="date"
-          value={newDue}
-          onChange={(e) => setNewDue(e.target.value)}
-          title="Optional due date"
-          className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface focus:outline-none focus:border-primary"
-        />
-        <select
-          value={newPriority}
-          onChange={(e) => setNewPriority(Number(e.target.value))}
-          className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface"
-        >
-          {PRIORITY.map((label, i) => (
-            <option key={label} value={i}>{label}</option>
-          ))}
-        </select>
-        {pickableRoles.length > 0 && (
-          <select
-            value={newRole}
-            onChange={(e) => setNewRole(e.target.value)}
-            aria-label="Assign to role"
-            title="Optional: assign to a role; its agent picks the task up"
-            className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface"
-          >
-            <option value="">no assignee</option>
-            {pickableRoles.map((r) => <option key={r} value={r}>{r} role</option>)}
-          </select>
-        )}
-        <button
-          onClick={() => addTask()}
-          className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
-        >
-          <Plus className="w-4 h-4" /> Add
-        </button>
-      </div>}
-
-      {/* View + grouping controls */}
-      <div className="flex flex-wrap items-center gap-2 text-sm text-on-surface-variant">
-        <div className="inline-flex rounded-full border border-outline-variant/20 p-0.5" role="group" aria-label="View">
-          {(['list', 'board'] as View[]).map((v) => (
-            <button
-              key={v}
-              onClick={() => chooseView(v)}
-              aria-pressed={view === v}
-              data-testid={`tasks-view-${v}`}
-              className={`px-2.5 py-1 rounded-full text-xs inline-flex items-center gap-1 ${view === v ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
-            >
-              {v === 'list' ? <List className="w-3 h-3" /> : <Columns3 className="w-3 h-3" />} {v}
-            </button>
-          ))}
-        </div>
-        {view === 'list' && (
-          <>
-            <span className="ml-2">Group by</span>
-            {(['next', 'priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
-              <button
-                key={g}
-                onClick={() => setGroupBy(g)}
-                className={`px-2.5 py-1 rounded-full text-xs capitalize ${groupBy === g ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
-              >
-                {g === 'none' ? 'nothing' : g === 'next' ? 'what next' : g}
-              </button>
-            ))}
-          </>
-        )}
-        {view === 'board' && (
-          <span className="ml-2 text-xs">
-            {canWrite ? 'columns by status, lanes by category — drag a card, or use its arrows' : 'columns by status, lanes by category'}
-          </span>
-        )}
-        <label className="ml-auto inline-flex items-center gap-1 text-xs">
-          Assignee
-          <select
-            value={assigneeFilter}
-            onChange={(e) => setAssigneeFilter(e.target.value as AssigneeFilter)}
-            data-testid="assignee-filter"
-            className="rounded-full border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-          >
-            <option value="all">all</option>
-            <option value="unassigned">unassigned</option>
-            <option value="agents">assigned to agents</option>
-            {assignedRoles.map((r) => <option key={r} value={`role:${r}`}>{r} role</option>)}
-            {/* A chosen role whose last task went elsewhere stays visible (and
-                clearable) rather than filtering silently. */}
-            {assigneeFilter.startsWith('role:') && !assignedRoles.includes(assigneeFilter.slice(5)) && (
-              <option value={assigneeFilter}>{assigneeFilter.slice(5)} role (no tasks)</option>
+            {todos.error && (
+              <div role="alert" className="mb-4 flex items-center gap-3 rounded-lg border border-error/30 bg-error-container px-4 py-3 text-sm text-on-error-container">
+                <span className="flex-1">{todos.error}</span>
+                <button type="button" onClick={() => todos.setError('')} className="font-medium underline">Dismiss</button>
+              </div>
             )}
-          </select>
-        </label>
-      </div>
 
-      {view === 'board' ? (
-        <TaskBoard
-          tasks={shown.filter((t) => t.status !== 'archived')}
-          lookup={lookup}
-          onSetStatus={setStatus}
-          onDelete={deleteTask}
-          onRelease={releaseClaim}
-          onEdit={setEditingTask}
+            {view === 'board' ? (
+              <BoardView todos={todos} lookup={lookup} filter={assigneeFilter} setFilter={setAssigneeFilter} canWrite={canWrite} canComment={canComment}
+                onOpen={open} captureLists={lists} onAdd={(t) => todos.create(t)} />
+            ) : (
+              <>
+                {canCapture && <CaptureBar ref={captureRef} lists={lists} onAdd={add} placeholder={current === 'my-day' ? 'Add a to-do for today' : 'Add a to-do'} />}
+                {visible.length === 0 && !doneShown ? (
+                  <EmptyList list={current} searching={searching} />
+                ) : (
+                  <div role="list" aria-label={title} className="todo-list" data-testid="todo-list">
+                    {sections.map((s) => (
+                      <div key={s.key} className="contents">
+                        {s.title && <h2 className="todo-group-title">{s.title}</h2>}
+                        {s.rows.map(renderRow)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {doneShown && (
+                  <>
+                    <button type="button" className="todo-section" aria-expanded={showCompleted || searching} onClick={() => setShowCompleted((v) => !v)} data-testid="todo-completed-toggle">
+                      <span aria-hidden className={cn('inline-block transition-transform', (showCompleted || searching) && 'rotate-90')}>›</span>
+                      Completed <span>{current === 'all' && !searching && todos.doneTotal !== null ? todos.doneTotal : done.length}</span>
+                    </button>
+                    {(showCompleted || searching) && <div role="list" aria-label="Completed" className="todo-list">{done.map(renderRow)}</div>}
+                  </>
+                )}
+                {(current === 'completed' || (current === 'all' && showCompleted)) && !searching && todos.doneTotal !== null && todos.doneTotal > todos.doneLimit && (
+                  <button type="button" onClick={todos.showMoreDone} className="todo-tool mt-3">
+                    Show more done ({todos.doneTotal - todos.doneLimit} more)
+                  </button>
+                )}
+                {suggestionsShown && (
+                  <MyDaySuggestions version={`${counts.smart['my-day']}:${tasks.length}`} canWrite={canWrite} onAdd={(t) => void todos.update(t, { myDay: true })} />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      {selected && (
+        <TodoDetail
+          key={selected.id}
+          task={selected}
+          tasks={tasks}
+          todos={todos}
+          lists={lists}
+          roles={pickableRoles}
           canWrite={canWrite}
           canComment={canComment}
+          isSpace={isSpace}
+          onClose={() => { open(null); focusRow(selected.id); }}
         />
-      ) : openTasks.length === 0 ? (
-        <div className="py-10 text-center font-mono animate-enter">
-          <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
-          <p className="mt-2 text-sm text-on-surface-variant/70">
-            {assigneeFilter === 'all' ? 'nothing to do — add a task above, or ask an agent to remind you' : 'no open tasks match this assignee filter'}
-          </p>
-        </div>
-      ) : (
-        openGroups.map((g) => (
-          <TaskGroup
-            key={g.key}
-            title={g.title}
-            tasks={g.tasks}
-            lookup={lookup}
-            roles={pickableRoles}
-            actions={actions}
-            // When grouping by category, a group "+ add" files the new task
-            // straight into that category (the QA: "in the groups the user can
-            // create todos"). `c:` key prefix → the category text after it.
-            onAddToCategory={canWrite && groupBy === 'category' && g.key.startsWith('c:') ? (title) => addTask({ title, category: g.key.slice(2) }) : undefined}
-          />
-        ))
       )}
-
-      {editingTask && canWrite && (
-        <TaskEditor key={editingTask.id} task={editingTask} roles={pickableRoles}
-          onClose={() => setEditingTask(null)}
-          onSave={(patch) => updateFields(editingTask, patch, true)} />
-      )}
-      {view === 'list' && done.length > 0 && (
-        <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} roles={pickableRoles} actions={actions} />
-      )}
+      {todos.undoToast}
     </div>
   );
 }
 
-/** Keep the draft outside rows so regrouping or a failed save cannot discard it. */
-function TaskEditor({ task, roles, onSave, onClose }: {
-  task: Task;
-  roles: readonly string[];
-  onSave: (patch: TaskPatch) => Promise<boolean>;
-  onClose: () => void;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    const previous = document.activeElement;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
-    };
-  }, []);
-  const [draft, setDraft] = useState(task);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const fieldClass = 'mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm text-on-surface';
-  const close = () => { if (!busy) onClose(); };
-  const save = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (busy || !draft.title.trim()) return;
-    // Send only edited fields: do not overwrite an agent's concurrent changes.
-    const patch: TaskPatch = {};
-    const values: TaskPatch = {
-      title: draft.title.trim(), notes: draft.notes || null,
-      status: draft.status, priority: draft.priority,
-      category: draft.category?.trim() || null, estimate: draft.estimate?.trim() || null,
-      dueAt: draft.dueAt || null,
-      assigneeKind: draft.assigneeKind ?? null, assigneeRef: draft.assigneeRef ?? null,
-    };
-    for (const key of Object.keys(values) as (keyof TaskPatch)[]) {
-      if ((draft[key] ?? null) !== (task[key] ?? null)) Object.assign(patch, { [key]: values[key] });
-    }
-    // The API validates assignment as a pair, including when only the role changed.
-    if ('assigneeKind' in patch || 'assigneeRef' in patch) {
-      patch.assigneeKind = values.assigneeKind;
-      patch.assigneeRef = values.assigneeRef;
-    }
-    if (!Object.keys(patch).length) { onClose(); return; }
-    setBusy(true);
-    setError('');
-    try {
-      if (await onSave(patch)) onClose();
-      else setError('Could not save your changes. Your draft is still here; try again.');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+/** Rename or delete the list on screen (its to-dos stay; Undo is offered). */
+function ListActions({ name, lists, onRename, onDelete }: { name: string; lists: readonly string[]; onRename: (to: string) => void; onDelete: () => void }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const commit = () => {
+    const to = draft.trim();
+    setRenaming(false);
+    if (to && to !== name) onRename(to);
   };
-  return (
-    <dialog ref={dialogRef} aria-label="Edit task" onCancel={(event) => { event.preventDefault(); close(); }}
-      className="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-outline-variant bg-surface-container p-5 text-on-surface shadow-2xl backdrop:bg-black/70">
-      <h2 className="mb-4 text-lg font-semibold">Edit task</h2>
-      <form onSubmit={save} className="space-y-4">
-        <fieldset disabled={busy} className="space-y-4">
-          <label className="block text-sm">Title<input autoFocus required maxLength={500} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className={fieldClass} /></label>
-          <label className="block text-sm">Notes<textarea aria-label="Notes" rows={3} maxLength={10000} value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} className={fieldClass} /></label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm">Status<select aria-label="Status" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as TaskStatus })} className={fieldClass}>{Object.entries(TASK_STATUS_TITLE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-            <label className="text-sm">Priority<select aria-label="Priority" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })} className={fieldClass}>{PRIORITY.map((label, value) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="text-sm">Category<input maxLength={100} value={draft.category ?? ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })} className={fieldClass} /></label>
-            <label className="text-sm">Due date<input type="date" value={toDateInput(draft.dueAt)} onChange={(e) => setDraft({ ...draft, dueAt: e.target.value || null })} className={fieldClass} /></label>
-            <label className="text-sm">Estimate<input maxLength={40} value={draft.estimate ?? ''} onChange={(e) => setDraft({ ...draft, estimate: e.target.value })} className={fieldClass} /></label>
-          </div>
-          <div className="space-y-2 text-sm"><p>Assigned to</p><AssigneeEditor task={draft} roles={roles} onChange={(patch) => setDraft({ ...draft, ...patch, ...(patch.assigneeKind === null ? { assigneeRef: null } : {}) })} /><p className="text-xs text-on-surface-variant">Assign to a role for background work. Assigning to a person keeps it on their list.</p></div>
-        </fieldset>
-        {error && <p role="alert" className="text-sm text-error">{error}</p>}
-        <div className="flex justify-end gap-2">
-          <button type="button" disabled={busy} onClick={close} className="rounded-lg border border-outline-variant px-4 py-2 text-sm">Cancel</button>
-          <button type="submit" disabled={busy || !draft.title.trim()} className="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary disabled:opacity-50">{busy ? 'Saving…' : 'Save changes'}</button>
-        </div>
-      </form>
-    </dialog>
-  );
-}
-
-/** What a list row can do to its task; the page owns every request. */
-interface RowActions {
-  onToggle: (t: Task) => void;
-  onSetStatus: (t: Task, status: TaskStatus) => void;
-  onDelete: (id: string) => void;
-  onUpdateNotes: (t: Task, notes: string) => void;
-  onUpdateFields: (t: Task, patch: TaskPatch) => void;
-  onRelease: (t: Task) => void;
-  onEdit: (t: Task) => void;
-  /** Edit, move, delete (owner and editor in a space). */
-  canWrite: boolean;
-  canComment: boolean;
-}
-
-function TaskGroup({
-  title,
-  tasks,
-  lookup,
-  roles,
-  actions,
-  onAddToCategory,
-}: {
-  title: string;
-  tasks: Task[];
-  lookup: ReadonlyMap<string, Task>;
-  roles: readonly string[];
-  actions: RowActions;
-  onAddToCategory?: (title: string) => void;
-}) {
-  const [inlineTitle, setInlineTitle] = useState('');
-  const addInline = () => {
-    const t = inlineTitle.trim();
-    if (!t || !onAddToCategory) return;
-    onAddToCategory(t);
-    setInlineTitle('');
-  };
-  // Sub-tasks sit under their parent when both are in this group; a child
-  // whose parent landed elsewhere (a different bucket, or done) stays a
-  // row of its own so nothing disappears from a filtered view.
-  const renderTree = (node: Nested<Task>, depth: number): React.ReactNode => (
-    <div key={node.id} className={depth > 0 ? 'pl-6' : undefined}>
-      <TaskRow
-        task={node}
-        depth={depth}
-        waiting={waitingText(node, lookup)}
-        subtasks={subtaskProgress(node, [...lookup.values()])}
-        roles={roles}
-        {...actions}
-      />
-      {node.children.length > 0 && <div className="mt-1 space-y-1">{node.children.map((c) => renderTree(c, depth + 1))}</div>}
-    </div>
-  );
-  return (
-    <div className="space-y-2 stagger">
-      <h2 className="section-label">{title}</h2>
-      {nestTasks(tasks).map((node) => renderTree(node, 0))}
-      {onAddToCategory && (
-        <div className="flex gap-2 pl-8">
-          <input
-            type="text"
-            value={inlineTitle}
-            onChange={(e) => setInlineTitle(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addInline()}
-            placeholder={`Add to ${title.replace(/ \(\d+\)$/, '')}…`}
-            className="flex-1 rounded-full border border-outline-variant/15 bg-surface px-3 py-1.5 text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary"
-          />
-          <button
-            onClick={addInline}
-            className="px-3 py-1.5 text-xs rounded-full border border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-high inline-flex items-center gap-1"
-          >
-            <Plus className="w-3 h-3" /> Add
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** task.dueAt → a `<input type="date">` value (YYYY-MM-DD), or '' if unset. */
-function toDateInput(dueAt?: string | null): string {
-  if (!dueAt) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) return dueAt.slice(0, 10);
-  const ms = dueMs(dueAt);
-  if (Number.isNaN(ms)) return '';
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function TaskRow({
-  task,
-  depth = 0,
-  waiting,
-  subtasks,
-  roles,
-  onToggle,
-  onSetStatus,
-  onDelete,
-  onUpdateNotes,
-  onUpdateFields,
-  onRelease,
-  onEdit,
-  canWrite,
-  canComment,
-}: {
-  task: Task;
-  depth?: number;
-  waiting: string | null;
-  subtasks: { done: number; total: number } | null;
-  roles: readonly string[];
-} & RowActions) {
-  const due = dueLabel(task.dueAt);
-  const [editingNotes, setEditingNotes] = useState(false);
-  const [showComments, setShowComments] = useState(false);
-  const [editingMeta, setEditingMeta] = useState(false);
-  const [draft, setDraft] = useState(task.notes ?? '');
-
-  // Keep the draft in sync with external updates (agent edits / refetch) while
-  // the editor is closed — without this, reopening could show a stale value.
-  // Adjust state during render (the React-endorsed alternative to an effect):
-  // reseed whenever the incoming notes change and the editor isn't open.
-  const [seededNotes, setSeededNotes] = useState(task.notes ?? '');
-  if (!editingNotes && seededNotes !== (task.notes ?? '')) {
-    setSeededNotes(task.notes ?? '');
-    setDraft(task.notes ?? '');
+  if (renaming) {
+    return (
+      <input autoFocus aria-label="List name" value={draft} maxLength={100} className="todo-field"
+        onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(name); setRenaming(false); } }} />
+    );
   }
-
-  const saveNotes = () => {
-    setEditingNotes(false);
-    if (draft !== (task.notes ?? '')) onUpdateNotes(task, draft);
-  };
-
   return (
-    <div className="px-3 py-2.5 rounded-xs border border-outline-variant/10 bg-surface" data-testid="task-row" data-depth={depth}>
-      <div className="flex items-center gap-3">
-        {canWrite ? (
-          <button
-            onClick={() => onToggle(task)}
-            aria-label={task.status === 'done' ? 'Mark open' : 'Mark done'}
-            title={task.status === 'in_progress' ? 'In progress — click to mark done' : undefined}
-            className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary hover:text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
-          >
-            {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
-          </button>
-        ) : (
-          <span
-            title={TASK_STATUS_TITLE[task.status]}
-            className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary' : 'text-on-surface-variant/70'}`}
-          >
-            {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <p className={`text-sm flex items-center gap-1.5 ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>
-            {depth > 0 && <CornerDownRight className="w-3 h-3 shrink-0 text-on-surface-variant/50" aria-hidden />}
-            <span className="min-w-0 truncate">{task.title}</span>
-          </p>
-          <div className="flex flex-wrap items-center gap-2 mt-0.5">
-            {task.priority > 0 && (
-              <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
-                P{task.priority}
-              </span>
-            )}
-            {task.estimate && (
-              <span title="estimate" className="text-[10px] font-mono inline-flex items-center gap-0.5 text-on-surface-variant">
-                <Ruler className="w-2.5 h-2.5" /> {task.estimate}
-              </span>
-            )}
-            {subtasks && (
-              <span title="sub-tasks done" className="text-[10px] font-mono text-on-surface-variant">
-                {subtasks.done}/{subtasks.total} sub-tasks
-              </span>
-            )}
-            {waiting && task.status !== 'done' && (
-              <span className="text-[10px] inline-flex items-center gap-0.5 text-error/80" title="cannot start yet">
-                <Lock className="w-2.5 h-2.5" /> {waiting}
-              </span>
-            )}
-            <AssigneeChip task={task} />
-            <LeaseBadge task={task} />
-            {task.category && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/10 text-on-surface-variant inline-flex items-center gap-0.5">
-                <Tag className="w-2.5 h-2.5" /> {task.category}
-              </span>
-            )}
-            {due && (
-              <span className={`text-[10px] ${due.overdue && task.status !== 'done' ? 'text-error' : 'text-on-surface-variant'}`}>
-                due {due.text}
-              </span>
-            )}
-            {task.source !== 'user' && (
-              <span className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70">
-                <Sparkles className="w-2.5 h-2.5" /> {task.source}
-              </span>
-            )}
-            {task.reason && task.status !== 'done' && (
-              <span className="text-[10px] text-on-surface-variant/70" title="why it ranks here">{task.reason}</span>
-            )}
-            {canWrite && (
-              <button
-                onClick={() => { setDraft(task.notes ?? ''); setEditingNotes((v) => !v); }}
-                className={`text-[10px] inline-flex items-center gap-0.5 ${task.notes ? 'text-primary' : 'text-on-surface-variant/70'} hover:text-on-surface`}
-                title={task.notes ? 'Edit notes' : 'Add notes'}
-              >
-                <NotebookPen className="w-2.5 h-2.5" /> {task.notes ? 'notes' : 'add notes'}
-              </button>
-            )}
-            <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
-            {canWrite && (
-              <button
-                onClick={() => setEditingMeta((v) => !v)}
-                className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
-                title="Quick fields: due date, category, priority, assignee"
-              >
-                <Pencil className="w-2.5 h-2.5" /> fields
-              </button>
-            )}
-            {canWrite && <button onClick={() => onEdit(task)} aria-label="Edit task" className="text-xs text-primary hover:underline">Edit</button>}
-        {canWrite && <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />}
-          </div>
-        </div>
-        {canWrite && (
-          <button
-            onClick={() => onDelete(task.id)}
-            aria-label="Delete task"
-            className="shrink-0 text-on-surface-variant hover:text-error self-start"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        )}
-      </div>
+    <div className="flex shrink-0 gap-1">
+      <button type="button" className="todo-tool" onClick={() => { setDraft(name); setRenaming(true); }} aria-label="Rename list" title="Rename list">
+        <Pencil className="h-4 w-4" /><span className="todo-tool-label">Rename</span>
+      </button>
+      <button type="button" className="todo-tool" onClick={onDelete} aria-label="Delete list" title="Delete list (its to-dos stay, in no list)">
+        <Trash2 className="h-4 w-4" /><span className="todo-tool-label">Delete list</span>
+      </button>
+    </div>
+  );
+}
 
-      {/* Notes — a place to store more about the task (the QA ask). */}
-      {editingNotes && canWrite ? (
-        <div className="mt-2 pl-8">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={saveNotes}
-            autoFocus
-            rows={3}
-            placeholder="Add details, links, context…"
-            className="w-full rounded-xs border border-outline-variant/20 bg-surface px-2 py-1.5 text-sm text-on-surface resize-y"
-          />
-          <div className="flex gap-2 mt-1">
-            {/* preventDefault on mousedown keeps focus so the textarea's blur
-                doesn't also fire saveNotes (which would double-PATCH). */}
-            <button onMouseDown={(e) => e.preventDefault()} onClick={saveNotes} className="text-xs px-2 py-1 rounded bg-primary/10 text-primary">Save</button>
-            <button onMouseDown={(e) => e.preventDefault()} onClick={() => setEditingNotes(false)} className="text-xs px-2 py-1 text-on-surface-variant hover:text-on-surface">Cancel</button>
-          </div>
-        </div>
-      ) : task.notes ? (
-        <p className="mt-1 pl-8 text-xs text-on-surface-variant whitespace-pre-wrap">{task.notes}</p>
-      ) : null}
-
-      {/* Comments — the agents' progress and hand-off log; fetched when opened. */}
-      {showComments && <CommentsThread taskId={task.id} canComment={canComment} />}
-
-      {/* Meta editor — set/clear due date, category, priority (the QA: users
-          couldn't set due dates and wanted custom categories). */}
-      {editingMeta && canWrite && (
-        <div className="mt-2 pl-8 flex flex-wrap items-center gap-2">
-          <label className="text-[11px] text-on-surface-variant inline-flex items-center gap-1">
-            Due
-            <input
-              type="date"
-              defaultValue={toDateInput(task.dueAt)}
-              onChange={(e) => onUpdateFields(task, { dueAt: e.target.value || null })}
-              className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-            />
-          </label>
-          <input
-            type="text"
-            list="task-categories"
-            defaultValue={task.category ?? ''}
-            placeholder="Category…"
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              if (v !== (task.category ?? '')) onUpdateFields(task, { category: v || null });
-            }}
-            className="w-32 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-          />
-          <select
-            defaultValue={task.priority}
-            onChange={(e) => onUpdateFields(task, { priority: Number(e.target.value) })}
-            className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-          >
-            {PRIORITY.map((label, i) => (
-              <option key={label} value={i}>{label}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            defaultValue={task.estimate ?? ''}
-            placeholder="Estimate (S/M/L, 3h)"
-            title="Effort estimate"
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              if (v !== (task.estimate ?? '')) onUpdateFields(task, { estimate: v || null });
-            }}
-            className="w-32 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-          />
-          <select
-            value={task.status}
-            aria-label="Status"
-            onChange={(e) => onSetStatus(task, e.target.value as TaskStatus)}
-            className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
-          >
-            {(Object.keys(TASK_STATUS_TITLE) as TaskStatus[]).map((st) => (
-              <option key={st} value={st}>{TASK_STATUS_TITLE[st]}</option>
-            ))}
-          </select>
-          <AssigneeEditor task={task} roles={roles} onChange={(p: AssigneePatch) => onUpdateFields(task, p)} />
-          <button onClick={() => setEditingMeta(false)} className="text-[11px] px-2 py-1 text-on-surface-variant hover:text-on-surface">Done</button>
-        </div>
-      )}
+function EmptyList({ list, searching }: { list: ListKey; searching: boolean }) {
+  const copy: Record<SmartList, [typeof Sun, string, string]> = {
+    'my-day': [Sun, 'Focus on your day', 'Add to-dos for today, or pick from the suggestions below.'],
+    important: [Star, 'Nothing important yet', 'Star a to-do to see it here.'],
+    planned: [CalendarDays, 'Nothing planned', 'To-dos with a due date show up here, grouped by day.'],
+    all: [Home, 'Nothing to do', 'Add a to-do above, or ask an agent to remind you.'],
+    completed: [CircleCheck, 'Nothing completed yet', 'Ticked-off to-dos land here.'],
+    archived: [RotateCcw, 'Nothing deleted', 'Deleted to-dos land here; open one to restore it.'],
+  };
+  const [Icon, heading, body] = searching
+    ? [Search, 'No matches', 'Nothing in your to-dos matches that search.'] as const
+    : list.startsWith('list:') ? [List, `Nothing in ${list.slice(5)} yet`, 'Add a to-do above, or drag one here from another list.'] as const
+      : copy[list as SmartList];
+  return (
+    <div className="todo-empty" data-testid="todo-empty">
+      <Icon aria-hidden />
+      <h2>{heading}</h2>
+      <p>{body}</p>
     </div>
   );
 }
 
 /**
- * The board: one column per status, lanes by category inside each column
- * (a PM's phases are categories, so a plan reads as phase rows across the
- * board). Cards drag between columns with the browser's own drag-and-drop;
- * the arrow buttons do the same move for keyboards and touch.
+ * The board (spaces, agents, plans): every to-do that is not archived in
+ * status columns with list lanes, the role agents and the assignee filter.
+ * Its cards open the same detail panel.
  */
-function TaskBoard({
-  tasks,
-  lookup,
-  onSetStatus,
-  onDelete,
-  onRelease,
-  onEdit,
-  canWrite,
-  canComment,
-}: {
-  tasks: Task[];
-  lookup: ReadonlyMap<string, Task>;
-  onSetStatus: (t: Task, status: TaskStatus) => void;
-  onDelete: (id: string) => void;
-  onRelease: (t: Task) => void;
-  onEdit: (t: Task) => void;
-  /** Without it the board is read-only: no drag, no moves, no delete. */
+function BoardView({ todos, lookup, filter, setFilter, canWrite, canComment, onOpen, captureLists, onAdd }: {
+  todos: ReturnType<typeof useTodos>;
+  lookup: ReadonlyMap<string, Todo>;
+  filter: AssigneeFilter;
+  setFilter: (f: AssigneeFilter) => void;
   canWrite: boolean;
   canComment: boolean;
+  onOpen: (t: Todo) => void;
+  captureLists: readonly string[];
+  onAdd: (t: NewTodo) => Promise<unknown>;
 }) {
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [over, setOver] = useState<TaskStatus | null>(null);
-
-  const lanes = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b));
-  const laneOf = (t: Task) => t.category?.trim() || '';
-  const laneKeys = [...lanes, ''];
-
-  const drop = (status: TaskStatus) => {
-    const task = dragging ? lookup.get(dragging) : undefined;
-    setDragging(null);
-    setOver(null);
-    if (task) onSetStatus(task, status);
-  };
-
-  if (tasks.length === 0) {
-    return (
-      <div className="py-10 text-center font-mono animate-enter">
-        <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
-        <p className="mt-2 text-sm text-on-surface-variant/70">nothing on the board — add a task above, or ask the project manager for a plan</p>
-      </div>
-    );
-  }
-
+  const { tasks } = todos;
+  const assignedRoles = [...new Set(tasks.filter((t) => t.assigneeKind === 'role' && t.assigneeRef).map((t) => t.assigneeRef as string))].sort((a, b) => a.localeCompare(b));
+  const assignmentKey = tasks.map((t) => `${t.id}:${t.assigneeKind ?? ''}:${t.assigneeRef ?? ''}:${t.status}`).join('|');
+  const shown = tasks.filter((t) => t.status !== 'archived' && matchesAssigneeFilter(t, filter));
   return (
-    <div className="overflow-x-auto" data-testid="task-board">
-      <div className="grid gap-3 min-w-[42rem]" style={{ gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(0, 1fr))` }}>
-        {BOARD_COLUMNS.map((status, col) => {
-          const inColumn = tasks.filter((t) => t.status === status);
-          return (
-            <section
-              key={status}
-              aria-label={TASK_STATUS_TITLE[status]}
-              data-testid={`board-column-${status}`}
-              onDragOver={(e) => {
-                if (!dragging) return;
-                e.preventDefault();
-                if (over !== status) setOver(status);
-              }}
-              onDragLeave={() => over === status && setOver(null)}
-              onDrop={(e) => {
-                e.preventDefault();
-                drop(status);
-              }}
-              className={`rounded-xs border p-2 min-h-[12rem] transition-colors ${over === status ? 'border-primary bg-primary/5' : 'border-outline-variant/10 bg-surface-container-low/40'}`}
-            >
-              <h2 className="section-label mb-2">
-                {TASK_STATUS_TITLE[status]} ({inColumn.length})
-              </h2>
-              <div className="space-y-3">
-                {laneKeys.map((lane) => {
-                  const cards = inColumn.filter((t) => laneOf(t) === lane);
-                  if (cards.length === 0) return null;
-                  return (
-                    <div key={lane || '__none'} data-testid="board-lane">
-                      <p className="text-[10px] uppercase tracking-wide text-on-surface-variant/70 mb-1 inline-flex items-center gap-1">
-                        <Tag className="w-2.5 h-2.5" /> {lane || 'Uncategorized'}
-                      </p>
-                      <div className="space-y-1.5">
-                        {cards.map((task) => (
-                          <BoardCard
-                            key={task.id}
-                            task={task}
-                            waiting={waitingText(task, lookup)}
-                            subtasks={subtaskProgress(task, [...lookup.values()])}
-                            parentTitle={task.parentId ? (lookup.get(task.parentId)?.title ?? null) : null}
-                            dragging={dragging === task.id}
-                            prev={col > 0 ? BOARD_COLUMNS[col - 1] : null}
-                            next={col < BOARD_COLUMNS.length - 1 ? BOARD_COLUMNS[col + 1] : null}
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData('text/plain', task.id);
-                              e.dataTransfer.effectAllowed = 'move';
-                              setDragging(task.id);
-                            }}
-                            onDragEnd={() => {
-                              setDragging(null);
-                              setOver(null);
-                            }}
-                            onMove={(st) => onSetStatus(task, st)}
-                            onDelete={() => onDelete(task.id)}
-                            onRelease={() => onRelease(task)}
-                            onEdit={() => onEdit(task)}
-                            canWrite={canWrite}
-                            canComment={canComment}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
+    <div className="space-y-4">
+      <RoleAgentsPanel refreshKey={assignmentKey} />
+      {canWrite && <CaptureBar lists={captureLists} onAdd={onAdd} />}
+      <div className="flex flex-wrap items-center gap-2 text-sm text-on-surface-variant">
+        <span>{canWrite ? 'Columns by status, lanes by list. Drag a card, or use its arrows.' : 'Columns by status, lanes by list.'}</span>
+        <label className="ml-auto inline-flex items-center gap-2">
+          Assignee
+          <select value={filter} onChange={(e) => setFilter(e.target.value as AssigneeFilter)} data-testid="assignee-filter" className="todo-field">
+            <option value="all">all</option>
+            <option value="unassigned">unassigned</option>
+            <option value="agents">assigned to agents</option>
+            {assignedRoles.map((r) => <option key={r} value={`role:${r}`}>{r} role</option>)}
+            {/* A chosen role whose last to-do went elsewhere stays visible (and clearable) rather than filtering silently. */}
+            {filter.startsWith('role:') && !assignedRoles.includes(filter.slice(5)) && <option value={filter}>{filter.slice(5)} role (no tasks)</option>}
+          </select>
+        </label>
       </div>
-    </div>
-  );
-}
-
-function BoardCard({
-  task,
-  waiting,
-  subtasks,
-  parentTitle,
-  dragging,
-  prev,
-  next,
-  onDragStart,
-  onDragEnd,
-  onMove,
-  onDelete,
-  onRelease,
-  onEdit,
-  canWrite,
-  canComment,
-}: {
-  task: Task;
-  waiting: string | null;
-  subtasks: { done: number; total: number } | null;
-  parentTitle: string | null;
-  dragging: boolean;
-  prev: TaskStatus | null;
-  next: TaskStatus | null;
-  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDragEnd: () => void;
-  onMove: (status: TaskStatus) => void;
-  onDelete: () => void;
-  onRelease: () => void;
-  onEdit: () => void;
-  canWrite: boolean;
-  canComment: boolean;
-}) {
-  const due = dueLabel(task.dueAt);
-  const [showComments, setShowComments] = useState(false);
-  // Typing in the comment box: the card must not start a drag when the user
-  // selects text there.
-  const [typing, setTyping] = useState(false);
-  return (
-    <div
-      draggable={canWrite && !typing}
-      onDragStart={canWrite ? onDragStart : undefined}
-      onDragEnd={canWrite ? onDragEnd : undefined}
-      data-testid="board-card"
-      className={`group rounded-xs border border-outline-variant/15 bg-surface px-2.5 py-2 ${canWrite ? 'cursor-grab active:cursor-grabbing' : ''} ${dragging ? 'opacity-40' : ''}`}
-    >
-      <p className={`text-sm leading-snug ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>{task.title}</p>
-      {parentTitle && (
-        <p className="text-[10px] text-on-surface-variant/70 inline-flex items-center gap-0.5 mt-0.5">
-          <CornerDownRight className="w-2.5 h-2.5" /> {parentTitle}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
-        <AssigneeChip task={task} />
-        <LeaseBadge task={task} />
-        {task.priority > 0 && (
-          <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
-            P{task.priority}
-          </span>
-        )}
-        {task.estimate && (
-          <span title="estimate" className="text-[10px] font-mono inline-flex items-center gap-0.5 text-on-surface-variant">
-            <Ruler className="w-2.5 h-2.5" /> {task.estimate}
-          </span>
-        )}
-        {subtasks && (
-          <span className="text-[10px] font-mono text-on-surface-variant">
-            {subtasks.done}/{subtasks.total}
-          </span>
-        )}
-        {due && (
-          <span className={`text-[10px] ${due.overdue && task.status !== 'done' ? 'text-error' : 'text-on-surface-variant'}`}>due {due.text}</span>
-        )}
-        {task.source !== 'user' && (
-          <span className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70">
-            <Sparkles className="w-2.5 h-2.5" /> {task.source}
-          </span>
-        )}
-        {waiting && task.status !== 'done' && (
-          <span className="text-[10px] inline-flex items-center gap-0.5 text-error/80" title="cannot start yet">
-            <Lock className="w-2.5 h-2.5" /> {waiting}
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-1 mt-1.5 opacity-60 group-hover:opacity-100 group-focus-within:opacity-100">
-        {canWrite && (
-          <>
-            <button
-              onClick={() => prev && onMove(prev)}
-              disabled={!prev}
-              aria-label={prev ? `Move to ${TASK_STATUS_TITLE[prev]}` : 'Already in the first column'}
-              className="text-on-surface-variant hover:text-primary disabled:opacity-30"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => next && onMove(next)}
-              disabled={!next}
-              aria-label={next ? `Move to ${TASK_STATUS_TITLE[next]}` : 'Already in the last column'}
-              className="text-on-surface-variant hover:text-primary disabled:opacity-30"
-            >
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
-        <span className="flex-1" />
-        <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
-        {canWrite && <button onClick={onEdit} aria-label="Edit task" className="text-xs text-primary hover:underline">Edit</button>}
-        {canWrite && <ReleaseClaimButton task={task} onRelease={onRelease} compact />}
-        {canWrite && (
-          <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-      {showComments && (
-        <div onFocus={() => setTyping(true)} onBlur={() => setTyping(false)}>
-          <CommentsThread taskId={task.id} indent={false} canComment={canComment} />
-        </div>
-      )}
+      {filter !== 'all' && shown.length === 0 && <p className="text-sm text-on-surface-variant">No to-dos match this assignee filter.</p>}
+      <TaskBoard
+        tasks={shown}
+        lookup={lookup}
+        onSetStatus={(t, s) => void todos.setStatus(t, s)}
+        onDelete={(id) => { const t = tasks.find((x) => x.id === id); if (t) todos.remove(t); }}
+        onRelease={(t) => void todos.release(t)}
+        onEdit={onOpen}
+        canWrite={canWrite}
+        canComment={canComment}
+      />
     </div>
   );
 }

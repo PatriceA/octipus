@@ -7,6 +7,171 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Today, and to-dos linked to notes** ([guide](docs/guides/todos-notes-today.md),
+  [API](docs/API.md#note--to-do-links)). A **Today** page (first in the
+  sidebar, and a tab beside To-dos) shows the day: overdue, due today and My
+  Day to-dos with capture, done today, yesterday's unfinished picks offered
+  again, today's calendar events (or a word on connecting a calendar), and
+  today's daily note written in place — made by the first keystroke, never by
+  opening the page (`GET /api/notes/daily?date=` reads the day without
+  creating it). A note's task line, or a selection, becomes a to-do linked to
+  it (⌘⇧Enter, the line's "+ To-do", the toolbar, or the reading view); the
+  line shows a chip, the note's context panel lists its to-dos, and ticking
+  either side ticks the other on the server (change for change: a deleted
+  to-do is never revived, a repeating one keeps its line on its occurrence and
+  attaches the note to the next). A to-do's panel renders its notes as
+  markdown and lists its linked notes as chips, with attach (existing or new)
+  and unlink. Links never show a note or a to-do to someone who cannot open
+  it, and never cross from personal to a space. New: table `task_note_links`
+  (migration 0211); `linkedNotes` on every task row, `linkedTasks` on
+  `GET /api/notes/:id`; `POST /api/tasks {noteId, noteAnchor}`,
+  `POST|DELETE /api/tasks/:id/notes`, `POST /api/notes/:id/todos`. A personal
+  note's save refused as stale (a to-do ticked its line meanwhile) is merged
+  and saved again when the changes do not overlap. Agents: task summaries name
+  their notes, `create_task` takes `noteId`, new `todos_from_note`,
+  `list_tasks` `view: "today"` (also on the MCP server's
+  `octipus_list_tasks`), `read_note` lists a note's to-dos. Ctrl+K can add a
+  line to today's note from any page.
+- **Note-to-do links, after review.** An agent's completion in a space that
+  takes its note changes as proposals proposes the line's tick; ticks typed
+  in a live space note reach their to-dos at once, as the member who typed
+  them and within their reach; a merge, a restored revision or an accepted
+  proposal reconciles the same way; a tick that could not be written is owed
+  (`task_note_links.pending_checked`, migration 0212) and made when the note
+  is next opened by a writer; every marker names one line and one link
+  (copies and markers without a link come off on save); personal note saves
+  are conditional in the UPDATE itself; a run of ticks on a closed space note
+  is one revision (`note_revisions.tick`); a repeating to-do's notes move on
+  instead of being copied to every occurrence. A **day's archived note stays
+  archived**: `POST /api/notes/daily` answers `409 archived` unless
+  `restore` or `fresh` is asked, and capture refuses it (Today offers Restore
+  / Start a fresh one). A to-do's notes render as untrusted markdown (no
+  picture loads by itself). Today follows midnight.
+- **To-dos, review fixes.** `/todo … *` stars the to-do; a refused note link
+  never leaves a to-do (or a skipped repeat occurrence) behind; a due-time
+  change keeps a monthly series' clamped anchor; a bare offset (`+05:30`) is
+  no zone; a device's zone report never replaces one chosen in Settings, even
+  in a race; the user's own checkout (or `checkout_task` `now: true`) claims a
+  future occurrence; list rename, delete and move are audited per to-do.
+- **Web notes are a notepad.** A note opens straight into one live-preview
+  editor: headings, bold, lists, quotes, links, `[[wikilinks]]` and `#tags`
+  read as rendered while the text stays markdown, `- [ ]` tasks are
+  checkboxes (also in the reading view, and in live space notes, where a tick
+  is a live edit), and a click on a wikilink opens the note. A new note needs
+  no fields: its first line is its title (an existing note whose title is its
+  first line keeps following it; the slug never changes, so links hold).
+  Title, tags, kind, folder, location and pin are in a details menu. The page
+  is a sheet of paper without the terminal frame and prompt bar; the list is
+  Recent first with a line of each note (A–Z and folders too), daily notes
+  newest first, a **Today** button and a one-line capture box into today's
+  note, Move to… and drag onto a folder, the archive one tab away, session
+  learnings under their own filter (their tag hidden without it), back and
+  forward buttons, and keys N (new), / (search), T (today). The links panel
+  opens on request. Pictures are drawn in the editor (fetched with the
+  session, as in the reading view; never for a space on another install).
+  One-key shortcuts (Q, N, /, T) share one rule: never while typing, with a
+  key held, or with a dialog, menu or overlay open.
+- **Notes: move without breaking links, and the day's note on request**
+  ([API](docs/API.md#notes)). `POST /api/notes/:id/move {slug}` moves a note
+  to another folder or name; its old slug is kept in `frontmatter.movedFrom` (one note per slug, never
+  taken from a client's frontmatter)
+  and `[[links]]` resolve to the note at a slug, else to one moved away from
+  it, so links written before or after the move keep working (an exact slug
+  always wins). `GET /api/notes/index` returns them (`movedFrom`); `GET /api/notes?preview=true`
+  lists a line of each note instead of its body. `POST
+  /api/notes/daily {date}` returns the caller's daily note for that day,
+  creating it the first time. A rename (a new title) never changes the slug.
+- **To-dos, after review** ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).
+  The star, My Day and order are now each user's own (also in a space;
+  migration `0210`), and the API returns the caller's values under the same
+  field names. Lists can be made empty, renamed and deleted (with Undo) on the
+  server (`/api/tasks/lists`). Repeating to-dos run in a stored zone and keep
+  their day of the month; deleting an occurrence skips it; an agent never
+  works a future occurrence early (`checkout` answers `409 not_due`). The user's
+  time zone is remembered from the browser (a phone's fixed offset never
+  replaces a named zone) and can be set under Settings → Profile. The capture
+  line reads dates only as a trailing or leading clause, repeats only with
+  "every", never inside URLs; quotes keep words literal.
+- **To-dos: star, manual order, My Day, repeat, capture, live updates**
+  ([API](docs/API.md#to-do-fields-star-order-my-day-repeat-due-time-steps)).
+  Migration `0209` adds `important`, `sortOrder`, `myDayOn`, `repeat` and
+  `repeatNextId` to every task row. Completing a repeating to-do — on the web,
+  through the API or by an agent's tasks tool — creates the next occurrence
+  exactly once; reopening it takes an untouched next occurrence back. My Day is
+  per calendar day in the user's zone and empties itself at midnight;
+  `GET /api/tasks/my-day` returns today's picks and suggestions. A capture
+  line ("call dentist tomorrow 3pm !high #personal") is parsed by one shared
+  function: `POST /api/tasks` with `quick`, `POST /api/tasks/parse` for a
+  preview, and the new `/todo <text>` chat command. Personal to-do writes now
+  send `tasks.changed` to the owner's connections, so lists update at once.
+- **The web To-dos page, redesigned after Microsoft To Do.** A rail of lists
+  (My Day, Important, Planned, All, Completed, Archived and your own lists,
+  with counts) replaces the "Group by" chips; rows are a round checkbox, the
+  title, one quiet line of metadata and a star; a detail panel holds steps,
+  My Day, reminder, due date and time with quick picks, repeat, list,
+  priority and notes, plus the board and agent fields (status, assignee,
+  estimate, claim, comments) that used to crowd the row. One capture line
+  shows what it understood as chips before you press Enter. Search,
+  Completed collapsed, Undo for completing, moving and deleting, a short
+  completion animation, keyboard (arrows, Space, Enter, Delete, Esc, N, /),
+  drag to reorder and drag onto a list. At phone width the rail is a drawer
+  and the panel a full screen. The board view keeps the role agents, the
+  assignee filter and the cards. **Q** (or "Add to-do" in the Ctrl+K search)
+  adds a to-do from any page, and the calendar shows the to-dos due in the
+  range on screen. The page, its sidebar entry and its tab are all called
+  "To-dos".
+- **Open to-dos no longer disappear behind finished ones**
+  ([API](docs/API.md#tasks)). `GET /api/tasks` sorted by the status text
+  (`archived`, `done`, `in_progress`, `open`) and stopped at 200 rows, so after
+  about 200 finished to-dos the open ones fell off the web page and the mobile
+  app. Without `status` it now returns every active task (in progress, then
+  open) followed by one page of done tasks, most recently finished first:
+  `?doneLimit=` (default 50, at most 500) and `?doneOffset=` page through them,
+  and a new `done: {total, offset, limit, hasMore}` field says how many there
+  are. Archived tasks are no longer in the unfiltered list (both clients hid
+  them); `?status=archived` lists them, and every `?status=` list now pages
+  with `?limit=` (at most 500) and `?offset=` and says `page: {total, …}`. The `tasks` array keeps its shape, so a
+  client calling the endpoint with no parameters keeps working. The web list
+  shows the total and a **Show more done** button.
+- **Deleting a to-do on the web can be undone.** The confirm dialog and hard
+  delete are replaced by an **Undo** toast. The to-do is only hidden while
+  Undo is on offer; when the offer closes (or the page is left) it is
+  archived. Undo sends nothing, so nothing of the to-do changes: archiving
+  would clear its completion time, free an agent's claim and wake what
+  waited on it.
+- **Notes for daily use on the web.**
+  - A personal note saves itself a moment after you stop typing, with a quiet
+    Saved / Saving… / Not saved (Retry) status in place of the Save button.
+    Unsaved changes are saved when you open another note, go back, leave the
+    page or hide the tab, and a copy is kept in this browser until the server
+    has them: a failed save or a closed tab never loses the draft, and opening
+    the note again brings it back (asking first if the note changed since).
+    Space notes are unchanged: the text saves itself, **Save details** stores
+    the rest. A new note is created once its title field is left (or the
+    note is), so its slug never comes from half a title. A draft is only ever
+    sent to the workspace and account it was typed in, and the drafts kept in
+    the browser are removed on sign-out. A save made from text that was
+    changed elsewhere since is refused (`ifSha256` on `POST /api/notes`,
+    409 `stale`) and the page asks: keep my version, or load the saved one.
+    `POST /api/notes` no longer re-embeds the note inside the request: it is
+    re-indexed once the note has been quiet for 5 seconds (`indexQueued`).
+  - The open note is in the address bar (`/notes?note=<id>`): reload,
+    bookmarks and back/forward work.
+  - Archiving a note shows **Undo**, and the navigator has an **archive** view
+    listing archived notes with **restore**; an archived note opens read-only.
+    New route `POST /api/notes/:id/restore`; `GET /api/notes?archived=only`
+    lists archived notes ([API](docs/API.md#notes)).
+  - Creating a note can no longer overwrite another one: `POST /api/notes`
+    accepts `createOnly: true` (409 `exists` when a note, archived or not,
+    already has the slug), and the web app sends it for new notes. Before, a
+    new note titled like an existing or archived one replaced its text.
+  - Search runs on the server and includes note bodies:
+    `GET /api/notes?q=` matches every word in the title, slug, tags or body
+    and shows a line of the matching text. It replaces filtering titles over
+    the first 500 notes in the browser.
+  - At phone width the notes page shows one pane at a time (the list, or the
+    open note with a back button); the context panel opens as a sheet and is
+    closed by default.
 - **Egress policy for tools** ([docs](docs/EGRESS-POLICY.md)). Operators can
   say what tools may reach on the network: `security.egressPolicy` with
   allow/deny rules by host (exact, `*.domain` or `*`), address range, port

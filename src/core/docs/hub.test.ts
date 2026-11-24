@@ -44,6 +44,9 @@ let now = 1_000_000;
 const limits: DocLimits = { noteMaxBytes: 4096, docMaxUpdatesPerSecond: 30, docPersistDebounceMs: 60_000, docReindexMinutes: 10, docBaseTtlMinutes: 30 };
 const inbox = new Map<string, GatewayMessage[]>();
 const reindexed: string[] = [];
+/** Live ticks the hub reported, and the reconciles they started (as the process's hub wires them). */
+const ticks: Array<{ noteId: string; userId: string; before: string; after: string }> = [];
+const tickWork: Promise<void>[] = [];
 /** How long a closed document stays warm; 0 (most tests) drops it on the last leave. */
 let keepWarmMs = 0;
 /** Test hooks around the hub's database calls. */
@@ -100,6 +103,11 @@ beforeAll(async () => {
     limits: () => limits,
     now: () => now,
     get keepWarmMs() { return keepWarmMs; },
+    onTicks: (input) => {
+      ticks.push(input);
+      tickWork.push(import('@/core/tasks/note-links').then(({ reconcileNoteTasks }) =>
+        reconcileNoteTasks({ kind: 'space', workspaceId: input.workspaceId, userId: input.userId, role: 'editor', archived: false }, input.noteId, input.before, input.after, { userId: input.userId })));
+    },
   });
   hub = makeHub();
   // The process's hub is this one, so every writer (the note service, the
@@ -1030,5 +1038,37 @@ describe('bases (review finding 13)', () => {
     await expect(notes.save({ scope: aliceScope, id: noteId, title: read!.title, body: `${later!.body}tail\n`, baseSha256: later!.bodySha256 }))
       .rejects.toBeInstanceOf(StaleWriteError);
     await hub.leave(a.connectionId, noteId);
+  });
+});
+
+describe('ticks of lines made to-dos', () => {
+  test('a member\'s tick in the live text completes the to-do at once, as that member', async () => {
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { putLink } = await import('@/db/repositories/task-note-links');
+    const aliceRepos = contentRepos(await resolvedPrincipal(alice, spaceId));
+    const noteId = await newNote('- [ ] Ship it\n');
+    const task = await aliceRepos.tasks.create({ title: 'Ship it' });
+    await putLink({ taskId: task.id, noteId, anchor: 'ship1234', createdBy: alice });
+    const before = await notes.getById(aliceScope, noteId);
+    await notes.save({ scope: aliceScope, id: noteId, title: before!.title, body: '- [ ] Ship it ^todo-ship1234\n', baseSha256: before!.bodySha256 });
+    const b = new Client(`b-${rand(3)}`, bob, noteId);
+    await b.join();
+    const box = b.text.indexOf('[ ]') + 1;
+    b.doc.transact(() => { b.doc.getText('body').delete(box, 1); b.doc.getText('body').insert(box, 'x'); });
+    await until(() => ticks.some((t) => t.noteId === noteId && t.after.includes('[x]')), 'the tick reported');
+    expect(ticks.filter((t) => t.noteId === noteId).every((t) => t.userId === bob)).toBe(true);
+    await Promise.all(tickWork);
+    expect((await aliceRepos.tasks.findById(task.id))?.status).toBe('done');
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const audit = (await auditRepository.findByResource('task', task.id)).map((r) => r.details as Record<string, any>);
+    expect(audit.find((d) => d.op === 'complete')?.actor).toEqual({ kind: 'user', id: bob });
+    // Ticked and unticked before any refresh: the to-do follows each change, and ends open.
+    const box2 = b.text.indexOf('[x]') + 1;
+    b.doc.transact(() => { b.doc.getText('body').delete(box2, 1); b.doc.getText('body').insert(box2, ' '); });
+    await until(() => ticks.some((t) => t.noteId === noteId && t.after.includes('[ ]') && t.before.includes('[x]')), 'the untick reported');
+    await Promise.all(tickWork);
+    expect((await aliceRepos.tasks.findById(task.id))?.status).toBe('open');
+    await hub.leave(b.connectionId, noteId);
   });
 });

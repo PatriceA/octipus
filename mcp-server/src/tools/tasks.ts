@@ -18,15 +18,16 @@ function asError(error: unknown) {
 export function registerTasksTools(server: McpServer, client: OctiClient): void {
   server.tool(
     'octipus_list_tasks',
-    "List the user's tasks (the Tasks tab), optionally filtered by status or due-today.",
+    "List the user's tasks (the Tasks tab), optionally filtered by status or due-today. view \"today\" answers what is on the user's plate today (overdue, due today, My Day). Tasks linked to notes name them in `linkedNotes`.",
     {
       status: z.enum(['open', 'done', 'archived']).optional().describe('Filter by status'),
       dueToday: z.boolean().optional().describe('Only tasks due by end of today'),
       category: z.string().optional().describe('Filter to a category/list (e.g. "Shopping"); "none" for uncategorized'),
+      view: z.enum(['next', 'today']).optional().describe('"next": next-action order; "today": overdue, due today and My Day'),
     },
-    async ({ status, dueToday, category }) => {
+    async ({ status, dueToday, category, view }) => {
       try {
-        return asText(await client.executeTool('tasks', 'list_tasks', { status, dueToday, category }));
+        return asText(await client.executeTool('tasks', 'list_tasks', { status, dueToday, category, view }));
       } catch (error) {
         return asError(error);
       }

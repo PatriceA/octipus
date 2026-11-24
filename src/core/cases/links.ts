@@ -205,7 +205,7 @@ export async function addFollowUp(repos: ContentRepos, caseId: string, input: Fo
     if (!link) throw new CaseLinkError('Case not found');
     return { task, link: toResolved(link, 'task', { label: task.title, detail: task.status }) };
   } catch (err) {
-    await repos.tasks.delete(task.id);
+    await repos.tasks.discardNew(task.id);
     throw err;
   }
 }

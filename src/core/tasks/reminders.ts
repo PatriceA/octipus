@@ -114,3 +114,20 @@ async function linkedCases(taskIds: string[]): Promise<Map<string, string[]>> {
   }
   return out;
 }
+
+/**
+ * Make the next occurrence of every finished repeating to-do that lacks one
+ * (a spawn that failed after its completion committed), and tell the lists.
+ * Runs with the reminder sweep. Returns how many were made.
+ */
+export async function healSeries(): Promise<number> {
+  const [{ healRepeatSeries }, { resolveSeriesTimezone }, { publishPersonalTaskChanged }, { publishTaskChanged }] = await Promise.all([
+    import('@/db/repositories/task-series'), import('./timezone'), import('./live'), import('./team'),
+  ]);
+  const made = await healRepeatSeries((userId) => resolveSeriesTimezone(userId), ({ next }) => {
+    publishPersonalTaskChanged(next.userId, next.id);
+    if (next.workspaceId) publishTaskChanged(next.workspaceId, next.id);
+  });
+  if (made > 0) coreLogger.info({ made }, 'Repeating to-dos: next occurrences made by the sweep');
+  return made;
+}

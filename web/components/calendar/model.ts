@@ -1,5 +1,6 @@
 import type { CalendarEvent, CalendarInfo, CalendarPreferences, CalendarProvider, CalendarRecurrence, RecurrenceScope } from '../../../src/shared/calendar';
 import { addDays, allDayRange, dayOf, monthGrid, noonOf, weekStart } from '../../../src/shared/calendar-layout';
+import { api } from '@/lib/api';
 
 export type CalendarViewName = 'day' | 'week' | 'month' | 'agenda';
 export const VIEWS: ReadonlyArray<{ id: CalendarViewName; label: string; key: string }> = [
@@ -15,6 +16,17 @@ export interface EventsResponse {
   partial: boolean;
   truncated?: boolean;
   failedCalendars?: string[];
+}
+
+/** The events query of the days `shown`, keyed by its first day and length: the calendar page and the Today page share the cache. */
+export const calendarEventsKey = (workspace: string | null, shown: readonly string[]) => ['calendar-events', workspace, shown[0], shown.length] as const;
+
+/** The events of the days `shown` (each `YYYY-MM-DD` in the reader's zone), every field present even from an older backend. */
+export function fetchCalendarEvents(shown: readonly string[]): Promise<EventsResponse> {
+  const from = new Date(`${shown[0]}T00:00:00`);
+  const to = new Date(`${addDays(shown[shown.length - 1], 1)}T00:00:00`);
+  return api.get<Partial<EventsResponse>>(`/calendar/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
+    .then((r): EventsResponse => ({ ...r, events: r.events ?? [], providers: r.providers ?? [], partial: r.partial === true }));
 }
 
 export interface CalendarsResponse {

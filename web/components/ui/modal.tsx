@@ -37,7 +37,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
 
   return (
     <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center font-sans">
+    <div className="fixed inset-0 z-50 flex items-center justify-center font-sans" role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}>
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
         className={cn(

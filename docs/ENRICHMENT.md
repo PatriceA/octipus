@@ -43,10 +43,21 @@ The user's personal to-do list. Agents can add, update, and complete items.
   `tasks`, route `/tasks`)
 - Route: `src/api/routes/tasks.ts`, recurring items via `routes/recurring-tasks.ts`
   + the scheduler
-- Web: `web/app/tasks/page.tsx` (sidebar entry **to-do**)
+- Web: `web/app/tasks/page.tsx` (sidebar entry **To-dos**) and `web/app/today/page.tsx` (**Today**)
 
 Distinct from `src/tools/task-state/` — a read-only inter-agent/workflow state tool
 that shares neither storage nor concept.
+
+**Today and note links.** `/today` (`web/app/today/page.tsx`) shows the day:
+overdue, due today and My Day (`todayParts` in `src/core/tasks/smart-lists.ts`),
+today's calendar events and the daily note, written in place. To-dos link to
+notes (`task_note_links`, `src/core/tasks/note-links.ts`): a note attached, or
+the note line a to-do was made from, whose tick follows the to-do both ways.
+The tool exposes them: every task summary names its `linkedNotes`,
+`create_task` takes `noteId`, `todos_from_note` makes to-dos of a note's open
+task lines (marked and linked), and `list_tasks` with `view: "today"` answers
+"what is on my plate today". See [API.md](API.md#note--to-do-links) and the
+[guide](guides/todos-notes-today.md).
 
 **What next.** `GET /api/tasks?view=next` (and `list_tasks` with `view: "next"`)
 returns open tasks in next-action order — overdue → due today → high priority →
@@ -55,8 +66,9 @@ each with a `bucket` and a one-line `reason`. "Today" is the user's calendar
 day: the page passes the browser's zone as `?tz=`, the tool uses the user's
 saved timezone preference, and both fall back to UTC — never the server's
 zone. The ranking is one pure function (`src/core/tasks/rank.ts`) shared by
-the tool, the API and the tasks page's *what next* grouping (the default); the
-Daily Briefing asks the tool for this view rather than re-sorting.
+the tool, the API and the To-dos page's My Day suggestions
+(`GET /api/tasks/my-day`); the Daily Briefing asks the tool for this view
+rather than re-sorting.
 
 **Provenance.** Every task carries `source` (`user | agent | email | channel`,
 and `reader` or `research` on tasks made by the removed core reader and

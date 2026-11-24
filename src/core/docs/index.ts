@@ -17,6 +17,14 @@ import { leasesForMember, listLeases, setLeaseChangeListener } from './file-leas
 
 let instance: DocumentHub | null = null;
 
+/** The live ticks of each note still reaching their to-dos, in order. */
+const tickChains = new Map<string, Promise<void>>();
+
+/** Tests: wait until every live tick so far has reached its to-do. */
+export async function settleLiveTicks(): Promise<void> {
+  await Promise.all([...tickChains.values()]);
+}
+
 /** Space presence (owned by the rooms code) hears who opened or left a note here. */
 let peersListener: (workspaceId: string) => void = () => undefined;
 
@@ -32,6 +40,17 @@ export function getDocHub(): DocumentHub {
     writeBody: async (noteId, workspaceId, expectedSha, body, sha) =>
       (await writeBodyIfUnchanged(noteId, workspaceId, expectedSha, body, sha)) !== null,
     insertRevision,
+    // Ticks typed in a live note reach their to-dos at once, as the member
+    // who typed them, one note's in the order they came.
+    onTicks: ({ noteId, workspaceId, userId, before, after }) => {
+      const prior = tickChains.get(noteId) ?? Promise.resolve();
+      const next = prior.then(async () => {
+        const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+        await reconcileNoteTasks({ kind: 'space', workspaceId, userId, role: 'editor', archived: false }, noteId, before, after, { userId });
+      }).catch((err: unknown) => coreLogger.warn({ err, noteId }, 'Live note ticks did not reach their to-dos'))
+        .finally(() => { if (tickChains.get(noteId) === next) tickChains.delete(noteId); });
+      tickChains.set(noteId, next);
+    },
     reindex: async (noteId, editorUserId, previousBody) => {
       const { getNoteService } = await import('@/core/knowledge/notes');
       return getNoteService().refreshSpaceNote(noteId, editorUserId, previousBody);

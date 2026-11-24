@@ -1,4 +1,4 @@
-import { index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { notes } from './notes';
 import { workspaces } from './organizations';
@@ -37,6 +37,8 @@ export const noteRevisions = pgTable('note_revisions', {
   origin: text('origin').$type<NoteRevisionOrigin>().notNull(),
   /** For `restore`: the revision restored. */
   restoredFrom: uuid('restored_from'),
+  /** Only to-dos' ticks reaching their lines (migration 0212): a later tick by the same member joins it. */
+  tick: boolean('tick').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   noteCreatedIdx: index('note_revisions_note_created_idx').on(table.noteId, table.createdAt),

@@ -109,7 +109,8 @@ Three passes, all in `NoteService.save` (`notes.ts`) except where noted:
    `to_ref` equals its slug bind to it. ("B linked to [[Target]] before Target
    existed.")
 2. **Outgoing** — each of the saved note's own refs that matches an existing
-   note's slug binds immediately. Without this pass, linking A→B when B
+   note's slug (or a slug a note was moved away from, see below) binds
+   immediately. Without this pass, linking A→B when B
    already exists left the edge a ghost until B was next saved, and the graph
    drew no line between two freshly-linked notes.
 3. **Fuzzy** — refs that matched nothing exactly get one similarity guess (see
@@ -117,6 +118,19 @@ Three passes, all in `NoteService.save` (`notes.ts`) except where noted:
 
 `tagged` edges are intentionally never resolved to an id: a tag is a
 pseudo-entity, not a row.
+
+### Renames and moves
+
+A note's slug is fixed when it is created: changing its title renames it
+without touching the slug, so `[[links]]` to it are unaffected. Moving it to
+another folder or name (`NoteService.move`, `POST /api/notes/:id/move`) does
+change the slug; the old one is kept in `frontmatter.movedFrom` (written by
+`move` alone, and held by one note at a time). Edges already
+bound keep their `to_id`, ghost edges waiting for the new slug bind at once,
+and a ref resolves to the note at that exact slug, else to an active note
+that was moved away from it (`NoteRepository.resolveSlug`) — so a link written
+with the old slug after the move binds too. An exact slug always wins: a new
+note created at an old slug takes the links saved after it.
 
 ### Fuzzy resolution of ghost links
 
@@ -338,8 +352,8 @@ Exposed through the notes tool's `sync_vault` action.
 
 | Route | What |
 |---|---|
-| `GET /api/notes` | List (filter by `kind`, `tag`, `includeArchived`; max 500) |
-| `POST /api/notes` | Create/update via the save pipeline |
+| `GET /api/notes` | List (filter by `kind`, `tag`, `includeArchived`; max 500). `q` searches title, slug, tags and body on the server (every word must match); `archived=only` lists the archived notes |
+| `POST /api/notes` | Create/update via the save pipeline. The route defers the re-index (`deferIndex`): the note is re-embedded once it has had no save for 5 seconds, so an editor's autosave does not embed on every pause. `createOnly` and, for personal notes, `ifSha256` guard against overwrites |
 | `POST /api/notes/query` | Bases-style property query (kind, tag, frontmatter, sort) |
 | `GET /api/notes/index` | Lightweight `{id,title,slug,kind}` — the source for `[[` autocomplete |
 | `GET /api/notes/tags` | Tag → count across active notes; powers the tag tree and `#tag` autocomplete |
@@ -348,6 +362,7 @@ Exposed through the notes tool's `sync_vault` action.
 | `GET /api/notes/:id/suggestions` | Computed link suggestions |
 | `PATCH /api/notes/:id/pin` | Pin/unpin |
 | `DELETE /api/notes/:id` | Archive; `?hard=true` removes the note, its chunks, and its edges |
+| `POST /api/notes/:id/restore` | Undo an archive: the note and its chunks are searchable again |
 | `GET /api/graph` | Global mode: active notes + resolved edges (capped 2000 nodes / 5000 edges). With `entryType`+`entryId`: local neighbourhood via traversal, `hops` clamped 1–5 |
 | `GET /api/graph/canvas` | JSON Canvas of a neighbourhood, `hops` clamped 1–5 |
 
@@ -358,7 +373,9 @@ target to draw a line to.
 
 - **`notes` tool** — `write_note`, `read_note`, `list_notes`, `search_notes`,
   `capture_note`, `suggest_links`, `archive_note`, `query_notes`,
-  `export_canvas`, `sync_vault`.
+  `export_canvas`, `sync_vault`. `read_note` lists the note's linked to-dos
+  (`linkedTasks`); the tasks tool's `todos_from_note` makes to-dos of its task
+  lines.
 - **`knowledge` tool** — `link_knowledge` (create an edge, including a ghost
   by `to_ref`; lands with `origin='agent'`), `get_backlinks`,
   `traverse_knowledge` (bounded BFS), plus
@@ -370,10 +387,31 @@ target to draw a line to.
 
 ### Web UI
 
-The graph lives *inside* the notes workspace as a view mode — notes and the
-graph are the same thing. `/notes` renders the workspace
-(`web/app/notes/notes-workspace.tsx`, `knowledge-graph.tsx`); `/graph`
-redirects to `/notes?view=graph` so old links keep working.
+`/notes` is a notepad (`web/app/notes/notes-workspace.tsx`): a list (Recent
+first with a line of each note, A–Z, or the folder tree; filters for pinned,
+daily notes, lessons and the archive), the open note as one live-preview
+editor (`markdown-codemirror.tsx` + `live-preview.ts`: the text stays
+markdown, its markup is hidden off the caret's line, `- [ ]` tasks are
+checkboxes and `[[links]]` open on click) with a reading view, and the links
+panel on request. A new note takes its title from its first line; a note
+whose title is its first line keeps following it (a rename: the slug never
+changes). Title, tags, kind, folder and pin are in the note's details menu;
+"Move to…" and dragging a note onto a folder call `POST /api/notes/:id/move`.
+The draft, autosave and live-note logic is `use-note-draft.ts`, so another
+page can embed the same editor (the Today page does, for the daily note,
+created by its first keystroke through the hook's `create`). A personal
+note's save refused as stale is merged with the server's text (diff3) and
+saved again when the two changes do not overlap.
+
+**Note lines as to-dos.** A task line made a to-do ends in ` ^todo-<anchor>`
+(`src/shared/note-todos.ts`), drawn as a chip in the editor and the reading
+view; ⌘⇧Enter, the line's "+ To-do" or the toolbar makes one of the caret's
+line or the selection (`use-note-todos.ts`), and the context panel lists the
+note's to-dos. The tick of a marked line and its to-do follow each other on
+the server (`src/core/tasks/note-links.ts`, hooked into `NoteService.save`,
+the live note's refresh and `TaskRepo.update`). See
+[API.md](API.md#note--to-do-links). The graph is a view of the same page:
+`/graph` redirects to `/notes?view=graph` so old links keep working.
 
 ---
 

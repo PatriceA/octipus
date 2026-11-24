@@ -12,7 +12,7 @@ import { principalFromUser } from '@/security/principal';
 const f = vi.hoisted(() => ({ handle: vi.fn(), release: () => {}, created: [] as unknown[] }));
 vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: f.handle }) }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ stopSession: vi.fn() }) }));
-vi.mock('@/db/repositories/scoped', () => ({ scopedRepos: () => ({ sessions: {
+vi.mock('@/db/repositories/scoped', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/db/repositories/scoped')>()), scopedRepos: () => ({ sessions: {
   findById: async () => ({ id: 'existing' }),
   create: async (row: unknown) => { f.created.push(row); return { id: `new-session-${f.created.length}` }; },
 } }) }));

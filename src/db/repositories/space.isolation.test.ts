@@ -128,6 +128,9 @@ const ALLOWLIST: Record<string, string> = {
   // The access layer itself.
   'src/db/repositories/scoped.ts': ACCESS_LAYER,
   'src/db/repositories/space.ts': ACCESS_LAYER,
+  // The series half of TaskRepo: it reads only the occurrence a scoped repo already reached (or the
+  // cron sweep's own finished rows) and that occurrence's children, comments and state rows by its id.
+  'src/db/repositories/task-series.ts': ACCESS_LAYER,
   'src/db/repositories/note-repository.ts': ACCESS_LAYER,
   'src/db/repositories/knowledge-link-repository.ts': ACCESS_LAYER,
   'src/core/rag/embeddings.ts': ACCESS_LAYER,

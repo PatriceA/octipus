@@ -113,6 +113,8 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'swarm_nodes', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'task_state', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'tasks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // A to-do list made before it held a to-do (its to-dos' lists are their `category`).
+  { table: 'task_lists', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'trajectory_runs', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'vault', ownerColumn: 'user_id', transfer: 'move', purge: 'delete', rowFilter: "scope = 'workspace'", reencrypt: true },
   // Space membership and invites (S1): only shared workspaces have them, and

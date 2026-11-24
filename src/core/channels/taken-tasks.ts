@@ -205,7 +205,7 @@ export async function completeTakenTask(input: {
   if (result) {
     await repo.addComment(task.id, { authorKind: 'agent', authorRef: `octipus@${input.sessionId}`, body: result });
   }
-  const done = await repo.update(task.id, { status: 'done', completedAt: new Date() });
+  const done = await repo.update(task.id, { status: 'done', completedAt: new Date() }, { agent: { sessionId: input.sessionId, agentId: input.agentId } });
   if (!done) return { ok: false, error: 'The task could not be updated; it may have been deleted meanwhile.' };
   await auditTaskMutation({
     userId: task.userId,

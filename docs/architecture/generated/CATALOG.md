@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-781 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
+796 mounted routes across 95 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -119,6 +119,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PUT | `/api/auth/recovery-policy` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/register` | `src/api/routes/auth.ts` |
 | GET | `/api/auth/registration` | `src/api/routes/auth.ts` |
+| PUT | `/api/auth/timezone` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/disable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/enable` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/totp/setup` | `src/api/routes/auth.ts` |
@@ -407,12 +408,17 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/:id/merge` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/move` | `src/api/routes/notes.ts` |
 | PATCH | `/api/notes/:id/pin` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/revisions` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/revisions/:revisionId` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/:id/revisions/:revisionId/restore` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/:id/suggestions` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/:id/todos` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/capture` | `src/api/routes/notes.ts` |
+| GET | `/api/notes/daily` | `src/api/routes/notes.ts` |
+| POST | `/api/notes/daily` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/index` | `src/api/routes/notes.ts` |
 | GET | `/api/notes/proposals` | `src/api/routes/notes.ts` |
 | POST | `/api/notes/proposals/:proposalId/accept` | `src/api/routes/notes.ts` |
@@ -732,7 +738,16 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/tasks/:id/checkout` | `src/api/routes/tasks.ts` |
 | GET | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
+| POST | `/api/tasks/:id/notes` | `src/api/routes/tasks.ts` |
+| DELETE | `/api/tasks/:id/notes/:noteId` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/release` | `src/api/routes/tasks.ts` |
+| DELETE | `/api/tasks/lists` | `src/api/routes/tasks.ts` |
+| GET | `/api/tasks/lists` | `src/api/routes/tasks.ts` |
+| PATCH | `/api/tasks/lists` | `src/api/routes/tasks.ts` |
+| POST | `/api/tasks/lists` | `src/api/routes/tasks.ts` |
+| POST | `/api/tasks/lists/move` | `src/api/routes/tasks.ts` |
+| GET | `/api/tasks/my-day` | `src/api/routes/tasks.ts` |
+| POST | `/api/tasks/parse` | `src/api/routes/tasks.ts` |
 | GET | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | PUT | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | GET | `/api/tools` | `src/api/routes/tools.ts` |
@@ -818,7 +833,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 30 |
-| `api` | `core` | 265 |
+| `api` | `core` | 274 |
 | `api` | `db` | 157 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -827,7 +842,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 70 |
 | `api` | `security` | 193 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 32 |
+| `api` | `shared` | 33 |
 | `api` | `skills` | 10 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 81 |
@@ -857,29 +872,29 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 80 |
-| `core` | `db` | 569 |
+| `core` | `db` | 577 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
 | `core` | `models` | 153 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 260 |
+| `core` | `security` | 261 |
 | `core` | `services` | 5 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 94 |
+| `core` | `shared` | 96 |
 | `core` | `skills` | 20 |
 | `core` | `tools` | 39 |
-| `core` | `utils` | 281 |
+| `core` | `utils` | 283 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
-| `db` | `core` | 23 |
+| `db` | `core` | 28 |
 | `db` | `models` | 1 |
 | `db` | `plugins` | 1 |
 | `db` | `security` | 27 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 10 |
-| `db` | `utils` | 20 |
+| `db` | `utils` | 22 |
 | `eval` | `config` | 4 |
 | `eval` | `core` | 7 |
 | `eval` | `db` | 31 |
@@ -960,7 +975,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 6 |
-| `tools` | `core` | 163 |
+| `tools` | `core` | 169 |
 | `tools` | `db` | 44 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
@@ -1092,6 +1107,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_completed` |
 | `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `*`, `swarm.node_spawned` |
 | `task.changed` | yes | — | `*` |
+| `tasks.changed` | yes | `src/core/tasks/live.ts` | `*` |
 | `team.completed` | yes | — | `*` |
 | `team.started` | yes | — | `*` |
 | `test.event` | yes | — | `*` |

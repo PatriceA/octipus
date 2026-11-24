@@ -27,7 +27,7 @@ export function RemoteNotesWorkspace({ remote }: { remote: RemoteSpace }) {
   const source = useMemo(() => remoteNotesSource(remote.id, gateway), [remote.id, gateway]);
   const via = useMemo(() => ({ gateway: source.gateway, merge: keepUnmerged }), [source]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<EditorMode>('preview');
+  const [mode, setMode] = useState<EditorMode>('edit');
   const [filter, setFilter] = useState<NoteFilter>('all');
   const [search, setSearch] = useState('');
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -58,8 +58,8 @@ export function RemoteNotesWorkspace({ remote }: { remote: RemoteSpace }) {
   const noop = () => {};
 
   return (
-    <div className="h-full flex min-h-0" data-testid="remote-notes">
-      <aside className="w-72 shrink-0 border-r border-outline-variant/30 bg-surface-container-lowest/40">
+    <div className="notes-page is-row" data-testid="remote-notes">
+      <aside className="notes-nav" style={{ width: 300 }}>
         <NotesNavigator
           notes={notes}
           tags={[]}
@@ -71,17 +71,19 @@ export function RemoteNotesWorkspace({ remote }: { remote: RemoteSpace }) {
           setSearch={setSearch}
           activeTag={activeTag}
           setActiveTag={setActiveTag}
-          onOpen={(n) => { setSelectedId(n.id); setMode(canWrite ? 'edit' : 'preview'); }}
+          onOpen={(n) => { setSelectedId(n.id); setMode('edit'); }}
         />
       </aside>
-      <main className="flex-1 min-w-0 flex flex-col">
-        <div className="px-5 pt-2 text-[11px] font-mono text-on-surface-variant" title={remote.hostFingerprint}>
-          {remote.spaceName} · hosted by {remote.hostBadge}
+      <main className="notes-main">
+        <div className="px-5 pt-2 text-[12px] text-on-surface-variant" title={remote.hostFingerprint}>
+          {remote.spaceName} · hosted by <span className="font-mono">{remote.hostBadge}</span>
           {list.error && <span role="alert" className="text-error"> · ! {(list.error as Error).message}</span>}
           {detail.error && <span role="alert" className="text-error"> · ! {(detail.error as Error).message}</span>}
         </div>
-        <div className="flex-1 min-h-0">
-          <NoteEditor
+        <div className="flex-1 min-h-0 flex flex-col">
+          {!selectedId ? (
+            <div className="notes-blank-inner"><p>Pick a note on the left.</p></div>
+          ) : <NoteEditor
             selectedId={selectedId}
             draftTitle={detail.data?.title ?? ''}
             setDraftTitle={noop}
@@ -108,7 +110,7 @@ export function RemoteNotesWorkspace({ remote }: { remote: RemoteSpace }) {
             live={live}
             liveLoading={canWrite && !!selectedId && !liveSynced}
             textOnly
-          />
+          />}
         </div>
       </main>
     </div>

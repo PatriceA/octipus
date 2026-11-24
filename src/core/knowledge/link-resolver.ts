@@ -180,7 +180,8 @@ export class LinkResolverService {
     let examined = 0;
     for (const [ref, target] of byRef) {
       // Exact match wins and needs no guessing.
-      if (await noteStoreFor(scope, this.notes).getBySlug(ref)) continue;
+      // (A note moved away from the slug counts: its alias binds the link.)
+      if (await noteStoreFor(scope, this.notes).resolveSlug(ref)) continue;
       if (examined >= MAX_REFS_PER_SAVE) {
         coreLogger.debug(
           { component: 'link-resolver', noteId, cap: MAX_REFS_PER_SAVE },

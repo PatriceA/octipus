@@ -49,6 +49,6 @@ for (const kind of ['shared', 'remote'] as const) {
     // Research is the research plugin's page now, not a work view.
     await expect(nav.getByRole('link', { name: 'Research', exact: true })).toHaveCount(0);
     await expect(nav.getByRole('link', { name: 'Documents', exact: true })).toHaveCount(kind === 'remote' ? 0 : 1);
-    await expect(nav.getByRole('link', { name: 'Next steps' })).toHaveAttribute('href', '/tasks');
+    await expect(nav.getByRole('link', { name: 'To-dos' })).toHaveAttribute('href', '/tasks');
   });
 }

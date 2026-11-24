@@ -142,6 +142,7 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('swarm_nodes', `INSERT INTO swarm_nodes (id, root_session_id, depth, kind, role, topic_path, model, token_cap, wall_clock_cap_ms, fan_out_cap, brief_hash, user_id, workspace_id) VALUES ($1, $2, 0, 'root', 'general', 't', 'm', 1, 1, 1, 'h', $3, $4)`, [`node-${randomUUID()}`, session.id, author, ws]);
   await one('task_state', `INSERT INTO task_state (session_id, user_id, owner_agent, task_kind, status, workspace_id) VALUES ($1, $2, 'a1', 'k', 'open', $3)`, [session.id, author, ws]);
   await one('tasks', `INSERT INTO tasks (user_id, title, workspace_id) VALUES ($1, 't', $2)`, [author, ws]);
+  await one('task_lists', `INSERT INTO task_lists (user_id, name, workspace_id) VALUES ($1, 'l', $2)`, [author, ws]);
   await one('trajectory_runs', `INSERT INTO trajectory_runs (user_id, root_session_id, outcome, started_at, ended_at, jsonl_path, jsonl_line, workspace_id) VALUES ($1, $2, 'success', now(), now(), '/t.jsonl', 1, $3)`, [author, session.id, ws]);
   await one('workspace_repos', `INSERT INTO workspace_repos (user_id, name, root_path, workspace_id) VALUES ($1, 'r', $2, $3)`, [author, `/repo/${randomUUID()}`, ws]);
   await one('space_memory', `INSERT INTO space_memory (workspace_id, body, author_kind, author_user_id) VALUES ($1, 'fact', 'member', $2)`, [ws, author]);

@@ -22,6 +22,7 @@ import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository, type NoteScope, personalNoteScope } from '@/db/repositories/note-repository';
 import { reposFor } from '@/db/repositories/content';
+import { linkedTasksOf } from '@/core/tasks/note-links';
 import type { NoteEditProposal } from '@/db/schema/live-documents';
 import type { AgentContext } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -215,6 +216,8 @@ export class NotesTool extends BaseTool {
           // A note the user asked Octipus for directly is the USER's note, so
           // the root writes it unattributed; a spawned agent's note is stamped.
           createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+          // A to-do this write ticks off is audited to the agent and its run.
+          actor: { userId: context.userId, agent: { id: context.id, sessionId: context.sessionId ?? null } },
         });
         return {
           id: result.note.id,
@@ -229,7 +232,7 @@ export class NotesTool extends BaseTool {
 
     this.registerTool(
       'read_note',
-      'Read a note by id or slug, including its backlinks (what links to it).',
+      'Read a note by id or slug, including its backlinks (what links to it) and its linked to-dos (`linkedTasks`: made from its lines — `line` is the marker ` ^todo-…` at the end of that line — or attached). To make to-dos from a note\'s task lines use the tasks tool\'s todos_from_note.',
       createParameterSchema({
         id: { type: 'string', description: 'Note id' },
         slug: { type: 'string', description: 'Note slug (alternative to id)' },
@@ -239,7 +242,8 @@ export class NotesTool extends BaseTool {
         const note = args.id
           ? await svc.getById(notesScope(context, false), args.id as string)
           : args.slug
-            ? await svc.getBySlug(notesScope(context), args.slug as string)
+            // A slug the note was moved away from still finds it.
+            ? await svc.resolveSlug(notesScope(context), args.slug as string)
             : null;
         if (!note) {
           if (!args.id && !args.slug) throw new Error('read_note requires id or slug');
@@ -265,6 +269,9 @@ export class NotesTool extends BaseTool {
           // write_note's base_sha256 so the edit merges (§7.3).
           sha256: note.bodySha256,
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
+          linkedTasks: (await linkedTasksOf(repos, note.id)).map((t) => ({
+            id: t.id, title: t.title, status: t.status, dueAt: t.dueAt, ...(t.anchor ? { line: `^todo-${t.anchor}` } : {}),
+          })),
           ...(pending && rebased ? {
             pendingProposal: {
               proposalId: pending.id,

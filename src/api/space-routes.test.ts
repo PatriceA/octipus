@@ -177,6 +177,10 @@ const SPACE_ACTING = [
   'GET /api/tasks', 'GET /api/tasks/role-agents', 'PUT /api/tasks/role-agents', 'GET /api/tasks/:id', 'POST /api/tasks',
   'PATCH /api/tasks/:id', 'POST /api/tasks/:id/checkout', 'POST /api/tasks/:id/release', 'GET /api/tasks/:id/comments',
   'POST /api/tasks/:id/comments', 'DELETE /api/tasks/:id',
+  // My Day and the capture preview read through `contentRepos` too (the space's tasks and lists in a space).
+  'GET /api/tasks/my-day', 'POST /api/tasks/parse',
+  // Lists and the personal layer: `contentRepos` too — the space's lists by the member's role, the star / My Day per member.
+  'GET /api/tasks/lists', 'POST /api/tasks/lists', 'PATCH /api/tasks/lists', 'DELETE /api/tasks/lists', 'POST /api/tasks/lists/move',
   // Cases and contacts (docs/CASES.md): `contentRepos`, by the member's role.
   'GET /api/cases', 'GET /api/cases/linked', 'POST /api/cases', 'GET /api/cases/:id', 'PATCH /api/cases/:id', 'DELETE /api/cases/:id',
   'POST /api/cases/:id/links', 'DELETE /api/cases/:id/links/:linkId', 'POST /api/cases/:id/follow-ups',
@@ -212,6 +216,13 @@ const SPACE_ACTING = [
   'DELETE /api/knowledge/:id', 'POST /api/knowledge/cleanup', 'GET /api/knowledge/cleanup-history', 'POST /api/knowledge/index',
   'GET /api/notes', 'POST /api/notes', 'POST /api/notes/query', 'GET /api/notes/index', 'GET /api/notes/tags', 'POST /api/notes/capture',
   'GET /api/notes/:id', 'GET /api/notes/:id/suggestions', 'PATCH /api/notes/:id/pin', 'DELETE /api/notes/:id',
+  // Undo an archive: a write, editors and owners only (live-notes.isolation.test.ts).
+  'POST /api/notes/:id/restore',
+  // The day's note and a move to another slug: `noteRepos` → the space's notes, writes by editors and owners.
+  'POST /api/notes/daily', 'POST /api/notes/:id/move',
+  // Today and note ↔ to-do links (core/tasks/note-links.ts): `contentRepos` on both ends; a link is made by a writer of
+  // the to-do who reaches the note, and read through the reader's scope on each side (task-note-links.isolation.test.ts).
+  'GET /api/notes/daily', 'POST /api/notes/:id/todos', 'POST /api/tasks/:id/notes', 'DELETE /api/tasks/:id/notes/:noteId',
   // Space notes (S3): revisions and the agent's edit proposals; 404 in a personal workspace.
   'GET /api/notes/proposals', 'POST /api/notes/proposals/:proposalId/accept', 'POST /api/notes/proposals/:proposalId/reject',
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',

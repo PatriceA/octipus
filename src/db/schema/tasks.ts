@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { TaskRepeat } from '@/core/tasks/repeat';
 import { users } from './users';
 import { workspaces } from './organizations';
+import { notes } from './notes';
 
 /**
  * Personal tasks / todos (feature #6). Distinct from `recurring_tasks` (cron
@@ -67,6 +69,20 @@ export const tasks = pgTable('tasks', {
   remindAt: timestamp('remind_at', { withTimezone: true }),
   remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  /**
+   * The series and order fields (to-do redesign, migrations 0209/0210).
+   * `sortOrder` is the task's default position, ascending: minus its creation
+   * time in ms, so the newest comes first; each user's own order, star and
+   * My Day live in `task_user_state` (per user, so space members do not share
+   * them). `repeat` is the rule of core/tasks/repeat.ts, with the zone and
+   * anchor day the series is computed in; completing (or skipping) a
+   * repeating to-do creates the next occurrence and records it in
+   * `repeatNextId`, which is what makes that happen once
+   * (db/repositories/task-series.ts).
+   */
+  sortOrder: doublePrecision('sort_order').default(sql`(-(extract(epoch from now()) * 1000))`).notNull(),
+  repeat: jsonb('repeat').$type<TaskRepeat>(),
+  repeatNextId: uuid('repeat_next_id'),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. 'reader' and 'research' are kept for existing tasks (the core reader and research module are removed; their example plugins write 'agent' or no task). */
   source: text('source').default('user').notNull(),
   /** Optional link back to the origin (sessionId, url, messageId, …). */
@@ -93,5 +109,58 @@ export interface TaskSourceRef {
   label?: string;
 }
 
+/**
+ * One user's personal layer on a task (migration 0210): their star, the day
+ * they put it in My Day, their own position. No row = defaults.
+ */
+export const taskUserState = pgTable('task_user_state', {
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  important: boolean('important').default(false).notNull(),
+  myDayOn: date('my_day_on', { mode: 'string' }),
+  sortOrder: doublePrecision('sort_order'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.taskId, table.userId] }),
+}));
+
+/** A to-do list that holds no to-do yet (a list is otherwise the `category` of its to-dos). Scoped like tasks. */
+export const taskLists = pgTable('task_lists', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
+ * A to-do linked to a note (migration 0211): a note attached to the to-do,
+ * or the note line it was made from. `anchor` is set for a line: the line
+ * carries ` ^todo-<anchor>` (src/shared/note-todos.ts), and its tick follows
+ * the to-do and the other way round (core/tasks/note-links.ts). Both ends
+ * are in one scope (a user's personal to-dos and notes, or one space's): a
+ * link is made only where the caller reaches both, and read only through
+ * the reader's own scope on each side, so it never shows a note (or a
+ * to-do) to someone who cannot open it.
+ */
+export const taskNoteLinks = pgTable('task_note_links', {
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }).notNull(),
+  noteId: uuid('note_id').references(() => notes.id, { onDelete: 'cascade' }).notNull(),
+  anchor: text('anchor'),
+  /** The tick the line is owed: the to-do's write to it failed and is retried (migration 0212). Null when none. */
+  pendingChecked: boolean('pending_checked'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.taskId, table.noteId] }),
+  noteIdx: index('task_note_links_note_idx').on(table.noteId),
+  anchorIdx: uniqueIndex('task_note_links_anchor_uidx').on(table.noteId, table.anchor).where(sql`${table.anchor} IS NOT NULL`),
+}));
+
 export type Task = typeof tasks.$inferSelect;
+/** A task as one user sees it: the row plus their personal layer (`sortOrder` theirs when they set one). */
+export type TaskView = Task & { important: boolean; myDayOn: string | null };
+export type TaskUserState = typeof taskUserState.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
+export type TaskNoteLink = typeof taskNoteLinks.$inferSelect;

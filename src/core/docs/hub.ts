@@ -166,6 +166,13 @@ export interface DocHubDeps {
   now(): number;
   /** Tests: how long a document stays in memory after its last leave (default `DOC_KEEP_WARM_MS`; 0 drops it at once). */
   keepWarmMs?: number;
+  /**
+   * A member's own update changed the text from `before` to `after` (only
+   * called when the text holds to-do markers): the to-dos of lines it ticked
+   * follow, as that member (core/tasks/note-links.ts). Called in the order
+   * the updates came; never awaited by the edit.
+   */
+  onTicks?(input: { noteId: string; workspaceId: string; userId: string; before: string; after: string }): void;
 }
 
 interface Peer {
@@ -403,7 +410,13 @@ export class DocumentHub {
       doc.stateBytes += bytes.length;
     }
     try {
+      // A tick typed or clicked here reaches its to-do now, as this member: the text around the update.
+      const before = this.deps.onTicks ? doc.text.toString() : '';
       Y.applyUpdate(doc.ydoc, bytes, { kind: 'peer', userId: conn.userId, connectionId: conn.connectionId } satisfies DocOrigin);
+      if (this.deps.onTicks && before.includes('^todo-')) {
+        const after = doc.text.toString();
+        if (after !== before) this.deps.onTicks({ noteId, workspaceId: doc.workspaceId, userId: conn.userId, before, after });
+      }
     } catch (err) {
       logger.warn({ err, noteId, connectionId: conn.connectionId }, 'doc.update could not be applied');
       this.error(conn.connectionId, noteId, 'INVALID_UPDATE', 'The update could not be read');

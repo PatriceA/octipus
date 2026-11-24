@@ -5,7 +5,7 @@ const fixture = vi.hoisted(() => ({
   result: { response: 'The answer.\n\n**Sources:** recent 2 msgs, profile(Patrice, 8 facts)', sessionId: 'session', agentId: 'agent', classification: { type: 'casual', confidence: 1 } },
 }));
 vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: async () => fixture.result }) }));
-vi.mock('@/db/repositories/scoped', () => ({ scopedRepos: () => ({ sessions: { findById: async () => ({ id: 'session' }) } }) }));
+vi.mock('@/db/repositories/scoped', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/db/repositories/scoped')>()), scopedRepos: () => ({ sessions: { findById: async () => ({ id: 'session' }) } }) }));
 vi.mock('@/security/devmode', () => ({ devModeAllowed: () => true, checkProjectPath: () => ({ allowed: true }) }));
 import { chatRoutes } from './chat';
 

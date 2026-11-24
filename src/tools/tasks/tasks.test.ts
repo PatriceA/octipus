@@ -405,3 +405,59 @@ describe('work board: checkout_task, add_task_comment, assignee', () => {
   });
 });
 
+
+describe('note links: what is on my plate today, and to-dos from a note', () => {
+  beforeAll(async () => {
+    // Note saves index in the background: keep that off the network.
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    vi.spyOn(getEmbeddingService(), 'generateEmbedding').mockRejectedValue(new Error('No embedding model configured (test)'));
+    vi.spyOn(getEmbeddingService(), 'embedBatch').mockImplementation(async (texts: string[]) => texts.map(() => new Error('No embedding model configured (test)')));
+  });
+  const saveNote = async (userId: string, title: string, body: string) => {
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { personalNoteScope } = await import('@/db/repositories/note-repository');
+    return (await getNoteService().save({ scope: personalNoteScope(userId), title, body, deferIndex: true })).note;
+  };
+
+  test('todos_from_note makes a to-do per open line, marks the lines, and the list names the note', async () => {
+    const note = await saveNote(aliceId, 'Standup', 'Standup\n- [ ] Review the PR\n- [x] Deploy\n- [ ] Write the release notes');
+    const made = await call('todos_from_note', { noteId: note.id }, aliceId);
+    expect(made).toMatchObject({ created: 2, linesMarked: true });
+    expect(made.tasks.map((t: { title: string }) => t.title)).toEqual(['Review the PR', 'Write the release notes']);
+    expect(made.tasks[0].linkedNotes).toEqual([{ id: note.id, title: 'Standup', line: true }]);
+    const { getNoteService } = await import('@/core/knowledge/notes');
+    const { personalNoteScope } = await import('@/db/repositories/note-repository');
+    const body = (await getNoteService().getById(personalNoteScope(aliceId), note.id))?.body ?? '';
+    expect(body.match(/\^todo-[a-z0-9]{8}/g)).toHaveLength(2);
+    // Completing through the tool ticks the line.
+    await call('complete_task', { id: made.tasks[0].id }, aliceId);
+    expect((await getNoteService().getById(personalNoteScope(aliceId), note.id))?.body).toMatch(/- \[x\] Review the PR \^todo-/);
+    // Bob cannot make to-dos of Alice's note.
+    expect(await call('todos_from_note', { noteId: note.id }, bobId)).toEqual({ error: 'Note not found' });
+    const listed = await call('list_tasks', {}, aliceId);
+    expect(listed.tasks.find((t: { id: string }) => t.id === made.tasks[1].id).linkedNotes).toEqual([{ id: note.id, title: 'Standup', line: true }]);
+  });
+
+  test('create_task attaches a note in reach, and refuses one that is not', async () => {
+    const note = await saveNote(aliceId, 'Trip', 'Trip\n\nideas');
+    const created = await call('create_task', { title: 'Book the hotel', noteId: note.id }, aliceId);
+    expect(created.task.linkedNotes).toEqual([{ id: note.id, title: 'Trip' }]);
+    expect(await call('create_task', { title: 'Sneaky', noteId: note.id }, bobId)).toEqual({ error: 'Note not found' });
+    expect((await call('list_tasks', { status: 'all' }, bobId)).tasks.map((t: { title: string }) => t.title)).not.toContain('Sneaky');
+  });
+
+  test('view "today": overdue, due today, My Day and what was finished today', async () => {
+    const overdue = await call('create_task', { title: 'Late thing', dueAt: '2020-01-01' }, bobId);
+    const picked = await call('create_task', { title: 'Picked thing', myDay: true }, bobId);
+    await call('create_task', { title: 'Someday thing' }, bobId);
+    const done = await call('create_task', { title: 'Done thing', myDay: true }, bobId);
+    await call('complete_task', { id: done.task.id }, bobId);
+    const plate = await call('list_tasks', { view: 'today' }, bobId);
+    const { localDateIn } = await import('@/core/tasks/rank');
+    expect(plate.date).toBe(localDateIn(Date.now(), plate.timezone));
+    expect(plate.overdue.map((t: { id: string }) => t.id)).toEqual([overdue.task.id]);
+    expect(plate.myDay.map((t: { id: string }) => t.id)).toEqual([picked.task.id]);
+    expect(plate.doneToday.map((t: { id: string }) => t.id)).toEqual([done.task.id]);
+    expect(JSON.stringify(plate)).not.toContain('Someday thing');
+  });
+});

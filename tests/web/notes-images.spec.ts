@@ -16,12 +16,11 @@ test.describe('notes — images', () => {
     await stubAllDefaults(authenticatedPage);
   });
 
-  /** Open the first note and switch the editor to split so both panes exist. */
+  /** Open the first note: it opens straight into the editor. */
   async function openNote(page: import('@playwright/test').Page) {
     await page.goto('/notes');
     await page.getByText('First note', { exact: false }).first().click();
-    await expect(page.getByRole('button', { name: /^split$/i })).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('button', { name: /^split$/i }).click();
+    await expect(page.locator('.cm-content')).toContainText('body text', { timeout: 10_000 });
   }
 
   test('pasting an image uploads it and inserts a markdown link', async ({ authenticatedPage: page }) => {
@@ -45,8 +44,10 @@ test.describe('notes — images', () => {
     await expect.poll(() => uploads.length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(uploads[0]).toBe('POST');
     // The placeholder must be replaced by the real link, not left behind.
-    await expect(page.locator('.cm-content')).toContainText('/api/documents/doc-img-1/raw', { timeout: 10_000 });
-    await expect(page.locator('.cm-content')).not.toContainText('#upload-');
+    // (Read from the document: off the caret's line the editor draws the picture, not its markdown.)
+    const text = () => page.evaluate(() => (document.querySelector('.cm-content') as HTMLElement & { cmTile: { root: { view: { state: { doc: { toString(): string } } } } } }).cmTile.root.view.state.doc.toString());
+    await expect.poll(text, { timeout: 10_000 }).toContain('/api/documents/doc-img-1/raw');
+    expect(await text()).not.toContain('#upload-');
   });
 
   test('the preview renders the image through an authenticated fetch', async ({
@@ -60,6 +61,7 @@ test.describe('notes — images', () => {
     await openNote(page);
     await page.locator('.cm-content').click();
     await page.keyboard.type('\n![shot](/api/documents/doc-img-1/raw)\n');
+    await page.getByRole('button', { name: 'Reading view' }).click();
 
     // Fetched by the API client (so credentials ride along), then shown as an
     // object URL — a plain `<img src="/api/…">` would never have been fetched
@@ -76,6 +78,7 @@ test.describe('notes — images', () => {
     await openNote(page);
     await page.locator('.cm-content').click();
     await page.keyboard.type('\n[Anthropic](https://www.anthropic.com)\n');
+    await page.getByRole('button', { name: 'Reading view' }).click();
 
     const link = page.getByRole('link', { name: 'Anthropic' });
     await expect(link).toBeVisible({ timeout: 10_000 });
@@ -84,4 +87,36 @@ test.describe('notes — images', () => {
     // Without rel=noopener the opened page gets a handle back to this one.
     await expect(link).toHaveAttribute('rel', /noopener/);
   });
+});
+
+test('an image in a note is drawn in the editor, fetched with the session', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  const rawReads: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/api/documents/doc-img-1/raw')) rawReads.push(r.url()); });
+  // Count the object URLs the page makes: one per picture, not one per redraw.
+  await page.addInitScript(() => {
+    const create = URL.createObjectURL.bind(URL);
+    (window as unknown as { blobUrls: number }).blobUrls = 0;
+    URL.createObjectURL = (obj: Blob | MediaSource) => { (window as unknown as { blobUrls: number }).blobUrls++; return create(obj); };
+  });
+  await page.goto('/notes');
+  await page.getByText('First note', { exact: false }).first().click();
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type('\n![shot](/api/documents/doc-img-1/raw)\nafter');
+  const img = page.locator('.cm-content .cm-np-image img[alt="shot"]');
+  await expect(img).toHaveAttribute('src', /^blob:/, { timeout: 10_000 });
+  expect(rawReads.length).toBeGreaterThan(0);
+  // On the caret's line the markdown shows, to edit it.
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.cm-content')).toContainText('/api/documents/doc-img-1/raw');
+  // The caret passing the line again and again redraws the picture from the one fetch, and no URL is left behind.
+  const before = rawReads.length;
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('ArrowDown');
+    await expect(img).toHaveAttribute('src', /^blob:/);
+    await page.keyboard.press('ArrowUp');
+  }
+  expect(rawReads.length).toBe(before);
+  expect(await page.evaluate(() => (window as unknown as { blobUrls: number }).blobUrls)).toBe(1);
 });

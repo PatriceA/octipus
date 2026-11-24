@@ -299,17 +299,279 @@ tools, and which runs through the plugin host API scopes `agent:run` and
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?view=next` for next-action order with a `bucket` and `reason` each) |
+| GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?assigneeKind=`/`?assigneeRef=`, `?view=next` for next-action order with a `bucket` and `reason` each). Without `status`: every active task, then a page of done ones (see below) |
 | GET | `/api/tasks/:id` | Get one task |
-| POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional) |
-| PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links |
+| POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional; the to-do fields below; `quick` instead of `title` for a capture line) |
+| PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links; the to-do fields below |
+| GET | `/api/tasks/my-day` | Today's My Day (`?tz=`): `{timezone, date, tasks, suggestions}` (see below) |
+| POST | `/api/tasks/parse` | Preview a capture line without creating anything: `{text, tz?}` → the parse (see below) |
 | DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
+| POST | `/api/tasks/:id/notes` | Link a note to the to-do: `{noteId}` (an existing note) or `{title}` (a new note made for it, that title as its first line) → `{note}` (a `linkedNotes` entry). Idempotent. See [Note ↔ to-do links](#note--to-do-links) |
+| DELETE | `/api/tasks/:id/notes/:noteId` | Unlink a note from the to-do (the note and its line stay) → `{unlinked: true}`; `404` when there is no such link in reach |
 | GET | `/api/tasks/role-agents` | The caller's role agents: task counts, on/off, `pipelineTemplate` (the template each task runs through, or null) |
 | PUT | `/api/tasks/role-agents` | Turn a role agent on or off (`{role, enabled}`); with `enabled: true`, `pipelineTemplate` (an id or name) makes it run each task through that pipeline and `null` makes it work tasks itself. A template with a required parameter is refused |
+
+**The unfiltered list.** `GET /api/tasks` with no `status` (and no `view`)
+returns `{serverNow, tasks, done}`: `tasks` holds every active task (in
+progress, then open; each by priority, due date, newest) followed by one page
+of done tasks, most recently completed first. Finished tasks never push an
+active one out of the list. `?doneLimit=` sets the page size (default 50,
+0–500; `0` returns only the active tasks) and `?doneOffset=` where it starts.
+`done` is `{total, offset, limit, hasMore}`: load more by asking again with
+`doneOffset` advanced by `limit` while `hasMore` is true. Archived tasks are not
+in this list; ask for them with `?status=archived`. `?status=X` returns one
+page of that status (done and archived most recently finished first):
+`?limit=` (default 200, at most 500) and `?offset=`, with
+`page: {total, offset, limit, hasMore}` instead of `done`. That is how an
+archived or completed view pages. Other filters (`due`, `category`, assignee) apply to both
+parts. Clients that call it without parameters (the mobile app) keep working:
+`tasks` is the same array shape as before.
+
+To show a to-do list, use the unfiltered call, not one call per status:
+`GET /api/tasks` gives **all** active to-dos (never cut at a page, unlike
+`?status=open`) plus the 50 most recently done, and `?doneLimit=0` gives only
+the active ones. For a "Completed" view, page the done ones with
+`?doneLimit=50&doneOffset=50` and so on (each response repeats the active
+tasks; take the ones with `status: "done"`), or ask for a larger first page
+(`doneLimit` up to 500). `done.total` is the count for a "Completed (n)"
+label.
 
 A parent or blocker the caller cannot see, a self-link, or a parent loop is a
 `400`. Only an active (open or in-progress) blocker blocks; a done one is
 inert and stays in the array.
+
+### To-do fields (star, order, My Day, repeat, due time, steps)
+
+Every task row carries these (all present on every row; older clients may
+ignore them). `important`, `myDayOn` and `sortOrder` are **the caller's own**
+(per user, also in a space: each member has their own star, My Day and
+order); the other fields belong to the task.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `important` | boolean | The caller's star (the Important list). Default `false` |
+| `sortOrder` | number | The caller's manual order within a list, **ascending**; until they reorder, the task's default (minus its creation time in ms, so the newest is first). To move a task between two neighbours, PATCH the midpoint of their `sortOrder`s; to the top, the first one's minus 1. Any finite number |
+| `myDayOn` | `YYYY-MM-DD` \| null | The day (in the caller's zone) they put it in My Day. It **is** in My Day only while that equals today's date there, so My Day empties itself at midnight; no write happens |
+| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6], tz, anchorDay?}` (0 = Sunday, `weekdays` only with `"week"`). The server stamps `tz` (the IANA zone the series runs in) and, for month and year rules, `anchorDay` (the day of the month the series keeps: the 31st comes back on the 31st whenever a month has one; changing only the time, or the date to the day the anchor gives in a shorter month, keeps it). Read-only for clients: send a rule without them (or echoed back unchanged) |
+| `repeatNextId` | uuid \| null | On a finished (done, or skipped = archived) repeating task: the occurrence that made |
+| `dueAt` | ISO \| null | As before. **Due time:** a due *day* is stored as the last millisecond of that day in the user's zone (seconds `59`, ms `999`); any other value is a due *time*. Send a bare `YYYY-MM-DD` for a day, a full ISO instant for a time |
+| `remindAt` | ISO \| null | As before: when the reminder fires (notification); a changed value re-arms it |
+| `parentId` | uuid \| null | As before. A to-do's **steps** are its children (`parentId` = the to-do); create one with `POST /api/tasks {title, parentId}` and tick it with `PATCH {status: "done"}` |
+
+Writing them (`POST` and `PATCH /api/tasks`, JSON):
+
+- `important: boolean`, `sortOrder: number`, `myDay: true|false` (`null` on
+  PATCH = false) set the **caller's own** layer. Any reader of the task may
+  send them, a space viewer too; a PATCH with only these fields needs no
+  write access and changes nothing anyone else sees. Clients send `myDay`,
+  never `myDayOn`.
+- `repeat`: a preset name (`"daily"`, `"weekdays"`, `"weekly"`, `"monthly"`,
+  `"yearly"`), a rule object, or `null` to stop repeating. A bad rule is a
+  `400` naming the problem. Writing `repeat` or `dueAt` re-stamps the anchor.
+- `tz`: the client's zone, for `myDay` and a bare `dueAt` day in this request.
+
+**Time zones.** "Today" in one request (My Day, a bare due day, capture) uses
+the request's `tz` as given. Anything long-lived uses the user's stored zone
+(`preferences.timezone`): a repeat series' `tz`, agent work, `/todo`,
+reminders. Every `tz` a client sends on these routes is offered to the stored
+zone by these rules (also `PUT /api/auth/timezone {timezone, source: "device"}`):
+
+- never over a zone the user chose in Settings (`source: "user"`);
+- **a fixed-offset zone (`Etc/GMT-1`, `Etc/UTC`, `UTC`, `GMT`) never replaces a
+  named zone** (`Europe/Berlin` stays when a phone reports `Etc/GMT-1`); a
+  named zone does replace a fixed one;
+- otherwise a different zone replaces the stored one.
+
+These rules are the condition of one database update, so a zone chosen in
+Settings at the same moment is never replaced. A **bare offset** (`+05:30`,
+`-0800`, `UTC+2`) is not a zone anywhere a zone is accepted: it is ignored as
+`tz` and never stored (Postgres reads such a string with the opposite sign).
+The mobile app sends an IANA fixed zone (`Etc/GMT-1`) for an offset.
+
+A series is stamped with the stored named zone first, then a named request
+zone, and only then a fixed offset (which ignores DST). `PUT /api/auth/timezone`
+with `source: "user"` fixes the zone (devices stop changing it); `"follow"` sets
+it and lets devices update it again. The answer is `{timezone, timezoneSource}`.
+The mobile app, which can only send an offset, should send `tz` as it does and
+read the stored zone from `GET /api/auth/me` `preferences.timezone`.
+
+**Repeating to-dos.** When an occurrence of a series leaves the active set —
+completed (`PATCH {status: "done"}`, an agent's `complete_task`/`update_task`)
+or **skipped** (archived, or deleted: deleting an occurrence does not end the
+series; to end it, set `repeat: null`) — the next occurrence is created
+**exactly once**: a new open task with the same title, notes, list, priority,
+assignee and rule, its steps copied open (deleted steps are not), each user's
+star and order copied (not My Day), due one step on in the series' zone at the
+same local time (repeated until it is today or later), `remindAt` moved by the
+same amount. The finished row's `repeatNextId` names it. Completing again, or
+two completions at once, never makes a second one; if the server fails to make
+it at once, a sweep makes it within minutes. Setting the finished task back to
+`open` (an Undo) deletes the next occurrence only while it is provably
+untouched — still open, unclaimed, never edited, no comment, no step added or
+ticked, nobody's star or order changed, and made less than 10 minutes ago —
+and then clears `repeatNextId`; otherwise it stays.
+
+**Agents and future occurrences.** An occurrence is not work before the start
+of its due day in the series' zone for anything that picks work up by itself:
+the role heartbeat skips it, the tasks tool's next view leaves it out, and
+`POST /api/tasks/:id/checkout` with an `actor` (a runner) answers
+`409 {reason: "not_due", dueAt}`. An explicit request is not stopped: the
+user's own checkout (no `actor`), a runner sending `early: true`, and the
+tool's `checkout_task` with `now: true` (when the user asked for it now) claim
+it. The user can always edit or complete it.
+
+**Lists.** A list is the `category` of its to-dos, plus lists made empty.
+`GET /api/tasks/lists` → `{lists: [{name, open}]}` (`open`: open top-level
+to-dos). `POST /api/tasks/lists {name}` makes an empty list (`409` if one of
+that name exists in any case). `PATCH /api/tasks/lists {name, newName}` renames
+it (every to-do in it moves; onto an existing name the lists merge) →
+`{name, taskIds}`. `DELETE /api/tasks/lists?name=…` deletes it; its to-dos stay,
+in no list → `{taskIds}`. `POST /api/tasks/lists/move {taskIds, name|null}`
+puts to-dos in a list (the Undo of a delete). In a space these are the space's
+lists, written by editors.
+
+**Capture.** `POST /api/tasks` with `quick: "call dentist tomorrow 3pm !high
+#personal"` (and `tz`) parses the line on the server and creates "call
+dentist", due tomorrow 15:00 in `tz`, priority 3, list `personal`; any field
+sent explicitly wins (`title` too). `POST /api/tasks/parse {text, tz?}` returns
+the same parse without creating anything — `{title, due: {date, time} | null,
+dueAt, priority, important, category, repeat, tokens: [{kind, text, start, end,
+label}], timezone}` (`kind`: `due` `time` `repeat` `priority` `important`
+`list`; `start`/`end` index the text) — for showing chips. The web, these two
+routes and `/todo` share one parser (`src/core/tasks/quick-add.ts`).
+
+**Capture grammar** (English; conservative, so ordinary words stay words):
+
+- **Marks**, read anywhere as whole words: `#list` (a letter first; matched to
+  an existing list ignoring case and `-`/`_`), `!high` `!medium` `!low` `!1`–`!3`,
+  `!!` (medium), `!!!` (high), `*` or `!important` (star). A lone `!` is text.
+- **Dates**: today, tonight (20:00 unless a time is given), tomorrow (tmrw),
+  day after tomorrow, a weekday name (the next one; today excluded), on/by/due
+  + weekday (also short: fri), next + weekday (that day of next week), next
+  week (Monday), (this) weekend, next month (the 1st), in 3 days / 2 weeks /
+  a month, 2026-12-01, dec 5, 5th december (a past day this year means next
+  year).
+- **Times**: 3pm, 3:30 pm, 15:00, optionally after "at"; at noon, at midday,
+  in the morning (09:00) / afternoon (14:00) / evening (18:00). A bare number
+  ("at 7", "3 options") is never a time. A time alone is today while it is
+  still ahead, else tomorrow.
+- **Repeats** only with "every": every day / weekday / week / month / year,
+  every 2 weeks, every other day, every mon and wed (first due on the next of
+  those days still ahead, counting today until its time has passed). "Daily",
+  "weekly" and the like are words.
+- Dates, times and repeats are read only as a **clause at the end or the start
+  of the line** (only spaces, commas, semicolons, colons or dashes between its
+  parts and the edge): "Buy Sunday paper" and "Plan next week with Anna" stay
+  titles. Nothing is read inside a URL, an e-mail address, a domain or a word
+  ("Monday.com", "Today's").
+- **Literal text**: "double quotes" or a backslash before a word keep it as
+  text; the quotes or backslash leave the title. Clients take a chip back by
+  quoting its text. A line that would leave no title is taken literally.
+
+**My Day.** `GET /api/tasks/my-day?tz=Europe/Berlin` →
+`{timezone, date, tasks, suggestions}`: `tasks` are those picked today, active
+and done; `suggestions` are active top-level tasks not picked today, each a
+task row plus `bucket` and `reason` — first those left in My Day on an earlier
+day (`bucket: "earlier"`, reason "in My Day yesterday"), then the next-action
+ranking's pressing ones (`doing`, `overdue`, `today`, `high`, `inbound`,
+`upcoming`), at most 12.
+
+### Note ↔ to-do links
+
+A to-do can be linked to notes: notes **attached** to it, or the note **line**
+it was made from. Every task row (`GET /api/tasks` in every form, `GET
+/api/tasks/:id`, `GET /api/tasks/my-day`'s `tasks`, and the answers of `POST`
+and `PATCH`) carries
+
+| Field | Type | Meaning |
+|---|---|---|
+| `linkedNotes` | array | The notes it is linked to **that the caller can open**, oldest link first: `{id, title, slug, noteKind, noteDate, archived, anchor}`. `anchor` is set when the to-do was made from a line of that note (see below), null for an attached note. An archived note is listed with `archived: true`; a deleted one is gone. Empty when none |
+
+and `GET /api/notes/:id` carries `linkedTasks`: the to-dos linked to the note
+that the caller can open, `{id, title, status, dueAt, completedAt, repeating,
+anchor}`.
+
+**Making links.** `POST /api/tasks` takes `noteId` (link the new to-do to that
+note) and, with it, `noteAnchor` (it was made from the line of that note that
+carries this anchor). `POST /api/tasks/:id/notes {noteId | title}` attaches a
+note to an existing to-do (`title`: a new note made for it). `POST
+/api/notes/:id/todos {lines?}` makes to-dos of a note's task lines on the
+server: every unticked `- [ ]` line that is not a to-do yet, or the 0-based
+`lines` given (a ticked one then becomes a done to-do); each line gets its
+marker and its link → `{tasks, marked}` (`marked: false` with a `reason` when
+the note could not take the markers: the to-dos are then attached instead).
+
+**Line markers.** A task line made a to-do ends in ` ^todo-<anchor>` (the
+anchor: 6–16 lowercase letters and digits, random):
+
+    - [ ] Call the dentist ^todo-k3x9qa2b
+
+The marker names the link, never the to-do, so a note says nothing about a
+to-do to a reader who cannot open it. A client that makes a to-do from a line
+picks a new anchor, creates the to-do with `noteId` and `noteAnchor`, then
+writes the marker into the line as an ordinary edit of the note (the web does
+this; `409 {code: "anchor_taken"}` when that line is already another to-do).
+Clients draw the marker as a chip and leave it out of titles and previews;
+the pure helpers are in `src/shared/note-todos.ts`.
+
+**Ticks follow each other**, change for change, never state for state:
+
+- A to-do moved between done and not done (by anyone: the web, the mobile app,
+  an agent), or restored from deleted, ticks or unticks its line on the
+  server: a personal note by one UPDATE conditional on the text the server
+  read (read again on a race), a space note merged into its live text. A
+  client editing that note sees the new text on its next read; a save made
+  from the older text is refused as `stale` (the web merges it with the change
+  and saves again when the two do not touch the same text). In a space that
+  takes the agent's note changes as proposals (`agent_edit_mode: suggest`), an
+  **agent's** completion is proposed as an edit of the note (the line follows
+  once a member accepts it), as all its note edits there are; a member's is
+  written. A run of ticks on a closed space note is one revision.
+- A tick that could not be written (the note busy, out of reach for a moment)
+  is **owed**: the link remembers it and it is made when the note is next
+  opened by someone who may write it (`GET /api/notes/:id`) or refreshed, so
+  line and to-do always come back together.
+- Any change of a note that ticks or unticks a marked line completes or
+  reopens its to-do, **as the person who made the change and within their
+  reach** (a to-do they cannot see is left alone; a guest's tick never
+  completes an internal to-do): a save, a merged write, a restored revision,
+  an accepted proposal, and each update typed in a live space note, as it
+  reaches the server, in order. Only a line whose tick **changed** counts: a
+  marker that only appears (a line just made a to-do) or only disappears (a
+  line deleted) changes nothing. The audit names who: the user, the agent and
+  its run, or an admin acting for the user.
+- **One marker, one line, one link**: a save takes a marker that has no link
+  in that note (copied from another note) or a second copy of a marker
+  (a pasted line) off its line; the line stays a plain task line, which may
+  become a to-do of its own. The save's answer is the text as saved.
+- A **deleted** (archived) to-do is never brought back by a tick, and deleting
+  one leaves its line as it is; restoring it to open unticks its line.
+- **Repeating** to-dos: the line stays with the occurrence it was made from
+  (ticked when that is done); its attached notes move on to the next
+  occurrence (one link per series) and the note of its line is attached
+  there. Deleting (skipping) an occurrence hands its links, line included, to
+  the next one.
+- **Deleting the line** leaves the to-do and its link (an undo brings the
+  line's link back); **editing** the line keeps the link (the to-do keeps its
+  own title).
+- A **stale or offline** client: a save refused as stale writes nothing (the
+  to-do's change stands); the web merges it and saves again, and a real clash
+  asks the user.
+
+**Who sees what.** Both ends of a link are always in one scope: a user's
+personal to-dos and notes, or one space's (a personal note can never be linked
+to a space to-do, nor a space note to a personal one). A link is made only by
+someone who can write the to-do and reach the note there, and is shown only
+through the reader's own access on each side: a space guest sees the linked
+notes of their folders only and, from a note, the to-dos of their rooms only.
+A remote member of a federated space reads the host's task rows without links.
+
+**Live updates.** Every write to one of your personal tasks (yours, an agent's,
+a repeat's), and every change to your own star / My Day / order (in a space
+too), sends the gateway event `tasks.changed` with payload `{taskId}` to your
+connections (subscribe to the pattern `tasks.changed`); refetch on it
+(debounced) instead of polling. Space tasks send `task.changed` to the space's
+subscribers as before.
 
 ## Recurring Tasks
 
@@ -579,15 +841,20 @@ in its body.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (max 500). |
-| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). |
+| GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (default 100, max 500), `q`, `archived=only`. `q` searches on the server: a note matches when every word of `q` (up to 8, case-insensitive, `%`/`_` literal) appears in its title, slug, tags or body; title matches come first, then pinned, then most recently updated. Archived notes never match unless `archived=only`. `preview=true`: each note carries `preview` (at most 140 characters of its text as plain text, without its title line) instead of `body` — for lists; without it the full `body` is returned as before. `archived=only` lists only archived notes (each with `archivedAt`), most recently archived first: the archive view. |
+| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). With `id` it updates that note. Without `id`, a note already at the slug (given, or derived from the title; archived notes included) is **updated**; send `createOnly: true` to create only, which answers `409 {code: "exists", id, slug}` and writes nothing when the slug is taken. The web app sends it for every new note. Personal notes: `ifSha256` (the `bodySha256` the edit was made from) saves only while the stored body still has it, else `409 {code: "stale", currentSha256}` and nothing is written (space notes merge through `baseSha256` instead). Re-indexing for search is deferred: the answer says `indexed: false, indexQueued: true`, and the note is re-embedded once it has had no save for 5 seconds (in the server process: a restart inside that window keeps the earlier chunks until the next save). |
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
-| GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
+| GET | `/api/notes/index` | Lightweight `{id,title,slug,noteKind}` list — the source for `[[` autocomplete. A note that was moved also carries `movedFrom` (the slugs it was moved away from), so a client resolves an old `[[link]]` as the server does. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
-| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). |
-| GET | `/api/notes/:id` | Read a note with its backlinks. |
+| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). The web app sends its own calendar day as `date` (`YYYY-MM-DD`); without it the server's UTC day is used. A day whose note is archived answers `409 {code: "archived", id}` (the line is not hidden in it). |
+| GET | `/api/notes/daily?date=YYYY-MM-DD` | `{ note, template }`: the day's daily note if it exists (`note: null` otherwise; nothing is created) and the text a new one starts from. The Today page shows the day with it and creates the note on the first keystroke. |
+| POST | `/api/notes/daily` | `{ date: "YYYY-MM-DD", restore?, fresh? }` (the caller's calendar day) → `{ note }`: the day's daily note (`daily/<date>`, kind `daily`), created from the daily template only while the day has none (a note created meanwhile is returned, never replaced). A day whose note the user **archived** answers `409 {code: "archived", id}` and writes nothing: `restore: true` brings it back (answered with `restored: true`), `fresh: true` starts a new note for the day (the archived one moves aside to `daily/<date>-archived-…`, answered with `fresh: true`). `400` for a day that does not exist (`2026-02-31`). |
+| POST | `/api/notes/:id/move` | `{ slug }` → `{ note }`: give the note another slug — another folder (`projects/plan`) or name. The id, text and title stay. The old slug is added to `frontmatter.movedFrom` (and taken out of any other note's: one note holds a moved slug), and a `[[link]]` to a slug resolves to the note at that slug, else to the active note that was moved away from it (the exact slug always wins): links to the old slug keep working, before and after the move. `movedFrom` is written by this route alone: `POST /api/notes` ignores it in `frontmatter` and keeps the note's own. `409 {code: "exists", id, slug}` when another note (an archived one included) has the slug, `400 {code: "invalid_slug"}` for a slug that is empty once normalized, `404` when the caller cannot reach the note; in a space, editors and owners only. Renaming a note (a new `title` on `POST /api/notes` with its `id`) never changes its slug. |
+| GET | `/api/notes/:id` | Read a note with its backlinks and `linkedTasks` (the to-dos linked to it that the caller can open; see [Note ↔ to-do links](#note--to-do-links)). |
+| POST | `/api/notes/:id/todos` | `{ lines?: number[] }` → `{ tasks, marked, reason? }`: make to-dos of the note's task lines that are not to-dos yet (every unticked one, or the 0-based `lines`), each marked and linked. `404` when the caller cannot reach the note. |
 | GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
 | PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
+| POST | `/api/notes/:id/restore` | Undo an archive: the note is back in lists, search and recall → `{ restored: true }` (also for a note that is not archived, which is left untouched). `404` when the caller cannot reach the note; in a space, editors and owners only (`403` otherwise). |
 | DELETE | `/api/notes/:id` | Archive (soft): the note's chunks stay but no search or recall returns them. On a lesson note this is your own archive: a later learning review that finds the same lesson drops it instead of reviving the note. `?hard=true` also deletes the note's chunks and edges. |
 
 ## Graph
@@ -930,7 +1197,8 @@ Events of note for clients (`event.type`): `chat.response`, `chat.delta`,
 `chat.message` (`injected` steer, `sideChannel` answer, or `proactive` in-app
 delivery to `webchat:<your id>`), `permission.request` / `permission.resolved`,
 `agent.approval_required` / `approval.resolved`, `document.*`,
-`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`. A refused
+`model.install_progress`, `voice.speak`, `swarm.*`, `agent.*`,
+`tasks.changed` (one of your personal to-dos changed: `{taskId}`). A refused
 `approval.respond` answers `error` `APPROVAL_NOT_FOUND` (unknown, someone
 else's, or already answered) or `APPROVAL_EXPIRED`.
 

@@ -4,9 +4,9 @@ import { type DocOrigin, type DocumentHub, NoteTooLargeError, StaleWriteError } 
 import { getDocHub } from '@/core/docs';
 import { merge3, normalizeNewlines } from '@/core/docs/text-merge';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
-import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
+import { insertRevision, insertTickRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
-import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
+import { assertNoteAccess, getNoteRepository, MOVED_FROM, noteMovedFrom, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
 import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
@@ -16,6 +16,9 @@ import { type KnowledgeOwner, noteKnowledgeScope } from '@/core/rag/knowledge-sc
 import { getLinkResolverService, type LinkResolverService } from './link-resolver';
 import { NOTE_PURPOSES, notePurposeFor } from './note-purpose';
 import { parseLinks, slugify } from './wikilink';
+import type { TickActor } from '@/core/tasks/note-links';
+import { anchorsOfNote } from '@/db/repositories/task-note-links';
+import { normalizeMarkers } from '../../shared/note-todos';
 
 /**
  * Knowledge-graph Tier 2 — the note authoring pipeline.
@@ -102,13 +105,40 @@ export interface SaveNoteInput {
    * an existing note is a proposal).
    */
   createOnly?: boolean;
+  /**
+   * Personal notes: write only while the stored body still has this sha
+   * (the one the writer read). Otherwise `StaleWriteError` and nothing is
+   * written — an autosave from an editor never overwrites text saved since
+   * from somewhere else. Space notes merge instead (`baseSha256`).
+   */
+  ifSha256?: string;
+  /**
+   * Re-index a moment after the last save of the note instead of inside this
+   * one (`INDEX_DEBOUNCE_MS`): an editor that saves on every pause does not
+   * re-embed the whole note each time. The result says `indexQueued`.
+   */
+  deferIndex?: boolean;
+  /**
+   * The write is a to-do's tick reaching its note line
+   * (core/tasks/note-links.ts): the note's to-dos are not reconciled with
+   * it again. Every other save completes or reopens the to-dos whose lines
+   * it ticked or unticked.
+   */
+  skipTaskSync?: boolean;
+  /** Who the change is (audit of the to-dos its ticks complete): an agent, an admin acting for the user. Default: the scope's user. */
+  actor?: TickActor;
 }
+
+/** A deferred re-index (`SaveNoteInput.deferIndex`) runs this long after the note's last save. */
+export const INDEX_DEBOUNCE_MS = 5_000;
 
 export interface SaveNoteResult {
   note: Note;
   created: boolean;
-  /** False when the body changed but re-indexing was skipped/failed (logged). */
+  /** False when the body changed but re-indexing was skipped/failed (logged), or was deferred. */
   indexed: boolean;
+  /** The re-index was deferred (`deferIndex`): it runs once the note has been quiet for `INDEX_DEBOUNCE_MS`. */
+  indexQueued?: boolean;
   links: { added: number; removed: number };
   /** Space notes: other changes were merged into the written body (it differs from the input). */
   merged?: boolean;
@@ -121,6 +151,14 @@ export interface SpaceBodyWrite {
   origin: DocOrigin;
   title?: string;
   tags?: string[];
+  /**
+   * A to-do's state reaching its line (core/tasks/note-links.ts): no
+   * reconcile back, and on a closed note one revision takes a run of such
+   * ticks by one member instead of one each.
+   */
+  mirror?: boolean;
+  /** Who the write is (the to-dos its ticks complete are audited to them); default the origin's user. */
+  actor?: TickActor;
 }
 
 export interface SpaceBodyWriteResult {
@@ -138,6 +176,36 @@ export class NoteExistsError extends Error {
     super(`A note already exists at ${slug}`);
     this.name = 'NoteExistsError';
   }
+}
+
+/**
+ * The day's daily note is archived: nothing writes into it or brings it back
+ * but an explicit restore (or a fresh note for the day), so an archive the
+ * user made stays one. Nothing was written.
+ */
+export class NoteArchivedError extends Error {
+  constructor(readonly noteId: string, readonly slug: string) {
+    super(`The note at ${slug} is archived: restore it, or start a fresh one`);
+    this.name = 'NoteArchivedError';
+  }
+}
+
+/** A move named a slug that is empty once normalized (`slugify`); nothing was written. */
+export class InvalidSlugError extends Error {
+  constructor(readonly input: string) {
+    super(`Not a usable note slug: ${JSON.stringify(input)}`);
+    this.name = 'InvalidSlugError';
+  }
+}
+
+function withoutMovedFrom(frontmatter: Record<string, unknown>): Record<string, unknown> {
+  const { [MOVED_FROM]: _drop, ...rest } = frontmatter;
+  void _drop;
+  return rest;
+}
+
+function withMovedFrom(frontmatter: Record<string, unknown>, movedFrom: string[]): Record<string, unknown> {
+  return movedFrom.length > 0 ? { ...frontmatter, [MOVED_FROM]: movedFrom } : frontmatter;
 }
 
 /** A new daily note's text. */
@@ -179,6 +247,9 @@ export class NoteService {
   async save(input: SaveNoteInput): Promise<SaveNoteResult> {
     const { scope, title } = input;
     assertNoCredentialTemplates({ title: input.title, body: input.body, tags: input.tags, frontmatter: input.frontmatter });
+    // `movedFrom` is written by `move` alone: a writer cannot claim another
+    // note's old slug through its frontmatter.
+    const inputFrontmatter = input.frontmatter === undefined ? undefined : withoutMovedFrom(input.frontmatter);
     assertNoteAccess(scope, 'write');
     const store = this.store(scope);
     let body = input.body ?? '';
@@ -199,6 +270,19 @@ export class NoteService {
       existing = await store.getBySlug(desiredSlug);
     }
     if (existing && input.createOnly) throw new NoteExistsError(existing.id, existing.slug);
+    if (existing && scope.kind !== 'space' && input.ifSha256 !== undefined && existing.bodySha256 !== input.ifSha256) {
+      throw new StaleWriteError('unknown_base', existing.bodySha256);
+    }
+    // Every to-do marker names one line and one link: a copied one, or one
+    // whose link is gone, comes off its line (src/shared/note-todos.ts).
+    if (input.body !== undefined && body.includes('^todo-')) {
+      const known = existing ? await anchorsOfNote(existing.id) : new Set<string>();
+      const normalized = normalizeMarkers(body, known);
+      if (normalized !== body) {
+        body = normalized;
+        bodySha = sha256Hex(body);
+      }
+    }
 
     // A space note's body goes through the hub (or the conditional write):
     // what is saved is the writer's change merged into the current text.
@@ -215,6 +299,7 @@ export class NoteService {
         base: { sha256: input.baseSha256 ?? sha256Hex(input.baseBody ?? ''), text: input.baseBody },
         next: body,
         origin: { kind: 'external', userId: scope.userId, onBehalfOfUserId: input.onBehalfOfUserId ?? null },
+        actor: input.actor,
       });
       body = write.note.body;
       bodySha = write.note.bodySha256;
@@ -236,11 +321,18 @@ export class NoteService {
         ...(scope.kind === 'space' ? {} : { body, bodySha256: bodySha }),
         // Omitted: the stored frontmatter is left as it is, not written back
         // from the read above (a write to it since would be lost).
-        ...(input.frontmatter !== undefined ? { frontmatter: input.frontmatter } : {}),
+        // The note's own `movedFrom` stays whatever frontmatter is sent.
+        ...(inputFrontmatter !== undefined ? { frontmatter: withMovedFrom(inputFrontmatter, noteMovedFrom(existing.frontmatter)) } : {}),
         tags,
         noteKind: input.noteKind ?? existing.noteKind,
         noteDate: input.noteDate ?? existing.noteDate,
-      });
+        // `ifSha256` is the UPDATE's own condition, not only the check above:
+        // a write that lands between the read and this one wins.
+      }, scope.kind !== 'space' && input.ifSha256 !== undefined ? { ifSha256: input.ifSha256 } : undefined);
+      if (!updated && scope.kind !== 'space' && input.ifSha256 !== undefined) {
+        const now = await store.getById(existing.id);
+        if (now) throw new StaleWriteError('unknown_base', now.bodySha256);
+      }
       if (!updated) throw new Error(`Note ${existing.id} vanished during update`);
       note = updated;
       created = false;
@@ -260,7 +352,7 @@ export class NoteService {
         title,
         body,
         bodySha256: bodySha,
-        frontmatter: input.frontmatter ?? {},
+        frontmatter: inputFrontmatter ?? {},
         tags,
         noteKind: input.noteKind ?? 'note',
         noteDate: input.noteDate ?? null,
@@ -280,12 +372,57 @@ export class NoteService {
       }
     }
 
+    // A ticked or unticked line made a to-do: the to-do follows (never fails the save).
+    // (A space note's write reconciled in `writeSpaceBody`.)
+    if (existing && scope.kind !== 'space' && !input.skipTaskSync && existing.body !== body) {
+      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+      await reconcileNoteTasks(scope, note.id, existing.body, body, input.actor);
+      // A to-do that followed may have written the note again: answer with the note as it is now.
+      const now = await store.getById(note.id);
+      if (now && now.bodySha256 !== note.bodySha256) note = now;
+    }
+
     const links = await this.relink(scope, note, parsed, tags, input.createdByAgentId ?? null);
 
     // 3. Re-index (degrades loudly if no embedding model).
+    if (input.deferIndex) {
+      this.scheduleReindex(note);
+      return { note: this.withLive(scope, note), created, indexed: false, indexQueued: true, links, merged };
+    }
+    this.cancelScheduledReindex(note.id);
     const indexed = await this.reindex(note);
 
     return { note: this.withLive(scope, note), created, indexed, links, merged };
+  }
+
+  /** Deferred re-indexes by note id (`deferIndex`): one pending timer per note. */
+  private readonly pendingIndex = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Re-index the note once it has been quiet for `INDEX_DEBOUNCE_MS`, from
+   * the row as it is then (later saves restart the wait). In-process: a
+   * restart inside the window leaves the earlier chunks until the next save.
+   */
+  private scheduleReindex(note: Note): void {
+    this.cancelScheduledReindex(note.id);
+    const timer = setTimeout(() => {
+      this.pendingIndex.delete(note.id);
+      this.notes.getById(note.userId, note.id)
+        .then(async (row) => {
+          const current = row
+            ?? (note.workspaceId ? await this.notes.getById({ kind: 'space', workspaceId: note.workspaceId, userId: note.userId, role: 'editor', archived: false }, note.id) : null);
+          if (current) await this.reindex(current);
+        })
+        .catch((err: unknown) => coreLogger.warn({ err, component: 'notes', noteId: note.id }, 'Deferred re-index of a note failed; it is searchable by its earlier text until the next save'));
+    }, INDEX_DEBOUNCE_MS);
+    timer.unref?.();
+    this.pendingIndex.set(note.id, timer);
+  }
+
+  private cancelScheduledReindex(noteId: string): void {
+    const timer = this.pendingIndex.get(noteId);
+    if (timer) clearTimeout(timer);
+    this.pendingIndex.delete(noteId);
   }
 
   /** Step 2 of `save`: sync the note's `[[links]]` and `#tags` edges, bind ghosts. */
@@ -324,7 +461,8 @@ export class NoteService {
     const outgoingRefs = [...new Set(parsed.wikilinks.map((w) => w.ref))];
     for (const ref of outgoingRefs) {
       if (ref === note.slug) continue; // a self-link has nothing to bind
-      const target = await this.store(scope).getBySlug(ref);
+      // A link to a slug a note was moved away from still means that note.
+      const target = await this.store(scope).resolveSlug(ref);
       if (target) {
         await this.links.resolveTo({ scope, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
       }
@@ -356,7 +494,20 @@ export class NoteService {
   async writeSpaceBody(scope: SpaceScope, noteId: string, input: SpaceBodyWrite): Promise<SpaceBodyWriteResult> {
     assertNoteAccess(scope, 'write');
     const write = { ...input, next: normalizeNewlines(input.next) };
+    // Every to-do marker names one line and one link (as on a personal save).
+    if (write.next.includes('^todo-')) write.next = normalizeMarkers(write.next, await anchorsOfNote(noteId));
     assertSpaceNoteSize(write.next);
+    // The text before this write: the to-dos of the lines it ticks follow, once the note's lock is let go.
+    let before: string | null = null;
+    const result = await this.writeSpaceBodyLocked(scope, noteId, write, (text) => { before = text; });
+    if (!write.mirror && before !== null && result.changed) {
+      const { reconcileNoteTasks } = await import('@/core/tasks/note-links');
+      await reconcileNoteTasks(scope, noteId, before, result.note.body, write.actor ?? { userId: write.origin.userId, onBehalfOf: write.origin.onBehalfOfUserId ?? null });
+    }
+    return result;
+  }
+
+  private async writeSpaceBodyLocked(scope: SpaceScope, noteId: string, write: SpaceBodyWrite, seen: (before: string) => void): Promise<SpaceBodyWriteResult> {
     const store = this.store(scope);
     const hub = this.hub();
     const meta = {
@@ -368,6 +519,7 @@ export class NoteService {
       const row = await store.getById(noteId);
       if (!row) throw new Error(`Note ${noteId} not found for this user`);
       if (open) {
+        seen(hub.readLive(noteId)?.text ?? row.body);
         const result = await hub.applyExternalLocked(noteId, write.base, write.next, write.origin);
         const note = hasMeta ? await store.update(noteId, meta) : await store.getById(noteId);
         if (!note) throw new Error(`Note ${noteId} vanished during update`);
@@ -377,6 +529,7 @@ export class NoteService {
         ? write.base.text
         : write.base.sha256 === row.bodySha256 ? row.body : null;
       if (baseText === null) throw new StaleWriteError('unknown_base', row.bodySha256);
+      seen(row.body);
       // A stored body from before line endings were normalized merges as `\n`.
       const result = merge3(normalizeNewlines(baseText), normalizeNewlines(row.body), write.next);
       if (!result.ok) throw new StaleWriteError('conflict', row.bodySha256);
@@ -390,16 +543,17 @@ export class NoteService {
       // Every writer of this note holds the mutex; a miss is a write from
       // outside this process (or the row's deletion).
       if (!note) throw new StaleWriteError('unknown_base', row.bodySha256);
-      const revision = await insertRevision({
+      const rev = {
         noteId,
         workspaceId: scope.workspaceId,
         body: result.text,
         bodySha256: sha,
         authors: [write.origin.userId],
         onBehalfOfUserId: write.origin.onBehalfOfUserId ?? null,
-        origin: write.origin.kind === 'peer' ? 'external' : write.origin.kind,
+        origin: write.origin.kind === 'peer' ? 'external' as const : write.origin.kind,
         restoredFrom: write.origin.restoredFrom ?? null,
-      });
+      };
+      const revision = write.mirror ? await insertTickRevision(rev, row.bodySha256) : await insertRevision(rev);
       return { note, changed: true, merged: result.text !== write.next, revisionId: revision.id };
     });
   }
@@ -428,6 +582,10 @@ export class NoteService {
     const previousBodyTags = new Set(previousBody === undefined ? [] : parseLinks(stripFrontmatter(previousBody)).tags);
     const tags = [...new Set([...note.tags.filter((tag) => !previousBodyTags.has(tag)), ...parsed.tags])];
     const current = (await this.notes.update(scope, noteId, { tags })) ?? note;
+    // Ticks a to-do could not write into the note before: made now (typed
+    // ticks reached their to-dos as they were typed, `onTicks` of the hub).
+    const { healNoteLines } = await import('@/core/tasks/note-links');
+    await healNoteLines(scope, noteId, editorUserId);
     await withProviderUsageContext(
       { userId: editorUserId, workspaceId: row.workspaceId, funding: 'install', accountingMetadata: { noteId, purpose: 'live-note-reindex' } },
       async () => {
@@ -518,6 +676,48 @@ export class NoteService {
     return note ? this.withLive(scope, note) : null;
   }
 
+  /**
+   * The note a `[[link]]` to `slug` means: the note at that slug, else one
+   * moved away from it (`move`). `getBySlug` matches the slug alone.
+   */
+  async resolveSlug(scope: NoteScope, slug: string): Promise<Note | null> {
+    const note = await this.store(scope).resolveSlug(slugify(slug));
+    return note ? this.withLive(scope, note) : null;
+  }
+
+  /**
+   * Move a note to another slug: another folder (`projects/plan`), or
+   * another name in its folder. The id, text and title stay; the old slug
+   * is kept in `frontmatter.movedFrom` (taken from any other note that held
+   * it: one note per moved slug), so every `[[link]]` to it still
+   * resolves (`resolveSlug`: the edges already bound keep their target, a
+   * link saved later binds through the alias), and links waiting for the
+   * new slug bind now. Null when the scope does not reach the note.
+   * Throws `NoteExistsError` when another note holds the slug (an archived
+   * one included), `InvalidSlugError` for a slug that is empty once
+   * normalized, and `SpaceError` for a role that may not write.
+   */
+  async move(scope: NoteScope, id: string, slugInput: string): Promise<Note | null> {
+    assertNoteAccess(scope, 'write');
+    const slug = slugify(slugInput);
+    if (!slug) throw new InvalidSlugError(slugInput);
+    const store = this.store(scope);
+    const note = await store.getById(id);
+    if (!note) return null;
+    if (note.slug === slug) return this.withLive(scope, note);
+    const taken = await store.getBySlug(slug);
+    if (taken && taken.id !== note.id) throw new NoteExistsError(taken.id, slug);
+    const movedFrom = [...new Set([...noteMovedFrom(note.frontmatter), note.slug])].filter((a) => a !== slug);
+    const moved = await store.update(note.id, { slug, frontmatter: { ...note.frontmatter, [MOVED_FROM]: movedFrom } });
+    if (!moved) throw new Error(`Note ${note.id} vanished during move`);
+    // One note holds a moved slug: this one now holds the slug it left, and
+    // the slug it took is its own (an old link to either means this note).
+    await store.releaseMovedFrom(note.slug, note.id);
+    await store.releaseMovedFrom(slug, note.id);
+    await this.links.resolveTo({ scope, toRef: slug, toType: SOURCE_PREFIX, toId: note.id });
+    return this.withLive(scope, moved);
+  }
+
   async list(scope: NoteScope, opts?: Parameters<NoteStore['list']>[0]): Promise<Note[]> {
     return this.store(scope).list(opts);
   }
@@ -534,20 +734,58 @@ export class NoteService {
    * existing user-level one (`getBySlug`'s fallback) — a new one is only
    * created when neither exists. In a space, the space's daily note.
    */
+  /**
+   * The daily note of a day if it exists (no note is created), and the text
+   * a new one starts from: a page can show the day before its note exists,
+   * and create it once something is written (`getOrCreateDaily`).
+   */
+  async findDaily(scope: NoteScope, day: string): Promise<{ note: Note | null; template: string }> {
+    const date = normalizeDay(day);
+    const note = await this.store(scope).getBySlug(`daily/${date}`);
+    return { note: note ? this.withLive(scope, note) : null, template: dailyTemplate(date) };
+  }
+
+  /**
+   * A fresh daily note for a day whose note is archived: the archived one
+   * steps aside to `daily/<date>-archived-<n>` (no alias: the day's slug is
+   * the new note's) and the day's note is made from the template.
+   */
+  async startFreshDaily(scope: NoteScope, day: string): Promise<Note> {
+    assertNoteAccess(scope, 'write');
+    const date = normalizeDay(day);
+    const store = this.store(scope);
+    const archived = await store.getBySlug(`daily/${date}`);
+    if (archived?.archivedAt) {
+      const aside = `daily/${date}-archived-${Date.now().toString(36)}`;
+      if (!(await store.update(archived.id, { slug: aside }))) throw new Error(`Daily note ${archived.id} vanished while starting a fresh one`);
+    }
+    return this.getOrCreateDaily(scope, date);
+  }
+
   async getOrCreateDaily(scope: NoteScope, day: string): Promise<Note> {
     const date = normalizeDay(day);
     const slug = `daily/${date}`;
     const existing = await this.store(scope).getBySlug(slug);
     if (existing) return existing;
-    const result = await this.save({
-      scope,
-      slug,
-      title: date,
-      body: dailyTemplate(date),
-      noteKind: 'daily',
-      noteDate: date,
-    });
-    return result.note;
+    try {
+      const result = await this.save({
+        scope,
+        slug,
+        title: date,
+        body: dailyTemplate(date),
+        noteKind: 'daily',
+        noteDate: date,
+        // Created only while the day has no note: one written meanwhile (another
+        // tab, a capture) is never replaced by the template.
+        createOnly: true,
+      });
+      return result.note;
+    } catch (err) {
+      if (!(err instanceof NoteExistsError)) throw err;
+      const found = await this.store(scope).getById(err.noteId);
+      if (!found) throw new Error(`Daily note ${slug} vanished while opening it`);
+      return found;
+    }
   }
 
   /**
@@ -565,6 +803,7 @@ export class NoteService {
       assertNoteAccess(scope, 'write');
       const slug = `daily/${date}`;
       let found = await this.store(scope).getBySlug(slug);
+      if (found?.archivedAt) throw new NoteArchivedError(found.id, slug);
       if (!found) {
         try {
           const created = await this.save({
@@ -592,6 +831,8 @@ export class NoteService {
       if (appended) return { ...opened, body: appended.text, bodySha256: appended.sha256 };
     }
     const daily = this.withLive(scope, await this.getOrCreateDaily(scope, date));
+    // An archived day's note stays archived: the line is not hidden in it.
+    if (daily.archivedAt) throw new NoteArchivedError(daily.id, daily.slug);
     const body = `${daily.body.replace(/\s+$/, '')}\n- ${time} ${text}\n`;
     // Based on the text just read: a space note's capture merges with
     // whatever members typed meanwhile.
@@ -616,6 +857,21 @@ export class NoteService {
     await this.deleteChunks(note);
     await this.links.deleteForEntity(SOURCE_PREFIX, id);
     return store.delete(id);
+  }
+
+  /**
+   * Undo `archive`: the note is active again, and its chunks (kept while it
+   * was archived, only hidden from search) are found again. False when the
+   * scope does not reach the note.
+   */
+  async restore(scope: NoteScope, id: string): Promise<boolean> {
+    assertNoteAccess(scope, 'write');
+    const store = this.store(scope);
+    const note = await store.getById(id);
+    if (!note) return false;
+    // Already active: nothing to undo (and nothing rewritten).
+    if (!note.archivedAt) return true;
+    return store.unarchive(id);
   }
 
   /**
@@ -648,6 +904,14 @@ export class NoteService {
  * an explicit `day` derived in the user's timezone. Tracked for Tier 3.
  */
 export function normalizeDay(day: string): string {
+  // A calendar day as written must exist: `2026-02-31` is refused, not rolled into March.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (ymd) {
+    const [y, m, dd] = [Number(ymd[1]), Number(ymd[2]), Number(ymd[3])];
+    const check = new Date(Date.UTC(y, m - 1, dd));
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== dd) throw new Error(`Invalid date for daily note: ${day}`);
+    return day;
+  }
   const d = new Date(day);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid date for daily note: ${day}`);
   return d.toISOString().slice(0, 10);

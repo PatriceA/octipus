@@ -35,10 +35,15 @@ import { visibleMessages } from './message-visibility';
 import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
+import { publishPersonalTaskChanged } from '@/core/tasks/live';
+import { occurrenceStarted, stampSeries } from '@/core/tasks/repeat';
+import { resolveSeriesTimezone } from '@/core/tasks/timezone';
+import { retractNextOccurrence, spawnNextOccurrence } from './task-series';
 import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { type GuestScope, type SpaceAction, SpaceError } from '@/security/space-access';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
+import { dbLogger } from '@/utils/logger';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
@@ -61,7 +66,7 @@ import { hookExecutions } from '../schema/hook-executions';
 import { monitors } from '../schema/monitors';
 import { companionActions, companionGoals } from '../schema/companion-supervision';
 import { type TaskComment, taskComments } from '../schema/task-comments';
-import { type NewTask, type Task, tasks } from '../schema/tasks';
+import { type NewTask, type Task, type TaskNoteLink, type TaskView, taskLists, taskNoteLinks, tasks, taskUserState } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
 import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
@@ -1223,8 +1228,20 @@ export interface TaskListFilter {
   /** Restrict to an assignee kind ('user' | 'role' | 'node'); with `assigneeRef`, to one assignee. */
   assigneeKind?: string;
   assigneeRef?: string;
+  /** Only tasks the caller put in My Day on this calendar day (`YYYY-MM-DD`, the user's zone). */
+  myDayOn?: string;
   limit?: number;
+  /** Rows to skip, for paging through one status set (e.g. the finished ones). */
+  offset?: number;
 }
+
+/**
+ * The status rank of `listOwn`: work still to do (in progress, then open)
+ * before finished work (done, then archived), whatever the spelling sorts
+ * to. Ordering by the status text put `archived` and `done` first, so a list
+ * cut at its limit dropped open tasks once enough had been finished.
+ */
+const TASK_STATUS_RANK = sql`CASE ${tasks.status} WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 WHEN 'done' THEN 2 WHEN 'archived' THEN 3 ELSE 4 END`;
 
 /**
  * Outcome of a board checkout. `conflict` carries the current holder (null
@@ -1235,7 +1252,9 @@ export type TaskCheckoutResult =
   | { ok: true; task: Task }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'conflict'; holder: string | null; status: string }
-  | { ok: false; reason: 'blocked'; waiting: WaitingOn };
+  | { ok: false; reason: 'blocked'; waiting: WaitingOn }
+  /** A future occurrence of a repeating to-do: workable from the start of its due day. */
+  | { ok: false; reason: 'not_due'; dueAt: Date };
 
 export type TaskReleaseResult =
   | { ok: true; task: Task }
@@ -1265,6 +1284,19 @@ export function taskLeaseFree(actor?: string): SQL {
   const lease = sql.raw(`interval '${Math.floor(TASK_CHECKOUT_TTL_MS / 1000)} seconds'`);
   const holder = actor === undefined ? sql`` : sql` OR ${tasks.checkedOutBy} = ${actor}`;
   return sql`(${tasks.checkedOutBy} IS NULL${holder} OR ${tasks.checkedOutAt} < now() - ${lease})`;
+}
+
+/**
+ * `occurrenceStarted` (core/tasks/repeat.ts) as a condition on `tasks`: no
+ * repeat rule, no due date, or its due day (in the series' zone) has begun.
+ * Every agent pickup path applies it — the role heartbeat's probe and
+ * implicit dispatch (core/heartbeat.ts) and the checkout — so an agent
+ * assigned a repeating to-do never works its future occurrences early.
+ */
+export function taskOccurrenceStarted(t: { repeat: AnyPgColumn; dueAt: AnyPgColumn } = tasks): SQL {
+  // Only a zone name (letters first, as `isValidTimezone` accepts): an offset string would be read with the POSIX sign.
+  const zone = sql`(CASE WHEN ${t.repeat}->>'tz' ~ '^[A-Za-z][A-Za-z0-9_/+-]*$' THEN ${t.repeat}->>'tz' ELSE 'UTC' END)`;
+  return sql`(${t.repeat} IS NULL OR ${t.dueAt} IS NULL OR (${t.dueAt} AT TIME ZONE ${zone})::date <= (now() AT TIME ZONE ${zone})::date)`;
 }
 
 /**
@@ -1326,12 +1358,16 @@ export class TaskRepo {
     return row[0] ?? null;
   }
 
-  /** List the scope's tasks (the principal's own, or the space's), newest-first, optionally filtered. */
-  async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
+  /** The conditions of a `listOwn` / `countOwn` filter, inside the scope. */
+  private listFilters(filter: TaskListFilter): SQL[] {
     const filters: SQL[] = [...this.rows(tasks)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
+    if (filter.myDayOn) {
+      // The caller's own My Day (task_user_state), never another member's.
+      filters.push(sql`EXISTS (SELECT 1 FROM ${taskUserState} s WHERE s.task_id = ${tasks.id} AND s.user_id = ${this.viewerId} AND s.my_day_on = ${filter.myDayOn})`);
+    }
     if (filter.category !== undefined) {
       const c = filter.category.trim();
       // '' / 'none' selects the uncategorized bucket; otherwise exact match.
@@ -1339,12 +1375,36 @@ export class TaskRepo {
     }
     if (filter.assigneeKind) filters.push(eq(tasks.assigneeKind, filter.assigneeKind));
     if (filter.assigneeRef) filters.push(eq(tasks.assigneeRef, filter.assigneeRef));
+    return filters;
+  }
+
+  /**
+   * List the scope's tasks (the principal's own, or the space's), optionally
+   * filtered: active before finished (`TASK_STATUS_RANK`); active ones by
+   * priority, then due date, then newest; finished ones most recently
+   * finished first, so a page of them is the latest.
+   */
+  async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
+    const finished = notInArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
     return this.db
       .select()
       .from(tasks)
-      .where(and(...filters))
-      .orderBy(asc(tasks.status), desc(tasks.priority), asc(tasks.dueAt), desc(tasks.createdAt))
-      .limit(filter.limit ?? 200);
+      .where(and(...this.listFilters(filter)))
+      .orderBy(
+        TASK_STATUS_RANK,
+        sql`CASE WHEN ${finished} THEN coalesce(${tasks.completedAt}, ${tasks.updatedAt}) END DESC NULLS LAST`,
+        desc(tasks.priority),
+        asc(tasks.dueAt),
+        desc(tasks.createdAt),
+      )
+      .limit(filter.limit ?? 200)
+      .offset(filter.offset ?? 0);
+  }
+
+  /** How many of the scope's tasks `listOwn` would match without a limit. */
+  async countOwn(filter: Omit<TaskListFilter, 'limit' | 'offset'> = {}): Promise<number> {
+    const [row] = await this.db.select({ n: count() }).from(tasks).where(and(...this.listFilters(filter)));
+    return Number(row?.n ?? 0);
   }
 
   /**
@@ -1442,10 +1502,12 @@ export class TaskRepo {
    * Create a task in the scope. Ignores any user_id and workspace_id in
    * `data`: the row is the scope's author's, in the scope's workspace.
    */
-  async create(data: Omit<NewTask, 'userId'>): Promise<Task> {
+  async create(data: Omit<NewTask, 'userId'>, opts: { tz?: string | null } = {}): Promise<Task> {
     this.taskScope.can('write');
     await this.checkStructure(data);
     const stamp = await this.stampRow();
+    // A series runs in the zone it was set up in, from its first due day.
+    if (data.repeat) data = { ...data, repeat: stampSeries(data.repeat, data.dueAt ?? null, await resolveSeriesTimezone(stamp.userId, opts.tz)) };
     await this.checkAssignee(data.assigneeKind, data.assigneeRef, stamp.userId);
     const result = await this.db
       .insert(tasks)
@@ -1456,18 +1518,25 @@ export class TaskRepo {
   }
 
   /**
-   * A space task changed (§9.3): the board's subscribers hear of it, and a
-   * new assignee is notified. Nothing for personal tasks.
+   * A task changed. In a space (§9.3) the board's subscribers hear of it,
+   * and a new assignee is notified; a personal task's owner hears
+   * `tasks.changed` on their own connections (core/tasks/live.ts).
    */
   private afterWrite(task: Task, previous: Task | null): void {
-    if (this.taskScope.kind !== 'space') return;
+    if (this.taskScope.kind !== 'space') {
+      publishPersonalTaskChanged(task.userId, task.id);
+      return;
+    }
     afterSpaceTaskWrite(this.taskScope.spaceId as string, task, this.taskScope.stamp().userId, previous);
   }
 
   /** The event alone, for a write that cannot change the assignee (claim, comment, delete). */
-  private changed(taskId: string, deleted?: Pick<Task, 'sourceRef'>): void {
-    if (this.taskScope.kind !== 'space') return;
-    publishTaskChanged(this.taskScope.spaceId as string, taskId, deleted);
+  private changed(task: Pick<Task, 'id' | 'userId' | 'sourceRef'>, deleted = false): void {
+    if (this.taskScope.kind !== 'space') {
+      publishPersonalTaskChanged(task.userId, task.id);
+      return;
+    }
+    publishTaskChanged(this.taskScope.spaceId as string, task.id, deleted ? { sourceRef: task.sourceRef } : undefined);
   }
 
   /**
@@ -1519,17 +1588,211 @@ export class TaskRepo {
    * sibling rule in core/tasks/wakeups.ts. The wakeup itself is detached
    * (`scheduleWakeup`): it never adds latency to, or fails, the write.
    */
-  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
+  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string; tz?: string | null; agent?: { sessionId: string | null; agentId: string | null } | null } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     this.taskScope.can('write');
-    // In a space the row before the write tells whether the assignee changed.
-    const previous = this.taskScope.kind === 'space' ? await this.findById(id) : null;
-    const row = await this.updateRow(id, patch, opts);
-    if (row) this.afterWrite(row, previous);
+    // Going back to an active status may take back a repeat's next occurrence.
+    const reopening = patch.status !== undefined && isActiveStatus(patch.status);
+    // In a space the row before the write tells whether the assignee changed;
+    // a series needs it to stamp its rule.
+    const touchesSeries = patch.repeat !== undefined || patch.dueAt !== undefined;
+    const previous = this.taskScope.kind === 'space' || reopening || touchesSeries ? await this.findById(id) : null;
+    if (previous && touchesSeries) {
+      const rule = patch.repeat !== undefined ? patch.repeat : previous.repeat;
+      if (rule) {
+        const dueAt = patch.dueAt !== undefined ? patch.dueAt : previous.dueAt;
+        patch = { ...patch, repeat: stampSeries(rule, dueAt ?? null, await resolveSeriesTimezone(previous.userId, opts.tz)) };
+      }
+    }
+    const result = await this.updateRow(id, patch, opts);
+    if (!result) return null;
+    let row = result.row;
+    if (result.closedFrom !== null) {
+      // The series moves on before the wakeups read the family, so a parent
+      // never closes for want of the step that just came back.
+      if (row.repeat && !row.repeatNextId) row = await this.nextOfSeries(row, true);
+      this.wakeAfter(row, result.closedFrom, 'closed');
+    } else if (reopening && previous && !isActiveStatus(previous.status) && previous.repeatNextId) {
+      const gone = await retractNextOccurrence(row, previous.repeatNextId);
+      if (gone) {
+        this.changed(gone, true);
+        row = { ...row, repeatNextId: null };
+      }
+    }
+    this.afterWrite(row, previous);
+    // Between done and not done: the note lines it was made from follow
+    // (core/tasks/note-links.ts). Awaited, so the response comes after the
+    // note has its tick; never fails the write.
+    // Back to active from done, or from deleted (archived: perhaps archived
+    // while done), unticks; a line already unticked is left alone.
+    const ticked = result.closedFrom !== null && row.status === 'done' ? true
+      : reopening && previous && !isActiveStatus(previous.status) && isActiveStatus(row.status) ? false : null;
+    if (ticked !== null) {
+      const { syncNoteLines } = await import('@/core/tasks/note-links');
+      await syncNoteLines(this.principal, row, ticked, { agent: opts.agent ?? null });
+    }
     return row;
   }
 
-  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<Task | null> {
+  /**
+   * The next occurrence of a series whose occurrence just left the active set
+   * (db/repositories/task-series.ts). A failure is logged, never thrown: the
+   * occurrence stays finished and the cron sweep (`healRepeatSeries`) makes
+   * the next one later. Returns the finished row as it now is.
+   */
+  private async nextOfSeries(finished: Task, claim: boolean, carry?: TaskNoteLink[]): Promise<Task> {
+    try {
+      const made = await spawnNextOccurrence(finished, { claim, fallbackTz: await resolveSeriesTimezone(finished.userId), carry });
+      if (!made) return claim ? (await this.findById(finished.id)) ?? finished : finished;
+      this.afterWrite(made.next, null);
+      return made.claimed ?? finished;
+    } catch (err) {
+      dbLogger.error({ err, taskId: finished.id }, 'Repeating to-do: next occurrence not made now; the sweep retries');
+      return finished;
+    }
+  }
+
+  // ── The personal layer (per user: star, My Day, own order) ──────────────
+
+  /** The caller whose personal layer a read shows and a write sets. */
+  private get viewerId(): string {
+    return this.principal.userId;
+  }
+
+  /**
+   * `rows` as the caller sees them: their star, My Day and own order merged
+   * in (`task_user_state`); no row of theirs means not starred, not in My
+   * Day, the task's default order.
+   */
+  async withState<T extends Task>(rows: T[]): Promise<(T & { important: boolean; myDayOn: string | null })[]> {
+    const ids = [...new Set(rows.map((r) => r.id))];
+    const states = ids.length === 0 ? [] : await this.db.select().from(taskUserState)
+      .where(and(eq(taskUserState.userId, this.viewerId), inArray(taskUserState.taskId, ids)));
+    const byTask = new Map(states.map((st) => [st.taskId, st]));
+    return rows.map((r) => {
+      const st = byTask.get(r.id);
+      return { ...r, important: st?.important ?? false, myDayOn: st?.myDayOn ?? null, sortOrder: st?.sortOrder ?? r.sortOrder };
+    });
+  }
+
+  /**
+   * Set the caller's own star, My Day day or order on a task they can see
+   * (a viewer in a space too: it changes nothing anyone else sees). Only the
+   * fields given change; `sortOrder: null` returns to the default order.
+   * Null when the task is out of reach.
+   */
+  async setPersonal(id: string, change: { important?: boolean; myDayOn?: string | null; sortOrder?: number | null }): Promise<TaskView | null> {
+    const task = await this.findById(id);
+    if (!task) return null;
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (change.important !== undefined) set.important = change.important;
+    if (change.myDayOn !== undefined) set.myDayOn = change.myDayOn;
+    if (change.sortOrder !== undefined) set.sortOrder = change.sortOrder;
+    if (Object.keys(set).length > 1) {
+      await this.db.insert(taskUserState).values({
+        taskId: task.id,
+        userId: this.viewerId,
+        important: change.important ?? false,
+        myDayOn: change.myDayOn ?? null,
+        sortOrder: change.sortOrder ?? null,
+      }).onConflictDoUpdate({ target: [taskUserState.taskId, taskUserState.userId], set });
+      // Only the caller's view changed: only their connections hear of it.
+      publishPersonalTaskChanged(this.viewerId, task.id);
+    }
+    const [view] = await this.withState([task]);
+    return view;
+  }
+
+  // ── Lists (the `category` values, plus lists made empty) ────────────────
+
+  /** `task_lists` rows the scope reaches (a guest's scope reaches none). */
+  private listRows(): SQL[] {
+    return this.taskScope.guest ? [sql`FALSE`] : this.taskScope.shared(taskLists);
+  }
+
+  /**
+   * The scope's lists: every category on a task that is not archived, and
+   * every list made here that has no to-do yet, alphabetical, each with its
+   * count of open top-level to-dos.
+   */
+  async lists(): Promise<{ name: string; open: number }[]> {
+    const [used, made] = await Promise.all([
+      this.db.select({
+        name: tasks.category,
+        open: sql<number>`count(*) FILTER (WHERE ${inArray(tasks.status, [...ACTIVE_TASK_STATUSES])} AND ${tasks.parentId} IS NULL)`,
+      }).from(tasks)
+        .where(and(...this.rows(tasks), sql`${tasks.category} IS NOT NULL`, ne(tasks.status, 'archived')))
+        .groupBy(tasks.category),
+      this.db.select({ name: taskLists.name }).from(taskLists).where(and(...this.listRows())),
+    ]);
+    const out = new Map<string, number>();
+    for (const u of used) out.set(u.name as string, Number(u.open));
+    for (const m of made) if (![...out.keys()].some((k) => k.toLowerCase() === m.name.toLowerCase())) out.set(m.name, 0);
+    return [...out].map(([name, open]) => ({ name, open })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The list names alone (what `#name` in a capture is matched to). */
+  async categories(): Promise<string[]> {
+    return (await this.lists()).map((l) => l.name);
+  }
+
+  /** Make an empty list. Throws when a list of that name (any case) exists. */
+  async createList(name: string): Promise<{ name: string }> {
+    this.taskScope.can('write');
+    const clean = name.trim().slice(0, 100);
+    if (!clean) throw new Error('A list needs a name');
+    if ((await this.lists()).some((l) => l.name.toLowerCase() === clean.toLowerCase())) throw new Error(`A list called "${clean}" already exists`);
+    const stamp = await this.stampRow();
+    await this.db.insert(taskLists).values({ ...stamp, name: clean });
+    return { name: clean };
+  }
+
+  /**
+   * Rename a list: every to-do in it (archived ones too, so a restore lands
+   * in the renamed list) and the stored empty list. Renaming onto an
+   * existing name merges the two. Returns the ids moved.
+   */
+  async renameList(name: string, newName: string): Promise<string[]> {
+    this.taskScope.can('write');
+    const to = newName.trim().slice(0, 100);
+    if (!to) throw new Error('A list needs a name');
+    const moved = await this.db.update(tasks).set({ category: to, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), eq(tasks.category, name))).returning();
+    await this.db.update(taskLists).set({ name: to }).where(and(...this.listRows(), eq(taskLists.name, name)));
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /**
+   * Delete a list: its to-dos stay, in no list (the caller offers Undo with
+   * `moveToList`), and a stored empty list goes. Returns the ids moved.
+   */
+  async deleteList(name: string): Promise<string[]> {
+    this.taskScope.can('write');
+    const moved = await this.db.update(tasks).set({ category: null, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), eq(tasks.category, name))).returning();
+    await this.db.delete(taskLists).where(and(...this.listRows(), eq(taskLists.name, name)));
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /** Put the to-dos of `ids` the scope reaches into list `name` (null: no list). Returns the ids moved. */
+  async moveToList(ids: readonly string[], name: string | null): Promise<string[]> {
+    this.taskScope.can('write');
+    const valid = [...new Set(ids.filter(isUuid))];
+    if (valid.length === 0) return [];
+    const moved = await this.db.update(tasks).set({ category: name?.trim().slice(0, 100) || null, updatedAt: new Date() })
+      .where(and(...this.rows(tasks), inArray(tasks.id, valid))).returning();
+    for (const row of moved) this.afterWrite(row, row);
+    return moved.map((r) => r.id);
+  }
+
+  /**
+   * The write itself. `closedFrom` is the active status the task left when
+   * this write closed it (the caller runs the series and the wakeups), else
+   * null.
+   */
+  private async updateRow(id: string, patch: Partial<NewTask>, opts: { asActor?: string }): Promise<{ row: Task; closedFrom: string | null } | null> {
     // Neither the author nor the workspace changes on an edit.
     const { userId: _drop, workspaceId: _ws, ...safe } = patch;
     void _drop;
@@ -1565,7 +1828,7 @@ export class TaskRepo {
     };
     if (!(isTaskStatus(safe.status) && !isActiveStatus(safe.status))) {
       const result = await this.db.update(tasks).set(values).where(where()).returning();
-      return result[0] ?? null;
+      return result[0] ? { row: result[0], closedFrom: null } : null;
     }
     const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
     const [won] = await this.db.update(tasks).set(values).where(where(active)).returning(withPrevious);
@@ -1575,7 +1838,7 @@ export class TaskRepo {
       .set(values)
       .where(where(notInArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
       .returning();
-    if (stillClosed) return stillClosed;
+    if (stillClosed) return { row: stillClosed, closedFrom: null };
     const [last] = await this.db.update(tasks).set(values).where(where()).returning(withPrevious);
     return last ? this.closedBy(last) : null;
   }
@@ -1636,11 +1899,16 @@ export class TaskRepo {
    * moves the task to in_progress. On a miss the task is re-read to say why:
    * gone, closed, blocked (with what it waits on), or held by someone else.
    */
-  async checkout(id: string, actor: string, runId: string | null = null): Promise<TaskCheckoutResult> {
+  async checkout(id: string, actor: string, runId: string | null = null, opts: { early?: boolean } = {}): Promise<TaskCheckoutResult> {
     const existing = await this.findById(id);
     if (!existing) return { ok: false, reason: 'not_found' };
     this.taskScope.can('write');
     if (!isActiveStatus(existing.status)) return { ok: false, reason: 'conflict', holder: existing.checkedOutBy, status: existing.status };
+    // A future occurrence of a series is not work yet (core/tasks/repeat.ts
+    // `occurrenceStarted`) for anything that picks work up by itself; `early`
+    // is an explicit request to do this occurrence now (the user's own
+    // checkout, or an agent told to by the user), which the gate never stops.
+    if (!opts.early && !occurrenceStarted(existing, new Date())) return { ok: false, reason: 'not_due', dueAt: existing.dueAt as Date };
     // The holder renews without the blocked rule (it may have split its own
     // task into sub-tasks); anyone else claims only a free, unblocked task.
     const [claimed] = await this.db
@@ -1649,11 +1917,12 @@ export class TaskRepo {
       .where(this.scopeWhere(
         id,
         inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
+        ...(opts.early ? [] : [taskOccurrenceStarted()]),
         or(eq(tasks.checkedOutBy, actor), and(this.leaseFree(actor), ...this.notWaiting())) as SQL,
       ))
       .returning();
     if (claimed) {
-      this.changed(claimed.id);
+      this.changed(claimed);
       return { ok: true, task: claimed };
     }
     const current = await this.findById(id);
@@ -1685,7 +1954,7 @@ export class TaskRepo {
       .where(this.scopeWhere(id, sql`${tasks.checkedOutBy} IS NOT NULL`, ...holderCheck))
       .returning();
     if (released) {
-      this.changed(released.id);
+      this.changed(released);
       return { ok: true, task: released };
     }
     const current = await this.findById(id);
@@ -1708,7 +1977,7 @@ export class TaskRepo {
       .insert(taskComments)
       .values({ ...comment, taskId: task.id, userId })
       .returning();
-    this.changed(task.id);
+    this.changed(task);
     return row;
   }
 
@@ -1730,11 +1999,10 @@ export class TaskRepo {
     return { comments: newest.slice(0, limit).reverse(), truncated: newest.length > limit };
   }
 
-  /** Strip the RETURNING extra and wake when the row was active before the write. */
-  private closedBy(row: Task & { previousStatus: string }): Task {
+  /** Strip the RETURNING extra; say which active status the write closed the task from, if any. */
+  private closedBy(row: Task & { previousStatus: string }): { row: Task; closedFrom: string | null } {
     const { previousStatus, ...closed } = row;
-    this.wakeAfter(closed, previousStatus, 'closed');
-    return closed;
+    return { row: closed, closedFrom: isActiveStatus(previousStatus) ? previousStatus : null };
   }
 
   /** Run the close listeners and the wakeups for a task that just left the active set, detached. */
@@ -1809,16 +2077,35 @@ export class TaskRepo {
    * its parent just as closing it does; DELETE … RETURNING hands back the
    * row atomically.
    */
+  /**
+   * Take back a task this same call just created, when a step after the
+   * create failed (a link it needed): a plain removal, unlike `delete` — no
+   * repeat series moves on (deleting an occurrence would skip it and make
+   * the next one), no dependent wakes (nothing waits on a task that existed
+   * for one request). False when the scope does not reach it.
+   */
+  async discardNew(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
+    this.taskScope.can('write');
+    const [gone] = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
+    if (gone) this.changed(gone, true);
+    return !!gone;
+  }
+
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
     this.taskScope.can('write');
+    // A repeating occurrence's note links go with its row: read first, so the next one can take them on.
+    const carry = await this.db.select().from(taskNoteLinks).where(eq(taskNoteLinks.taskId, id));
     const result = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
     const gone = result[0];
     // A delete ranks at the moment it happened in the sibling order.
     if (gone) {
+      // Deleting an occurrence of a series skips it: the series goes on.
+      if (isActiveStatus(gone.status) && gone.repeat) await this.nextOfSeries(gone, false, carry);
       this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
       // The row is gone: guests are matched on the deleted row's source.
-      this.changed(gone.id, { sourceRef: gone.sourceRef });
+      this.changed(gone, true);
     }
     return result.length > 0;
   }

@@ -15,6 +15,8 @@ import { ModuleGate } from './module-gate';
 import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
 import { WorkspaceBanner } from './workspace-banner';
+import { QuickAddTodo } from './todos/quick-add-dialog';
+import { TimezoneSync } from './todos/timezone-sync';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -48,8 +50,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Full-bleed pages manage their own layout/scroll edge-to-edge (no page
-  // padding, no entrance wrapper) — chat, rooms, email and the notes workspace.
-  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname.startsWith('/plugins/');
+  // padding, no entrance wrapper) — chat, rooms, email, the notes workspace, the to-dos and Today.
+  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname === '/email' || pathname === '/mail' || pathname.startsWith('/notes') || pathname === '/tasks' || pathname === '/today' || pathname.startsWith('/plugins/');
 
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">
@@ -70,7 +72,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           >
             {fullBleed ? (
-              <ModuleGate pathname={pathname}>{children}</ModuleGate>
+              // Keyed by the path like the padded pages: going from one
+              // full-bleed page to another (notes → to-dos) must unmount the
+              // first at once, not keep it alive while the next page's chunk
+              // loads, or a late save there still thinks it is on screen.
+              <ModuleGate key={pathname} pathname={pathname}>{children}</ModuleGate>
             ) : (
               // Reset page-local state on navigation; the shared menu retains its state.
               <div key={pathname}>
@@ -83,6 +89,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             the floating permission banner would leave a gap, so skip it. */}
         {!fullBleed && <GlobalPermissionBanner />}
       </div>
+      {/* Q or the Ctrl+K menu adds a to-do from any page. */}
+      <QuickAddTodo />
+      <TimezoneSync />
     </div>
   );
 }

@@ -167,13 +167,17 @@ async function memberPage(browser: Browser, server: Server, errors: string[]): P
   return page;
 }
 
-/** The editor's text, without other members' cursor labels (yCollab widgets). */
+/**
+ * The editor's text: its document, as CodeMirror holds it. (The live preview
+ * hides markdown markup off the caret's line, so the drawn lines are not the
+ * text; other members' cursor labels are widgets, never in the document.)
+ */
 function editorText(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const content = document.querySelector('.cm-content')?.cloneNode(true) as HTMLElement | undefined;
-    if (!content) return '';
-    for (const widget of content.querySelectorAll('.cm-ySelectionCaret, .cm-ySelectionInfo')) widget.remove();
-    return [...content.querySelectorAll('.cm-line')].map((line) => line.textContent ?? '').join('\n');
+    const content = document.querySelector('.cm-content') as (HTMLElement & { cmTile?: { root?: { view?: { state: { doc: { toString(): string } } } } } }) | null;
+    const view = content?.cmTile?.root?.view;
+    if (!view) throw new Error('no CodeMirror view on .cm-content');
+    return view.state.doc.toString();
   });
 }
 
@@ -183,7 +187,7 @@ test('edits typed offline survive a server restart and are merged with a change 
   const page = await memberPage(browser, server, consoleErrors);
   await page.goto('/notes');
   await page.getByText('First note').first().click();
-  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  // A note opens straight into its editor.
   await expect(page.locator('.cm-content')).toContainText('body text');
   await expect(page.getByTestId('live-status')).toContainText('Saved');
 

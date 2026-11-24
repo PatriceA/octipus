@@ -1,10 +1,10 @@
 'use client';
 
-import { Bell, BookOpen, Brain, Cpu, KeyRound, Loader2, LogOut, MessageSquare, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
+import { Bell, BookOpen, Brain, Cpu, KeyRound, ListTodo, Loader2, LogOut, MessageSquare, NotebookPen, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -14,6 +14,10 @@ import { WorkspacePicker } from './workspace-picker';
 import { useTheme } from '@/lib/theme';
 import { Moon, Sun } from 'lucide-react';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { usePageOn } from '@/lib/modules';
+import { openQuickAddTodo } from './todos/quick-add-dialog';
+import { localDay } from './todos/model';
+import { Portal } from './ui/portal';
 
 interface SearchResult {
   id: string;
@@ -53,6 +57,31 @@ export function Header() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
+  // The menu's actions (add a to-do) are offered as soon as anything is typed.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const pageOn = usePageOn();
+  const todosOn = pageOn('/tasks');
+  // And one line into today's note, from anywhere (the notes page's capture).
+  const notesOn = pageOn('/notes');
+  const qc = useQueryClient();
+  const [captured, setCaptured] = useState<{ text: string; error?: boolean } | null>(null);
+  useEffect(() => {
+    if (!captured) return;
+    const timer = setTimeout(() => setCaptured(null), captured.error ? 8000 : 3500);
+    return () => clearTimeout(timer);
+  }, [captured]);
+  const captureToToday = async (text: string) => {
+    try {
+      const res = await api.post<{ id: string }>('/notes/capture', { text, date: localDay(new Date()) });
+      void qc.invalidateQueries({ queryKey: ['note', res.id] });
+      void qc.invalidateQueries({ queryKey: ['note-daily'] });
+      void qc.invalidateQueries({ queryKey: ['notes'] });
+      setCaptured({ text: 'Added to today’s note' });
+    } catch (err) {
+      const archived = err instanceof ApiError && err.body.code === 'archived';
+      setCaptured({ text: archived ? 'Not added: today’s note is in the archive (restore it, or start a fresh one, from Today)' : `Not added to today’s note: ${err instanceof Error ? err.message : String(err)}`, error: true });
+    }
+  };
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,6 +126,7 @@ export function Header() {
       }
       if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
         setShowResults(false);
+        setActionsOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -144,6 +174,7 @@ export function Header() {
       }
       if (e.key === 'Escape') {
         setShowResults(false);
+        setActionsOpen(false);
         searchInputRef.current?.blur();
       }
     }
@@ -200,18 +231,54 @@ export function Header() {
             ref={searchInputRef}
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
-            placeholder="search sessions, hooks, models…    (ctrl+k)"
+            onChange={(e) => { setSearchQuery(e.target.value); setActionsOpen(e.target.value.trim().length > 0); }}
+            onFocus={() => { if (searchResults.length > 0) setShowResults(true); if (trimmedQuery) setActionsOpen(true); }}
+            placeholder="search, or type a to-do to add…    (ctrl+k)"
             className="w-full h-8 pl-7 pr-9 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary focus:ring-0 transition-colors"
           />
           {isSearching ? (
             <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-variant animate-spin" />
           ) : null}
 
-          {showResults && (
+          {(showResults || (actionsOpen && trimmedQuery && (todosOn || notesOn))) && (
             <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-lg shadow-xl z-50 animate-enter">
-              {searchResults.length === 0 && !isSearching ? (
+              {todosOn && trimmedQuery && (
+                <button
+                  type="button"
+                  data-testid="search-add-todo"
+                  onClick={() => {
+                    openQuickAddTodo(trimmedQuery);
+                    setSearchQuery('');
+                    setDebouncedQuery('');
+                    setShowResults(false);
+                    setActionsOpen(false);
+                  }}
+                  className="w-full px-3 py-2 hover:bg-surface-container-high cursor-pointer flex items-center gap-2.5 text-left border-b border-outline-variant/30"
+                >
+                  <ListTodo className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-on-surface">Add to-do “{trimmedQuery}”</span>
+                  <span className="text-[11px] text-on-surface-variant">to-dos</span>
+                </button>
+              )}
+              {notesOn && trimmedQuery && (
+                <button
+                  type="button"
+                  data-testid="search-capture-note"
+                  onClick={() => {
+                    void captureToToday(trimmedQuery);
+                    setSearchQuery('');
+                    setDebouncedQuery('');
+                    setShowResults(false);
+                    setActionsOpen(false);
+                  }}
+                  className="w-full px-3 py-2 hover:bg-surface-container-high cursor-pointer flex items-center gap-2.5 text-left border-b border-outline-variant/30"
+                >
+                  <NotebookPen className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-on-surface">Add “{trimmedQuery}” to today’s note</span>
+                  <span className="text-[11px] text-on-surface-variant">notes</span>
+                </button>
+              )}
+              {!showResults ? null : searchResults.length === 0 && !isSearching ? (
                 <div className="px-3 py-6 text-center text-[12px] text-on-surface-variant">
                   -- no matches --
                 </div>
@@ -414,6 +481,15 @@ export function Header() {
           )}
         </div>
       </div>
+    {captured && (
+        <Portal>
+          <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+            <div role={captured.error ? 'alert' : 'status'} className={cn('pointer-events-auto rounded-lg px-4 py-2.5 text-sm shadow-lg', captured.error ? 'bg-error-container text-on-error-container' : 'border border-outline-variant/40 bg-surface-container-high text-on-surface')}>
+              {captured.text}
+            </div>
+          </div>
+        </Portal>
+      )}
     </header>
   );
 }

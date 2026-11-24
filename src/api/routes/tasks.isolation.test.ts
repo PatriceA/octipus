@@ -144,10 +144,11 @@ describe('GET /api/tasks list cross-tenant', () => {
     expect(mine.reason).toBe('priority 2');
   });
 
-  test('an invalid tz falls back to UTC rather than failing the request', async () => {
+  test('an invalid tz falls back to the user\'s zone rather than failing the request', async () => {
     const { status, body } = await get(aliceApp, '/api/tasks?view=next&tz=Mars/Olympus');
     expect(status).toBe(200);
-    expect(body.timezone).toBe('UTC');
+    // The request above reported Berlin, which is now the user's zone; an invalid one is ignored, never stored.
+    expect(body.timezone).toBe('Europe/Berlin');
   });
 });
 

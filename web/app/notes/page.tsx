@@ -11,7 +11,8 @@ export default function NotesPage() {
   if (activeWorkspace?.kind === 'remote') return <RemoteNotesWorkspace key={activeWorkspace.id} remote={activeWorkspace} />;
   return (
     <Suspense fallback={null}>
-      <NotesWorkspace />
+      {/* A workspace switch starts afresh: no draft, target or cache crosses it. */}
+      <NotesWorkspace key={activeWorkspace?.id ?? 'none'} />
     </Suspense>
   );
 }

@@ -8,13 +8,13 @@ import {
 } from '@codemirror/autocomplete';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { oneDark } from '@codemirror/theme-one-dark';
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView, keymap, placeholder as placeholderText } from '@codemirror/view';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
+import { livePreview, type TodoChipView, todoLinksChanged } from './live-preview';
 import type { NoteIndexEntry, TagCount } from './types';
 
 // ---------------------------------------------------------------------------
@@ -45,6 +45,8 @@ export interface MarkdownEditorHandle {
    */
   replaceToken: (token: string, text: string) => void;
   focus: () => void;
+  /** "Make a to-do" of the caret's line, or of the selected text (as ⌘⇧Enter). */
+  makeTodo: () => void;
 }
 
 /** A live document to edit instead of a controlled `value` (space notes, §7.6). */
@@ -67,6 +69,27 @@ interface Props {
   getTags: () => TagCount[];
   /** Images pasted or dropped into the editor. */
   onFiles?: (files: File[]) => void;
+  /** A click on a `[[wikilink]]` in the text: open that note (the raw target, as typed). */
+  onOpenWikilink?: (target: string) => void;
+  /** Ctrl/⌘-click on a `#tag` in the text. */
+  onTag?: (tag: string) => void;
+  /** Shown while the note is empty. */
+  placeholder?: string;
+  /** Escape in the editor (the page's shortcuts take over once it lets go of the focus). */
+  onEscape?: () => void;
+  /** Take the focus on mount (a new note: click New and type). */
+  autoFocus?: boolean;
+  /** Draw `![images]` in the text (false: text from another install, whose images never load). */
+  images?: boolean;
+  /** The to-do a line's marker names, as the reader can see it (see live-preview.ts). */
+  todoOf?: (anchor: string) => TodoChipView | null;
+  /** Changes whenever what `todoOf` answers does: the chips redraw. */
+  todoVersion?: string;
+  onOpenTodo?: (anchor: string) => void;
+  /** "Make a to-do" of a line (0-based), or of the text selected on it. Absent: not offered. */
+  onMakeTodo?: (line: number, selection?: string) => void;
+  /** A line made a to-do was ticked or unticked here. */
+  onTodoToggled?: (anchor: string, checked: boolean) => void;
 }
 
 /**
@@ -108,6 +131,16 @@ export function imageFilesFrom(data: DataTransfer | null): File[] {
   }
   for (const file of Array.from(data.files ?? [])) add(file);
   return out;
+}
+
+/** "Make a to-do" of the caret's line, or of the text selected (on the line where the selection starts). */
+function makeTodoAt(view: EditorView, make: ((line: number, selection?: string) => void) | undefined): boolean {
+  if (!make) return false;
+  const { from, to } = view.state.selection.main;
+  const line = view.state.doc.lineAt(from).number - 1;
+  const selected = view.state.sliceDoc(from, to).trim();
+  make(line, selected || undefined);
+  return true;
 }
 
 /** Completion source for `[[wikilinks]]`. */
@@ -177,36 +210,43 @@ function tagSource(getTags: () => TagCount[]) {
   };
 }
 
-// Blend CodeMirror into the terminal surface: transparent background (oneDark
-// ships its own dark slab we don't want), mono font, periwinkle caret, roomy
-// line-height for prose.
+// A sheet of paper: the page's own colours (light and dark), the reading font
+// at a comfortable size, no gutter, no active-line band. The live-preview
+// styles (headings, checkboxes, links) are in notes.css.
 const editorTheme = EditorView.theme({
-  '&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent' },
+  '&': { height: '100%', fontSize: '16px', backgroundColor: 'transparent', color: 'var(--color-on-surface)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': {
-    fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+    fontFamily: 'var(--font-sans)',
     lineHeight: '1.7',
     overflow: 'auto',
   },
-  '.cm-content': { caretColor: '#8CACFF', paddingBlock: '6px' },
-  '.cm-cursor': { borderLeftColor: '#8CACFF' },
-  '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: '#5a5a5a' },
-  '.cm-activeLine': { backgroundColor: 'rgba(140,172,255,0.05)' },
-  '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+  '.cm-content': { caretColor: 'var(--color-primary)', padding: '0 0 40vh' },
+  '.cm-line': { padding: '0' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-primary)', borderLeftWidth: '2px' },
+  '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'color-mix(in srgb, var(--color-primary) 22%, transparent)',
+  },
+  '.cm-placeholder': { color: 'var(--color-on-surface-variant)', opacity: '0.6' },
+  '.cm-gutters': { display: 'none' },
   '.cm-tooltip': {
-    backgroundColor: '#1C1C1C',
-    border: '1px solid #2A2A2A',
-    borderRadius: '4px',
+    backgroundColor: 'var(--color-surface-container)',
+    color: 'var(--color-on-surface)',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: '8px',
+    boxShadow: '0 8px 24px #0f2a3018',
+    overflow: 'hidden',
   },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-    backgroundColor: '#1F2A4A',
-    color: '#fff',
+    backgroundColor: 'var(--color-primary-container)',
+    color: 'var(--color-on-primary-container)',
   },
-  '.cm-tooltip-autocomplete > ul > li': { padding: '2px 6px', fontFamily: 'var(--font-mono, monospace)' },
+  '.cm-tooltip-autocomplete > ul > li': { padding: '4px 10px', fontFamily: 'var(--font-sans)', fontSize: '13px' },
+  '.cm-completionDetail': { marginLeft: '8px', fontStyle: 'normal', color: 'var(--color-on-surface-variant)', fontSize: '11px' },
 });
 
 const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function NotesMarkdownEditor(
-  { value, onChange, onSave, getNotes, getTags, onFiles, collab },
+  { value, onChange, onSave, getNotes, getTags, onFiles, collab, onOpenWikilink, onTag, placeholder, onEscape, autoFocus, images = true, todoOf, todoVersion, onOpenTodo, onMakeTodo, onTodoToggled },
   ref,
 ) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -220,6 +260,15 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   getNotesRef.current = getNotes;
   const getTagsRef = useRef(getTags);
   getTagsRef.current = getTags;
+  const linksRef = useRef({ openWikilink: onOpenWikilink, openTag: onTag, todoOf, openTodo: onOpenTodo, makeTodo: onMakeTodo, todoToggled: onTodoToggled });
+  linksRef.current = { openWikilink: onOpenWikilink, openTag: onTag, todoOf, openTodo: onOpenTodo, makeTodo: onMakeTodo, todoToggled: onTodoToggled };
+  // What the chips show changed: redraw them (the extensions stay as they are).
+  const offersTodo = !!onMakeTodo;
+  useEffect(() => {
+    cmRef.current?.view?.dispatch({ effects: todoLinksChanged.of(null) });
+  }, [todoVersion, offersTodo]);
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
 
   // The live document's undo history (only this member's edits). Made in an
   // effect, so each remount's (and StrictMode's double mount's) manager is
@@ -244,6 +293,21 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
         icons: false,
       }),
       keymap.of([
+        {
+          // Lets go of the focus (after closing a completion popup, which takes Escape first).
+          key: 'Escape',
+          run: (view) => {
+            if (!onEscapeRef.current) return false;
+            view.contentDOM.blur();
+            onEscapeRef.current();
+            return true;
+          },
+        },
+        {
+          // "Make a to-do" of the caret's line, or of the selected text.
+          key: 'Mod-Shift-Enter',
+          run: (view) => makeTodoAt(view, linksRef.current.makeTodo),
+        },
         {
           key: 'Mod-s',
           preventDefault: true,
@@ -273,14 +337,15 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
           return true;
         },
       }),
-      oneDark,
       editorTheme,
+      livePreview(() => linksRef.current, { images }),
+      ...(placeholder ? [placeholderText(placeholder)] : []),
       // Bound once this document's manager exists (never another's).
       ...(collab && undoManager && undoManager.scope.includes(collab.text)
         ? [yCollab(collab.text, collab.awareness, { undoManager })]
         : []),
     ],
-    [collab, undoManager],
+    [collab, undoManager, placeholder, images],
   );
   // Bound to a live document, the editor starts from its text and is then
   // driven by yCollab alone: a changing `value` prop would fight it.
@@ -330,6 +395,10 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
     focus() {
       cmRef.current?.view?.focus();
     },
+    makeTodo() {
+      const view = cmRef.current?.view;
+      if (view) makeTodoAt(view, linksRef.current.makeTodo);
+    },
   }));
 
   return (
@@ -337,13 +406,19 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
       ref={cmRef}
       value={initial ?? value}
       onChange={onChange}
+      autoFocus={autoFocus}
+      // Its default theme paints the editor white: the paper theme above has the page's colours.
+      theme="none"
       height="100%"
       style={{ height: '100%' }}
       extensions={extensions}
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,
-        highlightActiveLine: true,
+        highlightActiveLine: false,
+        highlightActiveLineGutter: false,
+        // The live preview brings its own colours (light and dark).
+        syntaxHighlighting: false,
         autocompletion: false, // we supply our own with custom sources
         bracketMatching: true,
         closeBrackets: true,

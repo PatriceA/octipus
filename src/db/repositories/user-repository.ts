@@ -84,6 +84,36 @@ export class UserRepository {
   }
 
   /** Turn the post-task distil offer on or off for this user (`preferences.distillNudge`). */
+  /** Set the user's zone and who set it (core/tasks/timezone.ts decides when). */
+  async setTimezone(id: string, timezone: string, source: 'device' | 'user'): Promise<User | null> {
+    const [user] = await this.db.update(users).set({
+      preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${JSON.stringify({ timezone, timezoneSource: source })}::jsonb`,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id)).returning();
+    return user ?? null;
+  }
+
+  /**
+   * A zone a device reported, written only under the rules of
+   * `rememberDeviceTimezone`, checked in the same UPDATE (a zone the user sets
+   * in Settings meanwhile is never overwritten): not over a zone the user
+   * chose, not the same zone again, and a fixed offset (`fixed`) never over a
+   * named zone. Whether it wrote.
+   */
+  async setDeviceTimezone(id: string, timezone: string, fixed: boolean): Promise<boolean> {
+    const stored = sql`(${users.preferences}->>'timezone')`;
+    const rows = await this.db.update(users).set({
+      preferences: sql`COALESCE(${users.preferences}, '{}'::jsonb) || ${JSON.stringify({ timezone, timezoneSource: 'device' })}::jsonb`,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(users.id, id),
+      sql`(${stored} IS NULL OR ${users.preferences}->>'timezoneSource' IS DISTINCT FROM 'user')`,
+      sql`${stored} IS DISTINCT FROM ${timezone}`,
+      fixed ? sql`(${stored} IS NULL OR ${stored} ~* '^(etc/.*|utc|gmt|z|zulu|universal|uct|greenwich)$')` : sql`TRUE`,
+    )).returning({ id: users.id });
+    return rows.length > 0;
+  }
+
   async setDistillNudge(id: string, enabled: boolean): Promise<User | null> {
     const [user] = await this.db.update(users).set({
       preferences: sql`jsonb_set(COALESCE(${users.preferences}, '{}'::jsonb), '{distillNudge}', ${JSON.stringify(enabled)}::jsonb)`,

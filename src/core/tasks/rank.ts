@@ -74,6 +74,10 @@ const UPCOMING_WINDOW_DAYS = 7;
 /** True when `tz` is a zone Intl accepts. */
 export function isValidTimezone(tz: string | null | undefined): tz is string {
   if (!tz) return false;
+  // A bare offset (`+05:30`, `-0800`): Intl takes it, but it is no zone name,
+  // and Postgres reads such a string with the POSIX (flipped) sign — the
+  // database and this code would disagree by twice the offset. Not a zone.
+  if (/^\s*[+-]/.test(tz) || /^\s*(?:utc|gmt)\s*[+-]/i.test(tz)) return false;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
     return true;
@@ -88,7 +92,7 @@ function toMs(v: Date | string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-interface WallClock { year: number; month: number; day: number; hour: number; minute: number; second: number }
+export interface WallClock { year: number; month: number; day: number; hour: number; minute: number; second: number }
 
 /** The wall-clock reading of instant `ms` in `tz`. */
 function wallClockIn(ms: number, tz: string): WallClock {
@@ -116,6 +120,28 @@ function localMidnightIn(year: number, month: number, day: number, tz: string): 
   const naive = Date.UTC(year, month - 1, day);
   const candidate = naive - offsetAt(naive, tz);
   return naive - offsetAt(candidate, tz);
+}
+
+/**
+ * The instant at wall-clock (y, m, d, h, min) in `tz`. Month and day may run
+ * past their range (day 32 is the 1st of the next month), as with Date.UTC.
+ * Two passes for the same reason as `localMidnightIn`.
+ */
+export function localDateTimeIn(year: number, month: number, day: number, hour: number, minute: number, tz: string): Date {
+  const naive = Date.UTC(year, month - 1, day, hour, minute);
+  const candidate = naive - offsetAt(naive, tz);
+  return new Date(naive - offsetAt(candidate, tz));
+}
+
+/** The calendar date (`YYYY-MM-DD`) instant `ms` falls on in `tz`. */
+export function localDateIn(ms: number, tz: string): string {
+  const w = wallClockIn(ms, isValidTimezone(tz) ? tz : 'UTC');
+  return `${w.year}-${String(w.month).padStart(2, '0')}-${String(w.day).padStart(2, '0')}`;
+}
+
+/** The wall-clock reading of `ms` in `tz` (a valid zone, else UTC). */
+export function localWallClock(ms: number, tz: string): WallClock {
+  return wallClockIn(ms, isValidTimezone(tz) ? tz : 'UTC');
 }
 
 /** Start of the calendar day containing `ms` in `tz`, as an epoch. */

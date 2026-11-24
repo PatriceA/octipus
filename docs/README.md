@@ -76,7 +76,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
 | [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. The example plugin is [`plugins/reader`](../plugins/README.md); your own plugins live outside the repository. |
 | [PLUGIN-DATA-ACCESS.md](PLUGIN-DATA-ACCESS.md) | User and agent troubleshooting: approve supported data levels and trusted connections in Settings, keep the existing conversation, and recover after plugin updates without editing signed files. |
-| [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
+| [TASK-BOARD.md](TASK-BOARD.md) | The work board on the To-dos page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
 | [PLUGINS.md](PLUGINS.md) | Deprecated host-side plugins (`~/.octipus/legacy-plugins`) and in-process extensions (`~/.octipus/extensions`); neither loads from the Octipus checkout. |
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
@@ -115,6 +115,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Prometheus metrics, run correlation, and logging. |
 | [guides/channel-adapter.md](guides/channel-adapter.md) | Guide: writing a new channel adapter. |
 | [guides/tui.md](guides/tui.md) | Guide: the TUI client. |
+| [guides/todos-notes-today.md](guides/todos-notes-today.md) | Guide: to-dos, notes and the Today page as a daily driver (note lines made to-dos, linked notes, what agents see). |
 | [guides/small-business.md](guides/small-business.md) | Guide: a small company's inbox, ideas and approvals on autopilot (heartbeat, inbox watch, role agents, pipelines). |
 | [CHANGELOG.md](CHANGELOG.md) | Release history. |
 

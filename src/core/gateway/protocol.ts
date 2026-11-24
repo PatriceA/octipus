@@ -207,6 +207,10 @@ export type GatewayEventType =
   | 'space.presence'
   // A task of a space changed (coworking §9.3): ids only, to `space:<id>`.
   | 'task.changed'
+  // One of the user's personal to-dos changed (created, edited, completed,
+  // deleted; by the user, an agent or a repeat): payload `{ taskId }`, to the
+  // owner's connections. The to-do list refetches on it (core/tasks/live.ts).
+  | 'tasks.changed'
   // Published only by the gateway's own tests, as a synthetic type to drive
   // subscription and replay. It shows up in the generated catalog's
   // never-published list because that scan deliberately excludes test files —

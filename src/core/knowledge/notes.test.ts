@@ -115,6 +115,53 @@ describe('NoteService', () => {
     expect(await svc.getById(personalNoteScope(userId), r.note.id)).not.toBeNull();
   });
 
+  test('deferIndex re-indexes once, after the note is quiet, from its latest text; the save does not wait', async () => {
+    const { INDEX_DEBOUNCE_MS } = await import('./notes');
+    // biome-ignore lint/suspicious/noExplicitAny: spying on the private re-index step
+    const reindex = vi.spyOn(svc as any, 'reindex');
+    reindex.mockClear();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const scope = personalNoteScope(userId);
+      const first = await svc.save({ scope, title: 'Typing', body: 'one', deferIndex: true });
+      expect(first).toMatchObject({ indexed: false, indexQueued: true });
+      await svc.save({ scope, id: first.note.id, title: 'Typing', body: 'one two', deferIndex: true });
+      await svc.save({ scope, id: first.note.id, title: 'Typing', body: 'one two three', deferIndex: true });
+      expect(reindex).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(INDEX_DEBOUNCE_MS - 1);
+      expect(reindex).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(reindex).toHaveBeenCalledTimes(1), { interval: 5, timeout: 5_000 });
+      expect((reindex.mock.calls[0][0] as { body: string }).body).toBe('one two three');
+    } finally {
+      vi.useRealTimers();
+      reindex.mockRestore();
+    }
+  });
+
+  test('ifSha256 refuses a personal save over text saved since, and writes nothing', async () => {
+    const { StaleWriteError } = await import('@/core/docs/hub');
+    const scope = personalNoteScope(userId);
+    const created = await svc.save({ scope, title: 'Shared draft', body: 'v1' });
+    const base = created.note.bodySha256;
+    await svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v2 from the phone' });
+    await expect(svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v1 edited', ifSha256: base })).rejects.toBeInstanceOf(StaleWriteError);
+    expect((await svc.getById(scope, created.note.id))?.body).toBe('v2 from the phone');
+    const ok = await svc.save({ scope, id: created.note.id, title: 'Shared draft', body: 'v3', ifSha256: (await svc.getById(scope, created.note.id))!.bodySha256 });
+    expect(ok.note.body).toBe('v3');
+  });
+
+  test('restoring a note that is not archived changes nothing', async () => {
+    const scope = personalNoteScope(userId);
+    const created = await svc.save({ scope, title: 'Active one', body: 'x' });
+    const before = (await svc.getById(scope, created.note.id))!;
+    expect(await svc.restore(scope, created.note.id)).toBe(true);
+    const after = (await svc.getById(scope, created.note.id))!;
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+    const { getNoteRepository } = await import('@/db/repositories/note-repository');
+    expect(await getNoteRepository().unarchive(userId, created.note.id)).toBe(false);
+  });
+
   test('unchanged body on re-save is a no-op for links', async () => {
     const first = await svc.save({ scope: personalNoteScope(userId), title: 'Stable', body: 'has [[a]] link' });
     expect(first.links.added).toBe(1);
@@ -178,6 +225,90 @@ describe('NoteService', () => {
     const edge = (await links.getOutgoing(userId, 'note', a.note.id)).find((e) => e.linkType === 'references');
     expect(edge?.toId).toBe(target.note.id);
     expect(edge?.toType).toBe('note');
+  });
+
+  test('moving a note keeps its old slug as an alias: links to it stay bound and new ones bind', async () => {
+    const scope = personalNoteScope(userId);
+    const plan = await svc.save({ scope, title: 'Plan', body: 'the plan' });
+    const before = await svc.save({ scope, title: 'Linker', body: 'see [[Plan]]' });
+    const waiting = await svc.save({ scope, title: 'Waiting', body: 'see [[projects/plan]]' });
+
+    const moved = await svc.move(scope, plan.note.id, 'projects/Plan');
+    expect(moved?.slug).toBe('projects/plan');
+    expect(moved?.title).toBe('Plan');
+    expect(moved?.frontmatter.movedFrom).toEqual(['plan']);
+    // The link made before the move still points at the note…
+    const edge = (id: string) => links.getOutgoing(userId, 'note', id).then((es) => es.find((e) => e.linkType === 'references'));
+    expect((await edge(before.note.id))?.toId).toBe(plan.note.id);
+    // …so does one saved after it with the old slug, and one that waited for the new slug.
+    const after = await svc.save({ scope, title: 'Later', body: 'still [[Plan]]' });
+    expect((await edge(after.note.id))?.toId).toBe(plan.note.id);
+    expect((await edge(waiting.note.id))?.toId).toBe(plan.note.id);
+    expect((await svc.resolveSlug(scope, 'plan'))?.id).toBe(plan.note.id);
+    // The plain slug lookup is exact: a new note may take the old slug, and then wins it.
+    expect(await svc.getBySlug(scope, 'plan')).toBeNull();
+    const fresh = await svc.save({ scope, title: 'Plan', body: 'a new plan', createOnly: true });
+    expect((await svc.resolveSlug(scope, 'plan'))?.id).toBe(fresh.note.id);
+
+    // Moving back drops the alias it would shadow, and a taken slug is refused.
+    const back = await svc.move(scope, plan.note.id, 'archive/plan');
+    expect(back?.frontmatter.movedFrom).toEqual(['plan', 'projects/plan']);
+    const { NoteExistsError, InvalidSlugError } = await import('./notes');
+    await expect(svc.move(scope, plan.note.id, 'plan')).rejects.toBeInstanceOf(NoteExistsError);
+    await expect(svc.move(scope, plan.note.id, '///')).rejects.toBeInstanceOf(InvalidSlugError);
+    expect(await svc.move(personalNoteScope(randomUUID()), plan.note.id, 'x')).toBeNull();
+  });
+
+  test('one note holds a moved slug, and no save can plant one', async () => {
+    const scope = personalNoteScope(userId);
+    const a = await svc.save({ scope, title: 'Alpha', body: 'a' });
+    const b = await svc.save({ scope, title: 'Beta', body: 'b' });
+    await svc.move(scope, a.note.id, 'x/alpha');
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(a.note.id);
+    // Another note moved into the slug Alpha left takes it as its own: the old link means it now.
+    await svc.move(scope, b.note.id, 'alpha');
+    await svc.move(scope, b.note.id, 'y/beta');
+    expect((await svc.getById(scope, a.note.id))?.frontmatter.movedFrom).toEqual([]);
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(b.note.id);
+
+    // A writer naming `movedFrom` in its frontmatter claims nothing, and keeps nothing it had.
+    const c = await svc.save({ scope, title: 'Gamma', body: 'c', frontmatter: { movedFrom: ['y/beta-old', 'alpha'], mood: 'ok' } });
+    expect(c.note.frontmatter).toEqual({ mood: 'ok' });
+    expect((await svc.resolveSlug(scope, 'alpha'))?.id).toBe(b.note.id);
+    const resaved = await svc.save({ scope, id: b.note.id, title: 'Beta', body: 'b2', frontmatter: { mood: 'fine' } });
+    expect(resaved.note.frontmatter).toEqual({ mood: 'fine', movedFrom: ['beta', 'alpha'] });
+  });
+
+  test('getOrCreateDaily never replaces a daily note written meanwhile, and refuses an impossible day', async () => {
+    const scope = personalNoteScope(userId);
+    const { normalizeDay } = await import('./notes');
+    // Another tab created the day's note between this one's read and its write.
+    const realStore = svc.store.bind(svc);
+    let raced = false;
+    const spy = vi.spyOn(svc, 'store').mockImplementation((sc) => {
+      const store = realStore(sc);
+      return {
+        ...store,
+        getById: store.getById.bind(store),
+        getBySlug: async (slug: string) => {
+          if (!raced && slug === 'daily/2026-03-01') {
+            raced = true;
+            spy.mockRestore();
+            await svc.save({ scope, slug, title: '2026-03-01', body: 'typed in the other tab', noteKind: 'daily' });
+            return null;
+          }
+          return store.getBySlug(slug);
+        },
+      } as ReturnType<typeof realStore>;
+    });
+    const daily = await svc.getOrCreateDaily(scope, '2026-03-01');
+    expect(daily.body).toBe('typed in the other tab');
+    // The template lost the race: its create-only save was refused with the note that won, never written over it.
+    expect(raced).toBe(true);
+    await expect(svc.save({ scope, slug: 'daily/2026-03-01', title: '2026-03-01', body: 'template', createOnly: true }))
+      .rejects.toMatchObject({ name: 'NoteExistsError', noteId: daily.id, slug: 'daily/2026-03-01' });
+    expect(() => normalizeDay('2026-02-31')).toThrow(/Invalid date/);
+    expect(normalizeDay('2028-02-29')).toBe('2028-02-29');
   });
 
   test('getOrCreateDaily is idempotent and stamps the date', async () => {
