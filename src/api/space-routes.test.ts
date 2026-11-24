@@ -216,6 +216,8 @@ const SPACE_ACTING = [
   'GET /api/notes/:id', 'GET /api/notes/:id/suggestions', 'PATCH /api/notes/:id/pin', 'DELETE /api/notes/:id',
   // Undo an archive: a write, editors and owners only (live-notes.isolation.test.ts).
   'POST /api/notes/:id/restore',
+  // The day's note and a move to another slug: `noteRepos` → the space's notes, writes by editors and owners.
+  'POST /api/notes/daily', 'POST /api/notes/:id/move',
   // Space notes (S3): revisions and the agent's edit proposals; 404 in a personal workspace.
   'GET /api/notes/proposals', 'POST /api/notes/proposals/:proposalId/accept', 'POST /api/notes/proposals/:proposalId/reject',
   'GET /api/notes/:id/revisions', 'GET /api/notes/:id/revisions/:revisionId', 'POST /api/notes/:id/revisions/:revisionId/restore',
