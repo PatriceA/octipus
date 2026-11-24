@@ -5,7 +5,7 @@ import { disableRoleHeartbeatHook, ensureRoleHeartbeatHook } from '@/core/heartb
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { myDay, myDayDate } from '@/core/tasks/my-day';
-import { type LinkedNote, linkNote, NoteLinkError, unlinkNote, withLinkedNotes } from '@/core/tasks/note-links';
+import { checkNewNoteLink, type LinkedNote, linkNote, NoteLinkError, unlinkNote, withLinkedNotes } from '@/core/tasks/note-links';
 import { nextActions } from '@/core/tasks/next';
 import { parseQuickAdd, quickAddDueAt } from '@/core/tasks/quick-add';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
@@ -144,6 +144,13 @@ function noteZone(principal: Principal, tz: string | undefined): void {
 /** True when any of `fields` is given (`undefined` = left alone). */
 function anyGiven(fields: object): boolean {
   return Object.values(fields).some((v) => v !== undefined);
+}
+
+/** Audit a list change (rename, delete, move) on each to-do it moved: their `category` changed. */
+async function auditListMove(principal: Principal, repos: ContentRepos, taskIds: readonly string[]): Promise<void> {
+  if (taskIds.length === 0) return;
+  const rows = await repos.tasks.findByIds(taskIds);
+  await Promise.all(rows.map((task) => auditUserTaskMutation(principal, task, 'update', ['category'])));
 }
 
 /** A link refused by `core/tasks/note-links.ts`, as a status and body; null for any other error. */
@@ -362,7 +369,10 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        return { name: body.newName.trim(), taskIds: await contentRepos(principal).tasks.renameList(body.name, body.newName) };
+        const repos = contentRepos(principal);
+        const taskIds = await repos.tasks.renameList(body.name, body.newName);
+        await auditListMove(principal, repos, taskIds);
+        return { name: body.newName.trim(), taskIds };
       } catch (err) {
         if (err instanceof SpaceError) throw err;
         set.status = 400;
@@ -377,7 +387,10 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     '/lists',
     async ({ user, principal, query, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-      return { taskIds: await contentRepos(principal).tasks.deleteList(query.name) };
+      const repos = contentRepos(principal);
+      const taskIds = await repos.tasks.deleteList(query.name);
+      await auditListMove(principal, repos, taskIds);
+      return { taskIds };
     },
     { query: t.Object({ name: t.String({ minLength: 1, maxLength: 100 }) }), detail: { tags: ['tasks'] } }
   )
@@ -386,7 +399,10 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     '/lists/move',
     async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
-      return { taskIds: await contentRepos(principal).tasks.moveToList(body.taskIds, body.name) };
+      const repos = contentRepos(principal);
+      const taskIds = await repos.tasks.moveToList(body.taskIds, body.name);
+      await auditListMove(principal, repos, taskIds);
+      return { taskIds };
     },
     {
       body: t.Object({ taskIds: t.Array(t.String(), { maxItems: 1000 }), name: t.Union([t.String({ minLength: 1, maxLength: 100 }), t.Null()]) }),
@@ -534,15 +550,15 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         // Checked before anything is written: a bad sort order is a 400, not a half-made to-do.
         const sortOrder = body.sortOrder !== undefined ? sortOrderValue(body.sortOrder) : undefined;
         if (body.noteAnchor !== undefined && !body.noteId) throw new Error('noteAnchor needs noteId');
-        // The note it is made from must be in reach before anything is written.
-        if (body.noteId && !(await repos.notes.getById(body.noteId))) throw new NoteLinkError('not_found', 'Note not found');
+        // The link it is made with is checked before anything is written.
+        if (body.noteId) await checkNewNoteLink(repos, { noteId: body.noteId, anchor: body.noteAnchor ?? null });
         const task = await repo.create(values, { tz: body.tz });
         if (body.noteId) {
           try {
             await linkNote(repos, { taskId: task.id, noteId: body.noteId, anchor: body.noteAnchor ?? null });
           } catch (err) {
-            // Not linked (that line is already another to-do): nothing is made.
-            await repo.delete(task.id);
+            // Lost a race for that line: the to-do is taken back as if never made (no repeat skip, no wakeups).
+            await repo.discardNew(task.id);
             throw err;
           }
         }
@@ -719,7 +735,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       const actor = body?.actor?.trim() || `user:${user.id}`;
-      const result = await contentRepos(principal).tasks.checkout(params.id, actor, body?.runId ?? null);
+      // The user claiming it themselves, or a runner told so (`early`), may take a future occurrence now.
+      const early = body?.early ?? !body?.actor?.trim();
+      const result = await contentRepos(principal).tasks.checkout(params.id, actor, body?.runId ?? null, { early });
       if (result.ok) return result.task;
       if (result.reason === 'not_found') {
         set.status = 404;
@@ -741,6 +759,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
       body: t.Optional(t.Object({
         actor: t.Optional(t.String({ maxLength: 200 })),
         runId: t.Optional(t.String({ maxLength: 200 })),
+        /** Take a future occurrence of a repeating to-do now (default: true for the user's own claim, false for an `actor`). */
+        early: t.Optional(t.Boolean()),
       })),
       detail: { tags: ['tasks'] },
     }

@@ -3,7 +3,7 @@ import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/cor
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { myDay, myDayDate } from '@/core/tasks/my-day';
-import { type LinkedNote, linkedNotesOf, linkNote, makeTodosFromNote, NoteLinkError } from '@/core/tasks/note-links';
+import { checkNewNoteLink, type LinkedNote, linkedNotesOf, linkNote, makeTodosFromNote, NoteLinkError } from '@/core/tasks/note-links';
 import { todayParts } from '@/core/tasks/smart-lists';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { normalizeRepeat, REPEAT_UNITS } from '@/core/tasks/repeat';
@@ -144,7 +144,7 @@ export class TasksTool extends BaseTool {
         try {
           const noteId = idOrNull(args.noteId);
           // The note must be in reach before anything is written.
-          if (noteId && !(await contentRepos(principal).notes.getById(noteId))) return { error: 'Note not found' };
+          if (noteId) await checkNewNoteLink(contentRepos(principal), { noteId });
           const values = {
             title: args.title as string,
             notes: (args.notes as string | undefined) ?? null,
@@ -310,6 +310,7 @@ export class TasksTool extends BaseTool {
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
         release: { type: 'boolean', description: 'Give the claim back instead of taking it' },
+        now: { type: 'boolean', description: 'The user asked for this to be done now: claim a future occurrence of a repeating task anyway' },
       }),
       async (args, context) => {
         const repo = contentRepos(agentPrincipal(context)).tasks;
@@ -320,11 +321,16 @@ export class TasksTool extends BaseTool {
           if (released.reason === 'not_found') return { error: 'Task not found' };
           return { error: `Task is checked out by ${released.holder}`, holder: released.holder };
         }
-        const result = await repo.checkout(args.id as string, actor, context.id || null);
+        const result = await repo.checkout(args.id as string, actor, context.id || null, { early: args.now === true });
         if (result.ok) return { checkedOut: true, task: summarize(result.task) };
         if (result.reason === 'not_found') return { error: 'Task not found' };
         if (result.reason === 'blocked') return { error: `Task is blocked: ${waitingReason(result.waiting)}`, blocked: true };
-        if (result.reason === 'not_due') return { error: `This occurrence of a repeating task is not due until ${result.dueAt.toISOString()}; leave it until then`, notDue: true };
+        if (result.reason === 'not_due') {
+          return {
+            error: `This occurrence of a repeating task is not due until ${result.dueAt.toISOString()}. Leave it until then unless the user asked for it now; if they did, check it out again with now: true.`,
+            notDue: true,
+          };
+        }
         return {
           error: result.holder ? `Task is checked out by ${result.holder}` : `Task is ${result.status}`,
           holder: result.holder,

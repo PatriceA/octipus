@@ -74,6 +74,10 @@ const UPCOMING_WINDOW_DAYS = 7;
 /** True when `tz` is a zone Intl accepts. */
 export function isValidTimezone(tz: string | null | undefined): tz is string {
   if (!tz) return false;
+  // A bare offset (`+05:30`, `-0800`): Intl takes it, but it is no zone name,
+  // and Postgres reads such a string with the POSIX (flipped) sign — the
+  // database and this code would disagree by twice the offset. Not a zone.
+  if (/^\s*[+-]/.test(tz) || /^\s*(?:utc|gmt)\s*[+-]/i.test(tz)) return false;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
     return true;

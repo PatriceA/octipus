@@ -108,6 +108,23 @@ export async function linkedTasksOf(repos: ContentRepos, noteId: string): Promis
 }
 
 /**
+ * Whether a to-do made now could be linked to `noteId` (at `anchor`): the
+ * note in reach and in this scope, the anchor well formed and not another
+ * line's to-do. Throws `NoteLinkError` otherwise. Checked before a create,
+ * so a refused link makes nothing.
+ */
+export async function checkNewNoteLink(repos: ContentRepos, input: { noteId: string; anchor?: string | null }): Promise<void> {
+  repos.can('write');
+  if (input.anchor != null && !TODO_ANCHOR.test(input.anchor)) throw new NoteLinkError('invalid', 'noteAnchor must be 6 to 16 lowercase letters or digits');
+  const note = await repos.notes.getById(input.noteId);
+  const inScope = !!note && (repos.kind === 'space' ? note.workspaceId === repos.workspaceId : note.userId === repos.principal.userId);
+  if (!note || !inScope) throw new NoteLinkError('not_found', 'Note not found');
+  if (input.anchor && (await anchoredLinksOfNote(note.id, [input.anchor])).length > 0) {
+    throw new NoteLinkError('anchor_taken', 'That line of the note is already another to-do');
+  }
+}
+
+/**
  * Link a note to a to-do (idempotent), as an attachment or, with `anchor`,
  * as the line the to-do was made from. Needs write access to the to-do;
  * either end out of reach is `not_found` (no enumeration).

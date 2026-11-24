@@ -237,6 +237,23 @@ describe('a note line and its to-do follow each other', () => {
     const second = await json(await call('alice', 'POST', '/api/tasks', { body: { title: 'Again', noteId: n.id, noteAnchor: a } }));
     expect(second).toMatchObject({ status: 409, body: { code: 'anchor_taken' } });
     expect((await json(await call('alice', 'GET', '/api/tasks'))).body.tasks.map((t: { title: string }) => t.title)).not.toContain('Again');
+    // A repeating one refused the same way leaves no occurrence behind either (nothing was created to skip).
+    const repeating = await json(await call('alice', 'POST', '/api/tasks', { body: { title: 'Again weekly', repeat: 'weekly', dueAt: '2026-11-24', tz: 'UTC', noteId: n.id, noteAnchor: a } }));
+    expect(repeating).toMatchObject({ status: 409, body: { code: 'anchor_taken' } });
+    const all = await json(await call('alice', 'GET', '/api/tasks?status=archived'));
+    const open = await json(await call('alice', 'GET', '/api/tasks'));
+    expect([...all.body.tasks, ...open.body.tasks].map((t: { title: string }) => t.title)).not.toContain('Again weekly');
+  });
+
+  test('a to-do taken back after a lost race is removed outright: a repeating one makes no next occurrence', async () => {
+    const { contentRepos } = await import('@/db/repositories/content');
+    const { agentPrincipal } = await import('@/security/principal');
+    const repo = contentRepos(agentPrincipal({ userId: ids.alice, workspaceId: null })).tasks;
+    const task = await repo.create({ title: 'Raced weekly', repeat: { unit: 'week', interval: 1 }, dueAt: new Date('2026-11-24T23:59:59.999Z') });
+    expect(await repo.discardNew(task.id)).toBe(true);
+    const { queryRaw } = await import('@/db/postgres');
+    const rows = await queryRaw(`SELECT id FROM tasks WHERE user_id = $1 AND title = 'Raced weekly'`, [ids.alice]);
+    expect(rows.rows).toEqual([]);
   });
 
   test('a repeating to-do: its line is ticked with the occurrence; the next one has the note attached', async () => {

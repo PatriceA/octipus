@@ -140,6 +140,11 @@ describe('rankTasks', () => {
   test('an invalid timezone falls back instead of throwing', () => {
     expect(isValidTimezone('Mars/Olympus')).toBe(false);
     expect(isValidTimezone('Europe/Berlin')).toBe(true);
+    // Offsets are not zone names (Intl takes them on Node 24; Postgres reads them with the POSIX sign).
+    expect(isValidTimezone('+05:30')).toBe(false);
+    expect(isValidTimezone('-08:00')).toBe(false);
+    expect(isValidTimezone('UTC+2')).toBe(false);
+    expect(isValidTimezone('Etc/GMT-1')).toBe(true);
     expect(() => rankTasks([mk({ id: 'x' })], NOW, { timezone: 'Mars/Olympus' })).not.toThrow();
   });
 

@@ -90,14 +90,21 @@ export function normalizeRepeat(value: unknown): TaskRepeat | null {
  * The rule as stored for a series: its zone (`tz`, kept when the rule already
  * has one, so a series stays in the zone it was set up in) and, for month and
  * year rules, the anchor day — the due date's day of the month in that zone,
- * else today's. Called whenever the rule or the due date is written.
+ * else today's, unless the rule's anchor already gives that day (clamped in a
+ * shorter month). Called whenever the rule or the due date is written.
  */
 export function stampSeries(rule: TaskRepeat, dueAt: Date | null, tz: string, now: Date = new Date()): TaskRepeat {
   const zone = rule.tz && isValidTimezone(rule.tz) ? rule.tz : isValidTimezone(tz) ? tz : 'UTC';
-  const { anchorDay: _old, ...rest } = rule;
-  void _old;
+  const { anchorDay: old, ...rest } = rule;
   const stamped: TaskRepeat = { ...rest, tz: zone };
-  if (rule.unit === 'month' || rule.unit === 'year') stamped.anchorDay = localWallClock((dueAt ?? now).getTime(), zone).day;
+  if (rule.unit === 'month' || rule.unit === 'year') {
+    const due = localWallClock((dueAt ?? now).getTime(), zone);
+    // A due day the anchor clamps to in that month (Feb 28 of a 31st series)
+    // is still that series: a new due time, or the same day, keeps the
+    // anchor. Only a day the anchor would not give moves it.
+    const keep = old !== undefined && Math.min(old, daysInMonth(due.year, due.month)) === due.day;
+    stamped.anchorDay = keep ? old : due.day;
+  }
   return stamped;
 }
 

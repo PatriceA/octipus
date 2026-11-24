@@ -3,6 +3,7 @@ import { parseQuickAdd, quickAddDueAt } from '@/core/tasks/quick-add';
 import { repeatLabel } from '@/core/tasks/repeat';
 import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
 import { contentRepos } from '@/db/repositories/content';
+import type { NewTask } from '@/db/schema/tasks';
 import { agentPrincipal } from '@/security/principal';
 import { registerCommand } from './registry';
 
@@ -28,10 +29,10 @@ registerCommand({
     const timezone = await resolveUserTimezone(ctx.userId);
     const parsed = parseQuickAdd(text, { timezone, lists: await repo.categories() });
     const dueAt = quickAddDueAt(parsed.due, timezone);
-    const values = {
+    // Typed, so a field the task row does not hold (the star is the user's own layer) cannot slip in and be dropped.
+    const values: Omit<NewTask, 'userId'> = {
       title: parsed.title,
       priority: parsed.priority ?? 0,
-      important: parsed.important,
       category: parsed.category,
       repeat: parsed.repeat,
       dueAt: dueAt ? await parseTaskDate(dueAt, 'dueAt', ctx.userId, timezone) : null,
@@ -39,6 +40,8 @@ registerCommand({
       sourceRef: { sessionId: ctx.sessionId },
     };
     const task = await repo.create(values);
+    // The star (`*`, `!important`) is the user's own layer (task_user_state).
+    if (parsed.important) await repo.setPersonal(task.id, { important: true });
     await auditTaskMutation({ userId: ctx.userId, taskId: task.id, op: 'create', change: changedTaskFields(values), actor: { kind: 'user', id: ctx.userId }, runId: null });
     return { response: `Added to-do **${task.title}**${todoDetails(parsed, task.dueAt, timezone)}.` };
   },

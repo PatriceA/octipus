@@ -277,6 +277,15 @@ describe('/todo', () => {
     expect(row.source_ref).toEqual({ sessionId: 's1' });
     expect((await getCommand('todo')!.execute({ sessionId: 's1', userId: aliceId, args: ' ' })).response).toMatch(/^Usage/);
   });
+
+  test('a star (`*`) stars the to-do for the user, as the reply says', async () => {
+    const { getCommand } = await import('@/core/commands/registry');
+    const result = await getCommand('todo')!.execute({ sessionId: 's1', userId: aliceId, args: 'water the ferns *' });
+    expect(result.response).toMatch(/important/);
+    const id = (await rowsOf(aliceId)).find((r) => r.title === 'water the ferns')?.id;
+    const state = await queryRaw('SELECT important FROM task_user_state WHERE task_id = $1 AND user_id = $2', [id, aliceId]);
+    expect(state.rows[0]?.important).toBe(true);
+  });
 });
 
 describe('tasks.changed', () => {
@@ -299,7 +308,8 @@ describe('review findings', () => {
   test('a future occurrence is not work: checkout refuses it, the agent view and the heartbeat probe leave it out', async () => {
     const { body: task } = await req('POST', '/api/tasks', { title: 'Water plants', repeat: 'daily', dueAt: '2099-01-01', assigneeKind: 'role', assigneeRef: 'general', tz: 'UTC' });
     const { body: now } = await req('POST', '/api/tasks', { title: 'Today\'s run', repeat: 'daily', dueAt: today('UTC'), assigneeKind: 'role', assigneeRef: 'general', tz: 'UTC' });
-    const refused = await req('POST', `/api/tasks/${task.id}/checkout`, {});
+    // A runner claiming by itself is refused; the user's own claim is an explicit request and goes through.
+    const refused = await req('POST', `/api/tasks/${task.id}/checkout`, { actor: 'runner-1' });
     expect(refused).toMatchObject({ status: 409, body: { reason: 'not_due', dueAt: expect.stringMatching(/^2099-01-01/) } });
     expect((await req('POST', `/api/tasks/${now.id}/checkout`, {})).status).toBe(200);
     await req('POST', `/api/tasks/${now.id}/release`, { force: true });
@@ -307,8 +317,12 @@ describe('review findings', () => {
     expect(listed.tasks.map((t: any) => t.title)).toEqual(["Today's run"]);
     const { probeRoleWork } = await import('@/core/heartbeat');
     expect((await probeRoleWork(aliceId, 'general')).map((t) => t.title)).toEqual(["Today's run"]);
-    // The tool's checkout says why.
-    expect(await tool('checkout_task', { id: task.id })).toMatchObject({ notDue: true });
+    // The tool's checkout says why, and what to do when the user asked for it now.
+    const why = await tool('checkout_task', { id: task.id });
+    expect(why).toMatchObject({ notDue: true, error: expect.stringContaining('now: true') });
+    expect(await tool('checkout_task', { id: task.id, now: true })).toMatchObject({ checkedOut: true });
+    await req('POST', `/api/tasks/${task.id}/release`, { force: true });
+    expect((await req('POST', `/api/tasks/${task.id}/checkout`, {})).status).toBe(200);
   });
 
   test('a reported zone is remembered; a fixed offset never replaces a named zone; a chosen zone is kept', async () => {
@@ -326,6 +340,25 @@ describe('review findings', () => {
     // A zone chosen in Settings is never overwritten by a device.
     await setZone('Asia/Tokyo', 'user');
     expect(await rememberDeviceTimezone(aliceId, 'Europe/Berlin')).toBe(false);
+    expect(await zoneOf()).toMatchObject({ timezone: 'Asia/Tokyo', timezoneSource: 'user' });
+  });
+
+  test('a bare offset (`+05:30`) is no zone: never stored, never a series zone, never read by SQL', async () => {
+    const { rememberDeviceTimezone } = await import('@/core/tasks/timezone');
+    await setZone('Europe/Berlin');
+    expect(await rememberDeviceTimezone(aliceId, '+05:30')).toBe(false);
+    expect(await rememberDeviceTimezone(aliceId, '-0800')).toBe(false);
+    expect((await zoneOf()).timezone).toBe('Europe/Berlin');
+    const { body } = await req('POST', '/api/tasks', { title: 'Offset series', repeat: { unit: 'day', interval: 1, tz: '+05:30' }, dueAt: '2030-03-30', tz: '+05:30' });
+    expect(body.repeat.tz).toBe('Europe/Berlin');
+  });
+
+  test('a device report never replaces a zone chosen in Settings, even when the choice lands between its read and its write', async () => {
+    await setZone('Etc/GMT-1');
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    // The user's choice lands first; the device's write carries its own condition.
+    await setZone('Asia/Tokyo', 'user');
+    expect(await userRepository.setDeviceTimezone(aliceId, 'Europe/Lisbon', false)).toBe(false);
     expect(await zoneOf()).toMatchObject({ timezone: 'Asia/Tokyo', timezoneSource: 'user' });
   });
 
@@ -439,5 +472,12 @@ describe('review findings', () => {
     expect((await rowsOf(aliceId)).map((r) => r.category)).toEqual(['House', 'House']);
     await req('DELETE', '/api/tasks/lists?name=Garden');
     expect((await req('GET', '/api/tasks/lists')).body.lists).toEqual([{ name: 'House', open: 2 }]);
+    // Each move of a to-do between lists is audited (rename, delete, move back).
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    for (const id of deleted.body.taskIds as string[]) {
+      const moves = (await auditRepository.findByResource('task', id)).map((r) => r.details as Record<string, unknown>).filter((d) => d.op === 'update');
+      expect(moves).toHaveLength(3);
+      expect(moves.every((d) => JSON.stringify(d.change) === '["category"]')).toBe(true);
+    }
   });
 });

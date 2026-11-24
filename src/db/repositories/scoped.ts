@@ -1294,7 +1294,8 @@ export function taskLeaseFree(actor?: string): SQL {
  * assigned a repeating to-do never works its future occurrences early.
  */
 export function taskOccurrenceStarted(t: { repeat: AnyPgColumn; dueAt: AnyPgColumn } = tasks): SQL {
-  const zone = sql`coalesce(${t.repeat}->>'tz', 'UTC')`;
+  // Only a zone name (letters first, as `isValidTimezone` accepts): an offset string would be read with the POSIX sign.
+  const zone = sql`(CASE WHEN ${t.repeat}->>'tz' ~ '^[A-Za-z][A-Za-z0-9_/+-]*$' THEN ${t.repeat}->>'tz' ELSE 'UTC' END)`;
   return sql`(${t.repeat} IS NULL OR ${t.dueAt} IS NULL OR (${t.dueAt} AT TIME ZONE ${zone})::date <= (now() AT TIME ZONE ${zone})::date)`;
 }
 
@@ -1896,13 +1897,16 @@ export class TaskRepo {
    * moves the task to in_progress. On a miss the task is re-read to say why:
    * gone, closed, blocked (with what it waits on), or held by someone else.
    */
-  async checkout(id: string, actor: string, runId: string | null = null): Promise<TaskCheckoutResult> {
+  async checkout(id: string, actor: string, runId: string | null = null, opts: { early?: boolean } = {}): Promise<TaskCheckoutResult> {
     const existing = await this.findById(id);
     if (!existing) return { ok: false, reason: 'not_found' };
     this.taskScope.can('write');
     if (!isActiveStatus(existing.status)) return { ok: false, reason: 'conflict', holder: existing.checkedOutBy, status: existing.status };
-    // A future occurrence of a series is not work yet (core/tasks/repeat.ts `occurrenceStarted`).
-    if (!occurrenceStarted(existing, new Date())) return { ok: false, reason: 'not_due', dueAt: existing.dueAt as Date };
+    // A future occurrence of a series is not work yet (core/tasks/repeat.ts
+    // `occurrenceStarted`) for anything that picks work up by itself; `early`
+    // is an explicit request to do this occurrence now (the user's own
+    // checkout, or an agent told to by the user), which the gate never stops.
+    if (!opts.early && !occurrenceStarted(existing, new Date())) return { ok: false, reason: 'not_due', dueAt: existing.dueAt as Date };
     // The holder renews without the blocked rule (it may have split its own
     // task into sub-tasks); anyone else claims only a free, unblocked task.
     const [claimed] = await this.db
@@ -1911,7 +1915,7 @@ export class TaskRepo {
       .where(this.scopeWhere(
         id,
         inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
-        taskOccurrenceStarted(),
+        ...(opts.early ? [] : [taskOccurrenceStarted()]),
         or(eq(tasks.checkedOutBy, actor), and(this.leaseFree(actor), ...this.notWaiting())) as SQL,
       ))
       .returning();
@@ -2071,6 +2075,21 @@ export class TaskRepo {
    * its parent just as closing it does; DELETE … RETURNING hands back the
    * row atomically.
    */
+  /**
+   * Take back a task this same call just created, when a step after the
+   * create failed (a link it needed): a plain removal, unlike `delete` — no
+   * repeat series moves on (deleting an occurrence would skip it and make
+   * the next one), no dependent wakes (nothing waits on a task that existed
+   * for one request). False when the scope does not reach it.
+   */
+  async discardNew(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
+    this.taskScope.can('write');
+    const [gone] = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
+    if (gone) this.changed(gone, true);
+    return !!gone;
+  }
+
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
     this.taskScope.can('write');

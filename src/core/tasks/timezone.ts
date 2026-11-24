@@ -28,14 +28,8 @@ export function isFixedOffsetZone(tz: string): boolean {
  */
 export async function rememberDeviceTimezone(userId: string, tz: string | null | undefined): Promise<boolean> {
   if (!isValidTimezone(tz)) return false;
-  const user = await userRepository.findById(userId);
-  if (!user) return false;
-  const stored = user.preferences?.timezone;
-  if (user.preferences?.timezoneSource === 'user' && isValidTimezone(stored)) return false;
-  if (stored === tz) return false;
-  if (isFixedOffsetZone(tz) && isValidTimezone(stored) && !isFixedOffsetZone(stored)) return false;
-  await userRepository.setTimezone(userId, tz, 'device');
-  return true;
+  // The rules are the UPDATE's condition: a choice made in Settings between a read and a write is never replaced.
+  return userRepository.setDeviceTimezone(userId, tz, isFixedOffsetZone(tz));
 }
 
 /**

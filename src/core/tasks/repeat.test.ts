@@ -149,3 +149,14 @@ describe('series over several occurrences (review findings)', () => {
     expect(occurrenceStarted({ repeat: rule, dueAt: null }, new Date('2020-01-01'))).toBe(true);
   });
 });
+
+describe('stampSeries keeps a clamped anchor', () => {
+  test('a new due time on the Feb 28 of a 31st series keeps the 31st; another day moves it', () => {
+    const rule = { unit: 'month' as const, interval: 1, tz: 'UTC', anchorDay: 31 };
+    expect(stampSeries(rule, new Date('2027-02-28T15:00:00Z'), 'UTC').anchorDay).toBe(31);
+    expect(stampSeries(rule, new Date('2027-03-31T09:00:00Z'), 'UTC').anchorDay).toBe(31);
+    expect(stampSeries(rule, new Date('2027-02-27T09:00:00Z'), 'UTC').anchorDay).toBe(27);
+    expect(stampSeries({ unit: 'year', interval: 1, tz: 'UTC', anchorDay: 29 }, new Date('2027-02-28T09:00:00Z'), 'UTC').anchorDay).toBe(29);
+    expect(stampSeries({ unit: 'month', interval: 1 }, new Date('2027-02-28T09:00:00Z'), 'UTC').anchorDay).toBe(28);
+  });
+});
