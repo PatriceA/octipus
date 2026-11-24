@@ -32,6 +32,27 @@ labels reflect blast radius, not contract guarantees.
   `list_tasks` `view: "today"` (also on the MCP server's
   `octipus_list_tasks`), `read_note` lists a note's to-dos. Ctrl+K can add a
   line to today's note from any page.
+- **Note-to-do links, after review.** An agent's completion in a space that
+  takes its note changes as proposals proposes the line's tick; ticks typed
+  in a live space note reach their to-dos at once, as the member who typed
+  them and within their reach; a merge, a restored revision or an accepted
+  proposal reconciles the same way; a tick that could not be written is owed
+  (`task_note_links.pending_checked`, migration 0208) and made when the note
+  is next opened by a writer; every marker names one line and one link
+  (copies and markers without a link come off on save); personal note saves
+  are conditional in the UPDATE itself; a run of ticks on a closed space note
+  is one revision (`note_revisions.tick`); a repeating to-do's notes move on
+  instead of being copied to every occurrence. A **day's archived note stays
+  archived**: `POST /api/notes/daily` answers `409 archived` unless
+  `restore` or `fresh` is asked, and capture refuses it (Today offers Restore
+  / Start a fresh one). A to-do's notes render as untrusted markdown (no
+  picture loads by itself). Today follows midnight.
+- **To-dos, review fixes.** `/todo … *` stars the to-do; a refused note link
+  never leaves a to-do (or a skipped repeat occurrence) behind; a due-time
+  change keeps a monthly series' clamped anchor; a bare offset (`+05:30`) is
+  no zone; a device's zone report never replaces one chosen in Settings, even
+  in a race; the user's own checkout (or `checkout_task` `now: true`) claims a
+  future occurrence; list rename, delete and move are audited per to-do.
 - **Web notes are a notepad.** A note opens straight into one live-preview
   editor: headings, bold, lists, quotes, links, `[[wikilinks]]` and `#tags`
   read as rendered while the text stays markdown, `- [ ]` tasks are

@@ -351,7 +351,7 @@ order); the other fields belong to the task.
 | `important` | boolean | The caller's star (the Important list). Default `false` |
 | `sortOrder` | number | The caller's manual order within a list, **ascending**; until they reorder, the task's default (minus its creation time in ms, so the newest is first). To move a task between two neighbours, PATCH the midpoint of their `sortOrder`s; to the top, the first one's minus 1. Any finite number |
 | `myDayOn` | `YYYY-MM-DD` \| null | The day (in the caller's zone) they put it in My Day. It **is** in My Day only while that equals today's date there, so My Day empties itself at midnight; no write happens |
-| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6], tz, anchorDay?}` (0 = Sunday, `weekdays` only with `"week"`). The server stamps `tz` (the IANA zone the series runs in) and, for month and year rules, `anchorDay` (the day of the month the series keeps: the 31st comes back on the 31st whenever a month has one). Read-only for clients: send a rule without them (or echoed back unchanged) |
+| `repeat` | object \| null | `{unit: "day"\|"week"\|"month"\|"year", interval: 1..365, weekdays?: [0..6], tz, anchorDay?}` (0 = Sunday, `weekdays` only with `"week"`). The server stamps `tz` (the IANA zone the series runs in) and, for month and year rules, `anchorDay` (the day of the month the series keeps: the 31st comes back on the 31st whenever a month has one; changing only the time, or the date to the day the anchor gives in a shorter month, keeps it). Read-only for clients: send a rule without them (or echoed back unchanged) |
 | `repeatNextId` | uuid \| null | On a finished (done, or skipped = archived) repeating task: the occurrence that made |
 | `dueAt` | ISO \| null | As before. **Due time:** a due *day* is stored as the last millisecond of that day in the user's zone (seconds `59`, ms `999`); any other value is a due *time*. Send a bare `YYYY-MM-DD` for a day, a full ISO instant for a time |
 | `remindAt` | ISO \| null | As before: when the reminder fires (notification); a changed value re-arms it |
@@ -381,6 +381,12 @@ zone by these rules (also `PUT /api/auth/timezone {timezone, source: "device"}`)
   named zone does replace a fixed one;
 - otherwise a different zone replaces the stored one.
 
+These rules are the condition of one database update, so a zone chosen in
+Settings at the same moment is never replaced. A **bare offset** (`+05:30`,
+`-0800`, `UTC+2`) is not a zone anywhere a zone is accepted: it is ignored as
+`tz` and never stored (Postgres reads such a string with the opposite sign).
+The mobile app sends an IANA fixed zone (`Etc/GMT-1`) for an offset.
+
 A series is stamped with the stored named zone first, then a named request
 zone, and only then a fixed offset (which ignores DST). `PUT /api/auth/timezone`
 with `source: "user"` fixes the zone (devices stop changing it); `"follow"` sets
@@ -405,9 +411,13 @@ ticked, nobody's star or order changed, and made less than 10 minutes ago —
 and then clears `repeatNextId`; otherwise it stays.
 
 **Agents and future occurrences.** An occurrence is not work before the start
-of its due day in the series' zone: `POST /api/tasks/:id/checkout` answers
-`409 {reason: "not_due", dueAt}`, the role heartbeat skips it and the tasks
-tool's next view leaves it out. The user can still edit or complete it.
+of its due day in the series' zone for anything that picks work up by itself:
+the role heartbeat skips it, the tasks tool's next view leaves it out, and
+`POST /api/tasks/:id/checkout` with an `actor` (a runner) answers
+`409 {reason: "not_due", dueAt}`. An explicit request is not stopped: the
+user's own checkout (no `actor`), a runner sending `early: true`, and the
+tool's `checkout_task` with `now: true` (when the user asked for it now) claim
+it. The user can always edit or complete it.
 
 **Lists.** A list is the `category` of its to-dos, plus lists made empty.
 `GET /api/tasks/lists` → `{lists: [{name, open}]}` (`open`: open top-level
@@ -506,33 +516,46 @@ the pure helpers are in `src/shared/note-todos.ts`.
 **Ticks follow each other**, change for change, never state for state:
 
 - A to-do moved between done and not done (by anyone: the web, the mobile app,
-  an agent) ticks or unticks its line on the server: a personal note is written
-  only over the text the server read (read again on a race), a space note is
-  merged into its live text. A client editing that note sees the new text on
-  its next read; a save made from the older text is refused as `stale` (the web
-  merges it with the change and saves again when the two do not touch the same
-  text). The tick is the to-do's state, not anyone's text: it is written
-  directly also when an agent completed the to-do in a space that takes the
-  agent's note changes as proposals.
-- A note save that ticks or unticks a marked line completes or reopens its
-  to-do. Only a line whose tick **changed** in that save counts: a marker that
-  only appears (a line just made a to-do) or only disappears (a line deleted)
-  changes nothing, and an unrelated edit of a note whose line is out of step
-  does not flip the to-do. A live space note's typed ticks reach their to-dos
-  when the note is next saved (on last leave, and every few minutes); the web
-  completes the to-do at once when a linked box is clicked there.
+  an agent), or restored from deleted, ticks or unticks its line on the
+  server: a personal note by one UPDATE conditional on the text the server
+  read (read again on a race), a space note merged into its live text. A
+  client editing that note sees the new text on its next read; a save made
+  from the older text is refused as `stale` (the web merges it with the change
+  and saves again when the two do not touch the same text). In a space that
+  takes the agent's note changes as proposals (`agent_edit_mode: suggest`), an
+  **agent's** completion is proposed as an edit of the note (the line follows
+  once a member accepts it), as all its note edits there are; a member's is
+  written. A run of ticks on a closed space note is one revision.
+- A tick that could not be written (the note busy, out of reach for a moment)
+  is **owed**: the link remembers it and it is made when the note is next
+  opened by someone who may write it (`GET /api/notes/:id`) or refreshed, so
+  line and to-do always come back together.
+- Any change of a note that ticks or unticks a marked line completes or
+  reopens its to-do, **as the person who made the change and within their
+  reach** (a to-do they cannot see is left alone; a guest's tick never
+  completes an internal to-do): a save, a merged write, a restored revision,
+  an accepted proposal, and each update typed in a live space note, as it
+  reaches the server, in order. Only a line whose tick **changed** counts: a
+  marker that only appears (a line just made a to-do) or only disappears (a
+  line deleted) changes nothing. The audit names who: the user, the agent and
+  its run, or an admin acting for the user.
+- **One marker, one line, one link**: a save takes a marker that has no link
+  in that note (copied from another note) or a second copy of a marker
+  (a pasted line) off its line; the line stays a plain task line, which may
+  become a to-do of its own. The save's answer is the text as saved.
 - A **deleted** (archived) to-do is never brought back by a tick, and deleting
-  one leaves its line as it is.
+  one leaves its line as it is; restoring it to open unticks its line.
 - **Repeating** to-dos: the line stays with the occurrence it was made from
-  (ticked when that is done); the next occurrence has the note attached, not
-  the line.
+  (ticked when that is done); its attached notes move on to the next
+  occurrence (one link per series) and the note of its line is attached
+  there. Deleting (skipping) an occurrence hands its links, line included, to
+  the next one.
 - **Deleting the line** leaves the to-do and its link (an undo brings the
   line's link back); **editing** the line keeps the link (the to-do keeps its
-  own title). A marker copied into another note means nothing there.
+  own title).
 - A **stale or offline** client: a save refused as stale writes nothing (the
   to-do's change stands); the web merges it and saves again, and a real clash
-  asks the user. A tick that cannot reach its line (the note gone, out of
-  reach) is logged and the to-do's change stands.
+  asks the user.
 
 **Who sees what.** Both ends of a link are always in one scope: a user's
 personal to-dos and notes, or one space's (a personal note can never be linked
@@ -822,9 +845,9 @@ in its body.
 | POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
 | GET | `/api/notes/index` | Lightweight `{id,title,slug,noteKind}` list — the source for `[[` autocomplete. A note that was moved also carries `movedFrom` (the slugs it was moved away from), so a client resolves an old `[[link]]` as the server does. |
 | GET | `/api/notes/tags` | Tag → count across active notes. |
-| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). The web app sends its own calendar day as `date` (`YYYY-MM-DD`); without it the server's UTC day is used. |
+| POST | `/api/notes/capture` | Append `{ text, date? }` to the day's daily note (the workspace's, else an existing user-level one). The web app sends its own calendar day as `date` (`YYYY-MM-DD`); without it the server's UTC day is used. A day whose note is archived answers `409 {code: "archived", id}` (the line is not hidden in it). |
 | GET | `/api/notes/daily?date=YYYY-MM-DD` | `{ note, template }`: the day's daily note if it exists (`note: null` otherwise; nothing is created) and the text a new one starts from. The Today page shows the day with it and creates the note on the first keystroke. |
-| POST | `/api/notes/daily` | `{ date: "YYYY-MM-DD" }` (the caller's calendar day) → `{ note }`: the day's daily note (`daily/<date>`, kind `daily`), created from the daily template only while the day has none (a note created meanwhile is returned, never replaced). An archived one is restored and answered with `restored: true`. `400` for a day that does not exist (`2026-02-31`). |
+| POST | `/api/notes/daily` | `{ date: "YYYY-MM-DD", restore?, fresh? }` (the caller's calendar day) → `{ note }`: the day's daily note (`daily/<date>`, kind `daily`), created from the daily template only while the day has none (a note created meanwhile is returned, never replaced). A day whose note the user **archived** answers `409 {code: "archived", id}` and writes nothing: `restore: true` brings it back (answered with `restored: true`), `fresh: true` starts a new note for the day (the archived one moves aside to `daily/<date>-archived-…`, answered with `fresh: true`). `400` for a day that does not exist (`2026-02-31`). |
 | POST | `/api/notes/:id/move` | `{ slug }` → `{ note }`: give the note another slug — another folder (`projects/plan`) or name. The id, text and title stay. The old slug is added to `frontmatter.movedFrom` (and taken out of any other note's: one note holds a moved slug), and a `[[link]]` to a slug resolves to the note at that slug, else to the active note that was moved away from it (the exact slug always wins): links to the old slug keep working, before and after the move. `movedFrom` is written by this route alone: `POST /api/notes` ignores it in `frontmatter` and keeps the note's own. `409 {code: "exists", id, slug}` when another note (an archived one included) has the slug, `400 {code: "invalid_slug"}` for a slug that is empty once normalized, `404` when the caller cannot reach the note; in a space, editors and owners only. Renaming a note (a new `title` on `POST /api/notes` with its `id`) never changes its slug. |
 | GET | `/api/notes/:id` | Read a note with its backlinks and `linkedTasks` (the to-dos linked to it that the caller can open; see [Note ↔ to-do links](#note--to-do-links)). |
 | POST | `/api/notes/:id/todos` | `{ lines?: number[] }` → `{ tasks, marked, reason? }`: make to-dos of the note's task lines that are not to-dos yet (every unticked one, or the 0-based `lines`), each marked and linked. `404` when the caller cannot reach the note. |

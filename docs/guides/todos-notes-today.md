@@ -27,7 +27,9 @@ Open **Today** in the morning.
   calendars stay private: switch to your personal workspace to see them.
 - **Today's note.** The day's note, ready to type into. Opening the page does
   not create it: the first thing you type does. **Jot a line** below it adds a
-  timestamped line without moving your cursor.
+  timestamped line without moving your cursor. If you archived today's note,
+  it stays in the archive: Today offers **Restore it** or **Start a fresh
+  one**. After midnight the page moves on to the new day's note.
 
 Press **Q** on any page to add a to-do, or type into the search bar (Ctrl+K)
 and pick **Add to-do** or **Add … to today's note**.
@@ -49,8 +51,12 @@ to-do is titled with the selection and the note is attached to it).
 From then on the two follow each other:
 
 - Tick the line in the note and the to-do is completed (when the note saves,
-  a moment later). Complete the to-do anywhere — the to-do list, Today, your
-  phone, an agent — and the line is ticked in the note.
+  a moment later; at once in a shared space's live note). Complete the to-do
+  anywhere — the to-do list, Today, your phone, an agent — and the line is
+  ticked in the note. In a shared space where agents only suggest note
+  changes, an agent completing a to-do suggests the tick for a member to
+  accept.
+- A copied line keeps its text but not its link: each to-do has one line.
 - The note's **context panel** (the panel button at the top right) lists its
   to-dos, with a box to tick each and a click to open it.
 - Delete the line and the to-do stays (still linked to the note). Edit the line
