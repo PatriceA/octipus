@@ -33,6 +33,18 @@ import { logger } from '@/utils/logger';
 import { runKBSelfCheck } from '@/core/rag/health';
 import { initTracing, shutdownTracing } from '@/core/tracing';
 
+/**
+ * `OCTIPUS_BACKGROUND_WORKERS=off` starts this process without its background
+ * consumers (cron loop, monitors, companion, role heartbeats, the scheduler
+ * queue, document/learning job workers, deferred pipeline wakeups, index
+ * backlog catch-up, boot-time job recovery and lease sweeps). It serves HTTP,
+ * WebSocket and channels as usual. Used when another process on the same
+ * database owns those consumers, e.g. a second backend during a migration.
+ */
+function backgroundWorkersEnabled(): boolean {
+  return process.env.OCTIPUS_BACKGROUND_WORKERS?.trim().toLowerCase() !== 'off';
+}
+
 /** How long the boot KB self-check waits on its embedding call. */
 const BOOT_KB_EMBED_TIMEOUT_MS = 20_000;
 
@@ -143,8 +155,10 @@ async function main() {
           void runKBSelfCheck().catch((err) => logger.error({ err }, 'KB self-check after an embedding model was configured failed'));
         }
       });
-      const { startIndexBacklogCatchUp } = await import('@/core/rag/index-backlog');
-      startIndexBacklogCatchUp();
+      if (backgroundWorkersEnabled()) {
+        const { startIndexBacklogCatchUp } = await import('@/core/rag/index-backlog');
+        startIndexBacklogCatchUp();
+      }
       // The local embedding engine starts in the background only when its row
       // is the bound embedding model (otherwise it starts on demand, or never).
       void (async () => {
@@ -307,7 +321,7 @@ async function main() {
     // so running them now is safe. BEFORE the channels come up: a channel
     // attachment arriving during boot would otherwise be claimed by this
     // process and then swept by it as if a dead one held it.
-    {
+    if (backgroundWorkersEnabled()) {
       const { recoverBackgroundJobs } = await import('@/core/jobs/recover');
       const { interrupted, pruned } = await recoverBackgroundJobs();
       if (interrupted > 0 || pruned > 0) logger.info({ interrupted, pruned }, 'Background jobs reconciled after restart');
@@ -482,19 +496,23 @@ async function main() {
     // this server: all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; on
     // Postgres this instance's older boots when OCTIPUS_INSTANCE_ID is set,
     // none otherwise (they lapse by TTL). Before the cron loop can claim.
-    try {
-      await clearStaleRoleTurnLeases();
-    } catch (err) {
-      logger.warn({ err }, 'Clearing stale role heartbeat leases failed (they lapse on their own)');
-    }
+    if (backgroundWorkersEnabled()) {
+      try {
+        await clearStaleRoleTurnLeases();
+      } catch (err) {
+        logger.warn({ err }, 'Clearing stale role heartbeat leases failed (they lapse on their own)');
+      }
 
-    // Start recurring task scheduler
-    startCronLoop();
-    startMonitors();
-    startCompanion();
-    // Role heartbeats: a task wakeup for a role-assigned task marks that
-    // role's heartbeat hook due for the next tick (no-op without such hooks).
-    startRoleHeartbeatWakeups();
+      // Start recurring task scheduler
+      startCronLoop();
+      startMonitors();
+      startCompanion();
+      // Role heartbeats: a task wakeup for a role-assigned task marks that
+      // role's heartbeat hook due for the next tick (no-op without such hooks).
+      startRoleHeartbeatWakeups();
+    } else {
+      logger.warn('OCTIPUS_BACKGROUND_WORKERS=off: cron, monitors, companion, job queues and role heartbeats are not started in this process');
+    }
     // Relay task wakeups to and from the other server processes on this
     // Postgres (LISTEN/NOTIFY); does nothing on embedded PGlite.
     try {
@@ -507,10 +525,13 @@ async function main() {
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
     // (e.g. artifact cleanup) fills the storage queue but nothing ever drains it.
-    const { getScheduler } = await import('@/core/scheduler');
-    getScheduler().start();
-    const { startDeferredPipelineWakeups } = await import('@/core/agent/pipeline-deferred');
-    const stopDeferredPipelineWakeups = startDeferredPipelineWakeups();
+    let stopDeferredPipelineWakeups = (): void => {};
+    if (backgroundWorkersEnabled()) {
+      const { getScheduler } = await import('@/core/scheduler');
+      getScheduler().start();
+      const { startDeferredPipelineWakeups } = await import('@/core/agent/pipeline-deferred');
+      stopDeferredPipelineWakeups = startDeferredPipelineWakeups();
+    }
 
     logger.info('Octipus started successfully');
 
