@@ -3522,7 +3522,13 @@ export class PipelineManager {
         },
       );
 
-      stageReport = String(result ?? '');
+      // Worker failures must never become a successful "[object Object]" handoff.
+      if ((result != null && typeof result !== 'string') || result === '[object Object]') {
+        const detail = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+          ? result.error.slice(0, 2000) : 'The worker returned an invalid value instead of a text report.';
+        throw new Error(`Stage "${node.name}" did not return a text report. ${detail}`);
+      }
+      stageReport = result ?? '';
       // A node that returns nothing has not reported, whatever its status.
       if (String(result ?? '').trim() === '') {
         throw new Error(

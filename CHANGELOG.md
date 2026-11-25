@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Pipelines reject worker error objects and malformed object-string reports instead of marking a stage complete with `[object Object]`. Unbound workers now fail explicitly before spawning, and downstream stages do not run on that invalid handoff.
+
 - Codemode can discover and call explicitly read-only orchestration helpers, including pipeline status. Direct-only coordination calls and the outer CLI discovery wrapper now give specific guidance when mistakenly used inside scripts.
 
 - Disabled models can be edited and re-enabled from Models again. Administrative updates no longer report a disabled row as “Model not found”; saving other settings leaves its enabled state unchanged. A disabled fallback stays visible in its selector with instructions to enable it.

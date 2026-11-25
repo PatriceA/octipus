@@ -80,3 +80,22 @@ test('a throw between the hooks and the worker\'s run still closes the context-h
   await expect.poll(async () => (await queryRaw('SELECT event, outcome, finished_at FROM context_turns WHERE session_id = $1', [sessionId])).rows, { timeout: 5_000 })
     .toEqual([{ event: 'worker_start', outcome: 'error', finished_at: expect.anything() }]);
 });
+
+
+test('an unbound worker model rejects before spawning instead of returning an error object', async () => {
+  const sessionId = randomUUID();
+  await queryRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ($1, $2, 'webchat', $3)`, [sessionId, userId, `c-${sessionId}`]);
+  const { buildAgentContext, resolveAgentScope } = await import('./context');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'user' });
+  const context = buildAgentContext({ sessionId, userId, scope, topic: 'general', model: 'test-model', role: 'general', root: true, status: 'running' });
+  const { spawnWorker } = await import('./worker-spawner');
+  const { ModelSelector } = await import('./model-selector');
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const spawn = vi.spyOn(getAgentManager(), 'spawn');
+  try {
+    await expect(spawnWorker('research', 'Read a document', '', context, { emit: vi.fn(), modelSelector: new ModelSelector() }))
+      .rejects.toThrow(/No model configured.*research/);
+    expect(spawn).not.toHaveBeenCalled();
+  } finally { spawn.mockRestore(); }
+});
