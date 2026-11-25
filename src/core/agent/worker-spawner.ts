@@ -569,7 +569,7 @@ async function spawnWorkerRecorded(
 
   const finalModel = overrides?.model || expertModel || routing.model;
   if (!finalModel) {
-    return { error: 'No model configured. Please add one in the Models page.' };
+    throw new Error(`No model configured for worker role "${agentRole}" (topic "${lane}"). Bind an enabled model to this topic in the Models page.`);
   }
   const finalModelName = overrides?.model ? overrides.modelName : routing.name;
 

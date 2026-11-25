@@ -1122,7 +1122,13 @@ Ordinary tool schemas (including core groups and direct MCP tools) stay register
 inside Octipus. In a script, `searchTools(query)` finds authorized tools and
 `describeTool(name)` returns a signature on demand; `tools.<name>(args)` calls
 one. Use scripts for single calls too. This does not depend on the separate
-lazy-discovery setting. API workers with codemode use the same compact policy;
+lazy-discovery setting. `ALL_TOOLS` contains only script-callable tools. Explicitly
+read-only orchestration helpers, including `get_pipeline_status`, can also run
+inside scripts. Control-flow tools such as `spawn_child` and `resume_pipeline`
+remain direct calls outside Codemode. `call_discovered_tool` is an outer CLI
+bridge wrapper, not a member of `tools` in a script; call the discovered tool
+itself from the script. Handler-owned session/owner checks still apply to reads.
+API workers with codemode use the same compact policy;
 small API models and other workers without codemode retain their existing policy.
 When a tool returns images, scripts select which ones to show with
 `await showToolImage(result)`; unselected images stay out of model context. Selected images

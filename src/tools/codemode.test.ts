@@ -85,6 +85,22 @@ describe('codemode', () => {
     expect(h.calls.every((c) => c.name === 'filesystem__read_file')).toBe(true);
   });
 
+  test('read-only orchestration tools are discoverable and callable inside scripts', async () => {
+    const h = host({ tools: () => [handler('get_pipeline_status', { toolId: undefined, replaySafety: 'read_only', permissionAction: 'read' })],
+      call: async call => ({ toolCallId: call.id, result: { status: 'failed', reason: 'missing model' } }) });
+    const out = await run(h, 'const found = await searchTools("pipeline status"); text(found); text(await describeTool("get_pipeline_status")); return await tools.get_pipeline_status({id:"pipeline"});');
+    expect(out).toContain('get_pipeline_status');
+    expect(out).toContain('missing model');
+    expect(out).toContain('1 tool call');
+  });
+
+  test('direct-only tools and the CLI discovery wrapper explain the correct calling surface', async () => {
+    const h = host({ tools: () => [handler('spawn_child', { toolId: undefined })] });
+    await expect(run(h, 'return await tools.spawn_child({});')).rejects.toThrow(/direct-only.*outside codemode/);
+    await expect(run(h, 'return await tools.call_discovered_tool({});')).rejects.toThrow(/bridge wrapper.*not.*script tool/);
+    expect(h.calls).toHaveLength(0);
+  });
+
   test('a tool error rejects inside the script and can be handled there', async () => {
     const out = await run(host(), `
       try { await tools.filesystem__read_file({ path: "missing" }); }
