@@ -75,6 +75,7 @@ const DESCRIPTION = [
   '',
   '`code` is raw JavaScript (no markdown fence), run as the body of an async function in a sandbox with no network, filesystem, timers or modules — only these:',
   '- `await tools.<name>(args)` calls a registered tool, including tools whose schemas are omitted from the initial list, e.g. `tools.filesystem__read_file({ path })`. Resolves to the tool result; rejects with its error.',
+  '- `ALL_TOOLS` lists script-callable tools only. Read-only status tools can run in scripts. Direct-only coordination tools (for example spawn_child or resume_pipeline) must be called outside codemode. The CLI bridge wrapper call_discovered_tool is not a script tool: call the discovered tools.<name>(args) directly inside scripts.',
   '- `ALL_TOOLS` is an array of objects `{name: string, description: string}`, NOT strings. Example: `ALL_TOOLS.filter(t => t.name.includes("calendar")).map(t => t.name)`. `await searchTools(query)` returns the same shape; `await describeTool(name)` returns its TypeScript signature or undefined. Describe tools before guessing argument names.',
   '- `text(value)`, `console.log(...)` and `return value` produce the output.',
   '- `await showToolImage(toolResult)` shows the images from a tool result, e.g. `await showToolImage(await tools.vision__view_image({path}))`. Images are not shown unless selected this way; text output does not select images.',
@@ -86,16 +87,15 @@ const DESCRIPTION = [
 ].join('\n');
 
 /**
- * Handlers a script may call: real tools only. Orchestration meta-tools (no
- * `toolId`: spawn_child, collect_children, plans, status updates) change the
- * agent's own control flow and stay model-issued; the discovery pair has
- * in-script equivalents; `final` tools end the run.
+ * Handlers a script may call: grouped tools and explicitly read-only helpers.
+ * Coordination handlers that change control flow stay model-issued; discovery
+ * has in-script equivalents, and final handlers end the run.
  */
 export function scriptableTools(handlers: ToolHandler[]): ToolHandler[] {
   return handlers.filter(
     (h) =>
       h.name !== CODEMODE_TOOL_NAME &&
-      h.toolId !== undefined &&
+      (h.toolId !== undefined || h.replaySafety === 'read_only') &&
       h.toolId !== TOOL_DISCOVERY_TOOL_ID &&
       h.final !== true,
   );
@@ -376,7 +376,14 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       );
 
       if (!result.ok) {
-        const error = result.error.stack ?? `${result.error.name ?? 'Error'}: ${result.error.message}`;
+        let error = (result.error.stack ?? `${result.error.name ?? 'Error'}: ${result.error.message}`)
+          .replace('ALL_TOOLS lists every tool', 'ALL_TOOLS lists script-callable tools');
+        const missing = /tools\.([A-Za-z0-9_]+) does not exist/.exec(error)?.[1];
+        if (missing === 'call_discovered_tool') {
+          error += '\ncall_discovered_tool is an outer CLI bridge wrapper, not a script tool. Use searchTools/describeTool, then call the discovered tools.<name>(args) directly inside codemode.';
+        } else if (missing && host.tools().some(tool => tool.name === missing)) {
+          error += `\n${missing} is a direct-only coordination tool. Call it outside codemode using its advertised tool interface.`;
+        }
         // No timing here, unlike the success header: the executor blocks a
         // tool after the SAME error three times running, and a wall time in the
         // message made every repeat of one failure look different.

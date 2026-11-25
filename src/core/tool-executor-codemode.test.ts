@@ -76,6 +76,19 @@ const readFile = (execute = vi.fn().mockResolvedValue('line 1\nneedle\nline 3'))
 const script = (code: string) => [{ id: 'call-cm', name: 'codemode', arguments: { code } }];
 
 describe('codemode nested calls run through the executor pipeline', () => {
+  test('read-only orchestration nested calls retain the handler caller scope', async () => {
+    const execute = vi.fn().mockResolvedValue({ status: 'failed' });
+    const exec = executorWith({ name: 'get_pipeline_status', description: 'Read a pipeline',
+      replaySafety: 'read_only', permissionAction: 'read', parameters: { type: 'object', properties: { id: { type: 'string' } } }, execute });
+    const out = await exec.handleToolCalls(script('return await tools.get_pipeline_status({id:"pipeline"});'));
+    expect(out[0].content).toContain('failed');
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith({ id: 'pipeline' }, expect.objectContaining({ userId: 'user-test', sessionId: '00000000-0000-0000-0000-000000000000' }));
+    execute.mockRejectedValueOnce(new Error('Pipeline not found in this session'));
+    const refused = await exec.handleToolCalls(script('return await tools.get_pipeline_status({id:"other-pipeline"});'));
+    expect(refused[0].content).toContain('Pipeline not found in this session');
+  });
+
   test('worker output ceiling still applies after an explicit large script response budget', async () => {
     const exec = executorWith(readFile(vi.fn().mockResolvedValue('A natural language observation. '.repeat(4000))));
     const messages = await exec.handleToolCalls(script('// @options: {"max_output_tokens":32000}\nreturn await tools.filesystem__read_file({path:"fixture"});'));
