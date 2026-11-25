@@ -217,3 +217,11 @@ The sync tests use temporary website directories and verify link conversion,
 fenced examples, replacement of old MDX copies, and non-mutating drift checks.
 They use Node's test runner and are separate from `npm test`. A website build
 checks rendering; browser checks and link validation assess the served result.
+
+## Code scanning runtime
+
+CodeQL scans JavaScript and TypeScript on pull requests and main, plus its weekly
+schedule. Its job allows 30 minutes for extraction, queries, uploading results
+and waiting for GitHub to process them. A scan can time out after a successful
+upload; inspect the job annotation and result-processing step before treating
+that outcome as a code finding. The allowance does not skip files or queries.
