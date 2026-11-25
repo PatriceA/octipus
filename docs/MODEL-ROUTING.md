@@ -205,3 +205,11 @@ judge counts as available.
 | Root task vs conversation selection | `src/core/agent/model-selector.ts`, `src/core/agent/root-runner.ts` |
 | Spawn metrics | `src/core/telemetry.ts` (`recordSwarmSpawn`) |
 | Original design | `docs/plans/planner-executor-plan-split.md` |
+
+## Disabled model settings
+
+Disabling a model removes it from runtime selection without deleting its
+settings or topic assignments. Administrators can still edit it and enable it
+again on Models. Saving capabilities or CLI options alone does not enable it.
+A disabled legacy fallback does not satisfy the default-model requirement;
+enable it or choose an enabled fallback to restore callers that need one.

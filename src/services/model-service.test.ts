@@ -4,6 +4,7 @@ import { modelConfig } from '@/db/schema/models';
 
 const registry = vi.hoisted(() => ({
   getModel: vi.fn(),
+  getModelAnyState: vi.fn(),
   registerModel: vi.fn(),
   updateModel: vi.fn(),
   getAllModelsIncludeDisabled: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('@/models/capabilities', () => ({ getCapabilitiesForModel: () => ({}) })
 
 beforeEach(() => {
   vi.resetAllMocks();
+  registry.getModelAnyState.mockImplementation(name => registry.getModel(name));
   registry.registerModel.mockImplementation(async (body) => body);
   registry.updateModel.mockImplementation(async (name, body) => ({ name, ...body }));
 });
@@ -27,6 +29,22 @@ describe('model capability edits', () => {
     const result = await updateModel('ocr', { ...capabilities, topics: ['build'], topicRoles: { build: 'primary' } });
     expect(registry.updateModel).toHaveBeenCalledWith('ocr', capabilities);
     expect(result).toMatchObject({ ok: true, model: capabilities });
+  });
+
+  it('edits a disabled CLI model without enabling it or changing its bindings', async () => {
+    const existing = { name: 'cli/disabled', modelId: 'cli/claude', provider: 'cli', isEnabled: false,
+      topicRoles: { build: 'primary' }, metadata: { cliAgent: { permissionMode: 'full' } } };
+    registry.getModel.mockResolvedValue(null);
+    registry.getModelAnyState.mockResolvedValue(existing);
+    expect(await updateModel(existing.name, { supportsVision: true })).toMatchObject({ ok: true });
+    expect(registry.updateModel).toHaveBeenCalledWith(existing.name, { supportsVision: true });
+  });
+
+  it('re-enables a disabled model through the normal editor update path', async () => {
+    registry.getModel.mockResolvedValue(null);
+    registry.getModelAnyState.mockResolvedValue({ name: 'cli/disabled', modelId: 'cli/claude', provider: 'cli', isEnabled: false });
+    expect(await updateModel('cli/disabled', { isEnabled: true })).toMatchObject({ ok: true });
+    expect(registry.updateModel).toHaveBeenCalledWith('cli/disabled', { isEnabled: true });
   });
 
   it('leaves capability flags untouched when saving other fields', async () => {
