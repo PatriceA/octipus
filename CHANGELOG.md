@@ -7,7 +7,7 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
-- Disabled models can be edited and re-enabled from Models again. Administrative updates no longer report a disabled row as “Model not found”; saving other settings leaves its enabled state unchanged.
+- Disabled models can be edited and re-enabled from Models again. Administrative updates no longer report a disabled row as “Model not found”; saving other settings leaves its enabled state unchanged. A disabled fallback stays visible in its selector with instructions to enable it.
 
 - Allow CodeQL 30 minutes for full-repository scanning and result processing. The previous 15-minute job limit could cancel main scans after their results had uploaded. Scan coverage and queries are unchanged.
 

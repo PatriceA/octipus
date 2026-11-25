@@ -258,3 +258,28 @@ test('CLI status custom models save on blur instead of on every keystroke', asyn
   await expect.poll(() => saves).toBe(1);
   expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'new-vendor-model' } } });
 });
+
+
+test('a disabled fallback stays visible and can be enabled from its card', async ({ authenticatedPage: page }) => {
+  let model = { id: 'disabled-cli', name: 'cli/claude', provider: 'cli', modelId: 'cli/claude',
+    isEnabled: false, isDefault: true, supportsVision: false, supportsTools: false, supportsStreaming: false,
+    contextWindow: 200000, maxTokens: 16384, topics: [], priority: 80, costPerInputToken: 0, costPerOutputToken: 0, metadata: {} };
+  await page.route('**/api/models', route => json(route, 200, { models: [model] }));
+  await page.route('**/api/models/cli%2Fclaude', route => {
+    expect(route.request().method()).toBe('PATCH');
+    expect(route.request().postDataJSON()).toEqual({ isEnabled: true });
+    model = { ...model, isEnabled: true };
+    return json(route, 200, model);
+  });
+  await page.goto('/models');
+  await page.getByText('Advanced · legacy fallback model', { exact: true }).click();
+  const picker = page.getByRole('combobox', { name: 'Fallback model', exact: true });
+  await expect(picker).toHaveValue('cli/claude');
+  await expect(picker.locator('option[value="cli/claude"]')).toHaveText('cli/claude (disabled)');
+  await expect(page.getByText('The fallback is disabled.', { exact: false })).toBeVisible();
+  await page.getByTitle('Enable', { exact: true }).click();
+  await expect(page.getByTitle('Disable', { exact: true })).toBeVisible();
+  await expect(picker.locator('option[value="cli/claude"]')).toHaveText('cli/claude');
+  await expect(page.getByText('The fallback is disabled.', { exact: false })).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('fallback-reenabled.png') });
+});
