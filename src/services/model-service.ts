@@ -293,7 +293,8 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
   if (isExtensionModelName(name)) return { status: 403 as const, error: EXTENSION_ROW_REFUSAL };
   try {
     const registry = getModelRegistry();
-    const existing = await registry.getModel(name);
+    // Admin edits include disabled rows; runtime selection deliberately does not.
+    const existing = await registry.getModelAnyState(name);
     if (!existing) return { status: 404 as const, error: 'Model not found' };
     if (existing.ownerUserId) return { status: 403 as const, error: PERSONAL_ROW_REFUSAL };
     if ('ownerUserId' in safeUpdate) return { status: 400 as const, error: 'ownerUserId cannot be changed' };

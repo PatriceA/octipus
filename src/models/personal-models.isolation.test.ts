@@ -677,6 +677,27 @@ describe('cross-user effects of other users\' rows', () => {
     expect((await call(bobId, false, 'GET', '/api/models/install-off')).body.error).toBe('Model not found');
   });
 
+  test('admin can edit and re-enable a disabled CLI row while runtime and owner boundaries stay enforced', async () => {
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const registry = getModelRegistry();
+    const name = 'cli/disabled-editor-regression';
+    const path = `/api/models/${encodeURIComponent(name)}`;
+    const metadata = { cliAgent: { permissionMode: 'full' } };
+    const topicRoles = { research: 'backup' as const };
+    await registry.registerModel({ name, modelId: 'cli/claude', provider: 'cli', isEnabled: false, metadata, topicRoles });
+    try {
+      expect(await registry.getModel(name)).toBeNull();
+      expect((await call(bobId, false, 'PATCH', path, { isEnabled: true })).status).toBe(403);
+      const edit = await call(adminId, true, 'PATCH', path, { supportsVision: true });
+      expect(edit.status).toBe(200);
+      expect(edit.body).toMatchObject({ isEnabled: false, supportsVision: true, metadata, topicRoles });
+      expect(await registry.getModel(name)).toBeNull();
+      const enable = await call(adminId, true, 'PATCH', path, { isEnabled: true });
+      expect(enable.status).toBe(200);
+      expect(await registry.getModel(name)).toMatchObject({ isEnabled: true, supportsVision: true, metadata, topicRoles });
+    } finally { await registry.deleteModel(name); }
+  });
+
   test('pricing by row name never picks another user\'s personal row', async () => {
     const { getCostTracker } = await import('@/models/cost-tracker');
     const row = await getCostTracker().logUsageWithCost(bobId, 'install-shared', 1_000_000, 0, {});
