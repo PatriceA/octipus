@@ -32,7 +32,7 @@ import { visibleMessages } from './message-visibility';
  *      can't bypass it by accident.
  */
 
-import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
+import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, lte, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { afterSpaceTaskWrite, publishTaskChanged } from '@/core/tasks/team';
 import { publishPersonalTaskChanged } from '@/core/tasks/live';
@@ -1363,7 +1363,7 @@ export class TaskRepo {
     const filters: SQL[] = [...this.rows(tasks)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
-    if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
+    if (filter.dueBefore) filters.push(lte(tasks.dueAt, filter.dueBefore)); // column-typed bind: a raw Date in a sql fragment breaks postgres-js
     if (filter.myDayOn) {
       // The caller's own My Day (task_user_state), never another member's.
       filters.push(sql`EXISTS (SELECT 1 FROM ${taskUserState} s WHERE s.task_id = ${tasks.id} AND s.user_id = ${this.viewerId} AND s.my_day_on = ${filter.myDayOn})`);
