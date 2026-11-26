@@ -1,21 +1,38 @@
 /**
- * Test setup — runs before all tests.
+ * Test setup — runs before each test file.
  *
  * Generates ephemeral random secrets per process so committed test fixtures
  * never resemble production credentials. Existing env vars (e.g. for
  * integration tests pointing at a real DB) take precedence.
  */
 import { randomBytes } from 'crypto';
-import { inject } from 'vitest';
+import { aroundAll, inject } from 'vitest';
+import { createTestFileTmpRoot } from './test-helpers/tmp-cleanup';
 import { MODULES } from '@/modules';
 
-// Installed before test modules import code that calls os.tmpdir(). Child
-// processes inherit the same exclusive root. Set all platform aliases.
+// Installed before test modules import code that calls os.tmpdir(). A file's
+// fixtures outlive all its tests and teardown hooks, not the entire test run.
 const testTmpRoot = inject('testTmpRoot');
 if (!testTmpRoot) throw new Error('Test scratch root was not provided by global setup');
-process.env.TMPDIR = testTmpRoot;
-process.env.TMP = testTmpRoot;
-process.env.TEMP = testTmpRoot;
+const fileScratch = createTestFileTmpRoot(testTmpRoot);
+process.env.TMPDIR = fileScratch.root;
+process.env.TMP = fileScratch.root;
+process.env.TEMP = fileScratch.root;
+const releaseFileScratch = () => {
+  // Vitest may still write its own results after the file's hooks complete.
+  process.env.TMPDIR = testTmpRoot;
+  process.env.TMP = testTmpRoot;
+  process.env.TEMP = testTmpRoot;
+  fileScratch.cleanup();
+  process.removeListener('exit', releaseFileScratch);
+};
+// Collection failures do not enter aroundAll. Normal worker exit still cleans
+// their exclusive folder. Forced worker kills retain the run-level fallback.
+process.once('exit', releaseFileScratch);
+aroundAll(async runSuite => {
+  try { await runSuite(); }
+  finally { releaseFileScratch(); }
+});
 const pgliteTemplate = inject('pgliteTemplate');
 if (pgliteTemplate) process.env.OCTIPUS_PGLITE_TEMPLATE = pgliteTemplate;
 

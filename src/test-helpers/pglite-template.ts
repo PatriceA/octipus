@@ -9,7 +9,6 @@
  * Suites still call runMigrations(); against the copy it is a no-op.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { TestProject } from 'vitest/node';
@@ -20,8 +19,10 @@ declare module 'vitest' {
   }
 }
 
-export default async function setup(project: Pick<TestProject, 'provide'>): Promise<() => void> {
-  const dir = mkdtempSync(join(tmpdir(), 'octipus-pglite-template-'));
+export default async function setup(project: Pick<TestProject, 'provide' | 'getProvidedContext'>): Promise<() => void> {
+  const parent = project.getProvidedContext().testTmpRoot;
+  if (!parent) throw new Error('Test scratch root must be initialized before the PGlite template');
+  const dir = mkdtempSync(join(parent, 'pglite-template-'));
   const saved = { ...process.env };
   const rand = () => randomBytes(24).toString('hex');
   try {

@@ -827,6 +827,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `plugins` | 5 |
 | `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
+| `(root)` | `test-helpers` | 1 |
 | `(root)` | `tools` | 5 |
 | `(root)` | `utils` | 1 |
 | `(root)` | `voice` | 3 |
