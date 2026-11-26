@@ -2,9 +2,9 @@ import { afterEach, expect, inject, test } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { once } from 'node:events';
-import setup, { createTestTmpRoot } from './tmp-cleanup';
+import setup, { createTestFileTmpRoot, createTestTmpRoot } from './tmp-cleanup';
 
 const owned: string[] = [];
 afterEach(() => { for (const path of owned.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -13,9 +13,10 @@ function fixture() {
 }
 
 test('worker setup routes tmpdir and subprocess scratch into the injected root', async () => {
-  expect(tmpdir()).toBe(inject('testTmpRoot'));
+  expect(dirname(tmpdir())).toBe(inject('testTmpRoot'));
+  expect(basename(tmpdir())).toMatch(/^suite-/);
   const output = execFileSync(process.execPath, ['-e', 'process.stdout.write(require("node:os").tmpdir())'], { encoding: 'utf8' });
-  expect(output).toBe(inject('testTmpRoot'));
+  expect(output).toBe(tmpdir());
 });
 
 test('overlapping run teardowns preserve other runs and live or old server scratch', () => {
@@ -49,7 +50,7 @@ test('global setup publishes only its owned root and removes it at teardown', ()
 
 test('one parallel worker can finish and clean up while another still uses its database', async () => {
   const parent = fixture();
-  const runs = [createTestTmpRoot(parent), createTestTmpRoot(parent)];
+  const runs = [createTestFileTmpRoot(parent), createTestFileTmpRoot(parent)];
   const children = runs.map(run => spawn(process.execPath, ['-e', `
     const fs = require('node:fs');
     const path = require('node:path');

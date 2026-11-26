@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Test fixtures are cleaned after each test file finishes its teardown, rather than accumulating until the entire Vitest run ends. Passing, failed and collection-error files use private scratch folders; parallel files keep their own data. The shared PGlite template now lives inside the run-owned root.
+
 - Pipelines reject worker error objects and malformed object-string reports instead of marking a stage complete with `[object Object]`. Unbound workers now fail explicitly before spawning, and downstream stages do not run on that invalid handoff.
 
 - Codemode can discover and call explicitly read-only orchestration helpers, including pipeline status. Direct-only coordination calls and the outer CLI discovery wrapper now give specific guidance when mistakenly used inside scripts.

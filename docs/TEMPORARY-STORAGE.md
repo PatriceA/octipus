@@ -29,3 +29,9 @@ programs that override the supplied temporary variables, remote SSH hosts,
 container filesystems, or independently detached daemon process groups. Those
 need their own application lifecycle cleanup. This controls lifetime rather
 than the size of temporary data while an execution is still active.
+
+
+Octipus's own Vitest suites also own scratch per test file. Each file cleans
+its fixtures after teardown, while the session and other test files may keep
+running. Only the migrated database template is shared until run teardown.
+See [Testing](TESTING.md#temporary-fixture-lifetime).

@@ -1,8 +1,10 @@
 /** Each Vitest invocation owns one exclusive scratch root; never sweep shared /tmp. */
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestProject } from 'vitest/node';
+
+// Test files may mock node:fs; ownership cleanup must use the real filesystem.
+const { mkdtempSync, rmSync } = process.getBuiltinModule('node:fs');
 
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -10,13 +12,18 @@ declare module 'vitest' {
   }
 }
 
-export function createTestTmpRoot(parent = tmpdir()) {
-  const root = mkdtempSync(join(parent, 'octipus-test-run-'));
+export function createTestTmpRoot(parent = tmpdir(), prefix = 'octipus-test-run-') {
+  const root = mkdtempSync(join(parent, prefix));
   return {
     root,
     // Exact ownership, independent of filenames, activity times, or other runs.
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }),
   };
+}
+
+/** Every file owns scratch independently of its parallel siblings and the shared template. */
+export function createTestFileTmpRoot(parent: string) {
+  return createTestTmpRoot(parent, 'suite-');
 }
 
 /** The root project's provided context is inherited by all test projects. */

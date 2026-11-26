@@ -115,7 +115,8 @@ export default defineConfig({
   plugins: [markdownAsText()],
   test: {
     // Own one exclusive root per invocation, shared with workers via provide.
-    // Teardown removes only that root after all projects finish.
+    // Files clean their own fixtures after teardown; the run root and shared
+    // template are removed after all projects finish.
     // The CLI suites need the built tool bridge (cli-bridge-build.ts).
     globalSetup: ['./src/test-helpers/tmp-cleanup.ts', './src/test-helpers/cli-bridge-build.ts', './src/test-helpers/pglite-template.ts'],
     coverage: {
