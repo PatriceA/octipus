@@ -48,7 +48,7 @@ import { executionEnvironmentFor, pathInEnvironment, hasAccountAuthority, accoun
  * disjoint trees. Even with identical user-supplied paths the actual
  * filesystem locations never collide.
  */
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from 'node:path';
@@ -622,6 +622,15 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('TRAVERSAL',
         `path resolves to a target outside workspace via symlink: ${real}`);
     }
+    // `existsSync` follows links, so a dangling link looks absent and `real`
+    // names the link itself. A write through it would land on its missing
+    // target, so vet that too. `real` stays the return value: delete and
+    // move must act on the link, not its target.
+    const followed = this.followedPath(lexical);
+    if (followed !== real && !this.isUnder(followed, this.realRoot()) && !this.isInExtraAllowed(followed)) {
+      throw new WorkspaceFsError('TRAVERSAL',
+        `path resolves to a target outside workspace via symlink: ${followed}`);
+    }
     // A guest (S6): under one of their folders, judged on the real path so a
     // link inside a folder cannot reach the rest of the space.
     if (this.guestFolders && !this.guestFolders.some((f) => this.isUnder(real, join(this.realRoot(), f)))) {
@@ -711,6 +720,39 @@ export class WorkspaceFS {
       const next = dirname(parent);
       if (next === parent) break;
       tail = join(basename(parent), tail);
+      parent = next;
+    }
+    return lexical;
+  }
+
+  /**
+   * Where a write to `lexical` lands: like `realPathBestEffort`, but an
+   * entry that exists only as a dangling symlink is followed to its target
+   * (as `open(O_CREAT)` would) instead of being treated as missing.
+   * Gives up after 40 hops, as Linux does (ELOOP).
+   */
+  private followedPath(lexical: string, hops = 0): string {
+    let parent = lexical;
+    let tail = '';
+    for (let i = 0; i <= 32; i++) {
+      let isEntry = false;
+      try { lstatSync(parent); isEntry = true; } catch { /* missing */ }
+      if (isEntry) {
+        try {
+          const real = realpathSync(parent);
+          return tail ? join(real, tail) : real;
+        } catch {
+          // Dangling or looping link: continue from its target.
+          if (hops >= 40) return lexical;
+          try {
+            const target = pathResolve(dirname(parent), readlinkSync(parent));
+            return this.followedPath(tail ? join(target, tail) : target, hops + 1);
+          } catch { return lexical; }
+        }
+      }
+      const next = dirname(parent);
+      if (next === parent) break;
+      tail = tail ? join(basename(parent), tail) : basename(parent);
       parent = next;
     }
     return lexical;
