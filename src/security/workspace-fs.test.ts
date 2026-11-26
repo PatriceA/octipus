@@ -150,6 +150,22 @@ describe('WorkspaceFS.resolve — symlink escape', () => {
     expect(() => aliceFs.resolve('escape/anything')).toThrow(WorkspaceFsError);
   });
 
+  test('dangling symlink whose target is outside the root is rejected', () => {
+    const outsideTarget = join(mkdtempSync(join(tmpdir(), 'wsfs-dangling-')), 'missing', 'evil.txt');
+    const linkPath = join(aliceFs.root, 'dangling');
+    try { symlinkSync(outsideTarget, linkPath, 'file'); }
+    catch { return; } // symlink creation not permitted on this host
+    expect(() => aliceFs.resolve('dangling')).toThrow(/outside workspace via symlink/);
+    expect(() => aliceFs.resolve('dangling/sub.txt')).toThrow(/outside workspace via symlink/);
+  });
+
+  test('dangling symlink whose target is inside the root is allowed and names the link', () => {
+    const linkPath = join(aliceFs.root, 'dangling-inside');
+    try { symlinkSync(join(aliceFs.root, 'not-yet.txt'), linkPath, 'file'); }
+    catch { return; }
+    expect(aliceFs.resolve('dangling-inside')).toBe(join(realpathSync(aliceFs.root), 'dangling-inside'));
+  });
+
   test('symlink within the workspace is allowed', () => {
     mkdirSync(join(aliceFs.root, 'real'), { recursive: true });
     writeFileSync(join(aliceFs.root, 'real', 'data.txt'), 'hi');
