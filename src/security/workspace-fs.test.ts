@@ -166,6 +166,16 @@ describe('WorkspaceFS.resolve — symlink escape', () => {
     expect(aliceFs.resolve('dangling-inside')).toBe(join(realpathSync(aliceFs.root), 'dangling-inside'));
   });
 
+  test('deep missing path under a symlink pointing outside the root is rejected', () => {
+    const outsideTarget = mkdtempSync(join(tmpdir(), 'wsfs-deep-'));
+    const linkPath = join(aliceFs.root, 'deep-out');
+    try { symlinkSync(outsideTarget, linkPath, 'dir'); }
+    catch { return; }
+    for (const depth of [1, 31, 32, 33, 64]) {
+      expect(() => aliceFs.resolve(`deep-out/${'d/'.repeat(depth)}f.txt`)).toThrow(/outside workspace via symlink/);
+    }
+  });
+
   test('symlink within the workspace is allowed', () => {
     mkdirSync(join(aliceFs.root, 'real'), { recursive: true });
     writeFileSync(join(aliceFs.root, 'real', 'data.txt'), 'hi');

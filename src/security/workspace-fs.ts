@@ -708,8 +708,10 @@ export class WorkspaceFS {
     }
     let parent = dirname(lexical);
     let tail = basename(lexical);
-    // Walk up at most 32 levels — guards against bizarrely deep paths.
-    for (let i = 0; i < 32; i++) {
+    // Walk to the filesystem root, which always exists. A depth cap here
+    // fell back to the lexical path, which let a deep write under an
+    // escaping symlink pass the containment check.
+    for (;;) {
       if (existsSync(parent)) {
         try {
           return join(realpathSync(parent), tail);
@@ -734,7 +736,7 @@ export class WorkspaceFS {
   private followedPath(lexical: string, hops = 0): string {
     let parent = lexical;
     let tail = '';
-    for (let i = 0; i <= 32; i++) {
+    for (;;) {
       let isEntry = false;
       try { lstatSync(parent); isEntry = true; } catch { /* missing */ }
       if (isEntry) {
