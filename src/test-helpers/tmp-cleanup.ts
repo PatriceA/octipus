@@ -12,7 +12,7 @@ declare module 'vitest' {
   }
 }
 
-export function createTestTmpRoot(parent = tmpdir(), prefix = 'octipus-test-run-') {
+export function createTestTmpRoot(parent = tmpdir(), prefix = 'octi-t-') {
   const root = mkdtempSync(join(parent, prefix));
   return {
     root,
@@ -21,9 +21,9 @@ export function createTestTmpRoot(parent = tmpdir(), prefix = 'octipus-test-run-
   };
 }
 
-/** Every file owns scratch independently of its parallel siblings and the shared template. */
+/** Short names leave room for Unix socket paths. Every file owns scratch independently of its parallel siblings and the shared template. */
 export function createTestFileTmpRoot(parent: string) {
-  return createTestTmpRoot(parent, 'suite-');
+  return createTestTmpRoot(parent, 'f-');
 }
 
 /** The root project's provided context is inherited by all test projects. */

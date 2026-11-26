@@ -14,7 +14,7 @@ function fixture() {
 
 test('worker setup routes tmpdir and subprocess scratch into the injected root', async () => {
   expect(dirname(tmpdir())).toBe(inject('testTmpRoot'));
-  expect(basename(tmpdir())).toMatch(/^suite-/);
+  expect(basename(tmpdir())).toMatch(/^f-/);
   const output = execFileSync(process.execPath, ['-e', 'process.stdout.write(require("node:os").tmpdir())'], { encoding: 'utf8' });
   expect(output).toBe(tmpdir());
 });
