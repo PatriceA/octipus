@@ -343,11 +343,19 @@ export class GitTool extends BaseTool {
     const urls = named
       ? (await this.git(['remote', 'get-url', '--push', '--all', '--', remote], cwd).catch(() => remote)).split('\n').map((u) => u.trim()).filter(Boolean)
       : [remote];
-    const local = urls.filter((url) => gitRemoteTarget(url) === null);
+    // The egress parser refuses whitespace, but git accepts local paths
+    // containing it. Such receivers still need their own config guards.
+    const local = urls.filter((url) => {
+      const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
+      if (scheme) return scheme === 'file';
+      const colon = url.indexOf(':');
+      const slash = url.indexOf('/');
+      return colon < 0 || (slash >= 0 && slash < colon);
+    });
     if (!local.length) return null;
     const neutralize: string[] = [];
     for (const url of local) {
-      const path = url.startsWith('file://') ? fileURLToPath(url) : resolve(cwd, url);
+      const path = /^file:\/\//i.test(url) ? fileURLToPath(url) : resolve(cwd, url);
       const entries = await this.repoConfig(path).catch((err: unknown) => {
         toolLogger.debug({ err: (err as Error).message, path }, 'The receiving repository\'s config could not be read; hooks stay off');
         return [] as ConfigEntry[];

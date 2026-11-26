@@ -370,3 +370,13 @@ describe('refspecs and hosts', () => {
     expect(gitRemoteTarget('ssh://-oProxyCommand=x/r')).toBe('unjudgeable');
   });
 });
+
+
+test('local receiving paths with spaces and quotes retain repository-config refusals', async () => {
+  const { bare, work } = repoPair("quoted 'receiver");
+  git(bare, 'config', 'core.gitProxy', 'repository-program');
+  const push = await handler('push');
+  for (const remote of [bare, `file://${bare}`]) {
+    await expect(push.execute({ path: work, remote, branch: 'main' }, context)).rejects.toThrow(/The repository this pushes into sets core\.gitproxy/);
+  }
+}, 30_000);
