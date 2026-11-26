@@ -176,6 +176,19 @@ describe('WorkspaceFS.resolve — symlink escape', () => {
     }
   });
 
+  test('dangling link whose target text climbs through another symlink is rejected', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'wsfs-dotdot-'));
+    mkdirSync(join(outside, 'deep'));
+    try {
+      symlinkSync(join(outside, 'deep'), join(aliceFs.root, 'inner'), 'dir');
+      symlinkSync('inner/../pwned.txt', join(aliceFs.root, 'dotdot-link'), 'file');
+      symlinkSync('loop-b', join(aliceFs.root, 'loop-a'), 'file');
+      symlinkSync('loop-a', join(aliceFs.root, 'loop-b'), 'file');
+    } catch { return; }
+    expect(() => aliceFs.resolve('dotdot-link')).toThrow(/outside workspace via symlink/);
+    expect(() => aliceFs.resolve('loop-a')).toThrow(/outside workspace via symlink/);
+  });
+
   test('symlink within the workspace is allowed', () => {
     mkdirSync(join(aliceFs.root, 'real'), { recursive: true });
     writeFileSync(join(aliceFs.root, 'real', 'data.txt'), 'hi');

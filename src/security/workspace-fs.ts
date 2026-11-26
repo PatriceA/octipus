@@ -728,36 +728,37 @@ export class WorkspaceFS {
   }
 
   /**
-   * Where a write to `lexical` lands: like `realPathBestEffort`, but an
-   * entry that exists only as a dangling symlink is followed to its target
-   * (as `open(O_CREAT)` would) instead of being treated as missing.
-   * Gives up after 40 hops, as Linux does (ELOOP).
+   * Where a write to `lexical` lands, resolved one component at a time as the
+   * kernel does for `open(O_CREAT)`: a symlink (dangling or not) is replaced
+   * by its target and `..` pops the *physical* path built so far. Resolving a
+   * link target as text instead let `link -> inner/../x` escape when `inner`
+   * was itself a symlink to a directory outside. Missing components are
+   * appended as-is; nothing below them can be a link. Fails closed: on a loop
+   * (over 40 hops, like ELOOP) or an unreadable link it returns the
+   * filesystem root, which is outside every workspace.
    */
-  private followedPath(lexical: string, hops = 0): string {
-    let parent = lexical;
-    let tail = '';
-    for (;;) {
-      let isEntry = false;
-      try { lstatSync(parent); isEntry = true; } catch { /* missing */ }
-      if (isEntry) {
-        try {
-          const real = realpathSync(parent);
-          return tail ? join(real, tail) : real;
-        } catch {
-          // Dangling or looping link: continue from its target.
-          if (hops >= 40) return lexical;
-          try {
-            const target = pathResolve(dirname(parent), readlinkSync(parent));
-            return this.followedPath(tail ? join(target, tail) : target, hops + 1);
-          } catch { return lexical; }
-        }
-      }
-      const next = dirname(parent);
-      if (next === parent) break;
-      tail = tail ? join(basename(parent), tail) : basename(parent);
-      parent = next;
+  private followedPath(lexical: string): string {
+    const split = (p: string, root: string) => p.slice(root.length).split(/[\\/]+/).filter(Boolean);
+    const { root } = path.parse(lexical);
+    const todo = split(lexical, root);
+    let cur = root;
+    let hops = 0;
+    while (todo.length > 0) {
+      const part = todo.shift() as string;
+      if (part === '.') continue;
+      if (part === '..') { cur = dirname(cur); continue; }
+      const next = join(cur, part);
+      let isLink = false;
+      try { isLink = lstatSync(next).isSymbolicLink(); } catch { /* missing */ }
+      if (!isLink) { cur = next; continue; }
+      if (++hops > 40) return root;
+      let target: string;
+      try { target = readlinkSync(next); } catch { return root; }
+      const targetRoot = path.parse(target).root;
+      if (targetRoot) cur = targetRoot;
+      todo.unshift(...split(target, targetRoot));
     }
-    return lexical;
+    return cur;
   }
 
   /**
