@@ -42,7 +42,7 @@ describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
     expect(created.id).toBeDefined();
     expect(created.name).toBe('Alice');
 
-    const found = await repo.findById(created.id);
+    const found = await repo.findById(userId, created.id);
     expect(found?.name).toBe('Alice');
   });
 
@@ -77,14 +77,14 @@ describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
   test('addFact appends, and replaces existing key', async () => {
     const p = await repo.create({ name: 'Alice', category: 'person', userId, facts: [] });
 
-    await repo.addFact(p.id, { key: 'location', value: 'Munich' });
-    await repo.addFact(p.id, { key: 'birthday', value: 'March 15' });
-    const afterAdd = await repo.findById(p.id);
+    await repo.addFact(userId, p.id, { key: 'location', value: 'Munich' });
+    await repo.addFact(userId, p.id, { key: 'birthday', value: 'March 15' });
+    const afterAdd = await repo.findById(userId, p.id);
     expect(afterAdd?.facts?.length).toBe(2);
 
     // Replacing same key keeps count at 2
-    await repo.addFact(p.id, { key: 'location', value: 'Berlin' });
-    const afterReplace = await repo.findById(p.id);
+    await repo.addFact(userId, p.id, { key: 'location', value: 'Berlin' });
+    const afterReplace = await repo.findById(userId, p.id);
     expect(afterReplace?.facts?.length).toBe(2);
     expect(afterReplace?.facts?.find((f) => f.key === 'location')?.value).toBe('Berlin');
   });
@@ -100,8 +100,8 @@ describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
       ],
     });
 
-    await repo.removeFact(p.id, 'location');
-    const after = await repo.findById(p.id);
+    await repo.removeFact(userId, p.id, 'location');
+    const after = await repo.findById(userId, p.id);
     expect(after?.facts?.length).toBe(1);
     expect(after?.facts?.[0].key).toBe('likes');
   });
@@ -131,8 +131,50 @@ describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
 
   test('delete returns true for existing, false otherwise', async () => {
     const p = await repo.create({ name: 'Alice', category: 'person', userId });
-    expect(await repo.delete(p.id)).toBe(true);
-    expect(await repo.delete(p.id)).toBe(false);
+    expect(await repo.delete(userId, p.id)).toBe(true);
+    expect(await repo.delete(userId, p.id)).toBe(false);
+  });
+
+  test('by-id calls never reach another user\'s profile', async () => {
+    const otherUserId = randomUUID();
+    const theirs = await repo.create({
+      name: 'Theirs', category: 'person', userId: otherUserId,
+      facts: [{ key: 'location', value: 'Oslo', source: 'test', learnedAt: '2026-01-01T00:00:00.000Z' }],
+    });
+    expect(await repo.findById(userId, theirs.id)).toBeNull();
+    expect(await repo.update(userId, theirs.id, { name: 'Renamed' })).toBeNull();
+    expect(await repo.addFact(userId, theirs.id, { key: 'x', value: 'y' })).toBeNull();
+    expect(await repo.removeFact(userId, theirs.id, 'location')).toBeNull();
+    expect(await repo.delete(userId, theirs.id)).toBe(false);
+    const after = await repo.findById(otherUserId, theirs.id);
+    expect(after?.name).toBe('Theirs');
+    expect((after?.facts as { key: string }[]).map((f) => f.key)).toEqual(['location']);
+  });
+
+  test('the profiles tool refuses another user\'s profile by id', async () => {
+    const otherUserId = randomUUID();
+    const theirs = await repo.create({
+      name: 'Theirs', category: 'person', userId: otherUserId,
+      facts: [{ key: 'location', value: 'Oslo', source: 'test', learnedAt: '2026-01-01T00:00:00.000Z' }],
+    });
+    const { ProfilesTool } = await import('@/tools/profiles');
+    const tool = new ProfilesTool();
+    await tool.initialize();
+    const call = (name: string, args: Record<string, unknown>) =>
+      tool.getToolHandlers().find((h) => h.name.endsWith(`__${name}`) || h.name === name)!
+        .execute(args, { id: 'agent-1', userId, sessionId: 's1', role: 'general', status: 'running' } as never);
+    for (const [name, args] of [
+      ['get_profile', { id: theirs.id }],
+      ['update_profile', { id: theirs.id, name: 'Renamed' }],
+      ['add_fact', { id: theirs.id, key: 'x', value: 'y' }],
+      ['remove_fact', { id: theirs.id, key: 'location' }],
+      ['delete_profile', { id: theirs.id }],
+    ] as const) {
+      expect(await call(name, args), name).toEqual({ error: 'Profile not found.' });
+    }
+    const after = await repo.findByUserId(otherUserId);
+    expect(after.map((p) => p.name)).toEqual(['Theirs']);
+    expect((after[0].facts as { key: string }[]).map((f) => f.key)).toEqual(['location']);
   });
 });
 

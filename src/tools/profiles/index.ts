@@ -79,7 +79,7 @@ export class ProfilesTool extends BaseTool {
         const userId = this.resolveUserId(context);
 
         if (args.id) {
-          const profile = await this.profileRepo.findById(args.id as string);
+          const profile = await this.profileRepo.findById(userId, args.id as string);
           if (!profile) return { error: 'Profile not found.' };
           return this.formatProfile(profile);
         }
@@ -162,7 +162,8 @@ export class ProfilesTool extends BaseTool {
         relationship: { type: 'string', description: 'New relationship' },
         category: { type: 'string', description: 'New category' },
       }),
-      async (args) => {
+      async (args, context) => {
+        const userId = this.resolveUserId(context);
         const updates: Record<string, unknown> = {};
         if (args.name) updates.name = args.name;
         if (args.relationship) updates.relationship = args.relationship;
@@ -172,7 +173,7 @@ export class ProfilesTool extends BaseTool {
           return { error: 'No fields to update. Provide name, relationship, or category.' };
         }
 
-        const profile = await this.profileRepo.update(args.id as string, updates);
+        const profile = await this.profileRepo.update(userId, args.id as string, updates);
         if (!profile) return { error: 'Profile not found.' };
 
         return { updated: true, profile: this.formatProfile(profile) };
@@ -204,7 +205,8 @@ export class ProfilesTool extends BaseTool {
         value: { type: 'string', description: 'Fact value', required: true },
         source: { type: 'string', description: 'How this fact was learned (e.g., "user told us", "learned from conversation")', default: 'user told us' },
       }),
-      async (args) => {
+      async (args, context) => {
+        const userId = this.resolveUserId(context);
         const fact: ProfileFact = {
           key: args.key as string,
           value: args.value as string,
@@ -212,7 +214,7 @@ export class ProfilesTool extends BaseTool {
           learnedAt: new Date().toISOString(),
         };
 
-        const profile = await this.profileRepo.addFact(args.id as string, fact);
+        const profile = await this.profileRepo.addFact(userId, args.id as string, fact);
         if (!profile) return { error: 'Profile not found.' };
 
         return { updated: true, profile: this.formatProfile(profile) };
@@ -227,8 +229,8 @@ export class ProfilesTool extends BaseTool {
         id: { type: 'string', description: 'Profile ID', required: true },
         key: { type: 'string', description: 'Fact key to remove', required: true },
       }),
-      async (args) => {
-        const profile = await this.profileRepo.removeFact(args.id as string, args.key as string);
+      async (args, context) => {
+        const profile = await this.profileRepo.removeFact(this.resolveUserId(context), args.id as string, args.key as string);
         if (!profile) return { error: 'Profile not found.' };
 
         return { updated: true, profile: this.formatProfile(profile) };
@@ -242,8 +244,8 @@ export class ProfilesTool extends BaseTool {
       createParameterSchema({
         id: { type: 'string', description: 'Profile ID to delete', required: true },
       }),
-      async (args) => {
-        const deleted = await this.profileRepo.delete(args.id as string);
+      async (args, context) => {
+        const deleted = await this.profileRepo.delete(this.resolveUserId(context), args.id as string);
         if (!deleted) return { error: 'Profile not found.' };
 
         return { deleted: true, message: 'Profile deleted.' };
