@@ -26,10 +26,26 @@ export interface ConfigEntry {
   value: string;
 }
 
-/** `git config --list --show-scope` output as entries; keys lower-cased (git's own normalisation of section and variable). */
+/**
+ * `git config --list --show-scope -z` output as entries: records are
+ * `scope NUL key LF value NUL` (a bare key has no LF); keys lower-cased (git's
+ * own normalisation of section and variable). `-z` is required: in the
+ * line-based listing a value containing a newline forges a whole
+ * operator-scope line, which `neutralizingArgs` would put back as the
+ * operator's own program.
+ */
 export function parseConfigListing(listing: string): ConfigEntry[] {
-  return listing.split('\n').map((line) => /^(\w+)\t([^=]+)=(.*)$/.exec(line)).filter((m): m is RegExpExecArray => !!m)
-    .map((m) => ({ scope: m[1], key: lowerKey(m[2]), value: m[3] }));
+  const parts = listing.split('\0');
+  const entries: ConfigEntry[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const scope = parts[i];
+    const record = parts[i + 1];
+    const newline = record.indexOf('\n');
+    const key = newline < 0 ? record : record.slice(0, newline);
+    if (!scope || !key) continue;
+    entries.push({ scope, key: lowerKey(key), value: newline < 0 ? '' : record.slice(newline + 1) });
+  }
+  return entries;
 }
 
 /** Section and variable lower-cased, a subsection (between them) kept as written. */
