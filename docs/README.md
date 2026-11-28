@@ -70,6 +70,8 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [CALENDAR.md](CALENDAR.md) | The Google and Microsoft 365 calendar page, confirmed event changes, and calendar access for agents. |
 | [plans/modules.md](plans/modules.md) | Design: a lean core (the agent runner and dock) and modules a profile switches on; what is core, the first modules, how off is enforced. |
 | [plans/tui-modernization.md](plans/tui-modernization.md) | Plan: the terminal chat and editor — audit findings, whether to stay on pi-tui, the screen and selection model, and the phases. |
+| [plans/ecosystem-learnings-2026-11.md](plans/ecosystem-learnings-2026-11.md) | Plan (after the Rust port): what to take from T3 Code, Orca, OpenBot, OpenMausBot and Hermes Agent — provider terms and subscription logins, agent runtimes (Codex app-server, ACP), Companion, connectors, adoption, business. |
+| [plans/steering-v2-2026-11.md](plans/steering-v2-2026-11.md) | Plan (after the Rust port): messages sent while a CLI turn runs — three-state steer result, capability contract, durable editable queue, composer UX, Codex and Claude delivery; with a five-app comparison. |
 | [PROTECTION-LEVELS.md](PROTECTION-LEVELS.md) | Protection levels 1-4 on documents, cases, records and mail (unclear = 4): where they come from, who may change them, and what they will decide (privacy gateway). |
 | [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
 | [MODULES.md](MODULES.md) | The core and the modules an install switches on (cases, mail, scan folders, protection levels); Settings → Modules and the API. |

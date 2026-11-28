@@ -6,7 +6,79 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ---
 
-## Current priority — consolidation (2026-09-10)
+## Big break: the backend moves to Rust
+
+**Current priority.** The backend is being ported from Node.js to Rust.
+
+- **0.8.0 is the last Node.js release.** It is not tagged yet. After it, the
+  backend is Rust.
+- **Everything below the next divider describes the Node.js line** up to
+  0.8.0. File paths in those sections and in the plans they link point to the
+  Node.js code; they move with the port.
+- **New feature work is queued for after the port.**
+
+### After the Rust port: first in line
+
+The research of 2026-11-25 to 2026-11-28 produced two plans. Both start on the
+Rust backend:
+- [Ecosystem learnings](docs/plans/ecosystem-learnings-2026-11.md) covers
+  T3 Code, Orca, OpenBot, OpenMausBot and Hermes Agent.
+- [Steering v2](docs/plans/steering-v2-2026-11.md) covers messages sent while
+  a CLI turn runs.
+
+Order:
+
+1. **Provider compliance.**
+   - A Claude subscription login serves only its owner. Rooms are
+     unaffected: each member's turn uses their own login.
+   - Other subscription logins get an information bubble and a "Subscription
+     logins and provider terms" docs page with a risk-by-use table.
+   - No rotation between logins of one subscription to get past a usage
+     limit.
+2. **Quick wins.**
+   - Wait for a usage-limit reset, then resume.
+   - Cheap gates before scheduled runs (`command` probe, `no_update`,
+     `report_failure`).
+   - "Report a problem" drafts an issue.
+   - Deep links.
+   - One map of the four ways to get work done: chat, pipeline, to-do with a
+     role agent, Companion goal.
+   - Compaction before the prompt cache expires, once measured.
+3. **Steering v2.**
+   - A three-state steer result, which fixes a possible double send.
+   - An adapter capability contract.
+   - A durable, editable queue.
+   - Composer keys, queued cards and delivery badges.
+   - Claude delivery without an interrupt.
+4. **Adoption.**
+   - Onboarding ends with a first real task.
+   - Import from Claude Code, Codex, OpenClaw and Cursor at setup.
+   - "Schedule this job?" consent cards.
+   - "Make this a to-do / goal / pipeline" actions.
+5. **Agent runtimes.**
+   - Codex through `codex app-server` with `turn/steer`.
+   - A generic ACP adapter.
+   - Antigravity on `agy acp`.
+   - Claude stays on the CLI.
+6. **Connectors.**
+   - OAuth for remote MCP servers.
+   - A curated catalog of hosted MCP servers, probed weekly.
+   - Secret references.
+7. **Companion.**
+   - Animated avatar.
+   - Hold-to-talk quick-ask panel.
+   - Look-around suggestions.
+   - Visible self-changes with Undo.
+   - Approvals from the tray, then an opt-in desk pet.
+8. **Packages and business.**
+   - Agent and team packages with a trial run.
+   - Team policy file.
+   - Guest links for sessions.
+   - An optional hosted relay, after an owner decision.
+
+---
+
+## Consolidation (2026-09-10)
 
 The [product consolidation plan](docs/plans/product-consolidation-2026-09.md)
 sets the order for the next improvement cycle: preserve approval requirements
