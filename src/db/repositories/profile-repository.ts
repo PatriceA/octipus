@@ -13,11 +13,12 @@ export class ProfileRepository {
       .orderBy(desc(profiles.updatedAt));
   }
 
-  async findById(id: string): Promise<Profile | null> {
+  /** A profile by id, only when `userId` owns it: ids are never enough to reach another user's profile. */
+  async findById(userId: string, id: string): Promise<Profile | null> {
     const result = await this.db
       .select()
       .from(profiles)
-      .where(eq(profiles.id, id))
+      .where(this.owned(userId, id))
       .limit(1);
     return result[0] ?? null;
   }
@@ -43,17 +44,17 @@ export class ProfileRepository {
     return result[0];
   }
 
-  async update(id: string, data: Partial<Omit<NewProfile, 'id'>>): Promise<Profile | null> {
+  async update(userId: string, id: string, data: Partial<Omit<NewProfile, 'id' | 'userId'>>): Promise<Profile | null> {
     const result = await this.db
       .update(profiles)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(profiles.id, id))
+      .where(this.owned(userId, id))
       .returning();
     return result[0] ?? null;
   }
 
-  async addFact(id: string, fact: ProfileFact): Promise<Profile | null> {
-    const profile = await this.findById(id);
+  async addFact(userId: string, id: string, fact: ProfileFact): Promise<Profile | null> {
+    const profile = await this.findById(userId, id);
     if (!profile) return null;
 
     const existingFacts = (profile.facts as ProfileFact[]) || [];
@@ -64,13 +65,13 @@ export class ProfileRepository {
     const result = await this.db
       .update(profiles)
       .set({ facts: updatedFacts, updatedAt: new Date() })
-      .where(eq(profiles.id, id))
+      .where(this.owned(userId, id))
       .returning();
     return result[0] ?? null;
   }
 
-  async removeFact(id: string, key: string): Promise<Profile | null> {
-    const profile = await this.findById(id);
+  async removeFact(userId: string, id: string, key: string): Promise<Profile | null> {
+    const profile = await this.findById(userId, id);
     if (!profile) return null;
 
     const existingFacts = (profile.facts as ProfileFact[]) || [];
@@ -79,14 +80,18 @@ export class ProfileRepository {
     const result = await this.db
       .update(profiles)
       .set({ facts: updatedFacts, updatedAt: new Date() })
-      .where(eq(profiles.id, id))
+      .where(this.owned(userId, id))
       .returning();
     return result[0] ?? null;
   }
 
-  async delete(id: string): Promise<boolean> {
-    const result = await this.db.delete(profiles).where(eq(profiles.id, id)).returning();
+  async delete(userId: string, id: string): Promise<boolean> {
+    const result = await this.db.delete(profiles).where(this.owned(userId, id)).returning();
     return result.length > 0;
+  }
+
+  private owned(userId: string, id: string) {
+    return and(eq(profiles.userId, userId), eq(profiles.id, id));
   }
 
   async search(userId: string, query: string): Promise<Profile[]> {

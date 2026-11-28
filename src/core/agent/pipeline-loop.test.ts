@@ -52,6 +52,7 @@ let sessionId: string;
 let calls: WorkerCall[];
 /** Stage name → the replies it gives, in order; the last one repeats. */
 let replies: Record<string, string[]>;
+let invalidStageResult: unknown;
 /** How many times the run escalated to a human. */
 let approvalsAsked = 0;
 /** What the stubbed human answers. */
@@ -181,6 +182,7 @@ beforeAll(async () => {
     const call: WorkerCall = { role, stageName, input, resumeKey: context.metadata?.resumeKey, workerId: `worker-${calls.length + 1}`, metadata: { ...context.metadata },
       skillIds: options?.skillIds, decideSkills: options?.decideSkills };
     calls.push(call);
+    if (stageName === 'Implement' && invalidStageResult !== undefined) return invalidStageResult;
     options?.onTokens?.(tokenCharges[stageName] ?? 0);
     options?.onWorkerSpawned?.(call.workerId);
     await onSpawn?.(stageName, String(context.metadata?.pipelineId), call);
@@ -224,6 +226,7 @@ beforeEach(() => {
   uncertainByStage = {};
   policyByStage = {};
   replies = {};
+  invalidStageResult = undefined;
   approvalsAsked = 0;
   tokenCharges = {};
   approvalAnswer = { approved: false, response: 'Abort Pipeline' };
@@ -296,6 +299,21 @@ describe('the plan loop runs the body once per item', () => {
     // A loop that handed every pass the same item would still visit twice and
     // still finish green, so the visit count alone cannot prove iteration.
     expect(implementInputs[0]).not.toContain('item two');
+  });
+});
+
+describe('pipeline stage result boundary', () => {
+  test.each([{ error: 'No model configured for the worker' }, { unexpected: 'payload' }, '[object Object]'])('rejects a non-text stage report without starting downstream work: %j', async invalid => {
+    invalidStageResult = invalid;
+    const { pipelineId } = await run('do the thing');
+    const { rows } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
+    expect(rows[0].status).toBe('failed');
+    const { rows: nodes } = await queryRaw(`SELECT status, output, error FROM pipeline_nodes WHERE pipeline_id = '${pipelineId}' AND name = 'Implement'`);
+    expect(nodes[0].status).toBe('failed');
+    expect(nodes[0].output).not.toBe('[object Object]');
+    expect(nodes[0].error).toMatch(/text report|model configured/);
+    expect(calls.some(call => call.stageName === 'QA')).toBe(false);
+    expect(await planItemStatuses(pipelineId)).not.toContain('done');
   });
 });
 

@@ -48,7 +48,7 @@ import { executionEnvironmentFor, pathInEnvironment, hasAccountAuthority, accoun
  * disjoint trees. Even with identical user-supplied paths the actual
  * filesystem locations never collide.
  */
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from 'node:path';
@@ -622,6 +622,15 @@ export class WorkspaceFS {
       throw new WorkspaceFsError('TRAVERSAL',
         `path resolves to a target outside workspace via symlink: ${real}`);
     }
+    // `existsSync` follows links, so a dangling link looks absent and `real`
+    // names the link itself. A write through it would land on its missing
+    // target, so vet that too. `real` stays the return value: delete and
+    // move must act on the link, not its target.
+    const followed = this.followedPath(lexical);
+    if (followed !== real && !this.isUnder(followed, this.realRoot()) && !this.isInExtraAllowed(followed)) {
+      throw new WorkspaceFsError('TRAVERSAL',
+        `path resolves to a target outside workspace via symlink: ${followed}`);
+    }
     // A guest (S6): under one of their folders, judged on the real path so a
     // link inside a folder cannot reach the rest of the space.
     if (this.guestFolders && !this.guestFolders.some((f) => this.isUnder(real, join(this.realRoot(), f)))) {
@@ -699,8 +708,10 @@ export class WorkspaceFS {
     }
     let parent = dirname(lexical);
     let tail = basename(lexical);
-    // Walk up at most 32 levels — guards against bizarrely deep paths.
-    for (let i = 0; i < 32; i++) {
+    // Walk to the filesystem root, which always exists. A depth cap here
+    // fell back to the lexical path, which let a deep write under an
+    // escaping symlink pass the containment check.
+    for (;;) {
       if (existsSync(parent)) {
         try {
           return join(realpathSync(parent), tail);
@@ -714,6 +725,40 @@ export class WorkspaceFS {
       parent = next;
     }
     return lexical;
+  }
+
+  /**
+   * Where a write to `lexical` lands, resolved one component at a time as the
+   * kernel does for `open(O_CREAT)`: a symlink (dangling or not) is replaced
+   * by its target and `..` pops the *physical* path built so far. Resolving a
+   * link target as text instead let `link -> inner/../x` escape when `inner`
+   * was itself a symlink to a directory outside. Missing components are
+   * appended as-is; nothing below them can be a link. Fails closed: on a loop
+   * (over 40 hops, like ELOOP) or an unreadable link it returns the
+   * filesystem root, which is outside every workspace.
+   */
+  private followedPath(lexical: string): string {
+    const split = (p: string, root: string) => p.slice(root.length).split(/[\\/]+/).filter(Boolean);
+    const { root } = path.parse(lexical);
+    const todo = split(lexical, root);
+    let cur = root;
+    let hops = 0;
+    while (todo.length > 0) {
+      const part = todo.shift() as string;
+      if (part === '.') continue;
+      if (part === '..') { cur = dirname(cur); continue; }
+      const next = join(cur, part);
+      let isLink = false;
+      try { isLink = lstatSync(next).isSymbolicLink(); } catch { /* missing */ }
+      if (!isLink) { cur = next; continue; }
+      if (++hops > 40) return root;
+      let target: string;
+      try { target = readlinkSync(next); } catch { return root; }
+      const targetRoot = path.parse(target).root;
+      if (targetRoot) cur = targetRoot;
+      todo.unshift(...split(target, targetRoot));
+    }
+    return cur;
   }
 
   /**

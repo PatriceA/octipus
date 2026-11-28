@@ -17,6 +17,23 @@ npm test
 npm run test:tui
 ```
 
+### Temporary fixture lifetime
+
+Each test file gets a private directory under the current Vitest run's scratch
+root. `os.tmpdir()` and child processes use that file's directory. A file's
+scratch is removed after all its tests, teardown hooks and fixture cleanup
+complete, on success or failure; it is not held for the rest of a long session
+or the rest of the run. A worker-exit fallback covers collection failures.
+Parallel files have separate directories, so one file cannot clean another's
+active data. Filesystem mocks cannot suppress the actual ownership cleanup.
+
+The migrated PGlite template is shared by the run and stays outside individual
+file directories. It is removed at run teardown, together with the owned run
+root. Abrupt process termination can skip hooks; the command/runtime scratch
+cleanup remains a fallback. Tests must close connections and stop their own
+background processes in teardown. Reusable outputs belong in the workspace,
+not in disposable fixture directories.
+
 External Postgres tests gated on `INTEGRATION=1` are skipped in the ordinary
 lane. A green `npm test` does not mean those tests ran. The terminal clients live
 in `src/tui-pi/` and `src/tui-editor/`; they use pi-tui.
@@ -217,3 +234,11 @@ The sync tests use temporary website directories and verify link conversion,
 fenced examples, replacement of old MDX copies, and non-mutating drift checks.
 They use Node's test runner and are separate from `npm test`. A website build
 checks rendering; browser checks and link validation assess the served result.
+
+## Code scanning runtime
+
+CodeQL scans JavaScript and TypeScript on pull requests and main, plus its weekly
+schedule. Its job allows 30 minutes for extraction, queries, uploading results
+and waiting for GitHub to process them. A scan can time out after a successful
+upload; inspect the job annotation and result-processing step before treating
+that outcome as a code finding. The allowance does not skip files or queries.

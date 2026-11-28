@@ -287,3 +287,11 @@ per-node and process-local.
 **Can I query receipts/contract failures?** Yes — receipts via
 `swarm_nodes.result->'receipt'`; contract failures via `status = 'contract_failed'`
 or the swarm rows in `run_events`.
+
+## Pipeline worker reports
+
+A stage worker must return a non-empty text report. An unbound worker throws a
+configuration error before spawning. The pipeline also rejects non-text values
+and the literal `[object Object]`; it records a failure instead of passing that
+value to Testing or marking the item delivered. Zero token usage alone does not
+prove that no work happened: inspect the execution receipts and stage output.

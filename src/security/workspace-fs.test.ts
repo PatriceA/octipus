@@ -150,6 +150,45 @@ describe('WorkspaceFS.resolve — symlink escape', () => {
     expect(() => aliceFs.resolve('escape/anything')).toThrow(WorkspaceFsError);
   });
 
+  test('dangling symlink whose target is outside the root is rejected', () => {
+    const outsideTarget = join(mkdtempSync(join(tmpdir(), 'wsfs-dangling-')), 'missing', 'evil.txt');
+    const linkPath = join(aliceFs.root, 'dangling');
+    try { symlinkSync(outsideTarget, linkPath, 'file'); }
+    catch { return; } // symlink creation not permitted on this host
+    expect(() => aliceFs.resolve('dangling')).toThrow(/outside workspace via symlink/);
+    expect(() => aliceFs.resolve('dangling/sub.txt')).toThrow(/outside workspace via symlink/);
+  });
+
+  test('dangling symlink whose target is inside the root is allowed and names the link', () => {
+    const linkPath = join(aliceFs.root, 'dangling-inside');
+    try { symlinkSync(join(aliceFs.root, 'not-yet.txt'), linkPath, 'file'); }
+    catch { return; }
+    expect(aliceFs.resolve('dangling-inside')).toBe(join(realpathSync(aliceFs.root), 'dangling-inside'));
+  });
+
+  test('deep missing path under a symlink pointing outside the root is rejected', () => {
+    const outsideTarget = mkdtempSync(join(tmpdir(), 'wsfs-deep-'));
+    const linkPath = join(aliceFs.root, 'deep-out');
+    try { symlinkSync(outsideTarget, linkPath, 'dir'); }
+    catch { return; }
+    for (const depth of [1, 31, 32, 33, 64]) {
+      expect(() => aliceFs.resolve(`deep-out/${'d/'.repeat(depth)}f.txt`)).toThrow(/outside workspace via symlink/);
+    }
+  });
+
+  test('dangling link whose target text climbs through another symlink is rejected', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'wsfs-dotdot-'));
+    mkdirSync(join(outside, 'deep'));
+    try {
+      symlinkSync(join(outside, 'deep'), join(aliceFs.root, 'inner'), 'dir');
+      symlinkSync('inner/../pwned.txt', join(aliceFs.root, 'dotdot-link'), 'file');
+      symlinkSync('loop-b', join(aliceFs.root, 'loop-a'), 'file');
+      symlinkSync('loop-a', join(aliceFs.root, 'loop-b'), 'file');
+    } catch { return; }
+    expect(() => aliceFs.resolve('dotdot-link')).toThrow(/outside workspace via symlink/);
+    expect(() => aliceFs.resolve('loop-a')).toThrow(/outside workspace via symlink/);
+  });
+
   test('symlink within the workspace is allowed', () => {
     mkdirSync(join(aliceFs.root, 'real'), { recursive: true });
     writeFileSync(join(aliceFs.root, 'real', 'data.txt'), 'hi');

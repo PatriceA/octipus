@@ -257,6 +257,7 @@ describe('no git run of the tool executes a program the repository names (with o
     ['an ssh command', (w: string, m: string) => { git(w, 'config', 'core.sshCommand', script('ssh', m)); git(w, 'config', 'core.askPass', script('askpass', m)); }, 'status', (w: string) => ({ path: w })],
     ['an interactive pull rebase', (w: string, m: string) => { git(w, 'config', 'pull.rebase', 'interactive'); git(w, 'config', 'sequence.editor', script('seq', m)); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' })],
     ['an included file', (w: string, m: string) => { const inc = join(dir, `inc-${Math.random().toString(36).slice(2)}`); writeFileSync(inc, `[filter "x"]\n\tclean = ${script('incclean', m)}\n`); git(w, 'config', 'include.path', inc); writeFileSync(join(w, '.gitattributes'), 'f.txt filter=x\n'); }, 'add', (w: string) => ({ path: w, files: 'f.txt' })],
+    ['a signing program forged as operator config by a newline inside a value', (w: string, m: string) => { git(w, 'config', 'commit.gpgsign', 'true'); git(w, 'config', 'gpg.program', 'repo-gpg'); writeFileSync(join(w, '.git', 'config'), `${readFileSync(join(w, '.git', 'config'), 'utf8')}[foo]\n\tbar = "x\\nglobal\\tgpg.program=${script('forged', m)}"\n`); }, 'commit', (w: string) => ({ path: w, message: 'signed' })],
     ['a merge driver', (w: string, m: string) => { git(w, 'config', 'merge.x.driver', script('mergedrv', m)); writeFileSync(join(w, '.gitattributes'), '* merge=x\n'); }, 'pull', (w: string) => ({ path: w, remote: 'origin', branch: 'main' })],
   ])('%s at repository scope is neutralised: the action runs, the program never does', async (_what, arm, action, args) => {
     const { work } = repoPair(`neutral-${Math.random().toString(36).slice(2)}`);
@@ -370,3 +371,13 @@ describe('refspecs and hosts', () => {
     expect(gitRemoteTarget('ssh://-oProxyCommand=x/r')).toBe('unjudgeable');
   });
 });
+
+
+test('local receiving paths with spaces and quotes retain repository-config refusals', async () => {
+  const { bare, work } = repoPair("quoted 'receiver");
+  git(bare, 'config', 'core.gitProxy', 'repository-program');
+  const push = await handler('push');
+  for (const remote of [bare, `file://${bare}`]) {
+    await expect(push.execute({ path: work, remote, branch: 'main' }, context)).rejects.toThrow(/The repository this pushes into sets core\.gitproxy/);
+  }
+}, 30_000);

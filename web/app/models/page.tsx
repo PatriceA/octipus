@@ -192,8 +192,9 @@ export default function ModelsPage() {
         <p className="my-2 text-sm text-on-surface-variant">Topic assignments choose the model for each request. This fallback only applies when a topic is unbound; Companion has its own assignment above.</p>
         <label className="text-sm">Fallback model <select aria-label="Fallback model" className="ml-2 rounded-xs border border-outline-variant bg-surface-container p-2" disabled={actionLoading} value={models.find(model => model.isDefault)?.name ?? ''} onChange={event => void handleSetDefault(event.target.value)}>
           <option value="" disabled>No fallback configured</option>
-          {models.filter(model => model.isEnabled).map(model => <option key={model.name} value={model.name}>{model.name}</option>)}
+          {models.filter(model => model.isEnabled || model.isDefault).map(model => <option key={model.name} value={model.name} disabled={!model.isEnabled}>{model.name}{!model.isEnabled ? ' (disabled)' : ''}</option>)}
         </select></label>
+        {models.some(model => model.isDefault && !model.isEnabled) && <p className="mt-2 text-sm text-warning">The fallback is disabled. Enable it in its model card or choose an enabled fallback.</p>}
       </details>
 
       <RecommendedModelsPanel onInstalled={fetchModels} />

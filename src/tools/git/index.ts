@@ -343,11 +343,19 @@ export class GitTool extends BaseTool {
     const urls = named
       ? (await this.git(['remote', 'get-url', '--push', '--all', '--', remote], cwd).catch(() => remote)).split('\n').map((u) => u.trim()).filter(Boolean)
       : [remote];
-    const local = urls.filter((url) => gitRemoteTarget(url) === null);
+    // The egress parser refuses whitespace, but git accepts local paths
+    // containing it. Such receivers still need their own config guards.
+    const local = urls.filter((url) => {
+      const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
+      if (scheme) return scheme === 'file';
+      const colon = url.indexOf(':');
+      const slash = url.indexOf('/');
+      return colon < 0 || (slash >= 0 && slash < colon);
+    });
     if (!local.length) return null;
     const neutralize: string[] = [];
     for (const url of local) {
-      const path = url.startsWith('file://') ? fileURLToPath(url) : resolve(cwd, url);
+      const path = /^file:\/\//i.test(url) ? fileURLToPath(url) : resolve(cwd, url);
       const entries = await this.repoConfig(path).catch((err: unknown) => {
         toolLogger.debug({ err: (err as Error).message, path }, 'The receiving repository\'s config could not be read; hooks stay off');
         return [] as ConfigEntry[];
@@ -446,14 +454,14 @@ export class GitTool extends BaseTool {
    */
   private async repoConfig(cwd: string): Promise<ConfigEntry[]> {
     try {
-      return parseConfigListing(await this.runGit([...HARDENED_GIT, 'config', '--list', '--show-scope'], cwd));
+      return parseConfigListing(await this.runGit([...HARDENED_GIT, 'config', '--list', '--show-scope', '-z'], cwd));
     } catch (err) {
       toolLogger.debug({ err: (err as Error).message }, 'git config --show-scope unavailable; reading the repository\'s own config files');
     }
-    const scoped = (scope: string, out: string) => parseConfigListing(out.split('\n').filter(Boolean).map((line) => `${scope}\t${line}`).join('\n'));
-    const local = scoped('local', await this.runGit([...HARDENED_GIT, 'config', '--local', '--includes', '--list'], cwd).catch(() => ''));
+    const scoped = (scope: string, out: string) => parseConfigListing(out.split('\0').filter(Boolean).map((record) => `${scope}\0${record}\0`).join(''));
+    const local = scoped('local', await this.runGit([...HARDENED_GIT, 'config', '--local', '--includes', '--list', '-z'], cwd).catch(() => ''));
     if (local.some((e) => e.key === 'extensions.worktreeconfig' && e.value.toLowerCase() === 'true')) {
-      const worktree = await this.runGit([...HARDENED_GIT, 'config', '--worktree', '--includes', '--list'], cwd).catch(() => null);
+      const worktree = await this.runGit([...HARDENED_GIT, 'config', '--worktree', '--includes', '--list', '-z'], cwd).catch(() => null);
       if (worktree === null) throw new ToolNotExecutedError('git', 'This repository has per-worktree configuration that this git cannot list; the git tool does not run in it.');
       return [...local, ...scoped('worktree', worktree)];
     }
